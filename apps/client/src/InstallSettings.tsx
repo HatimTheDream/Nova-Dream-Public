@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AccessContext } from '../../../packages/domain/phone';
 import type { CompanionChallenge, CompanionDevice } from '../../../packages/domain/companion';
-import { request, readLocal, saveLocal } from './api';
+import { request, readLocal, saveLocal, ApiError } from './api';
 import { installationRoute, installAvailable, installNova, subscribeInstall } from './install';
 import { Dialog } from './ui';
 
@@ -39,7 +39,7 @@ export function InstallSettings({ epoch, access }: { epoch: string; access?: Acc
           command = { requestId: crypto.randomUUID(), epoch, challengeId: challenge.id, ...prepared };
           if (!saveLocal(key, command)) throw new Error('Allow device storage before linking this desktop.');
         }
-        const value = await request<{ epoch: string; deviceId: string }>('companions/link', command);
+        const value = await request<{ epoch: string; deviceId: string }>('companions/link', command).catch(error => { if (error instanceof ApiError && error.code === 'companion_unlinked') localStorage.removeItem(key); throw error; });
         await native.finishLink(value); localStorage.removeItem(key); setLinked(true); await refresh(); setMessage('Desktop linked. Open Desktop controls to choose the apps and duration.'); })}>{linked ? 'Desktop linked' : 'Link this desktop'}</button><button disabled={busy} onClick={() => void act(() => native.openControls())}>Desktop controls</button></div> : downloads.length ? <div className="install-downloads">{downloads.map(file => <div key={file.name}><button disabled={busy} onClick={() => void act(async () => { const controller = new AbortController(); downloading.current = controller; setDownloadProgress(0); try { await downloadCompanion(file, setDownloadProgress, controller.signal); setMessage('Download verified. Unzip it and open Nova Dream Desktop.'); } finally { downloading.current = null; setDownloadProgress(undefined); } })}>{file.platform === 'darwin' ? 'Download for Mac' : file.platform === 'win32' ? 'Download for Windows' : 'Download for Linux'} · {file.arch}</button><p className="metadata">{file.version} · {size(file.bytes)} · {file.signing === 'local-ad-hoc' ? 'Private local build; not notarized' : file.signing}</p><details><summary>Verify download</summary><p className="preserve-lines">SHA-256: {file.sha256}</p></details></div>)}</div> : <p className="notice">No desktop download is configured on this host. The repository includes a local build command; your workspace remains usable in the browser.</p>}
       <p className="metadata">{downloadProgress !== undefined && <><span role="status">Downloading and verifying: {downloadProgress}% </span><button onClick={() => downloading.current?.abort()}>Cancel download</button></>}</p><p className="metadata">A link grants no computer access by itself. Choose app access in the companion. Access expires, and you can disconnect or revoke the link.</p>
       {devices.filter(d => !d.revokedAt).map(device => <div className="setting-row" key={device.id}><div><strong>{device.name}</strong><p>{device.connected ? device.enabledUntil > Date.now() ? `Connected · app access until ${new Date(device.enabledUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connected · computer access off' : 'Offline · open the companion on this computer'}{device.apps.length ? ` · ${device.apps.join(', ')}` : ''}</p></div><button disabled={busy} onClick={() => setRemove(device)}>Revoke link</button></div>)}

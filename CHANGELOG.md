@@ -5,6 +5,10 @@
 - Include private systemd runtime credential copies with restrictive permissions for Linux hosting.
 - Retain the integrated workspace, pixel character system, provider adapters, encrypted recovery and bounded upload transport from the verified hosted edition.
 
+## [1.2.2] — 2026-09-15
+
+- Let desktop linking recover from an expired pairing challenge, and recheck expiry after a delayed native confirmation.
+
 ## [1.2.1] — 2026-09-15
 
 - Include Electron and Chromium license notices in the private desktop archive. No runtime or permission behavior changes.

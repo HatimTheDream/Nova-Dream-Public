@@ -89,13 +89,14 @@ else app.whenReady().then(async () => {
     if (!challenge || !/^[a-f0-9-]{36}$/.test(challenge.id) || !/^[a-f0-9-]{36}$/.test(challenge.epoch) || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce) || challenge.expiresAt <= Date.now() || challenge.expiresAt > Date.now()+6*60000) throw new Error('The pairing challenge expired or is invalid.');
     const choice = await dialog.showMessageBox(controls, { type: 'question', message: 'Link this desktop to Nova?', detail: config.origin + '\nComputer access will stay off until you choose apps and enable a timed session.', buttons: ['Cancel','Link desktop'], defaultId: 0, cancelId: 0 });
     if (choice.response !== 1) throw new Error('Desktop linking cancelled.');
+    if (challenge.expiresAt <= Date.now()) throw new Error('The pairing request expired. Click Link this desktop to prepare a fresh one.');
     const keys = generateKeyPairSync('ed25519'), deviceId = randomUUID();
     config.pendingLink = { deviceId, epoch: challenge.epoch, privateKey: keys.privateKey.export({ format:'pem',type:'pkcs8' }).toString() };
     persist();
     const data = JSON.stringify(['nova-desktop-link',1,challenge.id,challenge.epoch,challenge.nonce,challenge.expiresAt,deviceId]);
     return { deviceId, name: hostname().slice(0,80), platform: process.platform, publicKey: keys.publicKey.export({format:'pem',type:'spki'}).toString(), signature: sign(null,Buffer.from(data),keys.privateKey).toString('base64url') };
   });
-  ipcMain.handle('companion:finish-link', async(event,value) => { workspaceSender(event); if (config.connection?.deviceId === value.deviceId && config.connection?.epoch === value.epoch) return; if (!config.pendingLink || value.epoch !== config.pendingLink.epoch || value.deviceId !== config.pendingLink.deviceId) throw new Error('This is not the prepared desktop link.'); config.connection=config.pendingLink; delete config.pendingLink; persist(); runClient(); await client.tick(); });
+  ipcMain.handle('companion:finish-link', async(event,value) => { workspaceSender(event); if (config.connection?.deviceId === value.deviceId && config.connection?.epoch === value.epoch) { persist(); if(!client)runClient(); return; } if (!config.pendingLink || value.epoch !== config.pendingLink.epoch || value.deviceId !== config.pendingLink.deviceId) throw new Error('This is not the prepared desktop link.'); config.connection=config.pendingLink; delete config.pendingLink; persist(); runClient(); await client.tick(); });
   ipcMain.handle('companion:choose-apps', async event => {
     localSender(event); if (enabledUntil) throw new Error('Stop the current app session before changing access.');
     if (process.platform !== 'darwin') throw new Error('This build supports bounded Mac app selection.');
