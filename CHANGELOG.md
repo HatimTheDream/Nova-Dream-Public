@@ -1,3 +1,7 @@
+## [1.5.5] — 2026-09-16
+
+- Use the primary text color for Assistant reply paragraphs, matching your messages in light and dark themes across desktop, phone, live voice and saved conversations.
+
 ## [1.5.4] — 2026-09-16
 
 - Keep consecutive voice captions in one message bubble while you continue speaking, including when part of the message has already saved. Copy the whole spoken message; keep separate calls, typed messages and Assistant replies distinct. Existing conversations and saved readers use the same grouping, with original message actions available for each preserved part.

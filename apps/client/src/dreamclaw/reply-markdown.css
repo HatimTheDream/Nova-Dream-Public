@@ -1,8 +1,8 @@
 /* Original Nova Dream reply typography, scoped and mapped to E3 tokens. */
-  .dc-reply-markdown { line-height: 1.75; word-wrap: break-word; overflow-wrap: anywhere; letter-spacing: 0.01em; overflow-x: clip; overflow-y: visible; max-width: 100%; }
+  .dc-reply-markdown { color: var(--text); line-height: 1.75; word-wrap: break-word; overflow-wrap: anywhere; letter-spacing: 0.01em; overflow-x: clip; overflow-y: visible; max-width: 100%; }
   .dc-reply-markdown > :first-child { margin-top: 0; }
   .dc-reply-markdown > :last-child { margin-bottom: 0; }
-  .dc-reply-markdown p { margin-bottom: 0.85em; }
+  .dc-reply-markdown p { color: inherit; margin-bottom: 0.85em; }
   .dc-reply-markdown p:last-child { margin-bottom: 0; }
   .dc-reply-markdown h1, .dc-reply-markdown h2, .dc-reply-markdown h3,
   .dc-reply-markdown h4, .dc-reply-markdown h5, .dc-reply-markdown h6 {
