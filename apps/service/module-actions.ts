@@ -1,3 +1,7 @@
+import { agentMayUse } from '../../packages/domain/agent-capabilities.js';
+import type { TeamConversationAccess } from '../../packages/domain/team-work.js';
+import type { HostBrowser } from './host-browser.js';
+import { browserInputSchema } from '../../packages/domain/host-browser.js';
 import { SourceReader } from './source-reader.js';
 import type { Companions } from './companions.js';
 import { companionCallSchema } from '../../packages/domain/companion.js';
@@ -38,7 +42,7 @@ function uuid(value:unknown){const s=sha(value);return `${s.slice(0,8)}-${s.slic
 const stamp=()=>new Date().toISOString();
 const strip=(schema:z.ZodObject<any>)=>z.object(Object.fromEntries(Object.entries(schema.shape).filter(([key])=>!['requestId','epoch','writerId'].includes(key))) as any).strict();
 type Operation={title:string;module:string;schema:z.ZodType;write?:boolean;external?:boolean;read?:(device:string,input:any,owner:{operationId:string;assignmentId?:string;conversationId:string})=>unknown|Promise<unknown>;run?:(action:ModuleAction)=>unknown|Promise<unknown>;prepare?:(action:ModuleAction)=>unknown|Promise<unknown>;confirm?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;cancel?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;check?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>};
-export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService;companions?:Companions};
+export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService;companions?:Companions;hostBrowser?:HostBrowser};
 /** Model arguments never select an authority, device, epoch, conversation, or request receipt. */
 export class ModuleActions {
  private operations:Record<string,Operation>;
@@ -50,6 +54,11 @@ export class ModuleActions {
   this.reader=new SourceReader(store);
   const envelope=(a:ModuleAction)=>({...a.input,epoch:a.epoch,requestId:a.id});
   this.operations={
+   ...(s.hostBrowser ? {
+    'browser.state': {title:'Inspect the workspace host browser',module:'Browser',schema:z.object({}).strict(),read:()=>s.hostBrowser!.state()},
+    'browser.observe': {title:'Read a host browser page and its screenshot',module:'Browser',schema:z.object({targetId:z.string().min(1).max(200)}).strict(),read:(device:string,input:{targetId:string})=>s.hostBrowser!.observe(device,input.targetId)},
+    'browser.act': {title:'Act in the workspace host browser',module:'Browser',write:true,external:true,schema:browserInputSchema,run:(a:ModuleAction)=>s.hostBrowser!.act(a.deviceId,a.id,a.input,()=>{const access=this.reviewAccess(a);if(access.pendingSettings||access.permissionMode==='read-only')throw new Fault(403,'browser_access','Browser actions are no longer permitted.');if(a.assignmentId&&!this.s.assignments.canUseLiveModule(a.assignmentId,'browser.act'))throw new Fault(409,'browser_cancelled','This assignment is no longer running.');if(!a.assignmentId){const op=this.s.assistant.operations().find(o=>o.id===a.operationId);if(!op||op.cancelRequested||!['dispatching','accepted','running'].includes(op.state))throw new Fault(409,'browser_cancelled','This request is no longer running.');}}),check:(a:ModuleAction)=>s.hostBrowser!.result(a.id)},
+   } : {}),
    ...(s.companions ? {
     'computer.devices': { title: 'List optional linked computers', module: 'Computer', schema: z.object({}).strict(), read: () => ({ devices: s.companions!.devices().filter(d => !d.revokedAt), instructions: 'Select the exact computer requested by the owner and use its advertised tool schemas. Only an online desktop with locally enabled access can execute. Scope identifies selected apps or full desktop; enabledUntil null means explicitly enabled until stopped, and 0 means off. Each computer.call creates an owner review; pending or queued is not success. Read computer.result after approval before the next action. Observe before acting and verify afterward. Request a bounded screenshot size such as max_dimension 1024 when needed. Never repeat an unknown effect. Host tasks do not require a desktop.' }) },
     'computer.call': { title: 'Use the selected computer', module: 'Computer', write: true, external: true, schema: companionCallSchema, run: (a: ModuleAction) => this.computerAction(a), check: (a: ModuleAction) => s.companions!.result(a.id, a.operationId) },
@@ -127,6 +136,11 @@ export class ModuleActions {
  private save(a:ModuleAction){return this.s.store.internalWrite('modules:action:'+a.id,{...a,revision:a.revision+1,updatedAt:stamp()});}
  private get(id:string){const a=this.s.store.internalRead<ModuleAction>('modules:action:'+id);if(!a||a.epoch!==this.s.store.epoch)throw new Fault(404,'module_action_missing','This action is unavailable.');return a;}
  private def(operation:string){const op=Object.hasOwn(this.operations,operation)?this.operations[operation]:undefined;if(!op)throw new Fault(400,'module_operation_missing','Use nova_read catalog to choose a supported operation.');return op;}
+ private teamMayUse(conversationId:string,operation:string,input:Record<string,unknown>,write:boolean){
+  const binding=this.s.store.internalRead<TeamConversationAccess>('team:conversation:'+conversationId);if(!binding)return true;
+  const agent=this.s.store.readEntity('agent',binding.agentId);
+  return binding.epoch===this.s.store.epoch&&!!agent&&!agent.value.archived&&!(write&&binding.role!=='build')&&agentMayUse(binding.access,agent.value.access??{},operation,input,write);
+ }
  private current(input:ModuleInvocation){
   if(this.closed||input.epoch!==this.s.store.epoch)throw new Fault(409,'workspace_changed','Reconnect to this workspace before using its tools.');
   if(/^agent:edition3(?:-native)?-assignment:e3-assignment-/.test(input.nativeKey)) {
@@ -135,6 +149,7 @@ export class ModuleActions {
   }
   const c=this.s.assistant.conversations().find(c=>c.nativeId===input.nativeId&&c.nativeKey===input.nativeKey);
   if(!c||c.archived||c.deleted||c.pendingSettings||c.state!=='ready'||c.connectionGeneration!==this.s.gateway.status().generation)throw new Fault(403,'conversation_unavailable','These tools belong to an active Nova Dream conversation.');
+  if(!this.teamMayUse(c.id,input.operation,input.input,input.write))throw new Fault(403,'team_agent_access','This team member does not have this workspace capability.');
   if((c.permissionMode??'read-only')!==input.permissionMode)throw new Fault(403,'access_changed','Refresh the chat’s Access setting before changing app data.');
   const op=this.s.assistant.operations().find(o=>o.conversationId===c.id&&o.nativeId===c.nativeId&&o.epoch===input.epoch&&!o.cancelRequested&&!o.steerTarget&&['dispatching','accepted','running'].includes(o.state));
   if(!op)throw new Fault(403,'run_inactive','The originating Assistant request is no longer running.');
@@ -197,6 +212,7 @@ export class ModuleActions {
  list(conversationId:string){if(!this.s.assistant.conversations().some(c=>c.id===conversationId&&!c.deleted))return [];return this.all().filter(a=>a.epoch===this.s.store.epoch&&a.conversationId===conversationId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
  private result(a:ModuleAction,result:any){
   let state:ModuleAction['state']='applied';const status=result?.state??result?.status;
+  if(a.operation==='browser.act')state=status==='completed'?'applied':status==='failed'?'failed':'unknown';
   if(a.operation==='computer.call')state=status==='completed'?'applied':status==='cancelled'?'cancelled':status==='refused'?'failed':'unknown';
   if(a.external&&this.def(a.operation).prepare){
    if(['uncertain','unknown','interrupted','running','applying'].includes(status)||result?.outcomes?.some((o:any)=>o.state==='uncertain'))state='unknown';
@@ -217,6 +233,7 @@ export class ModuleActions {
   if(a.assignmentId) return {permissionMode:this.s.assignments.canReviewModule(a.assignmentId,a.operation,a.input,true)?'guarded':'read-only',pendingSettings:undefined};
   const c=this.s.assistant.conversations().find(c=>c.id===a.conversationId);
   if(!c||c.deleted||c.archived)throw new Fault(409,'conversation_unavailable','Restore the original chat before changing its saved actions.');
+  if(!this.teamMayUse(c.id,a.operation,a.input,true))throw new Fault(403,'team_agent_access','This team member no longer has permission for the proposed action.');
   return c;
  }
  async decide(device:string,raw:unknown){

@@ -233,11 +233,15 @@ export class AssistantService {
     if (conversation && status.generation !== conversation.connectionGeneration) throw new Fault(409, 'gateway_changed', 'This conversation belongs to a different Gateway. Reconnect its original host.');
     return status;
   }
-  async create(device: string, raw: unknown): Promise<Conversation> {
+  private assertTeamCheckout(folder:string|undefined, teamId?:string) {
+    if(folder && this.store.internalList<{id:string;folder:string;state:string;epoch:string}>('team:run:').some(team=>team.epoch===this.store.epoch && team.folder===folder && team.id!==teamId && ['running','stopping'].includes(team.state)))throw new Fault(409,'team_checkout_busy','The team is working in this checkout. Pause the workflow before starting another coding task there.');
+  }
+  async create(device: string, raw: unknown, teamId?:string): Promise<Conversation> {
     const input = createConversationSchema.parse(raw);
     const status = this.assertConnection();
     const admitted = this.store.admit(device, input, { type: 'conversation.create', ...input }, () => {
       const project = input.projectId ? this.store.readEntity('project', input.projectId) : undefined;
+      this.assertTeamCheckout(project?.value.workspace?.folder,teamId);
       if (input.projectId && !project) throw new Fault(409, 'missing_project', 'The selected Project is unavailable.');
       if (project && assistantSpace(project.value) !== assistantSpace(input)) throw new Fault(409, 'project_space', 'Choose a Project in this space.');
       if (input.refineSource) {
@@ -481,10 +485,11 @@ export class AssistantService {
     for (const attachment of manifest.attachments) if (canonical(this.store.blobMetadata(attachment.id)) !== canonical(attachment)) throw new Fault(409, 'attachment_changed', 'A required attachment changed or is missing.');
     return { input: draft.value.text, manifest: { ...manifest, digest: digest(manifest) } as ContextManifest };
   }
-  submit(device: string, raw: unknown, steering = false): AssistantOperation {
+  submit(device: string, raw: unknown, steering = false, teamId?:string): AssistantOperation {
     const input = steering ? steerSchema.parse(raw) : submitSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: steering ? 'assistant.steer' : 'assistant.submit', ...input }, () => {
       const conversation = this.conversation(input.conversationId);
+      this.assertTeamCheckout(conversation.workspace?.path??conversation.workspace?.folder,teamId);
       this.assertConnection(conversation);
       if (this.voiceBusy(conversation.id)) throw new Fault(409, 'voice_active', 'End the voice call before sending this draft. Your writing is kept.');
       if (conversation.revision !== input.conversationRevision || conversation.archived || conversation.state !== 'ready' || conversation.pendingSettings || !conversation.nativeId) throw new Fault(409, 'conversation_changed', 'Review the current conversation before sending.');

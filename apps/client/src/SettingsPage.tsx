@@ -6,6 +6,7 @@ import { ProviderAccounts } from './ProviderAccounts';
 import { ArrowLeft, Settings2, MailOpen, Sparkles, Zap, Device, Shield } from './icons';
 import './settings.css';
 
+const GitHubConnection = lazy(() => import('./GitHubConnection').then(module => ({ default: module.GitHubConnection })));
 const PhoneSettings = lazy(() => import('./Phone').then(module => ({ default: module.PhoneSettings })));
 const StorageSettings = lazy(() => import('./StorageSettings').then(module => ({ default: module.StorageSettings })));
 const InstallSettings = lazy(() => import('./InstallSettings').then(module => ({ default: module.InstallSettings })));
@@ -68,7 +69,7 @@ export function SettingsPage({ selected, select, snapshot, online, access, gener
     {!phone && <SettingsPanel id="accounts" active={current.id === 'accounts'}><section className="card settings-card settings-accounts">
       <h2>Connected accounts</h2>
       {recoveryPaused && <p className="notice">Connections are paused in this copy. Open Data to review recovery.</p>}
-      <ProviderAccounts snapshot={snapshot} online={online && !recoveryPaused} recoveryPaused={recoveryPaused}/>
+      <ProviderAccounts snapshot={snapshot} online={online && !recoveryPaused} recoveryPaused={recoveryPaused}/>{!recoveryPaused && <GitHubConnection epoch={snapshot.epoch}/>}
     </section></SettingsPanel>}
     {!phone && <SettingsPanel id="assistant" active={current.id === 'assistant'}><Connections recoveryPaused={recoveryPaused} remoteHost={access?.surface === 'web'} snapshot={snapshot} online={online} openAssistant={openAssistant}/></SettingsPanel>}
     {!phone && <SettingsPanel id="usage" active={current.id === 'usage'}><UsageSettings active={current.id === 'usage'} online={online && !recoveryPaused}/></SettingsPanel>}

@@ -109,9 +109,10 @@ export class AssignmentService {
     const a = this.read(attemptId), current = this.store.readEntity('agent', a.agentId);
     return !(write && ['discussion','proposal'].includes(a.capture.plan.value.executionMode ?? '')) && a.epoch === this.store.epoch && !!current && !current.value.archived && agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, operation, input, write);
   }
-  canUseComputer(attemptId: string) {
+  canUseComputer(attemptId: string) { return this.canUseLiveModule(attemptId,'computer.call'); }
+  canUseLiveModule(attemptId: string, operation:string) {
     const attempt = this.read(attemptId);
-    return !this.closing && !attempt.stopReason && this.now() < attempt.deadlineAt && this.canReviewModule(attemptId, 'computer.call', {}, true);
+    return !this.closing && !attempt.stopReason && this.now() < attempt.deadlineAt && this.canReviewModule(attemptId, operation, {}, true);
   }
   start(device: string, raw: unknown, scheduled?: { origin: AssignmentRoutineOrigin; admitted: (attempt: AssignmentAttempt) => void }) {
     const input = assignmentStartSchema.parse(raw);
@@ -122,6 +123,7 @@ export class AssignmentService {
       if (!plan || plan.revision !== input.revision || plan.value.archived || plan.value.state !== 'planned') throw new Fault(409, 'assignment_changed', 'Review the current active assignment plan before starting.');
       const agent = this.store.readEntityVersion('agent', plan.value.agentId, plan.value.agentRevision);
       if (!agent || this.store.readEntity('agent', plan.value.agentId)?.value.archived) throw new Fault(409, 'agent_changed', 'This saved agent design is unavailable or archived.');
+      if(this.store.internalList<import('../../packages/domain/team-work.js').TeamWork & {epoch:string}>('team:run:').some(t=>t.epoch===this.store.epoch&&!['complete','cancelled'].includes(t.state)&&t.steps[t.next]?.agentId===agent.id&&(t.state==='running'||t.state==='stopping'||['running','unknown'].includes(t.steps[t.next].state))))throw new Fault(409,'agent_team_busy','This agent has an unfinished team stage. Finish or stop that workflow before assigning more work.');
       const project = plan.value.projectId ? this.store.readEntity('project', plan.value.projectId) : null;
       if ((project?.revision ?? null) !== input.projectRevision || (plan.value.projectId && !project)) throw new Fault(409, 'project_changed', 'Review the current Project before starting this assignment.');
       const sources = (plan.value.sources ?? []).map(source => {

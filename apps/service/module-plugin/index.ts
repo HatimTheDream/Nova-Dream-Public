@@ -29,7 +29,7 @@ export function registerModuleTools(api:ModulePluginApi){
    const response=await fetch(config.url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.token},body:JSON.stringify({...input,epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,toolCallId,permissionMode:session.permissionMode??'read-only',write}),redirect:'error',signal:AbortSignal.any([AbortSignal.timeout(30000),...(signal?[signal]:[])])});
    const text=await response.text();if(Buffer.byteLength(text)>1024*1024)throw new Error('Narrow this workspace request.');
    let result:unknown;try{result=JSON.parse(text);}catch{throw new Error('The workspace result is unconfirmed. Check its saved action before repeating a change.');}
-   if (response.ok && input.operation === 'sources.read') {
+   if (response.ok && (input.operation === 'sources.read' || input.operation === 'browser.observe')) {
     const reading=z.object({image:z.object({mimeType:z.literal('image/jpeg'),data:z.string().max(950000).regex(/^[A-Za-z0-9+/]*={0,2}$/),width:z.number().int().positive().max(1400),height:z.number().int().positive().max(1400)}).optional()}).passthrough().parse(result);
     if(reading.image){const {image,...metadata}=reading;const summary={...metadata,image:{mimeType:image.mimeType,width:image.width,height:image.height}};return {content:[{type:'text',text:JSON.stringify(summary)},{type:'image',mimeType:image.mimeType,data:image.data}],details:summary,isError:false};}
    }

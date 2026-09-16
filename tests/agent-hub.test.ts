@@ -114,3 +114,13 @@ test('returned work retains pending review and links only applied canonical reco
   const hub=new AgentHub(f.store,f.service);assert.equal(hub.state().agents[0].tasks[0].id,task.id);
   assert.equal(f.store.snapshot(f.device).taskState?.earnedXp,0);
 }));
+
+test('team execution is visible in the hub with a direct conversation link and never exports the private brief', () => fixture(async f => {
+  const id=randomUUID(),conversationId=randomUUID(),operationId=randomUUID();
+  f.store.internalWrite('team:run:'+id,{id,epoch:f.store.epoch,title:'Team check',brief:'Private team brief sentinel',state:'running',next:0,steps:[{agentId:f.agent.id,role:'build',state:'running',conversationId,operationId}]});
+  f.store.internalWrite('assistant:operation:'+operationId,{state:'running'});
+  assert.equal(f.hub.state().agents[0].status,'working');assert.equal(f.hub.state().agents[0].team?.conversationId,conversationId);assert.equal(f.hub.state().roster[0].status,'working');
+  assert.doesNotMatch(JSON.stringify(f.hub.state()),/Private team brief/);
+  assert.throws(()=>f.start(),/unfinished team stage/);
+  f.store.internalWrite('assistant:operation:'+operationId,{state:'unknown'});assert.equal(f.hub.state().agents[0].status,'waiting-owner');
+}));

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../apps/service/store.js';
-import { ManagedRuntime } from '../apps/service/runtime.js';
+import { ManagedRuntime, needsShortRuntimeTemporaryDirectory } from '../apps/service/runtime.js';
 import type { AssistantConnection } from '../packages/domain/assistant.js';
 
 test('reconnecting the owned runtime reuses its live process and leaves a healthy connection alone', async () => {
@@ -41,6 +41,11 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     assert.equal(connection.modelAuthReady, false); // Process readiness never grants model access.
     assert.equal(connections.length, 1);
     const signIn = runtime.signInCommand();
+    if(needsShortRuntimeTemporaryDirectory(join(store.directory,'openclaw-runtime'))){
+      assert(Buffer.byteLength(signIn.env.TMPDIR!)<40,'Chromium socket suffix must fit Linux sockaddr_un');
+      assert.equal(statSync(signIn.env.TMPDIR!).mode&0o777,0o700);
+      assert.equal(signIn.env.TEMP,signIn.env.TMPDIR);
+    }
     assert.equal(signIn.args[signIn.args.indexOf('--agent') + 1], 'main'); // Native model commands require an owner when the assignment worker is present.
     assert(signIn.args.includes('--device-code'));
     assert(signIn.args.includes('openai:edition3-voice'));
@@ -57,14 +62,31 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     assert.equal(connections.length, 2);
     assert.equal(connections[0], connections[1]);
     assert.equal(readFileSync(join(store.directory, 'openclaw-runtime/starts.txt'), 'utf8'), 'started\n');
+    await runtime.configureBrowser(true);
+    const browserConfig=JSON.parse(readFileSync(signIn.env.OPENCLAW_CONFIG_PATH!,'utf8'));
+    assert.equal(browserConfig.browser.defaultProfile,'nova-work');assert.equal(browserConfig.browser.evaluateEnabled,false);
+    assert(browserConfig.browser.extraArgs.some((arg:string)=>/^--proxy-server=http:\/\/127\.0\.0\.1:\d+$/.test(arg)));
+    assert(browserConfig.browser.extraArgs.includes('--proxy-bypass-list=<-loopback>'));assert(browserConfig.tools.deny.includes('browser'));
+    assert.deepEqual(Object.keys(browserConfig.browser.profiles),['nova-work']);
+    await runtime.configureBrowser(false);
+    assert.deepEqual(JSON.parse(readFileSync(signIn.env.OPENCLAW_CONFIG_PATH!,'utf8')).browser,browserConfig.browser,'Turning browsing off closes its network route without restarting the Assistant');
     connection = { ...connection, url: 'wss://another-host.invalid' };
     assert.equal(runtime.status().canSignIn, false);
     assert.throws(() => runtime.signInCommand(), /Start the Assistant on this host/);
+    await runtime.stop();
+    if(needsShortRuntimeTemporaryDirectory(join(store.directory,'openclaw-runtime')))assert.equal(existsSync(signIn.env.TMPDIR!),false,'Only the owned short temporary directory is removed after shutdown');
   } finally {
     await runtime.stop(); store.close();
     if (previous === undefined) delete process.env.E3_OPENCLAW_ENTRY; else process.env.E3_OPENCLAW_ENTRY = previous;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('recovered Linux workspaces need a short temporary socket path without changing durable profile paths',()=>{
+  const recovered='/var/lib/nova/workspace/recovered-workspaces/740cee9f-b41f-4eb0-9ebd-e0b64b7822b8/openclaw-runtime';
+  assert.equal(needsShortRuntimeTemporaryDirectory(recovered,'linux'),true);
+  assert.equal(needsShortRuntimeTemporaryDirectory('/tmp/short','linux'),false);
+  assert.equal(needsShortRuntimeTemporaryDirectory(recovered,'win32'),false);
 });
 
 

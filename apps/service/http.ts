@@ -1,3 +1,9 @@
+import { TeamWorkService } from './team-work.js';
+import { HostBrowser } from './host-browser.js';
+import { browserInputSchema } from '../../packages/domain/host-browser.js';
+import { GitHubConnection } from './github.js';
+import { WorkRepositories } from './work-repositories.js';
+import { githubName } from '../../packages/domain/work-repositories.js';
 import type { RecoveryHost } from './workspace-host.js';
 import { UploadTransfers } from './upload-transfers.js';
 import { AssistantObservations } from './assistant-observations.js';
@@ -109,6 +115,8 @@ export async function startServer(options: { directory: string; port: number; pr
   if (keys.status().provider === 'server-secret') {
     try { await keys.protect(key => store.matchesKey(key)); } catch { store.close(); throw new Error('The server credential could not protect this workspace. Saved data was kept; no listener or connected work was started.'); }
   }
+  const github = new GitHubConnection(store);
+  const workRepositories = new WorkRepositories(store, github);
   const accounts = new Accounts(store, options.providers, undefined, options.privateWeb?.origin);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
@@ -137,6 +145,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const responseControl = options.responseControlFactory || gateway instanceof Gateway ? new SessionSettingsControl(gateway, options.responseControlFactory ?? (() => new Gateway(store, options.version, undefined, 'response-control')), 'response') : undefined;
   const assistant = new AssistantService(store, gateway, undefined, accessControl, responseControl);
   const assignments = new AssignmentService(store, gateway);
+  const teamWork = new TeamWorkService(store,assistant);
   const approvals = new AssistantApprovals(store, gateway, () => [...assistant.conversations(), ...assignments.approvalTargets()], options.approvalReviewFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'approval-review') : undefined));
   const questions = new AssistantQuestions(store, gateway, () => assistant.conversations(), id => assistant.history(id), options.questionReviewFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'question-review') : undefined));
   assistant.setApprovalReview(async id => { await Promise.all([approvals.prepare(id), questions.prepare(id)]); });
@@ -151,7 +160,8 @@ export async function startServer(options: { directory: string; port: number; pr
   const observations = new AssistantObservations(store, assistant);
   const companions = new Companions(store);
   const companionDownloads = new CompanionDownloads(process.env.E3_COMPANION_DOWNLOADS);
-  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions});
+  const hostBrowser = new HostBrowser(store, gateway, gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'browser-control') : undefined, enabled => { if(!runtime) throw new Fault(409,'browser_runtime','Use the managed Assistant for host browsing.'); return runtime.configureBrowser(enabled); });
+  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions,hostBrowser});
   const moduleToken = randomBytes(32).toString('hex');
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
   const backups = new WorkspaceBackups(store, options.version ?? 'development', options.nativeBackup ?? (runtime ? new ManagedNativeBackup(runtime) : undefined), () => assistant.captureSavedHistories());
@@ -351,6 +361,30 @@ export async function startServer(options: { directory: string; port: number; pr
           return json(200, phoneAccess.startPairing(device, await commandBody(request, 2048)));
         }
         if (!remote && url.pathname === '/api/phone/revoke' && request.method === 'POST') return json(200, phoneAccess.revoke(device, await commandBody(request, 2048)).value);
+        if (url.pathname === '/api/work/team' && request.method === 'GET') return json(200,teamWork.state());
+        if (url.pathname === '/api/work/team/start' && request.method === 'POST') return json(200,teamWork.create(device,await commandBody(request,32768)));
+        if (url.pathname === '/api/work/team/control' && request.method === 'POST') return json(200,teamWork.control(device,await commandBody(request,2048)));
+        if (url.pathname === '/api/work/browser' && request.method === 'GET') return json(200, await hostBrowser.state());
+        if (url.pathname === '/api/work/browser/configure' && request.method === 'POST') return json(200, await hostBrowser.configure(device,z.object({...assistantRequestSchema.shape,enabled:z.boolean()}).strict().parse(await commandBody(request,2048))));
+        if (url.pathname === '/api/work/browser/observe' && request.method === 'GET') return json(200, await hostBrowser.observe(device,z.string().min(1).max(200).parse(url.searchParams.get('target'))));
+        if (url.pathname === '/api/work/browser/action' && request.method === 'POST') {
+          const input=z.object({...assistantRequestSchema.shape,input:browserInputSchema}).strict().parse(await commandBody(request,32768));
+          store.admit(device,input,{type:'browser.action',...input},()=>({accepted:true}));
+          return json(200,await hostBrowser.act(device,input.requestId,input.input));
+        }
+        if (url.pathname === '/api/work/github' && request.method === 'GET') return json(200, await github.state(device));
+        if (url.pathname === '/api/work/github' && request.method === 'POST') return json(200, await github.action(device, await commandBody(request, 2048)));
+        if (url.pathname === '/api/work/repositories' && request.method === 'GET') return json(200, await github.repositories(z.coerce.number().int().min(1).max(1000).parse(url.searchParams.get('page') ?? 1)));
+        if (url.pathname === '/api/work/branches' && request.method === 'GET') return json(200, await github.branches(githubName.parse(url.searchParams.get('repository')), z.coerce.number().int().min(1).max(1000).parse(url.searchParams.get('page') ?? 1)));
+        if (url.pathname === '/api/work/state' && request.method === 'GET') return json(200, workRepositories.state());
+        if (url.pathname === '/api/work/checkout' && request.method === 'POST') return json(200, await workRepositories.checkout(device, await commandBody(request, 4096)));
+        if (url.pathname === '/api/work/review' && request.method === 'GET') return json(200, await workRepositories.review(z.uuid().parse(url.searchParams.get('conversation'))));
+        if (url.pathname === '/api/work/publish' && request.method === 'POST') return json(200, await workRepositories.publish(device, await commandBody(request, 16384)));
+        if (url.pathname === '/api/work/reconcile' && request.method === 'POST') {
+          const input = z.object({ ...assistantRequestSchema.shape, id:z.uuid() }).strict().parse(await commandBody(request, 2048));
+          store.admit(device,input,{type:'work.reconcile',...input},()=>({accepted:true}));
+          return json(200, await workRepositories.reconcile(device,input.id));
+        }
         if (url.pathname === '/api/snapshot' && request.method === 'GET') {
           const connection = gateway.status();
           return json(200, { ...store.snapshot(device), calendarReminders: calendar.reminders.state(), version: options.version, capabilities: { assistant: connection.state === 'ready' && connection.modelAuthReady && connection.grantedScopes.includes('operator.write'), voice: connection.state === 'ready' && connection.methods.includes('talk.client.create'), reason: connection.message } });
@@ -662,9 +696,9 @@ export async function startServer(options: { directory: string; port: number; pr
   if (webServer) { webServer.requestTimeout = 15000; webServer.headersTimeout = 10000; }
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
+  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
   if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); contactCrm.tick();
-    assignments.startPolling(); subtaskSuggestions.startPolling();
+    assignments.startPolling(); teamWork.start(); subtaskSuggestions.startPolling();
     agentRoutines.start(); hubMeetings.startPolling(); }
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Unexpected listening address');
   ownOrigin = `http://127.0.0.1:${address.port}`;
@@ -685,7 +719,7 @@ export async function startServer(options: { directory: string; port: number; pr
     closePromise = (async () => {
       try {
         await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
-        companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
+        await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
         await signIn?.close(); await chatGptAccount?.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
       } finally {
         try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }

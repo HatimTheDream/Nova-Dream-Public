@@ -237,3 +237,11 @@ test('Tailscale reconnect resumes only a stopped saved network on explicit reque
   assert.equal((await transport.reconcile(target, true)).state, 'unavailable');
   assert.equal(calls.some(args => args[0] === 'up'), false);
 });
+
+test('paired phones can inspect host work and browser state without linking a desktop, while host operations retain epoch checks',async t=>{
+  const f=await pairedWorkflow(t);
+  for(const path of ['work/state','work/team','work/browser'])assert.equal((await f.phone(path)).status,200,path);
+  assert.equal((await f.phone('work/browser')).data.enabled,false);
+  assert.equal((await f.phone('work/github',{...f.command(),epoch:randomUUID(),action:'disconnect'})).status,409);
+  assert.equal((await f.phone('work/team/start',{...f.command(),projectId:'missing',title:'Work',brief:'Check',steps:[{agentId:'a',role:'research'},{agentId:'b',role:'build'}]})).status,409);
+});

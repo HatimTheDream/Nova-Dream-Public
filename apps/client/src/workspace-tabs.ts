@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import { attachmentSchema } from '../../../packages/domain/attachments';
 const viewSchema = z.union([
-  z.object({ kind: z.enum(['home', 'files', 'changes', 'live']) }).strict(),
+  z.object({ kind: z.enum(['home', 'files', 'changes', 'live', 'browser', 'team']) }).strict(),
   z.object({ kind: z.literal('file'), file: attachmentSchema, outputId: z.string().optional(), outputVersion: z.number().int().positive().optional() }).strict(),
 ]);
 export type WorkspaceView = z.infer<typeof viewSchema>;
 export type WorkspaceTab = { id: string; view: WorkspaceView };
 export type WorkspaceTabs = { tabs: WorkspaceTab[]; active: string; visible: boolean; expanded: boolean };
 export const viewId = (view: WorkspaceView) => view.kind === 'file' ? `file:${view.file.id}:${view.file.sha256}` : view.kind;
-export const viewTitle = (view: WorkspaceView) => view.kind === 'file' ? view.file.name : ({ home: 'New tab', files: 'Files', changes: 'Review', live: 'Live view' })[view.kind];
+export const viewTitle = (view: WorkspaceView) => view.kind === 'file' ? view.file.name : ({ home: 'New tab', files: 'Files', changes: 'Review', live: 'Live view', browser: 'Browser', team: 'Team work' })[view.kind];
 export const emptyWorkspace = (): WorkspaceTabs => ({ tabs: [{ id: 'home', view: { kind: 'home' } }], active: 'home', visible: false, expanded: false });
 export function restoreWorkspace(value: unknown): WorkspaceTabs {
   const parsed = z.object({ tabs: z.array(z.object({ id: z.string(), view: viewSchema }).strict()).max(100), active: z.string(), visible: z.boolean(), expanded: z.boolean() }).strict().safeParse(value);

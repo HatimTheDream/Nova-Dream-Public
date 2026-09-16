@@ -83,7 +83,10 @@ import assert from 'node:assert/strict';
 // Measured 565,093 gzip bytes (+4,047); retain startup and individual chunk limits.
 // 1.4 adds provider allowance and seven-day activity in a lazy Settings panel.
 // Measured total 567,671 gzip bytes; cap at 569 KB. Startup/chunk limits hold.
-export const clientLimits = { startup: 180000, total: 569000, deferredChunk: 80000 };
+// 1.5 adds lazy GitHub preparation/publication, team workflows and host-browser
+// panels. First coherent total: 577,770 (+10,099 / 1.78%). Bound the tranche
+// at 580 KB; preserve the 180 KB startup and 80 KB deferred-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 580000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

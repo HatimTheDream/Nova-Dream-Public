@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto';
 import type { ModuleAction } from '../../packages/domain/module-actions.js';
 import type { ReviewApproval } from '../../packages/domain/approvals.js';
 import { assignmentNeedsApproval } from '../../packages/domain/assignment-approvals.js';
+import type { TeamWork } from '../../packages/domain/team-work.js';
+import type { Conversation, AssistantOperation } from '../../packages/domain/assistant.js';
 import { appendHubRoom, deskAvailable, hubLayoutCommandSchema, hubLayoutKey, roomFurnitureSlots, type HubLayout } from '../../packages/domain/hub-layout.js';
 
 export class AgentHub {
@@ -61,6 +63,16 @@ export class AgentHub {
     const waiting = new Set(activities.filter(a => assignmentHoldsSlot(a) && assignmentNeedsApproval(this.assignments.summary(a.id), approvals, this.now())).map(a => a.agentId));
     const changes = this.store.internalList<ModuleAction>('modules:action:').filter(a => a.epoch === this.store.epoch && a.assignmentId);
     const reviewStates = new Set(['preparing','pending','applying','partial','unknown']);
+    const teams=this.store.internalList<TeamWork & {epoch:string}>('team:run:').filter(t=>t.epoch===this.store.epoch&&!['complete','cancelled'].includes(t.state));
+    const teamWork=(agentId:string)=>{
+      const team=teams.find(t=>t.steps[t.next]?.agentId===agentId);if(!team)return undefined;
+      const step=team.steps[team.next],operation=step.operationId?this.store.internalRead<AssistantOperation>('assistant:operation:'+step.operationId):undefined;
+      const conversation=step.conversationId?this.store.internalRead<Conversation>('assistant:conversation:'+step.conversationId):undefined;
+      const unsettled=operation&&!['completed','failed','cancelled'].includes(operation.state);
+      const needsApproval=approvals.some(a=>a.epoch===this.store.epoch&&a.conversationId===step.conversationId&&a.nativeId===conversation?.nativeId&&a.nativeKey===conversation?.nativeKey&&a.connectionGeneration===conversation?.connectionGeneration&&(a.action?.state==='unknown'||a.snapshot.status==='pending'&&a.snapshot.expiresAtMs>this.now()));
+      const status:HubAgent['status']=needsApproval?'waiting-owner':unsettled&&!availability.ready?'waiting-provider':unsettled&&operation.state!=='unknown'?'working':'waiting-owner';
+      return {status,reason:`${team.title} · ${step.role}. ${needsApproval?'Open the conversation to review its action.':status==='working'?'This team stage is running.':team.message}`,team:{id:team.id,title:team.title,role:step.role,conversationId:step.conversationId}};
+    };
     const work = (agentId: string) => {
       const attempts = activities.filter(a => a.agentId === agentId), ids = new Set(attempts.map(a => a.id));
       const actions = changes.filter(a => ids.has(a.assignmentId!));
@@ -77,7 +89,7 @@ export class AgentHub {
     const page = all.slice(offset, offset + 12), routines = this.store.internalList<AgentRoutine>('agent-routines:item:');
     return { observedAt: this.now(), runtimeReady: availability.ready, runtimeReason: availability.ready ? 'Connected to this host’s assignment worker.' : 'Connect the Assistant on this host to run assignments.', total: all.length, activeAgentId: active?.agentId ?? null, nextCursor: offset + 12 < all.length ? page.at(-1)!.id : null,
       layout: this.store.internalRead<HubLayout>(hubLayoutKey)!,
-      roster: all.map(({ id, revision, name, position, appearance, archived }) => {const w=work(id);return { id, revision, name, position, appearance, archived, ...hubStatus(w.attempts.find(holds), availability.ready, w.attempts[0],w.pending,waiting.has(id)) };}),
+      roster: all.map(({ id, revision, name, position, appearance, archived }) => {const w=work(id);return { id, revision, name, position, appearance, archived, ...hubStatus(w.attempts.find(holds), availability.ready, w.attempts[0],w.pending,waiting.has(id)),...teamWork(id) };}),
       agents: page.map(agent => {
         const {attempts,reviews,actions,pending}=work(agent.id),current=attempts.find(holds),applied=actions.filter(a=>a.state==='applied');
         const linked = (kind:'task'|'content') => applied.filter(a=>a.operation==='records.save'&&a.input.kind===kind).flatMap(a=>{
@@ -88,7 +100,7 @@ export class AgentHub {
         for(const id of linked('task')) {const task=this.store.readEntity('task',id);if(task&&!task.value.trashed)tasks.set(id,{id,title:task.value.title,status:task.value.status});}
         const content = new Map(agent.content.map(c=>[c.id,c]));
         for(const id of linked('content')) {const item=this.store.readEntity('content',id);if(item&&!item.value.archived)content.set(id,{id,title:item.value.title,stage:item.value.stage});}
-        return { ...agent,tasks:[...tasks.values()],content:[...content.values()],reviews,appliedChanges:applied.length,...hubStatus(current, availability.ready, attempts[0],pending,waiting.has(agent.id)), active: current ?? null, latest: attempts[0] ?? null, returned: attempts.filter(a => a.state === 'returned').length, unresolved: attempts.filter(a => a.state === 'unknown' || a.state === 'stopping').length, routines: routines.filter(r => r.agentId === agent.id && !r.value.archived).map(r => ({ id: r.id, revision: r.revision, name: r.value.name, timezone: r.value.timezone, nextAt: r.nextAt, attention: r.attention })) };
+        return { ...agent,tasks:[...tasks.values()],content:[...content.values()],reviews,appliedChanges:applied.length,...hubStatus(current, availability.ready, attempts[0],pending,waiting.has(agent.id)),...teamWork(agent.id), active: current ?? null, latest: attempts[0] ?? null, returned: attempts.filter(a => a.state === 'returned').length, unresolved: attempts.filter(a => a.state === 'unknown' || a.state === 'stopping').length, routines: routines.filter(r => r.agentId === agent.id && !r.value.archived).map(r => ({ id: r.id, revision: r.revision, name: r.value.name, timezone: r.value.timezone, nextAt: r.nextAt, attention: r.attention })) };
       }),
     };
   }

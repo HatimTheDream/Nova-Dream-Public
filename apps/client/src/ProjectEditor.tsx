@@ -1,11 +1,13 @@
 import { assistantSpace, type AssistantSpace } from '../../../packages/domain/assistant-space';
-import { useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useMemo, useRef, useState } from 'react';
 import type { Attachment, Command, Entity, Project, Snapshot } from '../../../packages/domain/contracts';
 import { readLocal, saveLocal } from './api';
 import { retainedWindowId, useRetained } from './useWorkspace';
 import { useAttachments } from './useAttachments';
 import { Dialog, Empty } from './ui';
 import { File, Folder, Paperclip, X } from './icons';
+
+const GitHubRepositoryPicker = lazy(() => import('./GitHubRepositoryPicker').then(m => ({ default:m.GitHubRepositoryPicker })));
 
 type Form = Project & { attachments: Attachment[] };
 const form = (value?: Project): Form => ({ name: '', purpose: '', ...value, attachments: value?.attachments ?? [] });
@@ -23,7 +25,7 @@ export function ProjectEditor({ snapshot, projectId, space = 'chat', close, save
   const current = useMemo(() => entity ? { ...entity, value: form(entity.value) } : undefined, [entity]);
   const editor = useRetained<Form>('project', id, initial, current, snapshot, refresh, { autoSave: false });
   const uploads = useAttachments(snapshot, editor.value, editor.change, `project-sources:${id}:${retainedWindowId}`, 'Project');
-  const input = useRef<HTMLInputElement>(null), [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null), [error, setError] = useState(''), [repositoryPicker,setRepositoryPicker] = useState(space === 'work' && !projectId);
   const saving = useRef(false), blocked = editor.saving || !!editor.pending || !!editor.conflict;
   const save = async () => {
     if (saving.current || uploads.pending.length || editor.conflict) return;
@@ -38,10 +40,10 @@ export function ProjectEditor({ snapshot, projectId, space = 'chat', close, save
   return <Dialog title={projectId ? 'Project settings' : space === 'work' ? 'Create a Work Project' : 'Create a Chat Project'} close={close}>
     {projectId && !entity ? <Empty title="This Project is unavailable">Your kept changes remain on this device.</Empty> : <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={blocked}><label>Project name<input autoFocus required maxLength={100} value={editor.value.name} onChange={event => editor.change(value => ({ ...value, name: event.target.value }))}/></label>
-      {isWork ? <div className="project-folder-field">
+      {isWork ? <><div className="work-source-options"><button type="button" aria-pressed={repositoryPicker} onClick={()=>setRepositoryPicker(true)}>GitHub repository</button><button type="button" aria-pressed={!repositoryPicker} onClick={()=>setRepositoryPicker(false)}>Host folder</button></div>{repositoryPicker ? <Suspense fallback={<p role="status">Opening repositories…</p>}><GitHubRepositoryPicker epoch={snapshot.epoch} deviceId={snapshot.deviceId} projectId={id} onSelect={checkout=>{const kept=editor.change(value=>({...value,name:value.name.trim()?value.name:checkout.repository.fullName.split("/")[1],workspace:{folder:checkout.folder,environment:"local"}}));if(kept)setRepositoryPicker(false);return kept;}}/></Suspense> : <div className="project-folder-field">
         <label htmlFor={`${id}:source-folder`}>Source folder</label>
         <div className="project-folder-input"><input id={`${id}:source-folder`} required value={editor.value.workspace?.folder ?? ''} onChange={event => editor.change(value => ({ ...value, workspace: { environment: value.workspace?.environment ?? 'local', folder: event.target.value } }))} placeholder="Path to your project folder"/>{desktop && <button type="button" className="icon-button" aria-label="Choose source folder" title="Choose source folder" onClick={() => { void desktop.chooseWorkingFolder().then(folder => { if (folder) editor.change(value => ({ ...value, workspace: { folder, environment: value.workspace?.environment ?? 'local' } })); }).catch(() => setError('The folder chooser could not open. Enter its path above.')); }}><Folder size={20}/></button>}</div>
-      </div> : <>
+      <p className="metadata work-host-location">This folder belongs to the computer or server running Nova.</p></div>}</> : <>
       <label>Purpose & context<textarea rows={3} maxLength={10000} value={editor.value.purpose} onChange={event => editor.change(value => ({ ...value, purpose: event.target.value }))} placeholder="What are you working toward?"/></label>
       <label>Project instructions<textarea rows={2} maxLength={10000} value={editor.value.instructions ?? ''} onChange={event => editor.change(value => ({ ...value, instructions: event.target.value }))} placeholder="How should Nova use these sources and respond in this Project?"/></label>
       <div className="section-heading project-source-heading"><h3>Source files</h3><button type="button" disabled={editor.value.attachments.length + uploads.pending.length >= 10} onClick={() => input.current?.click()}><Paperclip size={17}/>Add attachments</button></div>

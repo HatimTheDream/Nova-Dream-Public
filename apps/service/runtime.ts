@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync, openSync, fsyncSync, closeSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, lstatSync, openSync, fsyncSync, closeSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Fault, Store } from './store.js';
 import { Gateway } from './gateway.js';
+import { BrowserNetwork } from './browser-network.js';
 import { withWorkerPlugin } from './worker-runtime-config.js';
 import { withModulePlugin } from './module-runtime-config.js';
 import { withSourcePlugin } from './source-runtime-config.js';
@@ -15,15 +16,37 @@ export type { RuntimeStatus } from '../../packages/domain/runtime.js';
 
 type RuntimeConfiguration = { port: number; token: string; entry: string };
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+// Chromium appends its own directory and SingletonSocket to TMPDIR. Recovered
+// workspaces can exceed Linux's 108-byte Unix socket limit before that suffix.
+export function needsShortRuntimeTemporaryDirectory(root:string,platform:NodeJS.Platform=process.platform){return platform==='linux'&&Buffer.byteLength(join(root,'tmp'))>60;}
 /** Owns only Edition 3's foreground Gateway process. Never uses service install/restart or --force. */
 export class ManagedRuntime {
   private child?: ChildProcess;
+  private browserNetwork=new BrowserNetwork();
+  private shortTemporaryDirectory?:string;
   private launching?: Promise<RuntimeStatus>;
   private generation = 0;
   private stopping = false;
   private stopPromise?: Promise<void>;
   private current: RuntimeStatus = { state: 'stopped', phase: 'idle', message: 'Edition 3 can start its own isolated OpenClaw workspace.', platform: process.platform, managedServiceInstalled: false };
   constructor(private store: Store, private gateway: Pick<Gateway, 'configure' | 'status'>, private readinessTimeoutMs = 45000, private moduleBridge?:()=>{url:string;token:string}) {}
+  async configureBrowser(enabled:boolean) {
+    if(this.store.recoveryEffectsPaused)throw new Fault(409,'recovery_held','Host browsing is paused in this recovered copy.');
+    const root=join(this.store.directory,'openclaw-runtime'),path=join(root,'openclaw.json');
+    if(!existsSync(path)||lstatSync(path).isSymbolicLink())throw new Fault(409,'browser_runtime','Start the managed Assistant before enabling its browser.');
+    const data=JSON.parse(readFileSync(path,'utf8'));
+    const browser=await this.browserConfiguration(data.browser,enabled);
+    const next={...data,browser,gateway:{...data.gateway,nodes:{...data.gateway?.nodes,browser:{mode:'off'}}},tools:{...data.tools,deny:[...new Set([...(data.tools?.deny??[]),'browser'])]}};
+    const temp=path+'.browser-'+randomBytes(8).toString('hex'),fd=openSync(temp,'wx',0o600);try{writeFileSync(fd,JSON.stringify(next,null,2));fsyncSync(fd);}finally{closeSync(fd);}renameSync(temp,path);
+  }
+  private async browserConfiguration(previous:any,enabled:boolean){
+    let port=this.store.internalRead<number>('browser:port');
+    if(!port){const socket=createServer();await new Promise<void>((ok,no)=>{socket.once('error',no);socket.listen(0,'127.0.0.1',ok);});const address=socket.address();if(!address||typeof address==='string')throw Error('No browser port');port=address.port;await new Promise<void>(ok=>socket.close(()=>ok()));this.store.internalWrite('browser:port',port);}
+    const proxy=await this.browserNetwork.start();this.browserNetwork.enable(enabled);
+    // OpenClaw's hostname policy cannot enforce proxy egress. Delegate that
+    // boundary to Nova's DNS-pinned public-only proxy, not to the remote page.
+    return {enabled:true,defaultProfile:'nova-work',evaluateEnabled:false,ssrfPolicy:{dangerouslyAllowPrivateNetwork:true},extraArgs:[`--proxy-server=${proxy}`,'--proxy-bypass-list=<-loopback>','--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],profiles:{'nova-work':{cdpPort:port,headless:process.platform==='linux'}}};
+  }
   status() {
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
     const connection = this.gateway.status();
@@ -67,7 +90,8 @@ export class ManagedRuntime {
     // Existing ChatGPT access is consumed only by OpenClaw's supported native login bridge.
     // No ambient provider key, channel token, runtime flag, or old OpenClaw profile is inherited.
     const env: NodeJS.ProcessEnv = Object.fromEntries(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SystemRoot', 'COMSPEC', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
-    return { ...env, OPENCLAW_HOME: join(root, 'home'), OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: join(root, 'workspace'), OPENCLAW_PROFILE: 'edition3', OPENCLAW_GATEWAY_PORT: String(config.port), OPENCLAW_GATEWAY_TOKEN: config.token, OPENCLAW_LOAD_SHELL_ENV: '0', OPENCLAW_EXEC_SHELL_SNAPSHOT: '0', OPENCLAW_NO_AUTO_UPDATE: '1', OPENCLAW_DISABLE_BONJOUR: '1', OPENCLAW_SKIP_CHANNELS: '1', TMPDIR: join(root, 'tmp'), TEMP: join(root, 'tmp'), TMP: join(root, 'tmp') };
+    const temporary=needsShortRuntimeTemporaryDirectory(root)?(this.shortTemporaryDirectory??=mkdtempSync('/tmp/nova-')):join(root,'tmp');
+    return { ...env, OPENCLAW_HOME: join(root, 'home'), OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: join(root, 'workspace'), OPENCLAW_PROFILE: 'edition3', OPENCLAW_GATEWAY_PORT: String(config.port), OPENCLAW_GATEWAY_TOKEN: config.token, OPENCLAW_LOAD_SHELL_ENV: '0', OPENCLAW_EXEC_SHELL_SNAPSHOT: '0', OPENCLAW_NO_AUTO_UPDATE: '1', OPENCLAW_DISABLE_BONJOUR: '1', OPENCLAW_SKIP_CHANNELS: '1', TMPDIR: temporary, TEMP: temporary, TMP: temporary };
   }
   resume() {
     const owned = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
@@ -116,7 +140,14 @@ export class ManagedRuntime {
       const serviceDirectory = dirname(fileURLToPath(import.meta.url));
       const bundlePath = import.meta.url.endsWith('.ts') ? resolve(serviceDirectory, '../../dist/service/apps/service/worker-plugin') : join(serviceDirectory, 'worker-plugin');
       const originalConfig = readFileSync(configPath, 'utf8');
-      const stagedConfig = withSourcePlugin(withWorkerPlugin(JSON.parse(originalConfig), this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache'));
+      const parsedConfig = JSON.parse(originalConfig);
+      const browserSetting=this.store.internalRead<{epoch:string;enabled:boolean}>('browser:setting');
+      const browserEnabled=browserSetting?.epoch===this.store.epoch&&browserSetting.enabled&&!this.store.recoveryEffectsPaused;
+      parsedConfig.browser=await this.browserConfiguration(parsedConfig.browser,!!browserEnabled);
+      parsedConfig.tools={...parsedConfig.tools,deny:[...new Set([...(parsedConfig.tools?.deny??[]),'browser'])]};
+      parsedConfig.gateway={...parsedConfig.gateway,nodes:{...parsedConfig.gateway?.nodes,browser:{mode:'off'}}};
+      parsedConfig.plugins = { ...parsedConfig.plugins, allow:[...new Set([...(parsedConfig.plugins?.allow??[]),'browser'])], entries:{...parsedConfig.plugins?.entries,browser:{...parsedConfig.plugins?.entries?.browser,enabled:true}} };
+      const stagedConfig = withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache'));
       const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),this.moduleBridge()) : stagedConfig,null,2);
       if (JSON.stringify(JSON.parse(originalConfig)) !== JSON.stringify(JSON.parse(updatedConfig))) {
         // The old path and replacement are recorded in the same atomic config
@@ -176,6 +207,7 @@ export class ManagedRuntime {
     this.current = { ...this.current, state: 'stopped', phase: 'stopping', message: 'Stopping this workspace’s Assistant runtime…' };
     this.stopPromise = (async () => {
       try {
+        await this.browserNetwork.close();
         if (child && child.exitCode === null && child.signalCode === null) {
           const exited = new Promise<void>(ok => {
             const done = () => { clearTimeout(timer); child.off('exit', done); ok(); };
@@ -191,6 +223,7 @@ export class ManagedRuntime {
         // configuration. Its generation fence prevents later spawn/restart/write.
         await launching;
       } finally {
+        if(this.shortTemporaryDirectory){rmSync(this.shortTemporaryDirectory,{recursive:true,force:true});this.shortTemporaryDirectory=undefined;}
         this.child = undefined; this.stopping = false; this.stopPromise = undefined;
         this.current = { ...this.current, state: 'stopped', phase: 'idle', message: 'The Edition 3 runtime stopped. Existing apps are separate.' };
       }

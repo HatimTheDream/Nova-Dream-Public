@@ -20,6 +20,7 @@ export type HubAgent = {
   content: { id: string; title: string; stage: Content['stage'] }[];
   reviews: { attemptId: string; assignmentId: string; title: string; count: number }[];
   appliedChanges: number;
+  team?: { id: string; title: string; role: string; conversationId?: string };
 };
 export type HubMember = Pick<HubAgent, 'id' | 'revision' | 'name' | 'position' | 'appearance' | 'archived' | 'status' | 'reason'>;
 export type HubState = { observedAt: number; runtimeReady: boolean; runtimeReason: string; agents: HubAgent[]; roster: HubMember[]; layout: HubLayout; total: number; nextCursor: string | null; activeAgentId: string | null };

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export const agentModules = ['tasks', 'calendar', 'inbox', 'contacts', 'content', 'projects', 'profile', 'home', 'computer'] as const;
+export const agentModules = ['tasks', 'calendar', 'inbox', 'contacts', 'content', 'projects', 'profile', 'home', 'computer', 'browser'] as const;
 export const agentAccessSchema = z.partialRecord(z.enum(agentModules), z.enum(['read', 'edit'])).default({});
 export type AgentAccess = Partial<Record<typeof agentModules[number], 'read' | 'edit'>>;
 const recordModule: Record<string, typeof agentModules[number]> = { task: 'tasks', routine: 'tasks', contact: 'contacts', content: 'content', project: 'projects', profile: 'profile', layout: 'home' };

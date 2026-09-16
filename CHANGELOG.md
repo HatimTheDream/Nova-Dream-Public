@@ -1,3 +1,14 @@
+## [1.5.1] — 2026-09-15
+
+- Keep Linux browser temporary socket paths short when a workspace lives inside a long recovery directory; preserve its durable profile and existing sandbox protections.
+
+## [1.5.0] — 2026-09-15
+
+- Connect GitHub with its device sign-in, choose a repository and branch, and prepare a separate checkout on Nova’s host.
+- Review the exact changed files, commit, push a feature branch and open a draft pull request, with retained publication receipts and recovery after an interrupted response.
+- Coordinate research, implementation and review across saved agents, sharing one checkout with durable handoffs, pause and stop controls, and real progress in the hub.
+- Add an isolated host browser with page observations and reviewed agent actions. These workflows run from mobile or desktop; VPS hosting remains optional.
+
 ## [1.4.1] — 2026-09-15
 
 - Show the provider’s 168-hour quota window as “Weekly allowance” in Settings.
