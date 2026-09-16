@@ -54,6 +54,7 @@ import { z } from 'zod';
 import { ManagedRuntime } from './runtime.js';
 import { ChatGptSignIn } from './sign-in.js';
 import { ChatGptAccount } from './chatgpt-account.js';
+import { AssistantUsage } from './usage.js';
 import { VoiceSetup } from './voice.js';
 import { VoiceCalls } from './voice-calls.js';
 import { Accounts } from './accounts.js';
@@ -158,6 +159,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const recoveryServices = new Map<string, { origin: string; close: () => Promise<void> }>();
   const recoveryOpening = new Map<string, Promise<{ origin: string; close: () => Promise<void> }>>();
   const signIn = runtime ? new ChatGptSignIn(store, runtime) : undefined;
+  const assistantUsage = new AssistantUsage(gateway);
   const chatGptAccount = runtime ? new ChatGptAccount(runtime) : undefined;
   const voice = new VoiceSetup(gateway);
   const dictation = new DictationService(store, gateway);
@@ -540,6 +542,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/voice/consult' && request.method === 'POST') return json(200, await calls.consult(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/voice/end' && request.method === 'POST') return json(200, await calls.end(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/sign-in' && request.method === 'GET') return json(200, signIn?.status() ?? { state: 'idle', message: 'Connect this host’s managed runtime to sign in here.' });
+        if (url.pathname === '/api/assistant/usage' && request.method === 'GET') return json(200, await assistantUsage.read());
         if (url.pathname === '/api/assistant/account' && request.method === 'GET') return json(200, await chatGptAccount?.read(url.searchParams.get('refresh') === '1') ?? { state: 'unavailable', emails: [], profileCount: 0, message: 'Check the saved account on the host running your Assistant.' });
         if (url.pathname === '/api/assistant/sign-in/start' && request.method === 'POST') {
           if (!signIn) throw new Fault(503, 'signin_unavailable', 'This host cannot start OpenClaw sign-in.');

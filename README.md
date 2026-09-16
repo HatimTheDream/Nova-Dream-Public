@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.3.0-blue)
+![Version](https://img.shields.io/badge/Version-1.4.0-blue)
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 
@@ -45,7 +45,9 @@ This repository contains the application source and synthetic tests. It starts w
 
 **A VPS is optional.** Run Nova on your own computer, or host it on an always-on server. Phone and browser clients connect to whichever host you choose.
 
-Settings → **Install & devices** provides device-specific installation guidance, local draft-storage status and optional desktop links. A linked, awake computer can accept reviewed app-control requests from Nova while ordinary host work continues independently. The current desktop companion build targets Apple Silicon Macs; public notarized installers and Windows/Linux packages are not included. See [desktop setup and private downloads](docs/DESKTOP-COMPANION.md).
+Settings → **Usage** shows provider-reported allowances and reset times, with recent runtime token activity. Some providers do not expose these figures.
+
+Settings → **Devices** provides device-specific installation guidance, local draft-storage status and optional desktop links. A linked, awake computer can accept reviewed app-control requests from Nova while ordinary host work continues independently. The current desktop companion build targets Apple Silicon Macs; public notarized installers and Windows/Linux packages are not included. See [desktop setup and private downloads](docs/DESKTOP-COMPANION.md).
 
 ## Quick start
 
@@ -80,7 +82,7 @@ The default workspace is stored in `.data`, outside Git. Back it up before chang
 
 ## Backups and privacy
 
-Use **Settings → Data & recovery** to create an encrypted export and keep its password outside the host. Backups include their own coverage summary; browser-only unsaved drafts, external Work directories and separately hosted histories may require separate copies. Recovery creates a new copy with connected execution paused for review. Reconnect your accounts through their supported sign-in flows.
+Use **Settings → Data** to create an encrypted export and keep its password outside the host. Backups include their own coverage summary; browser-only unsaved drafts, external Work directories and separately hosted histories may require separate copies. Recovery creates a new copy with connected execution paused for review. Reconnect your accounts through their supported sign-in flows.
 
 Keep data directories, environment files, encryption keys, cloud credentials and downloaded backups out of Git. Automatic independent off-server backup scheduling is not included in this release. See [security reporting and deployment boundaries](SECURITY.md).
 

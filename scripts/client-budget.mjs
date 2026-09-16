@@ -81,7 +81,9 @@ import assert from 'node:assert/strict';
 // Measured total 561,046 (+696 gzip bytes / 0.12%); keep startup/chunk ceilings.
 // 1.2 adds deferred installation, verified downloads and desktop-link controls.
 // Measured 565,093 gzip bytes (+4,047); retain startup and individual chunk limits.
-export const clientLimits = { startup: 180000, total: 567000, deferredChunk: 80000 };
+// 1.4 adds provider allowance and seven-day activity in a lazy Settings panel.
+// Measured total 567,671 gzip bytes; cap at 569 KB. Startup/chunk limits hold.
+export const clientLimits = { startup: 180000, total: 569000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

@@ -14,7 +14,7 @@ Phone and browser clients connect to the chosen workspace host. Work on that hos
 
 ## Install on a phone or in a browser
 
-Settings → **Install & devices** shows the installation instructions for the current browser. Where supported, the Install button opens the browser's native installation prompt. iPhone users use Safari's Share → Add to Home Screen. Nova's icon is included.
+Settings → **Devices** shows the installation instructions for the current browser. Where supported, the Install button opens the browser's native installation prompt. iPhone users use Safari's Share → Add to Home Screen. Nova's icon is included.
 
 The page reports actual site storage and can request persistent browser storage. Existing unsent writing and pending uploads stay in Nova's existing device journals. Installation does not create a complete offline copy of the workspace or make connected AI/mail available offline. Clearing site data can remove unsent drafts.
 
@@ -26,7 +26,7 @@ The current packaging recipe supports **Apple Silicon Macs**. Windows/Linux inst
 2. Run `npm run package:companion` from the application directory.
 3. Open the generated `Nova Dream Desktop.app` inside `.packages/companion/<version>-<candidate>/`.
 4. Enter your existing Nova address: an HTTPS hosted address or `http://127.0.0.1:<port>` for a locally running workspace.
-5. Sign in to that workspace normally. In Nova, use Settings → Install & devices → Link this desktop.
+5. Sign in to that workspace normally. In Nova, use Settings → Devices → Link this desktop.
 6. Open Desktop controls and choose **Selected apps** or **Full desktop access**. Select 15, 30 or 60 minutes, or **Until I turn it off**, then review the native confirmation.
 
 Full desktop access can observe and operate all applications and the visible desktop, including logged-in services and files reachable through their interfaces. Protected macOS authentication still requires the person using the computer. This is desktop interaction, not a separate remote shell or unrestricted filesystem API.

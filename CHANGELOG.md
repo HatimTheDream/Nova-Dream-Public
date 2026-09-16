@@ -1,3 +1,9 @@
+## [1.4.0] — 2026-09-15
+
+- Simplify Settings into six compact categories, with readable rows and expandable setup, account management and device-storage details.
+- Add provider-reported AI allowance, reset times and available credits, plus seven-day runtime token activity. Unavailable figures stay explicit; saved identities are not assumed to own provider totals.
+- Preserve visited forms, active desktop links and existing account permissions while navigating Settings.
+
 ## [1.3.0] — 2026-09-15
 
 - Choose selected apps or full desktop control, independently of a timed session or “Until I turn it off”. Persistent access resumes after reconnecting the same desktop and workspace; Stop and remote revocation clear it.

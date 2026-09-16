@@ -1,31 +1,108 @@
 .settings-page { scroll-padding-block: 16px; }
-.settings-page > .page-intro { margin-bottom: 20px; }
-.settings-return, .settings-navigation, .settings-description, .settings-panel { max-width: 1000px; margin-inline: auto; min-width: 0; }
-.settings-return { margin-bottom: 18px; }
-.settings-navigation { padding-block: 8px; background: var(--canvas); }
-.settings-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); scrollbar-width: thin; scroll-padding-inline: 5px; }
-.settings-tabs [role="tab"] { flex: 1 0 auto; min-height: 46px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); white-space: nowrap; box-shadow: none; }
-.settings-tabs [role="tab"]:hover { background: var(--canvas); color: var(--text); box-shadow: none; }
+.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 1100px; margin-inline: auto; }
+.settings-page > .page-intro { margin-bottom: 24px; }
+.settings-page .page-intro h1 { font-size: 28px; }
+.settings-page .page-intro p { font-size: 14px; margin-top: 6px; }
+.settings-return { margin-bottom: 16px; }
+.settings-layout { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 28px; align-items: start; }
+.settings-navigation { position: sticky; top: 0; }
+.settings-tabs { display: flex; flex-direction: column; gap: 4px; }
+.settings-tabs [role="tab"] { justify-content: flex-start; gap: 10px; min-height: 46px; padding: 10px 14px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); box-shadow: none; white-space: nowrap; }
+.settings-tabs [role="tab"]:hover { background: var(--surface); color: var(--text); box-shadow: none; }
 .settings-tabs [role="tab"][aria-selected="true"] { color: var(--text); background: var(--soft-violet); border-color: var(--line); }
 .settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
-.settings-description { margin-block: 14px 24px; font-size: 14px; line-height: 1.7; color: var(--muted); }
+.settings-content, .settings-panel { min-width: 0; }
 .settings-panel[hidden] { display: none; }
-.settings-panel { border-radius: 20px; }
-.settings-panel > .settings-card:last-child { margin-bottom: 0; }
-.settings-panel .setting-row strong { font-size: 14px; }
-.settings-panel .setting-row p { font-size: 13px; line-height: 1.7; }
-.settings-panel .setting-row > div { min-width: 0; }
-.settings-panel .settings-card > p { line-height: 1.7; }
-.settings-accounts .provider-connections { border-top: 0; padding-top: 8px; margin-top: 8px; }
-.settings-panel .provider-connections h3 { font-size: 17px; }
-.install-summary { display: flex; gap: 18px; align-items: center; }
-.install-summary img { flex: none; border-radius: 14px; }
-.install-summary h2 { margin-top: 0; }
+.settings-page .settings-card { padding: 20px 22px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 16px; box-shadow: none; }
+.settings-page .settings-card > h2, .settings-page .section-heading h2 { margin: 0 0 8px; padding: 0; border: 0; font-size: 17px; line-height: 1.4; }
+.settings-page .section-heading { gap: 16px; align-items: center; margin-bottom: 12px; }
+.settings-page .section-heading h3, .settings-page .section-heading h4 { margin: 0; font-size: 15px; }
+.settings-page .settings-card p { font-size: 13px; line-height: 1.55; }
+.settings-page .settings-card > p { color: var(--muted); margin: 6px 0 14px; }
+.settings-page .setting-row { display: flex; flex-direction: row; align-items: center; gap: 20px; padding: 14px 0; }
+.settings-page .setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.settings-page .setting-row > div { min-width: 0; }
+.settings-page .setting-row strong { font-size: 14px; }
+.settings-page .setting-row p { margin: 4px 0 0; color: var(--muted); }
+.settings-page .setting-row select { max-width: 260px; min-height: 44px; }
+.settings-page button, .settings-page .button-link { min-height: 44px; }
+.settings-page .setting-row > button, .settings-page .section-heading > button { flex-shrink: 0; }
+.settings-page details > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 13px; font-weight: 600; padding-block: 10px; }
+.settings-page details > summary:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 6px; }
+.settings-page .settings-details { margin-top: 14px; border-top: 1px solid var(--line); }
+.settings-disclosure { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 16px; background: var(--surface); }
+.settings-disclosure > summary { padding: 14px 20px; }
+.settings-disclosure-body { padding: 0 20px 18px; font-size: 13px; line-height: 1.55; }
+.settings-disclosure-body > .settings-card { padding: 0; border: 0; margin-top: 8px; }
+.settings-page .settings-footnote { font-size: 12px; line-height: 1.55; color: var(--muted); margin: 16px 0 0; }
+.settings-page .settings-about { display: flex; align-items: center; gap: 12px; padding: 12px 2px; font-size: 13px; color: var(--muted); }
+.settings-about img { border-radius: 12px; }
+.settings-about strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 3px; }
+.settings-page .settings-empty { padding-block: 12px; }
+.settings-accounts .provider-connections { border-top: 0; padding-top: 0; margin-top: 0; }
+.settings-accounts .provider-connections > p:not([class]), .settings-accounts .provider-connections .eyebrow { display: none; }
+.settings-accounts .provider-connections > .section-heading h3 { font-size: 13px; color: var(--muted); }
+.settings-accounts .provider-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; }
+.settings-page .provider-card { padding: 16px; border-radius: 12px; box-shadow: none; }
+.settings-page .provider-card .connected-account { padding-block: 12px; }
+.settings-page .provider-card .account-signin { margin-top: 10px; }
+.settings-page .account-registration { margin-top: 10px; }
+.settings-page .assistant-setup { padding: 16px 0 0; margin-top: 16px; border: 0; border-top: 1px solid var(--line); background: none; border-radius: 0; box-shadow: none; }
+.settings-page .assistant-setup:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.settings-page .connection-facts { margin-block: 12px; gap: 10px; }
+.settings-page .connection-facts > div { padding: 10px 12px; border-radius: 10px; }
+.settings-page .connection-facts strong { font-size: 13px; }
+.settings-page .voice-readiness { padding: 12px 0 0; border-top: 1px solid var(--line); margin-top: 16px; }
+.settings-page .voice-readiness strong { font-size: 13px; }
+.settings-page .voice-readiness p { margin: 4px 0; }
+.install-summary { display: flex; gap: 14px; align-items: center; }
+.install-summary img { flex: none; border-radius: 12px; width: 44px; height: 44px; }
+.settings-page .install-summary h2 { margin: 0 0 4px; font-size: 17px; }
+.settings-page .install-summary p { margin: 0; color: var(--muted); }
 .install-downloads { display: flex; flex-wrap: wrap; gap: 18px; }
 .install-downloads > div { min-width: 0; flex: 1 1 240px; }
 .install-downloads p { overflow-wrap: anywhere; }
-@media (max-width: 650px) {
-  .settings-tabs [role="tab"] { padding-inline: 13px; }
-  .settings-description { font-size: 13px; margin-block: 12px 20px; }
-  .settings-panel .settings-card > h2 { font-size: 18px; }
+.usage-provider { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
+.usage-windows { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.usage-window-label { display: flex; gap: 12px; justify-content: space-between; font-size: 13px; margin-bottom: 10px; }
+.usage-window-label strong { white-space: nowrap; }
+.usage-window progress { display: block; appearance: none; width: 100%; height: 7px; border: 0; border-radius: 99px; overflow: hidden; background: var(--line); accent-color: var(--violet); }
+.usage-window progress::-webkit-progress-bar { background: var(--line); }
+.usage-window progress::-webkit-progress-value { background: var(--violet); border-radius: 99px; }
+.usage-window progress::-moz-progress-bar { background: var(--violet); border-radius: 99px; }
+.usage-low progress { accent-color: #b87817; }
+.usage-low progress::-webkit-progress-value { background: #b87817; }
+.usage-low progress::-moz-progress-bar { background: #b87817; }
+.settings-page .usage-window p { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.usage-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-block: 20px; }
+.usage-metrics > div + div { border-left: 1px solid var(--line); padding-left: 16px; }
+.usage-metrics span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.usage-metrics strong { font-size: clamp(16px,2vw,24px); font-weight: 600; }
+.usage-days { margin: 0; }
+.usage-days > div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-top: 1px solid var(--line); }
+.usage-days dd { margin: 0; }
+@media (max-width: 999px) {
+  .settings-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .settings-navigation { position: static; }
+  .settings-tabs { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .settings-tabs [role="tab"] { justify-content: center; padding-inline: 8px; }
+  .settings-tabs [role="tab"] svg { display: none; }
 }
+@media (max-width: 650px) {
+  .settings-page > .page-intro { margin-bottom: 16px; }
+  .settings-page .page-intro h1 { font-size: 25px; }
+  .settings-tabs { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .settings-page .settings-card { padding: 18px 16px; }
+  .settings-page .setting-row { flex-wrap: wrap; gap: 12px; }
+  .settings-page .setting-row select { width: 100%; max-width: none; }
+  .settings-page .setting-row > div { flex: 1 1 180px; }
+  .settings-page .section-heading { gap: 10px; }
+  .settings-page .provider-card { padding: 12px; }
+  .usage-windows { grid-template-columns: minmax(0,1fr); gap: 18px; }
+  .usage-metrics { gap: 8px; }
+  .usage-metrics > div + div { padding-left: 10px; }
+}
+
+.settings-page .setting-row:has(+ .settings-details) { border-bottom: 0; }
+
+.usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
