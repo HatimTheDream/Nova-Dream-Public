@@ -10,7 +10,7 @@ const signature = (history: ConversationHistory) => canonical(history.messages.m
 /** Native history remains authoritative. This is a labelled, immutable reading
  * copy for disconnected clients and backups, never input to native resume. */
 export class SavedHistory {
-  constructor(private store: Store) {}
+  constructor(private store: Store, private display: (conversation: Conversation, history: ConversationHistory) => ConversationHistory = (_, history) => history) {}
   private transcript(conversation: Conversation) {
     let page = this.read(conversation);
     if (!page) throw new Fault(404, 'saved_history_missing', 'No saved transcript is available for this conversation.');
@@ -68,9 +68,9 @@ export class SavedHistory {
     }
     if (!complete && options.offset !== undefined && options.offset !== (source.offset ?? 0)) throw new Fault(409, 'saved_history_partial', 'This backup contains only the saved part of this conversation. The original Assistant archive is preserved.');
     const end = complete ? Math.max(0, messages.length - offset) : messages.length, start = complete ? Math.max(0, end - 100) : 0;
-    return { ...source, messages: messages.slice(start, end), offset: complete ? offset : source.offset, totalMessages: complete ? messages.length : source.totalMessages,
+    return this.display(conversation, { ...source, messages: messages.slice(start, end), offset: complete ? offset : source.offset, totalMessages: complete ? messages.length : source.totalMessages,
       hasMore: complete && start > 0, hasNewer: complete && offset > 0, nextOffset: complete && start > 0 ? offset + end - start : undefined,
-      activeRunIds: null, inFlightRun: undefined, retained: { complete, ...(source === saved?.history ? { capturedAt: saved.capturedAt } : {}) } };
+      activeRunIds: null, inFlightRun: undefined, retained: { complete, ...(source === saved?.history ? { capturedAt: saved.capturedAt } : {}) } });
   }
   async capture(conversations: Conversation[], read: (id: string, offset: number) => Promise<ConversationHistory>) {
     const deadline = Date.now() + 60000;

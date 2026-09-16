@@ -245,6 +245,56 @@ test('Assistant captures exact Project/draft/attachment identity and does not di
   assert.equal(f.store.readEntity('draft', `draft:${f.device}`)?.value.text, 'Use the selected context.');
 }));
 
+for (const version of [1, 2]) test(`native-trimmed v${version} envelopes display exact writing and repair older saved copies`, () => fixture(async f => {
+  const input = '  Original words — 🦊\nOwner message:\nKeep this heading.\n\nEdition 3 work mode:\nMy own paragraph.\n  ';
+  const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
+  const saved = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, text: input } });
+  if (version === 2) f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, autoTitle: true });
+  const op = f.service.submit(f.device, { ...submission(f), draftRevision: saved.revision }); await tick();
+  const envelope = f.gateway.calls.find(c => c.method === 'chat.send')!.params.message;
+  assert.notEqual(envelope, envelope.trim(), 'fixture exercises the runtime whitespace change');
+  assert.equal(op.context.messageVersion ?? 1, version);
+  const native = envelope.trim(), literal = 'Owner message:\nThis is a literal heading, not an app envelope.';
+  f.gateway.messages = [
+    { role: 'user', content: native, __openclaw: { id: 'owner', seq: 1 } },
+    { role: 'user', content: native.replace('My own paragraph.', 'Different internal wording.'), __openclaw: { id: 'different', seq: 2 } },
+    { role: 'user', content: literal, __openclaw: { id: 'literal', seq: 3 } },
+    { role: 'user', content: 'An ordinary final voice caption.', __openclaw: { id: 'voice', seq: 4 } },
+    { role: 'assistant', content: native, __openclaw: { id: 'assistant-quote', seq: 5 } },
+  ];
+  const history = await f.service.history(f.conversation.id), message = history.messages[0];
+  assert.equal(message.authoredText, input);
+  assert.equal(message.text, native);
+  assert.equal(message.textHash, createHash('sha256').update(canonical(native)).digest('hex'));
+  assert(history.messages.slice(1).every(m => m.authoredText === undefined));
+  // Simulate a pre-fix backup with no authored display field, then read offline.
+  const older = { ...history, messages: history.messages.map(({ authoredText: _display, ...m }) => m) };
+  f.store.internalWrite(`assistant:history:${f.conversation.id}`, older);
+  const retained = { history: older, complete: true, capturedAt: '2026-09-16T12:00:00.000Z' };
+  f.store.internalWrite(`assistant:retained-history:${f.conversation.id}`, retained);
+  const retainedBefore = f.store.internalRead(`assistant:retained-history:${f.conversation.id}`), cachedBefore = f.store.internalRead(`assistant:history:${f.conversation.id}`);
+  assert.equal(f.service.cachedHistory(f.conversation.id)!.messages[0].authoredText, input);
+  const generation = f.gateway.generation; f.gateway.generation = randomUUID();
+  const offline = await f.service.historyForReading(f.conversation.id);
+  assert.equal(offline.retained?.complete, true); assert.equal(offline.messages[0].authoredText, input);
+  assert.equal(offline.messages[0].textHash, message.textHash);
+  const review = f.service.retainedTranscriptReview(f.conversation.id);
+  const exported = f.service.exportRetainedTranscript(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, digest: review.digest });
+  const dialogue = JSON.parse(f.store.download(exported.file.id).bytes.toString().split('Saved dialogue (JSON; text values preserve the captured wording):\n')[1]);
+  assert.equal(dialogue[0].text, input); assert.equal(dialogue[0].sourceTextHash, message.textHash);
+  assert.equal(dialogue[2].text, literal); assert.equal(dialogue[3].text, 'An ordinary final voice caption.');
+  assert.deepEqual(f.store.internalRead(`assistant:retained-history:${f.conversation.id}`), retainedBefore, 'original archive stays immutable');
+  assert.deepEqual(f.store.internalRead(`assistant:history:${f.conversation.id}`), cachedBefore, 'cached native record stays exact');
+  f.gateway.generation = generation;
+  f.store.internalWrite(`assistant:operation:${op.id}`, { ...f.service.operations().find(o => o.id === op.id)!, state: 'completed' });
+  const branch = await f.service.fork(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: f.service.conversations().find(c => c.id === f.conversation.id)!.revision, nativeId: f.conversation.nativeId!, messageId: message.id, messageHash: message.textHash, purpose: 'retry' });
+  assert.equal(branch.state, 'ready');
+  const revised = f.store.readEntity('draft', `draft:${f.device}:${branch.id}`)!.value;
+  assert.equal(revised.text, input); assert.deepEqual(revised.attachments, op.context.attachments);
+  f.store.internalWrite(`assistant:operation:${op.id}`, { ...f.service.operations().find(o => o.id === op.id)!, connectionGeneration: randomUUID() });
+  assert.equal((await f.service.history(f.conversation.id)).messages[0].authoredText, undefined, 'another connection generation cannot lend its display text');
+}));
+
 test('Project changes during history preflight fence the dispatch and retain the original input', () => fixture(async f => {
   let release!: () => void; f.gateway.holdHistory = new Promise<void>(r => { release = r; });
   f.service.submit(f.device, submission(f));

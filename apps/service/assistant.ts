@@ -40,6 +40,10 @@ const ownerMessage = (operation: AssistantOperation) => {
   return `${memoryContext(operation.context.memory)}${guidance ? `Edition 3 work mode:\n${guidance}\n\n` : ''}${context ? `Edition 3 selected Project context (organization and supplied context; not a filesystem sandbox):\n${JSON.stringify(context)}\nContext manifest: ${operation.context.digest}\n\nOwner message:\n` : 'Edition 3 owner message:\n'}${operation.input}`;
 };
 
+// Native sends trim the envelope before saving it. Normalize only its boundary
+// whitespace for comparison, keeping the original input and native text exact.
+const matchesOwnerMessage = (operation: AssistantOperation, text: string) => ownerMessage(operation).trim() === text.trim();
+
 /** App intent and native history have separate authority. Unknown sends are never replayed. */
 export class AssistantService {
   private stopListening: () => void;
@@ -282,7 +286,7 @@ export class AssistantService {
       if (this.voiceBusy(source.id) || this.operations().some(op => op.conversationId === source.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Finish the current reply before branching or revising it.');
       const message = this.cachedHistory(source.id)?.messages.find(m => m.id === input.messageId && m.textHash === input.messageHash);
       if (!message || input.purpose !== 'branch' && message.role !== 'user') throw new Fault(409, 'message_changed', 'Reload the exact source message before revising it.');
-      const originalInput = this.operations().find(op => op.conversationId === source.id && op.nativeId === input.nativeId && ownerMessage(op) === message.text);
+      const originalInput = this.operations().find(op => op.conversationId === source.id && op.nativeId === input.nativeId && matchesOwnerMessage(op, message.text));
       if (message.role === 'user' && message.attachments.length && !originalInput?.context.attachments.length) throw new Fault(409, 'source_files_unavailable', 'This message has files that cannot yet be carried into a revision. Keep the original and attach its files to a new message.');
       const id = randomUUID();
       const branch = this.saveConversation({ ...source, id, revision: 1, title: `${input.purpose === 'branch' ? 'Branch' : input.purpose === 'edit' ? 'Revision' : 'Retry'} · ${source.title}`.slice(0, 150), archived: false, deleted: false, pinned: false, unread: false, permissionMode: 'read-only', nativeKey: `agent:main:e3:${id}`, nativeId: null, state: 'creating', createdAt: now(), updatedAt: now(), refineSource: undefined, forkSource: { conversationId: source.id, nativeId: input.nativeId, messageId: input.messageId, messageHash: input.messageHash, purpose: input.purpose, requestId: input.requestId } });
@@ -349,7 +353,7 @@ export class AssistantService {
     catch (error) {
       this.removals.assertAvailable(input.conversationId);
       const latest = this.conversation(input.conversationId);
-      const saved = input.nativeId === latest.nativeId ? new SavedHistory(this.store).read(latest, { messageId: input.messageId, offset: input.offset }) : undefined;
+      const saved = input.nativeId === latest.nativeId ? this.savedHistory().read(latest, { messageId: input.messageId, offset: input.offset }) : undefined;
       if (!saved) throw error;
       history = saved;
     }
@@ -370,7 +374,7 @@ export class AssistantService {
     try { return await this.history(id, options); }
     catch (error) {
       this.removals.assertAvailable(id);
-      const saved = new SavedHistory(this.store).read(this.conversation(id), options);
+      const saved = this.savedHistory().read(this.conversation(id), options);
       if (saved) return saved;
       throw error;
     }
@@ -378,14 +382,14 @@ export class AssistantService {
   async captureSavedHistories() {
     if (this.store.recoveryEffectsPaused || this.gateway.status().state !== 'ready') return;
     const generation = this.gateway.status().generation;
-    await new SavedHistory(this.store).capture(this.conversations().filter(c => c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }));
+    await this.savedHistory().capture(this.conversations().filter(c => c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }));
   }
   retainedTranscriptReview(id: string) {
     this.removals.assertAvailable(id);
-    return new SavedHistory(this.store).review(this.conversation(id));
+    return this.savedHistory().review(this.conversation(id));
   }
   exportRetainedTranscript(device: string, input: unknown) {
-    return new SavedHistory(this.store).export(device, input, id => { this.removals.assertAvailable(id); return this.conversation(id); });
+    return this.savedHistory().export(device, input, id => { this.removals.assertAvailable(id); return this.conversation(id); });
   }
   private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; resume?: boolean }): Promise<ConversationHistory> {
     let conversation = this.conversation(id);
@@ -409,7 +413,7 @@ export class AssistantService {
     if (this.closed) throw new Fault(503, 'service_closed', 'The workspace service is closing.');
     this.assertConnection(conversation, false);
     if (!options.readOnly && !conversation.nativeId) conversation = this.saveConversation({ ...conversation, nativeId, state: 'ready', error: undefined });
-    const messages: ConversationMessage[] = (Array.isArray(result.messages) ? result.messages : []).map((raw: any, index: number) => {
+    let messages: ConversationMessage[] = (Array.isArray(result.messages) ? result.messages : []).map((raw: any, index: number) => {
       const message = object(raw), meta = object(message.__openclaw);
       return { id: String(meta.id ?? message.id ?? `projection:${index}:${digest(message).slice(0, 16)}`), sequence: Number.isInteger(meta.seq) ? meta.seq : undefined, role: message.role === 'toolResult' ? 'tool' : ['user', 'assistant', 'system', 'tool'].includes(message.role) ? message.role : 'system', ...(historyToolInfo(message) ? { toolInfo: historyToolInfo(message) } : {}), text: textOf(message), textHash: digest(textOf(message)), createdAt: typeof message.timestamp === 'string' ? message.timestamp : undefined, runId: typeof meta.runId === 'string' ? meta.runId : typeof message.runId === 'string' ? message.runId : undefined, attachments: (Array.isArray(message.content) ? message.content : []).filter((part: any) => typeof part?.artifactId === 'string' && part.artifactId.length <= 2000).map((part: any) => ({ artifactId: part.artifactId, name: String(part.fileName ?? part.filename ?? part.alt ?? 'Generated output').slice(0, 150), ...(typeof part.mimeType === 'string' ? { mimeType: part.mimeType } : {}), ...(typeof part.type === 'string' ? { type: part.type } : {}), ...(Number.isSafeInteger(part.sizeBytes) && part.sizeBytes >= 0 ? { size: part.sizeBytes } : {}) })) };
     });
@@ -423,19 +427,7 @@ export class AssistantService {
       if (canonical(tools) !== canonical(operation.tools ?? [])) this.saveOperation({ ...operation, tools });
     }
     const info = object(result.sessionInfo);
-    const lineage = new Map([[conversation.id, nativeId]]), known = this.conversations();
-    let ancestor = conversation;
-    while (ancestor.forkSource?.resolved && lineage.size < 100) {
-      const source = ancestor.forkSource, parent = known.find(c => c.id === source.conversationId && c.nativeId === source.nativeId && c.connectionGeneration === conversation.connectionGeneration);
-      if (!parent || lineage.has(parent.id)) break;
-      lineage.set(parent.id, source.nativeId); ancestor = parent;
-    }
-    const authored = new Map(this.operations().filter(op => lineage.get(op.conversationId) === op.nativeId && op.connectionGeneration === conversation.connectionGeneration).map(op => [ownerMessage(op), op.input]));
-    for (const message of messages) {
-      // Display the owner's original words only for an exact app-owned envelope.
-      // Native text and its digest remain intact for provenance and recovery.
-      if (message.role === 'user' && authored.has(message.text)) message.authoredText = authored.get(message.text);
-    }
+    messages = this.authoredMessages(conversation, nativeId, messages);
     const activeRunIds = Array.isArray(info.activeRunIds) ? info.activeRunIds.filter((id: unknown) => typeof id === 'string') : info.hasActiveRun === false ? [] : null;
     const inFlight = object(result.inFlightRun);
     const nativeSettings = { pinned: typeof info.pinned === 'boolean' ? info.pinned : undefined, unread: typeof info.unread === 'boolean' ? info.unread : undefined, title: typeof info.label === 'string' ? info.label : typeof info.displayName === 'string' ? info.displayName : undefined, archived: typeof info.archived === 'boolean' ? info.archived : undefined, model: typeof info.model === 'string' ? info.model.includes('/') ? info.model : `${info.modelProvider}/${info.model}` : undefined, thinking: typeof info.thinkingLevel === 'string' ? info.thinkingLevel : undefined, fastMode: typeof info.fastMode === 'boolean' || info.fastMode === 'auto' ? info.fastMode : null, permissionModePending: info.permissionModePending === true, permissionMode: ['read-only', 'guarded', 'workspace', 'full'].includes(info.permissionMode) ? info.permissionMode : undefined, lifecycleRevision: Number.isInteger(info.lifecycleRevision) ? info.lifecycleRevision : undefined };
@@ -466,7 +458,27 @@ export class AssistantService {
     if (result.sessionKey !== conversation.nativeKey) throw new Fault(409, 'work_session_changed', 'The change report belongs to another session.');
     return result;
   }
-  cachedHistory(id: string) { this.conversation(id); return this.store.internalRead<ConversationHistory>(`assistant:history:${id}`); }
+  private authoredMessages(conversation: Conversation, nativeId: string, messages: ConversationMessage[]) {
+    const lineage = new Map([[conversation.id, nativeId]]), known = this.conversations();
+    let ancestor = conversation;
+    while (ancestor.forkSource?.resolved && lineage.size < 100) {
+      const source = ancestor.forkSource, parent = known.find(c => c.id === source.conversationId && c.nativeId === source.nativeId && c.connectionGeneration === conversation.connectionGeneration);
+      if (!parent || lineage.has(parent.id)) break;
+      lineage.set(parent.id, source.nativeId); ancestor = parent;
+    }
+    const authored = new Map(this.operations().filter(op => lineage.get(op.conversationId) === op.nativeId && op.connectionGeneration === conversation.connectionGeneration).map(op => [ownerMessage(op).trim(), op.input]));
+    // Never parse user-supplied "Owner message:" headings or remove arbitrary
+    // text. A captured operation in this exact lineage must match the envelope.
+    return messages.map(message => message.role === 'user' && authored.has(message.text.trim())
+      ? { ...message, authoredText: authored.get(message.text.trim()) } : message);
+  }
+  private savedHistory() {
+    return new SavedHistory(this.store, (conversation, history) => ({ ...history, messages: this.authoredMessages(conversation, history.nativeId, history.messages) }));
+  }
+  cachedHistory(id: string) {
+    const conversation = this.conversation(id), history = this.store.internalRead<ConversationHistory>(`assistant:history:${id}`);
+    return history ? { ...history, messages: this.authoredMessages(conversation, history.nativeId, history.messages) } : undefined;
+  }
   private context(device: string, draftId: string, draftRevision: number, projectRevision: number, conversation: Conversation, includeProjectFiles = true) {
     if (draftId !== spaceDraftId(device, assistantSpace(conversation)) && draftId !== `draft:${device}:${conversation.id}`) throw new Fault(403, 'draft_branch', 'Send only from your own conversation draft.');
     const draft = this.store.readEntity('draft', draftId);
@@ -752,7 +764,7 @@ export class AssistantService {
         this.saveOperation({ ...source, id: randomUUID(), requestId: randomUUID(), nativeRunId: run.runId, state: 'running', input: 'Continue pursuing the current goal.', text: run.text, createdAt: now(), updatedAt: now(), lastSequence: 0, tools: [], plan: undefined, planSequence: undefined, error: undefined, cancelRequested: undefined, effectiveModel: undefined, nativeTurnId: undefined });
       }
     }
-    const authored = goal && this.operations().find(op => op.conversationId === id && op.nativeId === conversation.nativeId && op.context.workMode === 'goal' && ownerMessage(op) === goal.objective);
+    const authored = goal && this.operations().find(op => op.conversationId === id && op.nativeId === conversation.nativeId && op.context.workMode === 'goal' && matchesOwnerMessage(op, goal.objective));
     return { goal: goal ? { ...goal, ...(authored ? { displayObjective: authored.input } : {}) } : null };
   }
   async changeGoal(device: string, raw: unknown) {

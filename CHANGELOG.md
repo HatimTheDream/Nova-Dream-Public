@@ -1,3 +1,7 @@
+## [1.5.3] — 2026-09-16
+
+- Display your original typed or dictated message when the AI runtime trims its surrounding instruction envelope. Repair existing live and saved conversation views, copying, transcript exports and retries without rewriting native history, changing permissions or stripping your own headings.
+
 ## [1.5.2] — 2026-09-15
 
 - Clear a team stage’s exact submitted briefing from its composer after saving the original operation. Keep the briefing in history and preserve later owner writing, including after a restart.

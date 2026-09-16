@@ -1,6 +1,6 @@
 {
   "name": "nova-dream-edition-3",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "type": "module",
   "description": "Isolated Edition 3 daily workspace",
@@ -8,7 +8,7 @@
     "node": ">=22.19.0"
   },
   "edition3": {
-    "buildVersion": "1.0.159",
+    "buildVersion": "1.0.160",
     "schemaVersion": 54,
     "apiVersion": 1,
     "appId": "private.novadream.edition3.preview"
