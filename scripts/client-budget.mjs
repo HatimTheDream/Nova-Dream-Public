@@ -92,7 +92,9 @@ import assert from 'node:assert/strict';
 // 1.5.10 warms existing modules, first views and art before entry. Preview total
 // 582,093 (+1,585 / 0.27% over 1.5.9). Bound at 583 KB while retaining
 // entry/chunk ceilings. Runtime preloading now intentionally fetches deferred JS.
-export const clientLimits = { startup: 180000, total: 583000, deferredChunk: 80000 };
+// 1.5.11 adds device-local startup timing estimates (+1,122 gzip bytes, 0.19%).
+// Bound total at 584 KB; startup and individual chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 584000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

@@ -1,3 +1,8 @@
+## [1.5.11] — 2026-09-16
+
+- Show estimated time remaining beneath the startup bar, adapting to observed progress and the last five successful startups on the current device and workspace.
+- Recalculate when loading stalls, keep errors actionable, and exclude interrupted or backgrounded attempts from timing history.
+
 ## [1.5.10] — 2026-09-16
 
 - Prepare navigation before opening Home: warm module code and nested views, bundled character and office art, Inbox, and the initial Calendar, team and Profile data behind one playful startup bar.
