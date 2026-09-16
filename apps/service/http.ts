@@ -5,6 +5,8 @@ import { WorkspaceBackups } from './workspace-backups.js';
 import { importMaxBytes } from '../../packages/domain/workspace-import.js';
 import { ManagedNativeBackup, type NativeBackup } from './native-backup.js';
 import { ModuleActions } from './module-actions.js';
+import { CompanionDownloads } from './companion-downloads.js';
+import { Companions } from './companions.js';
 import { ContactDirectory } from './contact-directory.js';
 import { AddressBooks } from './address-books.js';
 import { ContactCrm } from './contact-crm.js';
@@ -146,7 +148,9 @@ export async function startServer(options: { directory: string; port: number; pr
   const skillWorkshop = new SkillWorkshop(store, gateway);
   const skillManagement = new SkillManagement(store, gateway, skillWorkshop, options.skillManagementFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'skill-management') : undefined));
   const observations = new AssistantObservations(store, assistant);
-  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments});
+  const companions = new Companions(store);
+  const companionDownloads = new CompanionDownloads(process.env.E3_COMPANION_DOWNLOADS);
+  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions});
   const moduleToken = randomBytes(32).toString('hex');
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
   const backups = new WorkspaceBackups(store, options.version ?? 'development', options.nativeBackup ?? (runtime ? new ManagedNativeBackup(runtime) : undefined), () => assistant.captureSavedHistories());
@@ -222,6 +226,10 @@ export async function startServer(options: { directory: string; port: number; pr
         if (!['GET', 'POST'].includes(request.method ?? '')) throw new Fault(405, 'method', 'This method is not available.');
         if (url.pathname === '/api/health' && request.method === 'GET') return json(200, { application: 'nova-dream-edition-3', apiVersion: 1, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, status: 'ready' });
         if (request.method === 'POST' && request.headers['x-edition3-client'] !== '1') throw new Fault(403, 'client_required', 'Use the Edition 3 client for this operation.');
+        // The native transport is independently signed and versioned. Host,
+        // proxy, origin and recovery guards above still apply; device proof
+        // grants no access to any other API or browser session.
+        if (!remote && url.pathname === '/api/companions/transport' && request.method === 'POST') return json(200, companions.packet(await commandBody(request, 450000)));
         if (url.pathname === '/api/access/context' && request.method === 'GET') {
           let requiresPairing = false;
           if (remote) try { phoneAccess.authenticate(tokenFrom(request, phoneCookie) ?? ''); } catch { requiresPairing = true; }
@@ -250,6 +258,14 @@ export async function startServer(options: { directory: string; port: number; pr
           throw new Fault(409, 'client_update', 'This window needs the latest app. Keep your writing and reopen the app to continue saving.');
         }
         const transferOwner = surface + ':' + device;
+        if (url.pathname === '/api/companions/state' && request.method === 'GET') return json(200, { devices: companions.devices(), downloads: await companionDownloads.list(), protocol: 1 });
+        if (url.pathname === '/api/companions/download' && request.method === 'GET') {
+          const bytes = await companionDownloads.chunk(url.searchParams.get('name') ?? '', Number(url.searchParams.get('part') ?? -1));
+          response.setHeader('Content-Type', 'application/octet-stream'); response.setHeader('Content-Length', bytes.length); response.end(bytes); return;
+        }
+        if (url.pathname === '/api/companions/challenge' && request.method === 'POST') return json(200, companions.challenge(device, await commandBody(request, 2048)));
+        if (url.pathname === '/api/companions/link' && request.method === 'POST') return json(200, companions.link(device, await commandBody(request, 4096)));
+        if (url.pathname === '/api/companions/revoke' && request.method === 'POST') return json(200, companions.revoke(device, await commandBody(request, 2048)));
         if (request.headers['x-edition3-transfer'] !== undefined) {
           if (request.method !== 'POST' || typeof request.headers['x-edition3-transfer'] !== 'string' || Number(request.headers['content-length'] ?? 0) !== 0 || request.headers['transfer-encoding'] || url.search) throw new Fault(400, 'transfer_request', 'Use the original upload request without an additional body.');
           transferred = transfers.read(transferOwner, request.headers['x-edition3-transfer'], url.pathname, String(request.headers['content-type']));
@@ -643,7 +659,7 @@ export async function startServer(options: { directory: string; port: number; pr
   if (webServer) { webServer.requestTimeout = 15000; webServer.headersTimeout = 10000; }
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
+  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
   if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); contactCrm.tick();
     assignments.startPolling(); subtaskSuggestions.startPolling();
     agentRoutines.start(); hubMeetings.startPolling(); }
@@ -657,7 +673,7 @@ export async function startServer(options: { directory: string; port: number; pr
   let closePromise: Promise<void> | undefined;
   const close = () => {
     if (closePromise) return closePromise;
-    closing = true; clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
+    closing = true; companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
     // Stop admission before closing any authority. Browsers may retain sockets
     // without a complete HTTP request, so idle-connection cleanup is insufficient.
     const httpClosed = new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));
@@ -666,7 +682,7 @@ export async function startServer(options: { directory: string; port: number; pr
     closePromise = (async () => {
       try {
         await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
-        await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
+        companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
         await signIn?.close(); await chatGptAccount?.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
       } finally {
         try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }

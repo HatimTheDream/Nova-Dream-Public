@@ -31,7 +31,7 @@ test('schema 10 upgrade keeps encrypted account and mail records and fences olde
     const epoch=store.epoch,kept={draft:'Existing provider draft',revision:7};store.internalWrite('mail:delivery:fixture',kept);store.close();
     const before=new DatabaseSync(join(directory,'workspace.sqlite'));before.exec('PRAGMA user_version=10');before.close();
     store=new Store(directory);assert.equal(store.epoch,epoch);assert.deepEqual(store.internalRead('mail:delivery:fixture'),kept);
-    const after=new DatabaseSync(join(directory,'workspace.sqlite'));assert.equal((after.prepare('PRAGMA user_version').get() as {user_version:number}).user_version,53);after.close();
+    const after=new DatabaseSync(join(directory,'workspace.sqlite'));assert.equal((after.prepare('PRAGMA user_version').get() as {user_version:number}).user_version,54);after.close();
   }finally{store.close();rmSync(directory,{recursive:true,force:true});}
 });
 function fixture(provider:'google'|'microsoft') {

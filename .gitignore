@@ -19,3 +19,6 @@ output/
 *.p12
 *.pfx
 coverage/
+
+# Local desktop packages and pinned runtime archives.
+.packages/

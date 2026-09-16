@@ -5,6 +5,13 @@
 - Include private systemd runtime credential copies with restrictive permissions for Linux hosting.
 - Retain the integrated workspace, pixel character system, provider adapters, encrypted recovery and bounded upload transport from the verified hosted edition.
 
+## [1.2.0] — 2026-09-15
+
+- Add Install & devices with platform-specific installation guidance, actual device-storage status and persistent-storage requests.
+- Add optional, authenticated desktop links and reviewed computer actions with timed local app grants, revocation and durable interruption receipts. VPS hosting remains optional.
+- Add a local Apple Silicon companion build and authenticated, checksum-verified downloads. Public notarized installers and other desktop platforms remain separate releases.
+- Keep existing agent access unchanged; introduce an explicit Computer capability and schema 54 to protect compatibility.
+
 ## [1.1.2] — 2026-09-15
 
 - Transfer large attachments and encrypted backup uploads in authenticated encrypted pieces below the gateway request limit.

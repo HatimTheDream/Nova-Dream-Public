@@ -1,0 +1,48 @@
+# Installation and optional desktop access
+
+**Desktop preview status:** source checks, the Mac archive and its local controls have been verified. End-to-end native computer use and hosted sign-in from the companion still require target-device acceptance. No public installer is published.
+
+Nova supports a local workspace and an optionally hosted workspace. **A VPS is not required.** The desktop companion connects to an existing workspace; it does not start another backend or copy its accounts.
+
+| Setup | Workspace runs on | Needs a personal computer online? |
+| --- | --- | --- |
+| Local Nova | Your computer, using the repository's normal start/launch commands | Yes, while using that host |
+| Hosted Nova | Your chosen always-on host; a VPS is one option | No, for host work |
+| Optional computer control | An explicitly linked desktop with selected app access enabled | Yes, for that computer's actions |
+
+Phone and browser clients connect to the chosen workspace host. Work on that host does not depend on a desktop link. Native computer control requires an awake linked computer, its running companion, and a locally enabled timed app session. This is not direct phone control. Repository access, provider accounts and host browser availability still require their own configuration.
+
+## Install on a phone or in a browser
+
+Settings → **Install & devices** shows the installation instructions for the current browser. Where supported, the Install button opens the browser's native installation prompt. iPhone users use Safari's Share → Add to Home Screen. Nova's icon is included.
+
+The page reports actual site storage and can request persistent browser storage. Existing unsent writing and pending uploads stay in Nova's existing device journals. Installation does not create a complete offline copy of the workspace or make connected AI/mail available offline. Clearing site data can remove unsent drafts.
+
+## Build the desktop companion locally
+
+The current packaging recipe supports **Apple Silicon Macs**. Windows/Linux installers and their native-driver setup are not available in this release.
+
+1. Install the repository's dependencies and build the application normally.
+2. Run `npm run package:companion` from the application directory.
+3. Open the generated `Nova Dream Desktop.app` inside `.packages/companion/<version>-<candidate>/`.
+4. Enter your existing Nova address: an HTTPS hosted address or `http://127.0.0.1:<port>` for a locally running workspace.
+5. Sign in to that workspace normally. In Nova, use Settings → Install & devices → Link this desktop.
+6. Open Desktop controls, choose the Mac apps, and enable a 15-, 30- or 60-minute session only when needed.
+
+The package downloads a pinned official Electron archive and checks its SHA-256. Only the companion code, branding and runtime are packaged. Workspace data, AI credentials, the Nova backend and CuaDriver are not included. The package is locally ad-hoc signed and is **not notarized**. Public binary distribution requires a separate Developer ID signing/notarization release; do not publish this archive as a public installer.
+
+Computer access currently requires the separately installed compatible `cua-driver` helper at `~/.local/bin/cua-driver`, plus its macOS Accessibility and Screen Recording permissions. Use that helper's supported installation and permission flows. Nova does not silently install or grant OS permissions. It launches a bounded driver with the explicitly selected apps and no whole-desktop capture. The transport, installed build and actual helper integration need to be verified on the target machine; source tests alone do not establish OS access.
+
+## Host a private download
+
+The packaging output includes `downloads.json` and a versioned ZIP. Put these two files in a host-owned directory and set `E3_COMPANION_DOWNLOADS` to that absolute directory before starting Nova. With no setting, Nova remains fully usable and reports that no download is configured.
+
+The download catalog and chunks require the workspace's existing authentication. Nova checks each 2 MB chunk and the final archive digest before saving the ZIP, including through hosts with response-size limits. No arbitrary host files are downloadable through this route. Keep the directory outside user-uploaded workspace files and preserve old packages until their replacement is verified.
+
+## Remote work and stopping access
+
+An agent needs the **Computer** workspace capability in both its captured and current design. Existing agents gain no new access automatically. Main Assistant and agent computer requests create review cards. Approve the requested action through Nova on your signed-in phone or browser, then check its actual result before continuing. The desktop link supplies its live tool schemas; an offline computer is never silently substituted with another device.
+
+Each link has an OS-encrypted private key. Only its public key is registered with the workspace. Requests bind a particular workspace, computer and original operation. Interrupted actions retain receipts: an uncertain click is not automatically repeated. Results are available in their original conversation. Restarting or restoring a workspace never resumes queued computer actions, and a restored backup does not revive old desktop links.
+
+Use **Stop computer access** to end the local grant, **Disconnect and forget this link** to remove local connection credentials, or **Revoke link** in Nova to reject future packets from that desktop. Actions already performed cannot be undone by disconnecting. After quitting, no companion dispatcher should remain running.

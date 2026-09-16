@@ -1,6 +1,8 @@
 // Explicit existing workspace routes. New endpoints default to desktop-only.
 const routes = new Set(`
 GET /api/accounts
+GET /api/companions/state
+POST /api/companions/revoke
 GET /api/agent-routines/state
 GET /api/agent-skills/installed
 GET /api/agent-skills/proposal

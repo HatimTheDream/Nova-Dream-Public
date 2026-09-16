@@ -1,9 +1,11 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Companions } from '../apps/service/companions.js';
+import { companionLinkData, companionSignedData, type CompanionPacket } from '../packages/domain/companion.js';
 import { Store } from '../apps/service/store.js';
 import { ModuleActions, type ModuleServices } from '../apps/service/module-actions.js';
 import { ContactCrm } from '../apps/service/contact-crm.js';
@@ -20,14 +22,15 @@ function fixture(t:TestContext){
  const providerCalls:any[]=[],review={id:randomUUID(),revision:1,digest:'a'.repeat(64),state:'prepared',message:{subject:'Hello',to:['one@example.test'],bodyText:'Reviewed writing'}};
  const mailDelivery:any={prepare:async(_d:any,i:any)=>{providerCalls.push(['prepare',i]);return review;},confirm:async(_d:any,i:any)=>{providerCalls.push(['confirm',i]);return {...review,state:i.decision==='cancel'?'cancelled':'accepted'};},reconcile:async(_d:any,i:any)=>{providerCalls.push(['check',i]);return {...review,state:'accepted'};}};
  const mailTriage:any={prepare:async()=>({id:randomUUID(),revision:1,digest:'b'.repeat(64),status:'awaiting_confirmation'}),confirm:async(_d:any,i:any)=>({status:i.decision==='cancel'?'cancelled':'completed',outcomes:[]}),reconcile:async()=>({status:'partial',outcomes:[{state:'observed'}]})};
- const deps={store,assistant,gateway,accounts,calendar,crm,mailDelivery,mailTriage,calendarWrites:{},mail:{},assignments:{}} as unknown as ModuleServices;
+ const companions=new Companions(store);
+ const deps={companions,store,assistant,gateway,accounts,calendar,crm,mailDelivery,mailTriage,calendarWrites:{},mail:{},assignments:{}} as unknown as ModuleServices;
  let service=new ModuleActions(deps);
- t.after(async()=>{await service.close();await calendar.close();await accounts.close();store.close();rmSync(directory,{recursive:true,force:true});});
+ t.after(async()=>{await service.close();await calendar.close();await accounts.close();companions.close();store.close();rmSync(directory,{recursive:true,force:true});});
  const input=(operation:string,value:unknown,write=true)=>({operation,input:value,epoch:store.epoch,nativeId:conversation.nativeId,nativeKey:conversation.nativeKey,toolCallId:randomUUID(),permissionMode:conversation.permissionMode,write});
  const save=(kind:string,changes:unknown,id?:string,expectedRevision=0)=>input('records.save',{kind,id,expectedRevision,changes});
  const invoke=(raw:unknown)=>service.invoke(raw) as Promise<ModuleAction>;
  const decide=(a:ModuleAction,decision:'apply'|'cancel'|'check')=>service.decide(device,{requestId:randomUUID(),epoch:store.epoch,actionId:a.id,expectedRevision:a.revision,decision});
- return {store,device,conversation,operation,gateway,accounts,calendar,crm,mailDelivery,mailTriage,providerCalls,input,save,invoke,decide,get service(){return service;},async restart(){await service.close();service=new ModuleActions(deps);}};
+ return {companions,store,device,conversation,operation,gateway,accounts,calendar,crm,mailDelivery,mailTriage,providerCalls,input,save,invoke,decide,get service(){return service;},async restart(){await service.close();service=new ModuleActions(deps);}};
 }
 test('module catalog exposes all supported modules and schemas without drafts or credentials',async t=>{
  const f=fixture(t),catalog:any=await f.service.invoke(f.input('catalog',{},false));
@@ -167,4 +170,24 @@ test('a lost goal completion response is reconciled by observation after restart
 test('an unconfirmed goal change stays unknown when the goal is still active; checking never replays it',async t=>{
  const f=goalFixture(t);f.setLoss('before');const a=await f.invoke(f.input('goal.update',{goalId:f.goal.id,status:'blocked'}));assert.equal(a.state,'unknown');
  await f.restart();f.setLoss(undefined);assert.equal((await f.decide(a,'check')).state,'unknown');assert.equal(f.goal.status,'active');assert.equal(f.calls.length,1);
+});
+
+
+test('computer actions require review, expose original results in the same chat and stop before claim when cancelled', async t => {
+ const f=fixture(t), keys=generateKeyPairSync('ed25519'), deviceId=randomUUID(), command=()=>({epoch:f.store.epoch,requestId:randomUUID()});
+ const challenge=f.companions.challenge(f.device,command());
+ f.companions.link(f.device,{...command(),challengeId:challenge.id,deviceId,name:'Fixture desktop',platform:'darwin',publicKey:keys.publicKey.export({format:'pem',type:'spki'}).toString(),signature:sign(null,Buffer.from(companionLinkData(challenge,deviceId)),keys.privateKey).toString('base64url')});
+ let clock=Date.now(); const packet=(action:CompanionPacket['action'],payload:Record<string,unknown>)=>{const p={protocol:1 as const,epoch:f.store.epoch,deviceId,requestId:randomUUID(),issuedAt:++clock,action,payload};return {...p,signature:sign(null,Buffer.from(companionSignedData(p)),keys.privateKey).toString('base64url')};};
+ f.companions.packet(packet('poll',{enabledUntil:Date.now()+60000,apps:['Fixture']}));
+ const proposed=await f.invoke(f.input('computer.call',{deviceId,tool:'get_window_state',arguments:{session_id:'fixture'}}));
+ assert.equal(proposed.state,'pending');assert.throws(()=>f.companions.result(proposed.id,f.operation.id));
+ const queued=await f.decide(proposed,'apply');assert.equal(queued.state,'unknown');assert.equal(f.companions.result(proposed.id,f.operation.id).state,'queued');
+ f.operation.cancelRequested=true;assert.throws(()=>f.companions.packet(packet('claim',{id:proposed.id})),/cancelled/);
+ f.companions.packet(packet('poll',{enabledUntil:Date.now()+60000,apps:['Fixture']}));assert.equal(f.companions.result(proposed.id,f.operation.id).state,'cancelled');
+ f.operation.cancelRequested=false;
+ const next=await f.invoke(f.input('computer.call',{deviceId,tool:'get_window_state',arguments:{session_id:'fixture'}}));await f.decide(next,'apply');
+ f.companions.packet(packet('claim',{id:next.id}));f.companions.packet(packet('result',{id:next.id,state:'completed',result:{content:[{type:'text',text:'Verified window'}]}}));
+ const result:any=await f.service.invoke(f.input('computer.result',{id:next.id},false));assert.equal(result.state,'completed');
+ const original=f.operation.id;f.operation.id=randomUUID();assert.equal((await f.service.invoke(f.input('computer.result',{id:next.id},false)) as any).state,'completed');f.operation.id=original;
+ f.conversation.id=randomUUID();f.operation.conversationId=f.conversation.id;await assert.rejects(f.service.invoke(f.input('computer.result',{id:next.id},false)),/original conversation/);
 });

@@ -109,6 +109,10 @@ export class AssignmentService {
     const a = this.read(attemptId), current = this.store.readEntity('agent', a.agentId);
     return !(write && ['discussion','proposal'].includes(a.capture.plan.value.executionMode ?? '')) && a.epoch === this.store.epoch && !!current && !current.value.archived && agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, operation, input, write);
   }
+  canUseComputer(attemptId: string) {
+    const attempt = this.read(attemptId);
+    return !this.closing && !attempt.stopReason && this.now() < attempt.deadlineAt && this.canReviewModule(attemptId, 'computer.call', {}, true);
+  }
   start(device: string, raw: unknown, scheduled?: { origin: AssignmentRoutineOrigin; admitted: (attempt: AssignmentAttempt) => void }) {
     const input = assignmentStartSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: 'assignment.start', ...input, ...(scheduled ? { routine: scheduled.origin } : {}) }, () => {

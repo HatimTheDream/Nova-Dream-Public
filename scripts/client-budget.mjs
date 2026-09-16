@@ -79,7 +79,9 @@ import assert from 'node:assert/strict';
 // Bound this addition at 561 KB; startup and deferred-chunk ceilings stay fixed.
 // 1.1.2 adds authenticated upload pieces after the real Vercel body-limit failure.
 // Measured total 561,046 (+696 gzip bytes / 0.12%); keep startup/chunk ceilings.
-export const clientLimits = { startup: 180000, total: 562000, deferredChunk: 80000 };
+// 1.2 adds deferred installation, verified downloads and desktop-link controls.
+// Measured 565,093 gzip bytes (+4,047); retain startup and individual chunk limits.
+export const clientLimits = { startup: 180000, total: 567000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

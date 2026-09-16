@@ -9,7 +9,7 @@ const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const base64 = z.string().refine(isBase64, 'Invalid base64 encoding');
 export const retainedNativeSchema = z.object({ archive: base64, sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: integer.max(192 * 1024 * 1024) }).strict();
 export const backupSnapshotSchema = z.object({
-  format: z.literal(backupFormat), schema: z.union([z.literal(47), z.literal(48), z.literal(49), z.literal(50), z.literal(51), z.literal(52), z.literal(53)]), version: z.string().max(40),
+  format: z.literal(backupFormat), schema: z.union([z.literal(47), z.literal(48), z.literal(49), z.literal(50), z.literal(51), z.literal(52), z.literal(53), z.literal(54)]), version: z.string().max(40),
   id: z.string().uuid(), createdAt: z.string().datetime(), epoch: z.string().uuid(), cursor: integer,
   entities: z.array(z.object({ id, kind: z.enum(['layout', 'task', 'draft', 'project', 'routine', 'contact', 'content', 'agent', 'assignment', 'profile']), revision: integer.min(1), deviceId: id, updatedAt: z.string().datetime(), value: z.unknown() }).strict()).max(100000),
   history: z.array(z.object({ cursor: integer.min(1), entityId: id, revision: integer.min(1), value: z.unknown() }).strict()).max(1000000),

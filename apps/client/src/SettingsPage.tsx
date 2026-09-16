@@ -8,11 +8,12 @@ import './settings.css';
 
 const PhoneSettings = lazy(() => import('./Phone').then(module => ({ default: module.PhoneSettings })));
 const StorageSettings = lazy(() => import('./StorageSettings').then(module => ({ default: module.StorageSettings })));
+const InstallSettings = lazy(() => import('./InstallSettings').then(module => ({ default: module.InstallSettings })));
 const categories = [
   { id: 'general', label: 'General', description: 'Appearance, Home preferences and app information.' },
   { id: 'accounts', label: 'Accounts', description: 'Google and Microsoft connections for mail, calendars and contacts.' },
   { id: 'assistant', label: 'Assistant & voice', description: 'ChatGPT sign-in, voice readiness and your Assistant connection.' },
-  { id: 'phone', label: 'Phone & devices', description: 'Private access to this workspace from your other devices.' },
+  { id: 'phone', label: 'Install & devices', description: 'Install Nova, manage device storage and optionally connect a computer.' },
   { id: 'data', label: 'Data & recovery', description: 'Workspace protection, imports, backups and recovery.' },
 ] as const;
 export type SettingsTab = typeof categories[number]['id'];
@@ -65,7 +66,7 @@ export function SettingsPage({ selected, select, snapshot, online, access, gener
       <ProviderAccounts snapshot={snapshot} online={online && !recoveryPaused} recoveryPaused={recoveryPaused}/>
     </section></SettingsPanel>}
     {!phone && <SettingsPanel id="assistant" active={current.id === 'assistant'}><Connections recoveryPaused={recoveryPaused} remoteHost={access?.surface === 'web'} snapshot={snapshot} online={online} openAssistant={openAssistant}/></SettingsPanel>}
-    <SettingsPanel id="phone" active={current.id === 'phone'}><PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/></SettingsPanel>
+    <SettingsPanel id="phone" active={current.id === 'phone'}><InstallSettings epoch={snapshot.epoch} access={access}/><PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/></SettingsPanel>
     {!phone && <SettingsPanel id="data" active={current.id === 'data'}><StorageSettings remoteHost={access?.surface === 'web'} epoch={snapshot.epoch} deviceId={snapshot.deviceId}/></SettingsPanel>}
   </main>;
 }

@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import './install';
 import '@fontsource-variable/sora';
 import { App } from './App';
 import './styles.css';

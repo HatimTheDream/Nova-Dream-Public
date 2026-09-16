@@ -53,7 +53,7 @@ test('all missing module records share encrypted revisions, snapshots and retain
     for (const [kind, id, value] of values) { assert.deepEqual(f.store.readEntity(kind, id)?.value, value); assert.equal(f.store.snapshot('owner').records?.[kind].length, 1); assert.deepEqual(f.store.recordHistory({ kind, id }).versions[0].value, value); }
     const db = new DatabaseSync(join(f.path, 'workspace.sqlite'), { readOnly: true });
     for (const table of ['entities', 'history', 'receipts']) for (const row of db.prepare(`SELECT payload FROM ${table}`).all()) { const bytes = Buffer.from(row.payload as Uint8Array).toString('utf8'); assert.ok(!bytes.includes('Private fixture')); assert.ok(!bytes.includes('Exact bytes')); }
-    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 53); db.close();
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 54); db.close();
   } finally { f.close(); }
 });
 test('revisions and request receipts reject competing, cross-device and changed-payload writes', () => {

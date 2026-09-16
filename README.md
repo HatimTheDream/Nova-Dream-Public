@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.1.3-blue)
+![Version](https://img.shields.io/badge/Version-1.2.0-blue)
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 
@@ -40,6 +40,12 @@ Actual screenshots from Nova Dream 1.1.3, using fictional demo tasks, writing an
 </table>
 
 This repository contains the application source and synthetic tests. It starts with an empty workspace. You use your own accounts, credentials and hosting; no maintainer account, production database, conversation history or live deployment is included. A public source repository does not make anyone's private workspace public.
+
+## Choose where Nova runs
+
+**A VPS is optional.** Run Nova on your own computer, or host it on an always-on server. Phone and browser clients connect to whichever host you choose.
+
+Settings → **Install & devices** provides device-specific installation guidance, local draft-storage status and optional desktop links. A linked, awake computer can accept reviewed app-control requests from Nova while ordinary host work continues independently. The current desktop companion build targets Apple Silicon Macs; public notarized installers and Windows/Linux packages are not included. See [desktop setup and private downloads](docs/DESKTOP-COMPANION.md).
 
 ## Quick start
 

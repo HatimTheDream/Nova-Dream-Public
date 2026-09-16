@@ -33,6 +33,13 @@ export function registerModuleTools(api:ModulePluginApi){
     const reading=z.object({image:z.object({mimeType:z.literal('image/jpeg'),data:z.string().max(950000).regex(/^[A-Za-z0-9+/]*={0,2}$/),width:z.number().int().positive().max(1400),height:z.number().int().positive().max(1400)}).optional()}).passthrough().parse(result);
     if(reading.image){const {image,...metadata}=reading;const summary={...metadata,image:{mimeType:image.mimeType,width:image.width,height:image.height}};return {content:[{type:'text',text:JSON.stringify(summary)},{type:'image',mimeType:image.mimeType,data:image.data}],details:summary,isError:false};}
    }
+   if (response.ok && input.operation === 'computer.result') {
+    const image = toolImage(result);
+    if (image) {
+     const metadata = JSON.parse(JSON.stringify(result, (_key, value) => value?.type === 'image' ? {type:'image',mimeType:value.mimeType} : value));
+     return {content:[{type:'text',text:JSON.stringify(metadata)},{type:'image',mimeType:image.mimeType,data:image.data}],details:metadata,isError:false};
+    }
+   }
    return {content:[{type:'text',text:JSON.stringify(result)}],details:result,isError:!response.ok};
   }}));
  },{names:['nova_read','nova_write']});

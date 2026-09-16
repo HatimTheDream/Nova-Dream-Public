@@ -1,0 +1,51 @@
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { AccessContext } from '../../../packages/domain/phone';
+import type { CompanionChallenge, CompanionDevice } from '../../../packages/domain/companion';
+import { request, readLocal, saveLocal } from './api';
+import { installationRoute, installAvailable, installNova, subscribeInstall } from './install';
+import { Dialog } from './ui';
+
+type NativeCompanion = { linked(): Promise<{ deviceId: string; epoch: string } | null>; prepareLink(challenge: CompanionChallenge): Promise<Record<string, unknown>>; finishLink(value: { epoch: string; deviceId: string }): Promise<void>; openControls(): Promise<void> };
+import { downloadCompanion, type CompanionDownload as Download } from './companion-download';
+const size = (value?: number) => value === undefined ? 'Unavailable' : value < 1024 * 1024 ? `${Math.ceil(value / 1024)} KB` : `${Math.round(value / 1024 / 1024)} MB`;
+export function InstallSettings({ epoch, access }: { epoch: string; access?: AccessContext }) {
+  const available = useSyncExternalStore(subscribeInstall, installAvailable);
+  const [installed, setInstalled] = useState(() => matchMedia('(display-mode: standalone)').matches || !!(navigator as Navigator & { standalone?: boolean }).standalone);
+  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [devices, setDevices] = useState<CompanionDevice[]>([]), [downloads, setDownloads] = useState<Download[]>([]);
+  const [storage, setStorage] = useState<{ usage?: number; quota?: number; persistent?: boolean }>();
+  const acting = useRef(false), downloading = useRef<AbortController | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>();
+  useEffect(() => () => downloading.current?.abort(), []);
+  const [linked, setLinked] = useState(false);
+  const [remove, setRemove] = useState<CompanionDevice>();
+  const native = (window as Window & { novaCompanion?: NativeCompanion }).novaCompanion;
+  useEffect(() => { void native?.linked().then(value => setLinked(value?.epoch === epoch), () => setLinked(false)); }, [native, epoch]);
+  const route = native ? { title: 'Desktop companion', instructions: 'Nova is open in the desktop companion. Link this computer below when you want to enable selected apps for remote work.' } : installationRoute(navigator.userAgent, navigator.maxTouchPoints, installed);
+  useEffect(() => { const changed = () => setInstalled(true); window.addEventListener('appinstalled', changed); return () => window.removeEventListener('appinstalled', changed); }, []);
+  const readStorage = async () => { try { const estimate = await navigator.storage?.estimate(); const persistent = await navigator.storage?.persisted?.(); setStorage({ ...estimate, persistent }); } catch { setStorage({}); } };
+  const refresh = async () => { const state = await request<{ devices: CompanionDevice[]; downloads?: Download[] }>('companions/state'); setDevices(state.devices); setDownloads(state.downloads ?? []); void native?.linked().then(value => setLinked(value?.epoch === epoch), () => setLinked(false)); };
+  useEffect(() => { let alive = true; const load = () => request<{ devices: CompanionDevice[]; downloads?: Download[] }>('companions/state').then(state => { if (alive) { setDevices(state.devices); setDownloads(state.downloads ?? []); void native?.linked().then(value => setLinked(value?.epoch === epoch), () => setLinked(false)); } }, () => { if (alive) setMessage('Device status is unavailable. Reconnect to your workspace host.'); }); void load(); void readStorage(); const timer = setInterval(() => void load(), 10000); return () => { alive = false; clearInterval(timer); }; }, [epoch]);
+  const act = async (work: () => Promise<void>) => { if (acting.current) return; acting.current = true; setBusy(true); setMessage(''); try { await work(); } catch (error) { setMessage(error instanceof Error ? error.message : 'This action could not be confirmed.'); } finally { acting.current = false; setBusy(false); } };
+  return <>
+    <section className="card settings-card install-summary"><img src="/icons/nova-dream-192-v2.png" width="64" height="64" alt="Nova Dream"/><div><h2>Your workspace, on your devices</h2><p>{access?.surface === 'web' ? 'This workspace runs on its host. Your phone and browser can use it without linking a personal computer.' : 'Nova can run on your own computer. A VPS is optional; use one when you want a host that stays online independently.'}</p></div></section>
+    <section className="card settings-card"><h2>{route.title}</h2><p>{route.instructions}</p>{available && !installed && <button className="primary" disabled={busy} onClick={() => void act(async () => { const accepted = await installNova(); setMessage(accepted ? 'Installation accepted. Open Nova from your device’s app list.' : 'You can install Nova later.'); })}>Install Nova</button>}</section>
+    <section className="card settings-card"><h2>Storage on this device</h2><p>Unsent writing and pending uploads are kept on this device. Saved workspace records stay on your chosen host. Keep an editor open to retain unsaved writing through a temporary disconnection.</p><div className="setting-row"><div><strong>{size(storage?.usage)} used{storage?.quota ? ` · ${size(storage.quota)} site quota` : ''}</strong><p>{storage?.persistent ? 'This browser has granted persistent storage.' : 'Your browser manages local storage and may clear it when space is needed. Clearing site data also removes local drafts.'}</p></div>{navigator.storage?.persist && !storage?.persistent && <button disabled={busy} onClick={() => void act(async () => { const kept = await navigator.storage.persist(); await readStorage(); setMessage(kept ? 'Persistent storage is enabled for this device.' : 'The browser did not grant persistent storage. Your current drafts are unchanged.'); })}>Keep device storage</button>}</div><p className="metadata">Installation does not make AI, mail or all workspace screens available offline.</p></section>
+    <section className="card settings-card"><h2>Optional desktop companion</h2><p>Connect an awake computer when you want Nova to use its approved apps. You can request that work from any signed-in device. Tasks that run on your workspace host do not require this connection.</p>
+      {native ? <div className="button-row"><button className="primary" disabled={busy || linked} onClick={() => void act(async () => { const key = 'nova-desktop-link:' + epoch;
+        let command = readLocal<Record<string, unknown>>(key);
+        if (!command) {
+          const challenge = await request<CompanionChallenge>('companions/challenge', { requestId: crypto.randomUUID(), epoch });
+          const prepared = await native.prepareLink(challenge);
+          command = { requestId: crypto.randomUUID(), epoch, challengeId: challenge.id, ...prepared };
+          if (!saveLocal(key, command)) throw new Error('Allow device storage before linking this desktop.');
+        }
+        const value = await request<{ epoch: string; deviceId: string }>('companions/link', command);
+        await native.finishLink(value); localStorage.removeItem(key); setLinked(true); await refresh(); setMessage('Desktop linked. Open Desktop controls to choose the apps and duration.'); })}>{linked ? 'Desktop linked' : 'Link this desktop'}</button><button disabled={busy} onClick={() => void act(() => native.openControls())}>Desktop controls</button></div> : downloads.length ? <div className="install-downloads">{downloads.map(file => <div key={file.name}><button disabled={busy} onClick={() => void act(async () => { const controller = new AbortController(); downloading.current = controller; setDownloadProgress(0); try { await downloadCompanion(file, setDownloadProgress, controller.signal); setMessage('Download verified. Unzip it and open Nova Dream Desktop.'); } finally { downloading.current = null; setDownloadProgress(undefined); } })}>{file.platform === 'darwin' ? 'Download for Mac' : file.platform === 'win32' ? 'Download for Windows' : 'Download for Linux'} · {file.arch}</button><p className="metadata">{file.version} · {size(file.bytes)} · {file.signing === 'local-ad-hoc' ? 'Private local build; not notarized' : file.signing}</p><details><summary>Verify download</summary><p className="preserve-lines">SHA-256: {file.sha256}</p></details></div>)}</div> : <p className="notice">No desktop download is configured on this host. The repository includes a local build command; your workspace remains usable in the browser.</p>}
+      <p className="metadata">{downloadProgress !== undefined && <><span role="status">Downloading and verifying: {downloadProgress}% </span><button onClick={() => downloading.current?.abort()}>Cancel download</button></>}</p><p className="metadata">A link grants no computer access by itself. Choose app access in the companion. Access expires, and you can disconnect or revoke the link.</p>
+      {devices.filter(d => !d.revokedAt).map(device => <div className="setting-row" key={device.id}><div><strong>{device.name}</strong><p>{device.connected ? device.enabledUntil > Date.now() ? `Connected · app access until ${new Date(device.enabledUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connected · computer access off' : 'Offline · open the companion on this computer'}{device.apps.length ? ` · ${device.apps.join(', ')}` : ''}</p></div><button disabled={busy} onClick={() => setRemove(device)}>Revoke link</button></div>)}
+      {!devices.some(d => !d.revokedAt) && <p className="metadata">No personal computers linked. Host work is still available when your workspace host is online.</p>}
+    </section>
+    {message && <p className="notice" role="status">{message}</p>}
+    {remove && <Dialog title={`Revoke ${remove.name}?`} close={() => setRemove(undefined)}><p>This stops new computer actions. Saved workspace work stays intact. An action already performed cannot be undone by disconnecting.</p><div className="button-row"><button onClick={() => setRemove(undefined)}>Keep link</button><button className="primary" disabled={busy} onClick={() => void act(async () => { await request('companions/revoke', { epoch, requestId: crypto.randomUUID(), deviceId: remove.id }); setRemove(undefined); await refresh(); })}>Revoke link</button></div></Dialog>}
+  </>;
+}

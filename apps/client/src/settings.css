@@ -18,6 +18,12 @@
 .settings-panel .settings-card > p { line-height: 1.7; }
 .settings-accounts .provider-connections { border-top: 0; padding-top: 8px; margin-top: 8px; }
 .settings-panel .provider-connections h3 { font-size: 17px; }
+.install-summary { display: flex; gap: 18px; align-items: center; }
+.install-summary img { flex: none; border-radius: 14px; }
+.install-summary h2 { margin-top: 0; }
+.install-downloads { display: flex; flex-wrap: wrap; gap: 18px; }
+.install-downloads > div { min-width: 0; flex: 1 1 240px; }
+.install-downloads p { overflow-wrap: anywhere; }
 @media (max-width: 650px) {
   .settings-tabs [role="tab"] { padding-inline: 13px; }
   .settings-description { font-size: 13px; margin-block: 12px 20px; }

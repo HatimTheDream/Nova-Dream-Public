@@ -1,4 +1,6 @@
 import { SourceReader } from './source-reader.js';
+import type { Companions } from './companions.js';
+import { companionCallSchema } from '../../packages/domain/companion.js';
 import { chatGoalSchema } from '../../packages/domain/chat-goal.js';
 import { sourceReadSchema, type CapturedSourceFile } from '../../packages/domain/source-reader.js';
 import { questCommandSchema } from '../../packages/domain/profile-progression.js';
@@ -35,8 +37,8 @@ const sha=(value:unknown)=>createHash('sha256').update(canonical(value)).digest(
 function uuid(value:unknown){const s=sha(value);return `${s.slice(0,8)}-${s.slice(8,12)}-4${s.slice(13,16)}-a${s.slice(17,20)}-${s.slice(20,32)}`;}
 const stamp=()=>new Date().toISOString();
 const strip=(schema:z.ZodObject<any>)=>z.object(Object.fromEntries(Object.entries(schema.shape).filter(([key])=>!['requestId','epoch','writerId'].includes(key))) as any).strict();
-type Operation={title:string;module:string;schema:z.ZodType;write?:boolean;external?:boolean;read?:(device:string,input:any,owner:{operationId:string;assignmentId?:string})=>unknown|Promise<unknown>;run?:(action:ModuleAction)=>unknown|Promise<unknown>;prepare?:(action:ModuleAction)=>unknown|Promise<unknown>;confirm?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;cancel?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;check?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>};
-export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService};
+type Operation={title:string;module:string;schema:z.ZodType;write?:boolean;external?:boolean;read?:(device:string,input:any,owner:{operationId:string;assignmentId?:string;conversationId:string})=>unknown|Promise<unknown>;run?:(action:ModuleAction)=>unknown|Promise<unknown>;prepare?:(action:ModuleAction)=>unknown|Promise<unknown>;confirm?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;cancel?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;check?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>};
+export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService;companions?:Companions};
 /** Model arguments never select an authority, device, epoch, conversation, or request receipt. */
 export class ModuleActions {
  private operations:Record<string,Operation>;
@@ -48,6 +50,11 @@ export class ModuleActions {
   this.reader=new SourceReader(store);
   const envelope=(a:ModuleAction)=>({...a.input,epoch:a.epoch,requestId:a.id});
   this.operations={
+   ...(s.companions ? {
+    'computer.devices': { title: 'List optional linked computers', module: 'Computer', schema: z.object({}).strict(), read: () => ({ devices: s.companions!.devices().filter(d => !d.revokedAt), instructions: 'Select the exact computer requested by the owner and use its advertised tool schemas. Only an online desktop with a locally enabled app grant can execute. Each computer.call creates an owner review; pending or queued is not success. Read computer.result after approval before the next action. Never repeat an unknown effect. Host tasks do not require a desktop.' }) },
+    'computer.call': { title: 'Use the selected computer', module: 'Computer', write: true, external: true, schema: companionCallSchema, run: (a: ModuleAction) => this.computerAction(a), check: (a: ModuleAction) => s.companions!.result(a.id, a.operationId) },
+    'computer.result': { title: 'Read an original computer action result', module: 'Computer', schema: z.object({ id: z.uuid() }).strict(), read: (_d: string, i: { id: string }, owner: { operationId: string; conversationId: string }) => { const action = this.get(i.id); if (action.conversationId !== owner.conversationId) throw new Fault(403, 'computer_result_owner', 'Read computer results only in their original conversation.'); return s.companions!.result(i.id, action.operationId); } },
+   } : {}),
    'goal.read':{title:'Read this conversation’s goal',module:'Assistant',schema:z.object({}).strict(),read:(_d,_i,owner)=>this.readGoal(owner.operationId)},
    'goal.update':{title:'Report this goal complete or blocked',module:'Assistant',write:true,schema:z.object({goalId:z.string().min(1).max(200),status:z.enum(['complete','blocked'])}).strict(),run:a=>this.reportGoal(a),check:a=>this.reportGoal(a,true)},
    'sources.list':{title:'List source files captured for this request',module:'Sources',schema:z.object({}).strict(),read:(_d,_i,owner)=>({files:this.sourceFiles(owner),instructions:'Use sources.read with the exact fileId. PDF text and image views read one page at a time. Filenames alone are not inspected content.'})},
@@ -84,6 +91,15 @@ export class ModuleActions {
   if(this.closed||this.s.store.epoch!==operation.epoch||!current||current.deleted||current.archived||current.pendingSettings||current.state!=='ready'||current.nativeKey!==operation.nativeKey||current.nativeId!==operation.nativeId||current.connectionGeneration!==this.s.gateway.status().generation||result.session?.sessionId!==operation.nativeId)throw new Fault(409,'goal_session_changed','The native goal session changed.');
   return {goal:result.session.goal?chatGoalSchema.parse(result.session.goal):null};
  }
+ private computerAction(a:ModuleAction){
+  const authorize=()=>{
+   const current=this.reviewAccess(a);
+   if(current.pendingSettings||current.permissionMode==='read-only')throw new Fault(403,'computer_access_changed','This request no longer permits computer actions.');
+   if(a.assignmentId){if(!this.s.assignments.canUseComputer(a.assignmentId))throw new Fault(409,'computer_cancelled','The assignment stopped or reached its deadline.');if(!this.s.assignments.canReviewModule(a.assignmentId,a.operation,a.input,true))throw new Fault(403,'computer_access_changed','The agent no longer has computer access.');}
+   else { const original=this.s.assistant.operations().find(op=>op.id===a.operationId), conversation=this.s.assistant.conversations().find(c=>c.id===a.conversationId); if(!original||original.cancelRequested||!conversation||conversation.nativeId!==original.nativeId||conversation.nativeKey!==original.nativeKey)throw new Fault(409,'computer_cancelled','The originating request was cancelled or its session changed.'); }
+  };
+  return this.s.companions!.enqueue(a.id,a.operationId,companionCallSchema.parse(a.input),authorize);
+ }
  private async reportGoal(a:ModuleAction,check=false){
   const {goal}=await this.readGoal(a.operationId);
   if(!goal||goal.id!==a.input.goalId)throw new Fault(409,'goal_changed','This goal was replaced or cleared. Read the current goal before reporting its status.');
@@ -98,7 +114,7 @@ export class ModuleActions {
   if(confirmed.goal?.id!==a.input.goalId||confirmed.goal.status!==a.input.status)throw new Error('The saved goal status is not confirmed. Check this original action.');
   return {...confirmed,nextAction:'Goal status was saved. This does not send a reply; provide the requested visible final response.'};
  }
- private sourceFiles(owner:{operationId:string;assignmentId?:string}):CapturedSourceFile[]{
+ private sourceFiles(owner:{operationId:string;assignmentId?:string;conversationId:string}):CapturedSourceFile[]{
   if(owner.assignmentId)return this.s.assignments.sourceFiles(owner.assignmentId);
   const operation=this.s.assistant.operations().find(value=>value.id===owner.operationId);
   if(!operation)throw new Fault(403,'source_request_missing','The captured source request is unavailable.');
@@ -181,6 +197,7 @@ export class ModuleActions {
  list(conversationId:string){if(!this.s.assistant.conversations().some(c=>c.id===conversationId&&!c.deleted))return [];return this.all().filter(a=>a.epoch===this.s.store.epoch&&a.conversationId===conversationId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
  private result(a:ModuleAction,result:any){
   let state:ModuleAction['state']='applied';const status=result?.state??result?.status;
+  if(a.operation==='computer.call')state=status==='completed'?'applied':status==='cancelled'?'cancelled':status==='refused'?'failed':'unknown';
   if(a.external&&this.def(a.operation).prepare){
    if(['uncertain','unknown','interrupted','running','applying'].includes(status)||result?.outcomes?.some((o:any)=>o.state==='uncertain'))state='unknown';
    else if(status==='cancelled')state='cancelled';
