@@ -1,10 +1,12 @@
 export type InboxStartupProgress = { phase: 'accounts' | 'mailboxes' | 'messages' | 'ready'; completed: number; total?: number };
 
-export function inboxStartupView(progress: InboxStartupProgress) {
-  const detail = { accounts: 'Checking your mail accounts…', mailboxes: 'Preparing your mailboxes…', messages: 'Preparing recent messages…', ready: 'Your workspace is ready.' }[progress.phase];
-  const amount = progress.phase === 'accounts' ? 'Waiting for mail accounts' : progress.phase === 'ready' ? 'Inbox preparation complete' : `${progress.completed} of ${progress.total ?? 0} ${progress.phase === 'mailboxes' ? 'mailboxes checked' : 'recent messages'}`;
-  const percent = progress.phase === 'ready' ? 100 : progress.total ? Math.floor(progress.completed / progress.total * 100) : undefined;
-  return { detail, amount, percent };
+/** One preparation pass across accounts, first pages and settled messages. */
+export function inboxLoadingPercent(progress: InboxStartupProgress) {
+  if (progress.phase === 'ready') return 100;
+  const fraction = progress.total ? Math.min(1, Math.max(0, progress.completed / progress.total)) : 0;
+  if (progress.phase === 'accounts') return 0;
+  if (progress.phase === 'mailboxes') return Math.floor(5 + 15 * fraction);
+  return Math.floor(20 + 79 * fraction);
 }
 
 /** Report settled message preparation, not requests merely put into a queue. */

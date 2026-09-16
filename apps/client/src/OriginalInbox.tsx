@@ -24,9 +24,11 @@ import { DEFAULT_SETTINGS } from './dreamclaw/pages/Calendar/calendarTypes';
 import type { PageViewState } from './dreamclaw/types/missionControl';
 import './dreamclaw/styles.css';
 import './dreamclaw/inbox.css';
-import { prepareRecentMessages, type InboxStartupProgress } from './inbox-startup-progress';
+import { inboxLoadingPercent, prepareRecentMessages, type InboxStartupProgress } from './inbox-startup-progress';
 
-type Props = { snapshot: Snapshot; openSettings(): void; openCalendar(): void; openContact(id: string): void; refresh(): Promise<void> };
+import { ModuleLoading } from './ModuleLoading';
+
+type Props = { prepare?: boolean; snapshot: Snapshot; openSettings(): void; openCalendar(): void; openContact(id: string): void; refresh(): Promise<void> };
 // The original Inbox session deliberately survives leaving its route. Recheck
 // account authority before showing it again; only a changed scope invalidates it.
 let retainedScope: { key: string; dispose(): void } | undefined;
@@ -38,15 +40,28 @@ function acceptMailScope(snapshot: Snapshot, accounts: AccountsState) {
   }
   return fingerprint;
 }
-// There is one startup screen per window. Reconnection replaces its observer.
-let startup: { key: string; work: Promise<void>; progress: InboxStartupProgress; report?: (progress: InboxStartupProgress) => void; settled: boolean } | undefined;
-export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: InboxStartupProgress) => void): Promise<void> {
+// Preparation starts on the Inbox route and survives navigation away. Reopening
+// attaches to the same work instead of starting a second preparation pass.
+let startup: { key: string; work: Promise<AccountsState>; progress: InboxStartupProgress; report?: (progress: InboxStartupProgress) => void; settled: boolean } | undefined;
+export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: InboxStartupProgress) => void): Promise<AccountsState> {
   const key = `${snapshot.epoch}:${snapshot.deviceId}`;
-  if (startup?.key === key && (!startup.settled || startup.progress.phase === 'ready')) {
+  if (startup?.key === key && startup.settled && startup.progress.phase === 'ready') {
+    const prepared = startup;
+    return request<AccountsState>('accounts').then(accounts => {
+      const scope = retainedScope?.key;
+      if (acceptMailScope(snapshot, accounts) !== scope) {
+        if (startup === prepared) startup = undefined;
+        return prepareInboxStartup(snapshot, report);
+      }
+      report?.(prepared.progress);
+      return accounts;
+    });
+  }
+  if (startup?.key === key && !startup.settled) {
     if (report) { report(startup.progress); if (!startup.settled) startup.report = report; }
     return startup.work;
   }
-  const state = { key, work: Promise.resolve(), progress: { phase: 'accounts', completed: 0 } as InboxStartupProgress, report, settled: false };
+  const state = { key, work: Promise.resolve(undefined as unknown as AccountsState), progress: { phase: 'accounts', completed: 0 } as InboxStartupProgress, report, settled: false };
   startup = state;
   const publish = (progress: InboxStartupProgress) => { state.progress = progress; state.report?.(progress); };
   publish(state.progress);
@@ -79,6 +94,7 @@ export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: Inbo
         await api.preloadThread({ provider: account.provider === 'gmail' ? 'google' : 'microsoft', accountId: account.accountId, threadId: thread.id, messageId: thread.sourceMessageId }).catch(() => { api.assertCurrent(); });
     }, publish);
     publish({ phase: 'ready', completed: recent.length, total: recent.length });
+    return accounts;
   })();
   state.work = work.finally(() => { state.settled = true; state.report = undefined; }); return state.work;
 }
@@ -91,10 +107,22 @@ const retainedFollowups = new Map<string, ReturnType<typeof createInboxFollowups
 const retainedDelivery = new Map<string, ReturnType<typeof createInboxDeliveryJournal>>();
 export default function OriginalInbox(props: Props) {
   const [identity, setIdentity] = useState<{ id: string; previous?: string }>();
-  useEffect(() => { let active = true; void calendarWindowIdentity().then(value => { if (active) setIdentity(value); }); return () => { active = false; }; }, []);
-  return identity ? <ConnectedInbox key={`${props.snapshot.deviceId}:${props.snapshot.epoch}:${identity.id}`} {...props} identity={identity}/> : <main className="page-scroll" role="status">Opening Inbox…</main>;
+  const [accounts, setAccounts] = useState<AccountsState>();
+  const [progress, setProgress] = useState<InboxStartupProgress>({ phase: 'accounts', completed: 0 });
+  const [ready, setReady] = useState(false), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true, first = 0, second = 0;
+    setError('');
+    void Promise.all([calendarWindowIdentity(), props.prepare === false ? Promise.resolve(undefined) : prepareInboxStartup(props.snapshot, value => { if (active) setProgress(value); })]).then(([identity, accounts]) => {
+      if (!active) return;
+      setIdentity(identity); setAccounts(accounts);
+      first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { if (active) setReady(true); }); });
+    }).catch(() => { if (active) setError('Your mail needs a moment. Try again when your connection is ready.'); });
+    return () => { active = false; cancelAnimationFrame(first); cancelAnimationFrame(second); };
+  }, [props.snapshot.deviceId, props.snapshot.epoch, props.prepare, attempt]);
+  return ready && identity ? <ConnectedInbox key={`${props.snapshot.deviceId}:${props.snapshot.epoch}:${identity.id}`} {...props} identity={identity} initialAccounts={accounts}/> : <ModuleLoading module="Inbox" percent={inboxLoadingPercent(progress)} error={error} retry={() => setAttempt(value => value + 1)}/>;
 }
-function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, refresh, identity }: Props & { identity: { id: string; previous?: string } }) {
+function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, refresh, identity, initialAccounts }: Props & { identity: { id: string; previous?: string }; initialAccounts?: AccountsState }) {
   const [contactInput, setContactInput] = useState<MailContactPrepare>();
   const [source] = useState(() => {
     const key=`${snapshot.epoch}:${snapshot.deviceId}:${identity.id}`;
@@ -108,7 +136,7 @@ function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, ref
     if(!journal){journal=createInboxFollowups({epoch:snapshot.epoch,deviceId:snapshot.deviceId,windowId:identity.id,previousWindowId:identity.previous});retainedFollowups.set(key,journal);}return journal;
   });
   const followupState=useStore(followups.store,state=>state);
-  const [scopeVersion, setScopeVersion] = useState(''), [connectionError, setConnectionError] = useState('');
+  const [scopeVersion, setScopeVersion] = useState(() => initialAccounts ? retainedScope?.key ?? '' : ''), [connectionError, setConnectionError] = useState('');
   const [notice, setNotice] = useState<InboxNotice>();
   const [portal] = useState(() => { const element = document.createElement('div'); element.className = 'dreamclaw-module dc-inbox-portals'; return element; });
   const [writing] = useState(() => {
@@ -138,7 +166,7 @@ function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, ref
     return journal;
   });
   const triageState = useStore(triage.store, state => state);
-  const accountState = useRef<AccountsState | undefined>(undefined);
+  const accountState = useRef<AccountsState | undefined>(initialAccounts);
   const displayedReadJob=useRef<Promise<unknown>|undefined>(undefined);
   const [showKeptWorkspace, setShowKeptWorkspace] = useState(false);
   const actionResult = (plan:MailTriagePlan) => ({plan,status:plan.status,message:plan.resultMessage??plan.summary,receipt:plan.receipt,errors:plan.errors});
@@ -238,6 +266,6 @@ function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, ref
         {record.result&&!record.pending&&<button disabled={followupState.busy[key]} onClick={()=>{const account=accountState.current?.accounts.find(a=>a.id===record.command.source.accountId);if(!account){setNotice({severity:'error',title:'Refresh this mail account',body:'Your saved follow-up remains in Calendar.'});return;}void Promise.resolve().then(()=>followups.schedule({...proposal,generation:account.generation,after:{eventId:record.result!.event.id,revision:record.result!.event.revision}})).catch(()=>{});}}>Schedule another · {new Intl.DateTimeFormat(undefined,{timeZone:proposal.timezone,month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(new Date(proposal.startAt))}</button>}</div>
       </li>})}</ul>
     </details>}
-    {scopeVersion ? !accountState.current?.accounts.some(account => account.state !== 'disconnected' && account.capabilities.mailRead) && !showKeptWorkspace ? <div className="inbox-setup-screen"><AccountSetup openSettings={openSettings}/><button className="text-button" onClick={() => setShowKeptWorkspace(true)}>Open kept mail workspace</button></div> : <InboxPage/> : <div className="inbox-opening" role="status">{connectionError ? 'Waiting for your mail connection…' : 'Opening your inboxes…'}</div>}
+    {scopeVersion ? !accountState.current?.accounts.some(account => account.state !== 'disconnected' && account.capabilities.mailRead) && !showKeptWorkspace ? <div className="inbox-setup-screen"><AccountSetup openSettings={openSettings}/><button className="text-button" onClick={() => setShowKeptWorkspace(true)}>Open kept mail workspace</button></div> : <InboxPage/> : <ModuleLoading module="Inbox" error={connectionError}/>}
   </div></InboxHostProvider>;
 }

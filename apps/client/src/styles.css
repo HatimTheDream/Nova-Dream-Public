@@ -232,9 +232,9 @@
   .startup-fill { display:block; height:100%; border-radius:inherit; background:var(--brand-red); transition:width 180ms ease-out; }
   .startup-track[aria-valuenow="100"] .startup-fill { transition:none; }
   .startup-progress .startup-percent { margin:12px 0 0; font-size:13px; line-height:1.5; font-weight:580; font-variant-numeric:tabular-nums; color:var(--text); }
-  .startup-progress .startup-amount { margin:5px 0 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; color:var(--muted); }
+  .startup-amount { margin:5px 0 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; color:var(--muted); }
   .startup-progress.is-indeterminate .startup-fill { animation:startup-wait 1.4s ease-in-out infinite alternate; }
-  @keyframes startup-wait { from { transform:translateX(0); } to { transform:translateX(258%); } }
+  @keyframes startup-wait { from { opacity:.25; } to { opacity:.65; } }
   @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } .startup-progress.is-indeterminate .startup-fill { animation:none; } }
   .search-input { flex-direction:row; align-items:center; gap:10px; }
   .search-input input { flex:1; min-width:0; }
@@ -944,3 +944,12 @@
 .task-family-list { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
 .task-family-list button { width: 100%; min-height: 44px; text-align: left; display: grid; gap: 4px; white-space: normal; overflow-wrap: anywhere; }
 .task-family-list small { color: var(--muted); }
+
+.startup-meter { width: min(280px, 100%); }
+.module-loading { flex: 1; min-height: 240px; display: grid; place-items: center; padding: 32px 24px; }
+.module-loading-card { width: min(100%, 300px); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.module-loading-card img { object-fit: contain; }
+.module-loading-card h2 { margin: 0; color: var(--text); font-size: 19px; font-weight: 650; }
+.module-loading-card > p { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.module-loading-card .startup-progress { width: min(220px, 100%); }
+.module-loading-card .startup-track { height: 5px; }

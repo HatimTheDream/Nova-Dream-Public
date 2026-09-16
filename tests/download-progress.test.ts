@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { downloadPercent, readDownload, type DownloadProgress } from '../apps/client/src/download-progress';
 import { request } from '../apps/client/src/api';
-import { inboxStartupView, prepareRecentMessages, type InboxStartupProgress } from '../apps/client/src/inbox-startup-progress';
+import { inboxLoadingPercent, prepareRecentMessages, type InboxStartupProgress } from '../apps/client/src/inbox-startup-progress';
 
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(accept => { resolve = accept; }); return { promise, resolve }; }
@@ -60,15 +60,15 @@ test('Inbox percentage counts completed work while two real message preparations
   const work = prepareRecentMessages([0, 1, 2], async index => { started.push(index); await pending[index].promise; }, progress => seen.push(progress));
   assert.deepEqual(started, [0, 1]); assert.equal(seen.at(-1)?.completed, 0);
   pending[1].resolve(); await settle(); assert.deepEqual(started, [0, 1, 2]); assert.equal(seen.at(-1)?.completed, 1);
-  assert.equal(inboxStartupView(seen.at(-1)!).percent, 33);
+  assert.equal(inboxLoadingPercent(seen.at(-1)!), 46);
   pending[0].resolve(); await settle(); assert.equal(seen.at(-1)?.completed, 2);
   pending[2].resolve(); await work; assert.equal(seen.at(-1)?.completed, 3);
-  assert.equal(inboxStartupView(seen.at(-1)!).percent, 100);
+  assert.equal(inboxLoadingPercent(seen.at(-1)!), 99);
 });
 
 test('an invalidated Inbox scope rejects preparation without inventing completed messages', async () => {
   const seen: InboxStartupProgress[] = [];
   await assert.rejects(prepareRecentMessages([0], async () => { throw Error('Scope changed'); }, progress => seen.push(progress)), /Scope changed/);
   assert.equal(seen.at(-1)?.completed, 0);
-  assert.equal(inboxStartupView({ phase: 'accounts', completed: 0 }).percent, undefined);
+  assert.equal(inboxLoadingPercent({ phase: 'accounts', completed: 0 }), 0);
 });

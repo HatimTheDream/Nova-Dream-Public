@@ -1,3 +1,8 @@
+## [1.5.9] — 2026-09-16
+
+- Open the workspace without waiting for mail. Prepare Inbox on its first visit with its own continuous progress bar, reusing completed work across navigation.
+- Give startup playful subtitles and one measured download bar. Match module loading states to the red-border Nova logo and red progress theme, with friendly copy and navigation still available.
+
 ## [1.5.8] — 2026-09-16
 
 - Measure workspace downloads using received bytes and their actual total, with indeterminate progress when the total is unavailable.
