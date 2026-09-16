@@ -28,7 +28,7 @@ test('learned preparation timing accounts for slow later work instead of assumin
 test('stalled and overdue estimates stop promising seconds while a resumed advance recalculates', () => {
   const current = [{percent:0,ms:0},{percent:25,ms:2_000}];
   assert.equal(startupRemaining(current, 18_000, [previous]), undefined);
-  assert.equal(startupWaitLabel(undefined, 18_000, false), 'Updating time estimate…');
+  assert.equal(startupWaitLabel(undefined, false), '');
   assert.equal(startupRemaining([...current,{percent:80,ms:22_000}], 23_000, [previous]), 7_000);
   assert.equal(startupRemaining([...current,{percent:80,ms:22_000}], 31_000, [previous]), undefined);
 });
@@ -53,10 +53,23 @@ test('stored history rejects malformed, future, old and non-monotonic data and k
   assert.deepEqual(startupHistory(runs,at),runs.slice(-5));
 });
 
-test('copy labels estimates without displaying a false zero before completion', () => {
-  assert.equal(startupWaitLabel(undefined,0,false),'Estimating time remaining…');
-  assert.equal(startupWaitLabel(4_000,10_000,false),'A few seconds left');
-  assert.equal(startupWaitLabel(12_000,10_000,false),'About 15 seconds left');
-  assert.equal(startupWaitLabel(61_000,10_000,false),'About 1 min 15 sec left');
-  assert.equal(startupWaitLabel(0,10_000,true),'Ready');
+test('wait uses only numerical durations with second precision and no false zero', () => {
+  assert.equal(startupWaitLabel(undefined,false),'');
+  assert.equal(startupWaitLabel(1_000,false),'1 second');
+  assert.equal(startupWaitLabel(4_000,false),'4 seconds');
+  assert.equal(startupWaitLabel(12_001,false),'13 seconds');
+  assert.equal(startupWaitLabel(60_000,false),'1 minute');
+  assert.equal(startupWaitLabel(68_000,false),'1 minute 8 seconds');
+  assert.equal(startupWaitLabel(3_665_000,false),'1 hour 1 minute 5 seconds');
+  assert.equal(startupWaitLabel(0,false),'');
+  assert.equal(startupWaitLabel(0,true),'0 seconds');
+});
+
+test('displayed duration moves down and up as elapsed time and observed speed change', () => {
+  const current = [{percent:0,ms:0},{percent:25,ms:2_000}];
+  const label = (points: typeof current, elapsed: number) => startupWaitLabel(startupRemaining(points,elapsed,[previous]),false);
+  assert.equal(label(current,2_000),'28 seconds');
+  assert.equal(label(current,3_000),'27 seconds');
+  assert.equal(label([...current,{percent:30,ms:5_000}],5_000),'35 seconds');
+  assert.equal(label([...current,{percent:80,ms:10_000}],10_000),'4 seconds');
 });

@@ -29,5 +29,5 @@ export function useStartupEstimate(percent: number, complete: boolean, error: bo
       if (sample) saveLocal(timingKey, [...startupHistory(readLocal(timingKey), Date.now()), sample].slice(-5));
     }
   }, [clock, percent, complete, error, timingKey, remember]);
-  return startupWaitLabel(startupRemaining(clock.points, clock.elapsed(now), history), clock.elapsed(now), complete);
+  return startupWaitLabel(startupRemaining(clock.points, clock.elapsed(now), history), complete);
 }

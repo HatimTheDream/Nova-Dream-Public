@@ -1,3 +1,8 @@
+## [1.5.12] — 2026-09-16
+
+- Show startup waiting time as a plain duration in seconds and minutes, recalculated with one-second precision as observed loading speed changes.
+- Put the percentage on the left and remaining time on the right in one row beneath the red bar. Leave uncertain estimates blank instead of showing a fabricated countdown.
+
 ## [1.5.11] — 2026-09-16
 
 - Show estimated time remaining beneath the startup bar, adapting to observed progress and the last five successful startups on the current device and workspace.

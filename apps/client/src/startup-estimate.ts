@@ -41,14 +41,14 @@ export function startupRemaining(points: StartupPoint[], elapsed: number, histor
   return left >= 1_000 ? left : undefined;
 }
 
-export function startupWaitLabel(remaining: number | undefined, elapsed: number, complete: boolean) {
-  if (complete) return 'Ready';
-  if (remaining === undefined) return elapsed < 15_000 ? 'Estimating time remaining…' : 'Updating time estimate…';
-  if (remaining <= 5_000) return 'A few seconds left';
-  const seconds = Math.ceil(remaining / 5_000) * 5;
-  if (seconds < 60) return `About ${seconds} seconds left`;
-  const rounded = Math.ceil(seconds / 15) * 15, minutes = Math.floor(rounded / 60), rest = rounded % 60;
-  return `About ${minutes} min${rest ? ` ${rest} sec` : ''} left`;
+export function startupWaitLabel(remaining: number | undefined, complete: boolean) {
+  if (complete) return '0 seconds';
+  if (remaining === undefined || !Number.isFinite(remaining) || remaining <= 0) return '';
+  const total = Math.ceil(remaining / 1_000);
+  const hours = Math.floor(total / 3_600), minutes = Math.floor(total % 3_600 / 60), seconds = total % 60;
+  return [[hours, 'hour'], [minutes, 'minute'], [seconds, 'second']]
+    .filter(([value]) => value)
+    .map(([value, unit]) => `${value} ${unit}${value === 1 ? '' : 's'}`).join(' ');
 }
 
 export class StartupClock {
