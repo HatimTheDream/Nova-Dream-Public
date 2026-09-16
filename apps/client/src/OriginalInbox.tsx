@@ -24,6 +24,7 @@ import { DEFAULT_SETTINGS } from './dreamclaw/pages/Calendar/calendarTypes';
 import type { PageViewState } from './dreamclaw/types/missionControl';
 import './dreamclaw/styles.css';
 import './dreamclaw/inbox.css';
+import { prepareRecentMessages, type InboxStartupProgress } from './inbox-startup-progress';
 
 type Props = { snapshot: Snapshot; openSettings(): void; openCalendar(): void; openContact(id: string): void; refresh(): Promise<void> };
 // The original Inbox session deliberately survives leaving its route. Recheck
@@ -37,18 +38,33 @@ function acceptMailScope(snapshot: Snapshot, accounts: AccountsState) {
   }
   return fingerprint;
 }
-let startup: { key: string; work: Promise<void> } | undefined;
-export function prepareInboxStartup(snapshot: Snapshot): Promise<void> {
+// There is one startup screen per window. Reconnection replaces its observer.
+let startup: { key: string; work: Promise<void>; progress: InboxStartupProgress; report?: (progress: InboxStartupProgress) => void; settled: boolean } | undefined;
+export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: InboxStartupProgress) => void): Promise<void> {
   const key = `${snapshot.epoch}:${snapshot.deviceId}`;
-  if (startup?.key === key) return startup.work;
+  if (startup?.key === key && (!startup.settled || startup.progress.phase === 'ready')) {
+    if (report) { report(startup.progress); if (!startup.settled) startup.report = report; }
+    return startup.work;
+  }
+  const state = { key, work: Promise.resolve(), progress: { phase: 'accounts', completed: 0 } as InboxStartupProgress, report, settled: false };
+  startup = state;
+  const publish = (progress: InboxStartupProgress) => { state.progress = progress; state.report?.(progress); };
+  publish(state.progress);
   const work = (async () => {
     const accounts = await request<AccountsState>('accounts'); acceptMailScope(snapshot, accounts);
     const api = getInboxMailApi()!;
-    await initializeInboxSession(); api.assertCurrent();
-    const firstPagesReady = () => accounts.accounts.filter(account => account.capabilities.mailRead && ['connected', 'refreshing'].includes(account.state)).every(account => {
+    const mailAccounts = accounts.accounts.filter(account => account.capabilities.mailRead && ['connected', 'refreshing'].includes(account.state));
+    const firstPagesReady = () => {
+      const completed = mailAccounts.filter(account => {
       const page = useInboxSessionStore.getState().folders.inbox.snapshots.find(page => page.account.accountId === account.id);
       return page && (page.threads.length > 0 || ['complete', 'paused', 'error'].includes(page.indexStatus || ''));
-    });
+      }).length;
+      publish({ phase: 'mailboxes', completed, total: mailAccounts.length });
+      return completed === mailAccounts.length;
+    };
+    publish({ phase: 'mailboxes', completed: 0, total: mailAccounts.length });
+    const observeInitialization = useInboxSessionStore.subscribe(firstPagesReady);
+    try { await initializeInboxSession(); api.assertCurrent(); } finally { observeInitialization(); }
     if (!firstPagesReady()) await new Promise<void>(resolve => {
       const finish = () => { clearTimeout(timer); unsubscribe(); unsubscribeScope(); resolve(); };
       const unsubscribe = useInboxSessionStore.subscribe(() => { if (firstPagesReady()) finish(); });
@@ -58,16 +74,13 @@ export function prepareInboxStartup(snapshot: Snapshot): Promise<void> {
     api.assertCurrent();
     const recent = useInboxSessionStore.getState().folders.inbox.snapshots.flatMap(snapshot => snapshot.threads.map(thread => ({ thread, account: snapshot.account })))
       .sort((a, b) => (Date.parse(b.thread.date || '') || 0) - (Date.parse(a.thread.date || '') || 0)).slice(0, 25);
-    let next = 0;
-    const worker = async () => {
-      while (next < recent.length) {
-        api.assertCurrent(); const { account, thread } = recent[next++];
+    await prepareRecentMessages(recent, async ({ account, thread }) => {
+        api.assertCurrent();
         await api.preloadThread({ provider: account.provider === 'gmail' ? 'google' : 'microsoft', accountId: account.accountId, threadId: thread.id, messageId: thread.sourceMessageId }).catch(() => { api.assertCurrent(); });
-      }
-    };
-    await Promise.allSettled([worker(), worker()]);
+    }, publish);
+    publish({ phase: 'ready', completed: recent.length, total: recent.length });
   })();
-  startup = { key, work }; return work;
+  state.work = work.finally(() => { state.settled = true; state.report = undefined; }); return state.work;
 }
 // Route changes must also preserve writing that could not fit in browser storage.
 const retainedWriting = new Map<string, ReturnType<typeof createInboxWriting>>();

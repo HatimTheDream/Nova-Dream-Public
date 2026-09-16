@@ -1,3 +1,8 @@
+## [1.5.8] — 2026-09-16
+
+- Measure workspace downloads using received bytes and their actual total, with indeterminate progress when the total is unavailable.
+- Keep Inbox preparation before opening Home on desktop and phone. Show real mailbox and recent-message counts, with a separately labeled percentage for each phase, instead of fixed startup milestones or an eight-second automatic skip.
+
 ## [1.5.7] — 2026-09-16
 
 - Refresh startup with the red-border Nova Dream logo, matching red progress bar and percentage, and clear step-by-step loading text. Progress follows actual startup checkpoints; slow or unavailable mail never prevents your workspace from opening.

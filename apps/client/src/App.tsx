@@ -28,7 +28,7 @@ import { TaskEditor } from './TaskEditor';
 import { Conflict, Dialog, Empty } from './ui';
 import { RenderingFallback } from './RenderingFallback';
 import { StartupScreen } from './StartupScreen';
-import { prepareWorkspaceStartup, type StartupPhase } from './startup-progress';
+import type { InboxStartupProgress } from './inbox-startup-progress';
 
 declare const __E3_VERSION__: string;
 declare const __E3_BUILD__: string;
@@ -54,7 +54,7 @@ export function App() {
   const workspace = useWorkspace();
   if (workspace.access?.requiresPairing) return <Suspense fallback={<main className="startup">Opening phone pairing…</main>}><PhonePairingScreen paired={workspace.reconnect}/></Suspense>;
   if (!workspace.snapshot && workspace.updateRequired) return <main className="startup"><AppUpdate initial/></main>;
-  if (!workspace.snapshot) return <StartupScreen phase={workspace.startupPhase} error={workspace.error} reconnect={() => void workspace.reconnect()}/>;
+  if (!workspace.snapshot) return <StartupScreen phase={workspace.startupPhase} download={workspace.download} error={workspace.error} reconnect={() => void workspace.reconnect()}/>;
   return <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>;
 }
 function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
@@ -62,19 +62,24 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
   const [voice] = useState(() => new VoiceController(snapshot.deviceId));
   useEffect(() => { const release = () => voice.dispose(); window.addEventListener('pagehide', release); return () => { window.removeEventListener('pagehide', release); release(); }; }, [voice]);
   const [route, setRoute] = useState<Route>('home');
-  const [startupReady, setStartupReady] = useState(access?.surface === 'phone' || access?.recoveryLocal || access?.recovery === true);
-  const [startupPhase, setStartupPhase] = useState<StartupPhase>('modules');
+  const [startupReady, setStartupReady] = useState(!online || !!access?.recoveryLocal || access?.recovery === true);
+  const [inboxProgress, setInboxProgress] = useState<InboxStartupProgress>({ phase: 'accounts', completed: 0 });
+  const [startupError, setStartupError] = useState('');
+  const [preparationAttempt, setPreparationAttempt] = useState(0);
   useEffect(() => {
-    if (access?.surface === 'phone' || access?.recoveryLocal || access?.recovery) { setStartupReady(true); return; }
-    return prepareWorkspaceStartup(() => import('./OriginalInbox').then(module => () => module.prepareInboxStartup(snapshot)), setStartupPhase);
-  }, [snapshot.epoch, snapshot.deviceId, access?.surface, access?.recoveryLocal, access?.recovery]);
+    if (!online || access?.recoveryLocal || access?.recovery) { setStartupReady(true); return; }
+    let active = true;
+    setStartupError('');
+    // Prepare the same Inbox session used by navigation, on desktop and phone.
+    void import('./OriginalInbox').then(module => { if (active) return module.prepareInboxStartup(snapshot, progress => { if (active) setInboxProgress(progress); }); }).catch(() => { if (active) setStartupError('Inbox preparation could not finish. Reconnect to try again.'); });
+    return () => { active = false; };
+  }, [snapshot.epoch, snapshot.deviceId, online, access?.surface, access?.recoveryLocal, access?.recovery, preparationAttempt]);
   useEffect(() => {
-    if (startupPhase !== 'ready') return;
-    // Paint the completed checkpoint before revealing Home; no timer-based progress.
+    if (inboxProgress.phase !== 'ready') return;
     let second = 0;
     const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => setStartupReady(true)); });
     return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
-  }, [startupPhase]);
+  }, [inboxProgress.phase]);
   const [connectionOrigin, setConnectionOrigin] = useState<ModuleId | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null);
@@ -119,7 +124,7 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
   const projectMatches = snapshot.projects.filter(item => `${item.value.name} ${item.value.purpose}`.toLowerCase().includes(needle));
   const recordMatches = savedRecordMatches(snapshot, needle);
   const title = route === 'settings' ? 'Settings' : modules[route].label;
-  if (!startupReady) return <StartupScreen phase={startupPhase}/>;
+  if (!startupReady) return updateRequired ? <main className="startup"><AppUpdate initial/></main> : <StartupScreen inbox={inboxProgress} error={startupError} reconnect={() => setPreparationAttempt(attempt => attempt + 1)}/>;
   return <div className="app-shell"><nav id="main-navigation" className="primary-rail" aria-label="Main navigation" hidden={!navigationVisible} inert={!navigationVisible}><button className="brand" aria-label="Nova Dream Home" onClick={() => open('home')}><img src="/icons/nova-dream-brand-192-v2.png" alt=""/></button><div className="rail-modules" data-reorder-scroll>{nav.order.map(id => { const item = modules[id]; const Icon = item.icon; return <div key={id} className="nav-item-wrap" data-reorder-group="navigation" data-reorder-item={id}><button className={`nav-item ${item.color} ${route === id ? 'active' : ''} ${nav.dragging === id ? 'dragging' : ''}`} aria-label={item.label} aria-current={route === id ? 'page' : undefined} title={item.label} {...nav.bind(id)} onClick={() => { if (!nav.suppressClick.current) open(id); }} onContextMenu={event => { event.preventDefault(); setNavMenu(id); }} onKeyDown={event => { if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); nav.move(id, nav.order.indexOf(id) + (event.key === 'ArrowUp' ? -1 : 1)); } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); setNavMenu(id); } }}><span className="nav-icon"><Icon size={27}/></span></button></div>; })}</div><div className="rail-footer"><button className={`nav-item neutral ${route === 'settings' ? 'active' : ''}`} aria-label="Settings" title="Settings" aria-current={route === 'settings' ? 'page' : undefined} onClick={() => { setConnectionOrigin(null); open('settings'); }}><span className="nav-icon"><Settings size={26}/></span></button></div></nav>
     {navMenu && <div className="nav-popover popover"><div className="section-heading"><strong>{modules[navMenu].label}</strong><button className="icon-button" aria-label="Close navigation options" onClick={() => setNavMenu(null)}><X size={18}/></button></div><button disabled={nav.order.indexOf(navMenu) === 0} onClick={() => nav.move(navMenu, nav.order.indexOf(navMenu) - 1)}>Move earlier</button><button disabled={nav.order.indexOf(navMenu) === nav.order.length - 1} onClick={() => nav.move(navMenu, nav.order.indexOf(navMenu) + 1)}>Move later</button><button onClick={() => nav.move(navMenu, 0)}>Move to first</button><button onClick={() => nav.move(navMenu, nav.order.length - 1)}>Move to last</button></div>}
     <div className="workspace" data-route={route}><header className="topbar"><div className="topbar-leading"><button className="icon-button navigation-toggle" aria-label={navigationVisible ? "Hide main navigation" : "Show main navigation"} title={navigationVisible ? "Hide main navigation" : "Show main navigation"} aria-expanded={navigationVisible} aria-controls="main-navigation" onClick={toggleNavigation}>{navigationVisible ? <PanelLeft size={20}/> : <Menu size={20}/>}</button><div className="breadcrumb"><span>Nova Dream</span><span className="slash">/</span><strong>{title}</strong></div></div><div className="topbar-actions"><span className="build-tag">v{__E3_VERSION__}</span><button className="icon-button reminder-bell" aria-label={`Reminders${reminderCount ? ` · ${reminderCount} waiting` : ''}`} title="Reminders" onClick={() => setRemindersOpen(true)}><Bell size={20}/>{reminderCount > 0 && <span className="reminder-dot"/>}</button><button className="icon-button" aria-label="Search saved work" title="Search saved work" onClick={() => setSearch('')}><Search size={20}/></button><button className="icon-button" aria-label="Toggle color theme" title="Toggle color theme" onClick={() => layout.change(value => ({ ...value, theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark' }))}>{document.documentElement.dataset.theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}</button></div></header>

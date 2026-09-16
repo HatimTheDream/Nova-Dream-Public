@@ -86,7 +86,10 @@ import assert from 'node:assert/strict';
 // 1.5 adds lazy GitHub preparation/publication, team workflows and host-browser
 // panels. First coherent total: 577,770 (+10,099 / 1.78%). Bound the tranche
 // at 580 KB; preserve the 180 KB startup and 80 KB deferred-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 580000, deferredChunk: 80000 };
+// 1.5.8 adds measured UTF-8 transfer and Inbox preparation progress. Final total:
+// 580,118 (+927 / 0.16% over 1.5.7). Bound this addition at
+// 581 KB; the 180 KB startup and 80 KB deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 581000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

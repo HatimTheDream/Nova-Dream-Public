@@ -194,6 +194,7 @@ export async function startServer(options: { directory: string; port: number; pr
         headers.Vary = 'Cookie';
         if (request.headers['if-none-match'] === headers.ETag) { response.writeHead(304, headers); response.end(); return; }
       }
+      if (status === 200 && request.method === 'GET' && (request.url ?? '').split('?')[0] === '/api/snapshot') headers['X-Nova-Body-Bytes'] = String(Buffer.byteLength(text));
       response.writeHead(status, headers); response.end(text);
     };
     response.setHeader('X-Content-Type-Options', 'nosniff');

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { canonical, type Command, type Entity, type Kind, type Snapshot } from '../../../packages/domain/contracts';
 import type { AccessContext } from '../../../packages/domain/phone';
 import { ApiError, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
-import type { StartupPhase } from './startup-progress';
+import type { DownloadProgress } from './download-progress';
 
 export function useWorkspace() {
-  const [startupPhase, setStartupPhase] = useState<StartupPhase>('connecting');
+  const [startupPhase, setStartupPhase] = useState<'connecting' | 'session' | 'workspace'>('connecting');
+  const [download, setDownload] = useState<DownloadProgress>();
   const [access, setAccess] = useState<AccessContext>();
   const gated = useRef(false);
   const denyPhone = useCallback(() => { gated.current = true; setAccess({ surface: 'phone', requiresPairing: true }); current.current = undefined; setSnapshot(undefined); setOnline(false); saveLocal('e3:snapshot', null); }, []);
@@ -19,7 +20,7 @@ export function useWorkspace() {
     if (refreshing.current || gated.current) return;
     refreshing.current = true;
     try {
-      const next = await fetchSnapshot();
+      const next = await fetchSnapshot(current.current ? undefined : progress => { if (!gated.current && !current.current) setDownload(progress); });
       if (gated.current) return;
       if (current.current && next.epoch !== current.current.epoch) {
         // The selected workspace can change without this tab navigating. Update
@@ -65,13 +66,13 @@ export function useWorkspace() {
     return () => { alive = false; clearInterval(timer); window.removeEventListener('e3:pair-required', denied); window.removeEventListener('e3:update-required', outdated); };
   }, [refresh, denyPhone]);
   const reconnect = async () => { try {
-    setError(''); setStartupPhase('connecting');
+    setError(''); setDownload(undefined); setStartupPhase('connecting');
     const context = await request<AccessContext>('access/context'); setAccess(context);
     if (context.requiresPairing) { denyPhone(); return; }
     setStartupPhase('session');
     await request('session', {}); setStartupPhase('workspace'); gated.current = false; await refresh();
   } catch (reason) { if (reason instanceof ApiError && reason.code === 'phone_pair_required') denyPhone(); else setError('The host is still unavailable. Your draft is kept.'); } };
-  return { snapshot, online, error, refresh, reconnect, access, updateRequired, startupPhase };
+  return { snapshot, online, error, refresh, reconnect, access, updateRequired, startupPhase, download };
 
 }
 

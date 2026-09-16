@@ -1,5 +1,6 @@
 import type { Command, Entity, Snapshot } from '../../../packages/domain/contracts';
 import { ConditionalReads } from './conditional-reads';
+import { readDownload, type DownloadProgress } from './download-progress';
 const conditionalReads = new ConditionalReads();
 export const mayPoll = (path: string) => conditionalReads.mayPoll(path);
 
@@ -17,7 +18,7 @@ export function apiFailure(result: { code?: string; message?: string; current?: 
   }
   return new ApiError(result.code ?? 'request_failed', result.message ?? 'This request could not be completed.', result.current, status);
 }
-export async function request<T>(url: string, data?: unknown, signal?: AbortSignal, timeoutMs = 12000): Promise<T> {
+export async function request<T>(url: string, data?: unknown, signal?: AbortSignal, timeoutMs = 12000, download?: (progress: DownloadProgress) => void): Promise<T> {
   if (url === 'session' && data !== undefined) conditionalReads.clear();
   const ticket = conditionalReads.begin(url);
   try {
@@ -29,8 +30,12 @@ export async function request<T>(url: string, data?: unknown, signal?: AbortSign
       payload = undefined;
     }
     const response = await fetch(`/api/${url}`, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: { ...clientHeaders(), ...transferHeaders, ...(data === undefined ? ticket.entry ? { 'If-None-Match': ticket.entry.tag } : {} : { 'Content-Type': 'application/json' }) }, body: payload, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), cache: 'no-store' });
-    if (response.status === 304 && data === undefined) return conditionalReads.accept(url, ticket, response.headers.get('etag'), undefined) as T;
-    const json = await response.text();
+    if (response.status === 304 && data === undefined) {
+      const result = conditionalReads.accept(url, ticket, response.headers.get('etag'), undefined) as T;
+      download?.({ loadedBytes: 0, totalBytes: 0, complete: true, cached: true }); return result;
+    }
+    const received = response.ok && download ? await readDownload(response, download) : undefined;
+    const json = received ? received.text : await response.text();
     if (!response.ok) {
       if ([401, 403].includes(response.status)) conditionalReads.clear();
       let result;
@@ -39,10 +44,12 @@ export async function request<T>(url: string, data?: unknown, signal?: AbortSign
       if (result.code === 'client_update') conditionalReads.clear();
       throw apiFailure(result, response.status);
     }
-    return (data === undefined ? conditionalReads.accept(url, ticket, response.headers.get('etag'), json) : JSON.parse(json)) as T;
+    const result = (data === undefined ? conditionalReads.accept(url, ticket, response.headers.get('etag'), json) : JSON.parse(json)) as T;
+    if (received) download?.({ loadedBytes: received.loadedBytes, totalBytes: received.loadedBytes, complete: true });
+    return result;
   } catch (error) { conditionalReads.forget(url); throw error; }
 }
-export const fetchSnapshot = () => request<Snapshot>('snapshot');
+export const fetchSnapshot = (download?: (progress: DownloadProgress) => void) => request<Snapshot>('snapshot', undefined, undefined, 12000, download);
 export const commit = <T>(command: Command) => request<Entity<T>>('commands', command);
 export const readLocal = <T>(key: string): T | undefined => { try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? undefined; } catch { return undefined; } };
 export function saveLocal(key: string, value: unknown): boolean { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }

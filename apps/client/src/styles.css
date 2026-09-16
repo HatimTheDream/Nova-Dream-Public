@@ -232,7 +232,10 @@
   .startup-fill { display:block; height:100%; border-radius:inherit; background:var(--brand-red); transition:width 180ms ease-out; }
   .startup-track[aria-valuenow="100"] .startup-fill { transition:none; }
   .startup-progress .startup-percent { margin:12px 0 0; font-size:13px; line-height:1.5; font-weight:580; font-variant-numeric:tabular-nums; color:var(--text); }
-  @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } }
+  .startup-progress .startup-amount { margin:5px 0 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; color:var(--muted); }
+  .startup-progress.is-indeterminate .startup-fill { animation:startup-wait 1.4s ease-in-out infinite alternate; }
+  @keyframes startup-wait { from { transform:translateX(0); } to { transform:translateX(258%); } }
+  @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } .startup-progress.is-indeterminate .startup-fill { animation:none; } }
   .search-input { flex-direction:row; align-items:center; gap:10px; }
   .search-input input { flex:1; min-width:0; }
   .search-results { padding-top:18px; max-height:55dvh; overflow:auto; }

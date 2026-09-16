@@ -100,8 +100,11 @@ test('private HTTP snapshot and reminder actions require credentials, origins an
   const session = await fetch(host.origin + '/api/session', { method: 'POST', headers: { Origin: host.origin, 'X-Edition3-Client': '1' } });
   assert.equal(session.status, 200);
   const headers = { Origin: host.origin, Cookie: session.headers.get('set-cookie')!.split(';')[0], 'X-Edition3-Client': '1', 'Content-Type': 'application/json' };
-  assert.equal((await fetch(host.origin + '/api/snapshot')).status, 401);
-  const snap = await (await fetch(host.origin + '/api/snapshot', { headers })).json() as any;
+  const denied = await fetch(host.origin + '/api/snapshot');
+  assert.equal(denied.status, 401); assert.equal(denied.headers.get('x-nova-body-bytes'), null);
+  const response = await fetch(host.origin + '/api/snapshot', { headers }), text = await response.text();
+  assert.equal(Number(response.headers.get('x-nova-body-bytes')), Buffer.byteLength(text));
+  const snap = JSON.parse(text) as any;
   assert.ok(snap.calendarReminders);
   const start = new Date(Math.floor(Date.now() / 60000) * 60000 + 5 * 60000), end = new Date(start.getTime() + 3600000);
   const value = { title: 'HTTP Calendar alarm', notes: '', location: '', timezone: 'UTC', allDay: false, start: { date: start.toISOString().slice(0,10), time: start.toISOString().slice(11,16) }, end: { date: end.toISOString().slice(0,10), time: end.toISOString().slice(11,16) }, state: 'confirmed', projectId: null, taskId: null, reminderMinutes: 5 };
