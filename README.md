@@ -6,6 +6,39 @@ A self-hosted, single-owner workspace for your Assistant, agents and everyday wo
 
 Nova brings together a customizable Home board, Tasks and Projects, Google/Microsoft Calendar and Inbox, Contacts, a writing workspace, Profile quests and XP, voice conversations, and a modular pixel-art agent office.
 
+[![Nova Dream Home with a personal task plan and the Nova mascot](docs/screenshots/home.jpg)](docs/screenshots/home.jpg)
+
+## A look inside
+
+Actual screenshots from Nova Dream 1.1.3, using fictional demo tasks, writing and agents. New installations start empty; no personal data or connected accounts are shown. Select any image to view it at full size.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>A home for your agents</strong><br>
+      Individual offices, connected paths and a shared boardroom.<br><br>
+      <a href="docs/screenshots/agent-hub.jpg"><img src="docs/screenshots/agent-hub.jpg" alt="Four agent offices surrounding a central boardroom in Nova Dream’s pixel-art hub" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Characters with their own style</strong><br>
+      Choose fur, features, clothing and accessories.<br><br>
+      <a href="docs/screenshots/character-creator.jpg"><img src="docs/screenshots/character-creator.jpg" alt="A lynx in a navy suit beside modular wardrobe and eight-direction preview controls" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>A clear plan for today</strong><br>
+      Capture work, keep track of progress and return to what matters.<br><br>
+      <a href="docs/screenshots/tasks.jpg"><img src="docs/screenshots/tasks.jpg" alt="Nova Dream’s Today task list with fictional creative and everyday tasks" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Room to write and refine</strong><br>
+      Draft in Markdown with a formatted preview alongside it.<br><br>
+      <a href="docs/screenshots/content-writing.jpg"><img src="docs/screenshots/content-writing.jpg" alt="A fictional article in the Content workspace’s split Markdown editor and preview" width="100%"></a>
+    </td>
+  </tr>
+</table>
+
 This repository contains the application source and synthetic tests. It starts with an empty workspace. You use your own accounts, credentials and hosting; no maintainer account, production database, conversation history or live deployment is included. A public source repository does not make anyone's private workspace public.
 
 ## Quick start
