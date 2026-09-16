@@ -6,4 +6,4 @@ Use separate protected server and gateway credentials, outside the application d
 
 Do not post credentials, databases, personal conversations or raw provider logs in public issues. For suspected vulnerabilities, use GitHub's private vulnerability reporting when enabled. If it is unavailable, open a minimal issue requesting a private contact without revealing exploit details or personal data.
 
-This source release is not a multi-user access-control system or a signed desktop installer. The optional computer companion and automatic independent backup scheduling remain separate work. Backup and restore tests must use a separate copy before changing a live workspace.
+This source release is not a multi-user access-control system or a signed desktop installer. The [desktop companion](docs/DESKTOP-COMPANION.md) is optional; public notarized installers are not included. Automatic independent backup scheduling remains separate work. Backup and restore tests must use a separate copy before changing a live workspace.
