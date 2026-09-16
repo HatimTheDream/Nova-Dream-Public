@@ -1,4 +1,5 @@
 const { randomUUID, sign } = require('node:crypto');
+const { active } = require('./companion-access.cjs');
 
 // The transport owns no UI or operating-system API. Native admission, durable
 // receipts and the bounded driver are injected by the desktop host.
@@ -38,7 +39,7 @@ class CompanionClient {
       if (!claim.claimed || this.stopped) throw new Error('This computer action was not admitted.');
       let receipt;
       try {
-        if (this.status().enabledUntil <= this.now()) throw new Error('Local computer access is off.');
+        if (!active(this.status().enabledUntil, this.now())) throw new Error('Local computer access is off.');
         const result = await this.execute(op.call, op.expiresAt);
         receipt = { id: op.id, state: result.isError ? 'refused' : 'completed', result };
       } catch (error) { receipt = { id: op.id, state: 'unknown', result: { message: String(error.message || 'Computer result unconfirmed.').slice(0, 500) } }; }

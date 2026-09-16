@@ -1,3 +1,9 @@
+## [1.3.0] — 2026-09-15
+
+- Choose selected apps or full desktop control, independently of a timed session or “Until I turn it off”. Persistent access resumes after reconnecting the same desktop and workspace; Stop and remote revocation clear it.
+- Add a menu-bar access indicator and Stop control, and expand computer interaction with typing, scrolling, dragging, menus and whole-desktop observations when explicitly enabled.
+- Preserve per-action review, signed device identity, short operation deadlines and no-repeat receipts. VPS hosting remains optional.
+
 ## [1.1.3] — 2026-09-15
 
 - Publish a standalone, self-hosting source distribution with setup, privacy and recovery instructions and fresh repository history.

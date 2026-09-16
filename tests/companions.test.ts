@@ -90,6 +90,28 @@ test('desktop keys do not become browser sessions and duration/challenge limits 
   assert.throws(() => stale.service.link(stale.owner, stale.link));
 });
 
+test('persistent desktop access survives elapsed time but never bypasses heartbeat, stop, revocation or per-action deadlines', t => {
+  const f=fixture(t);f.service.link(f.owner,f.link);
+  const poll=()=>f.service.packet(f.packet('poll',{enabledUntil:null,scope:'desktop',apps:[]}));
+  poll();assert.equal(f.service.devices()[0].scope,'desktop');
+  f.advance(30*24*60*60000);assert.throws(()=>f.enqueue(),/Open the desktop/);
+  poll();const op=f.enqueue();assert.equal(op.expiresAt,f.now()+120000);
+  f.advance(120001);assert.equal(f.service.result(op.id,'run-one').state,'cancelled');
+  poll();const next=f.enqueue();f.service.packet(f.packet('poll',{enabledUntil:0,scope:'desktop',apps:[]}));
+  assert.equal(f.service.result(next.id,'run-one').state,'cancelled');assert.throws(()=>f.enqueue());
+  poll();f.service.revoke(f.owner,{...f.cmd(),deviceId:f.deviceId});assert.throws(poll);
+  assert.equal(f.service.devices()[0].enabledUntil,0);
+});
+
+test('the desktop client executes a reviewed persistent-access operation once and respects local Stop', async t=>{
+  const f=fixture(t);f.service.link(f.owner,f.link);
+  f.service.packet(f.packet('poll',{enabledUntil:null,scope:'desktop',apps:[]}));
+  const op=f.enqueue();f.advance(2);let receipt:any,effects=0,until:number|null=null;
+  const client=new CompanionClient({connection:f.connection,now:f.now,request:async(p:CompanionPacket)=>{f.advance(1);return f.service.packet(p);},readReceipt:()=>receipt,saveReceipt:(r:unknown)=>receipt=r,status:()=>({enabledUntil:until,scope:'desktop',apps:[]}),execute:async()=>{effects++;return {content:[]};}});
+  await client.tick();assert.equal(effects,1);assert.equal(f.service.result(op.id,'run-one').state,'completed');
+  f.enqueue();until=0;await client.tick();assert.equal(effects,1);assert.throws(()=>f.enqueue());
+});
+
 for (const point of ['before-claim', 'after-claim', 'after-result'] as const) test(`desktop interrupted ${point} never repeats a native effect`, async t => {
   const f = fixture(t); f.service.link(f.owner, f.link); f.poll(); const op = f.enqueue(); f.advance(2);
   let receipt: any, effects = 0, lose = true;

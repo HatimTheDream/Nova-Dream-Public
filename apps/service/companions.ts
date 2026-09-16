@@ -1,13 +1,13 @@
 import { createPublicKey, randomBytes, randomUUID, verify } from 'node:crypto';
 import { z } from 'zod';
 import { canonical } from '../../packages/domain/contracts.js';
-import { companionCallSchema, companionToolSchema, companionCommandSchema, companionLinkData, companionLinkSchema, companionPacketSchema, companionSignedData, type CompanionCall, type CompanionChallenge, type CompanionDevice, type CompanionOperation } from '../../packages/domain/companion.js';
+import { computerAccessActive, companionCallSchema, companionToolSchema, companionCommandSchema, companionLinkData, companionLinkSchema, companionPacketSchema, companionSignedData, type CompanionCall, type CompanionChallenge, type CompanionDevice, type CompanionOperation } from '../../packages/domain/companion.js';
 import { Fault, Store } from './store.js';
 
 type Device = Omit<CompanionDevice, 'connected'> & { epoch: string; publicKey: string };
 const deviceKey = (id: string) => 'companion:device:' + id;
 const operationKey = (id: string) => 'companion:operation:' + id;
-const bounded = z.object({ enabledUntil: z.number().int().nonnegative(), apps: z.array(z.string().min(1).max(150)).max(20), tools: z.array(companionToolSchema).max(8).optional() }).strict();
+const bounded = z.object({ enabledUntil: z.number().int().nonnegative().nullable(), scope: z.enum(['apps','desktop']).default('apps'), apps: z.array(z.string().min(1).max(150)).max(20), tools: z.array(companionToolSchema).max(19).optional() }).strict();
 const proofError = () => new Fault(403, 'companion_unlinked', 'This desktop link is unavailable. Link it again in Install & devices.');
 function checkSignature(key: string, data: string, signature: string) {
   try { const publicKey = createPublicKey(key); return publicKey.asymmetricKeyType === 'ed25519' && verify(null, Buffer.from(data), publicKey, Buffer.from(signature, 'base64url')); } catch { return false; }
@@ -73,10 +73,10 @@ export class Companions {
       return prior;
     }
     const device = this.device(parsed.deviceId);
-    if (device.lastSeenAt <= this.now() - 15000 || device.enabledUntil <= this.now()) throw new Fault(409, 'computer_offline', 'Open the desktop companion and enable a bounded computer session on the selected computer. Cloud work can continue.');
+    if (device.lastSeenAt <= this.now() - 15000 || !computerAccessActive(device.enabledUntil, this.now())) throw new Fault(409, 'computer_offline', 'Open the desktop companion and enable computer access on the selected computer. Host work can continue.');
     if (this.all().some(op => op.call.deviceId === device.id && ['queued', 'claimed'].includes(op.state))) throw new Fault(409, 'computer_busy', 'Wait for the selected computer’s current action to finish.');
     if (this.all().length >= 3000) throw new Fault(507, 'computer_history_full', 'Computer history is full. Existing results remain available.');
-    const op: CompanionOperation = { id, ownerId, epoch: this.store.epoch, call: parsed, createdAt: this.now(), expiresAt: Math.min(device.enabledUntil, this.now() + 2 * 60000), state: 'queued' };
+    const op: CompanionOperation = { id, ownerId, epoch: this.store.epoch, call: parsed, createdAt: this.now(), expiresAt: Math.min(device.enabledUntil ?? Infinity, this.now() + 2 * 60000), state: 'queued' };
     this.checks.set(id, authorize); this.save(op); return op;
   }
   result(id: string, ownerId: string) {
@@ -97,10 +97,10 @@ export class Companions {
       if (input.action === 'disconnect') { this.store.internalWrite(deviceKey(device.id), { ...device, enabledUntil: 0, lastSeenAt: 0, apps: [] }); this.cancelDevice(device.id, 'The desktop disconnected.'); return { disconnected: true }; }
       if (input.action === 'poll') {
         const status = bounded.parse(input.payload);
-        if (Buffer.byteLength(JSON.stringify(status.tools ?? [])) > 90000) throw new Fault(413, 'computer_catalog', 'The computer tool catalog is too large.');
-        if (status.enabledUntil > this.now() + 61 * 60000) throw new Fault(400, 'computer_duration', 'Computer sessions are limited to one hour.');
+        if (Buffer.byteLength(JSON.stringify(status.tools ?? [])) > 180000) throw new Fault(413, 'computer_catalog', 'The computer tool catalog is too large.');
+        if (status.enabledUntil !== null && status.enabledUntil > this.now() + 61 * 60000) throw new Fault(400, 'computer_duration', 'Choose a timed session up to one hour or explicitly enable access until stopped.');
         this.store.internalWrite(deviceKey(device.id), { ...device, ...status, lastSeenAt: this.now() });
-        if (status.enabledUntil <= this.now()) this.cancelDevice(device.id, 'Computer access is off.');
+        if (!computerAccessActive(status.enabledUntil, this.now())) this.cancelDevice(device.id, 'Computer access is off.');
         for (const item of this.all().filter(op => op.call.deviceId === device.id && ['queued', 'claimed'].includes(op.state))) {
           const op = this.result(item.id, item.ownerId);
           if (op.state !== 'queued') continue;
@@ -114,7 +114,7 @@ export class Companions {
       if (!existing || existing.call.deviceId !== device.id || existing.epoch !== this.store.epoch) throw proofError();
       const op = this.result(id, existing.ownerId);
       if (input.action === 'claim') {
-        if (op.state !== 'queued' || device.enabledUntil <= this.now() || !this.checks.has(op.id)) throw new Fault(409, 'computer_claimed', 'This action is no longer available for execution.');
+        if (op.state !== 'queued' || !computerAccessActive(device.enabledUntil, this.now()) || !this.checks.has(op.id)) throw new Fault(409, 'computer_claimed', 'This action is no longer available for execution.');
         this.checks.get(op.id)!(); this.save({ ...op, state: 'claimed' });
         return { claimed: true, operation: { ...op, state: 'claimed' } };
       }
