@@ -10,7 +10,7 @@ Nova brings together a customizable Home board, Tasks and Projects, Google/Micro
 
 ## A look inside
 
-Actual screenshots from Nova Dream 1.1.3, using fictional demo tasks, writing and agents. New installations start empty; no personal data or connected accounts are shown. Select any image to view it at full size.
+Actual screenshots from Nova Dream 1.5.10, using fictional demo tasks, writing and agents. New installations start empty; no personal data or connected accounts are shown. Select any image to view it at full size.
 
 <table>
   <tr>
@@ -38,6 +38,10 @@ Actual screenshots from Nova Dream 1.1.3, using fictional demo tasks, writing an
     </td>
   </tr>
 </table>
+
+**Compact settings, clear choices.** Accounts, Assistant preferences, provider usage, devices and data each have their own place.
+
+[![Nova Dream Settings with compact categories and the current version](docs/screenshots/settings.jpg)](docs/screenshots/settings.jpg)
 
 This repository contains the application source and synthetic tests. It starts with an empty workspace. You use your own accounts, credentials and hosting; no maintainer account, production database, conversation history or live deployment is included. A public source repository does not make anyone's private workspace public.
 
