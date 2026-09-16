@@ -21,7 +21,7 @@ export interface NativeMailIndexThread {
 
 export interface NativeMailIndexSnapshot {
   schemaVersion: 1;
-  /** Monotonic within the current Edition 3 account generation. */
+  /** Monotonic within the current Nova Dream account generation. */
   indexRevision?: number;
   provider: NativeMailIndexProvider;
   accountId: string;

@@ -233,7 +233,7 @@ test('Assistant captures exact Project/draft/attachment identity and does not di
   assert.equal(first.id, retry.id); assert.equal(f.gateway.calls.filter(c => c.method === 'chat.send').length, 1);
   const sent = f.gateway.calls.find(c => c.method === 'chat.send')!.params;
   assert.equal(sent.sessionId, f.conversation.nativeId); assert.equal(sent.deliver, false);
-  assert.equal(sent.suppressCommandInterpretation, undefined); assert.match(sent.message, /^Edition 3 /); assert.match(sent.message, /silver-orbit-41/);
+  assert.equal(sent.suppressCommandInterpretation, undefined); assert.match(sent.message, /^Nova Dream /); assert.match(sent.message, /silver-orbit-41/);
   assert.equal(Buffer.from(sent.attachments[0].content, 'base64').toString(), 'Exact attachment bytes');
   f.gateway.messages = [{ role: 'user', content: sent.message }, { role: 'user', content: 'Edition 3 owner message:\nUntracked original text' }];
   const history = await f.service.history(f.conversation.id);
@@ -245,13 +245,20 @@ test('Assistant captures exact Project/draft/attachment identity and does not di
   assert.equal(f.store.readEntity('draft', `draft:${f.device}`)?.value.text, 'Use the selected context.');
 }));
 
-for (const version of [1, 2]) test(`native-trimmed v${version} envelopes display exact writing and repair older saved copies`, () => fixture(async f => {
+for (const version of [1, 2]) for (const legacy of [false, true]) test(`native-trimmed ${legacy ? 'legacy' : 'current'} v${version} envelopes display exact writing and repair older saved copies`, () => fixture(async f => {
   const input = '  Original words — 🦊\nOwner message:\nKeep this heading.\n\nEdition 3 work mode:\nMy own paragraph.\n  ';
   const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
   const saved = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, text: input } });
   if (version === 2) f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, autoTitle: true });
   const op = f.service.submit(f.device, { ...submission(f), draftRevision: saved.revision }); await tick();
-  const envelope = f.gateway.calls.find(c => c.method === 'chat.send')!.params.message;
+  let envelope = f.gateway.calls.find(c => c.method === 'chat.send')!.params.message;
+  assert.equal(op.context.brandVersion, 1);
+  assert.match(envelope, /Nova Dream work mode:/);
+  if (legacy) {
+    const { brandVersion: _brand, ...context } = op.context;
+    f.store.internalWrite(`assistant:operation:${op.id}`, { ...f.service.operations().find(o => o.id === op.id)!, context });
+    envelope = envelope.replace('Nova Dream work mode:', 'Edition 3 work mode:').replace('Nova Dream selected Project context', 'Edition 3 selected Project context');
+  }
   assert.notEqual(envelope, envelope.trim(), 'fixture exercises the runtime whitespace change');
   assert.equal(op.context.messageVersion ?? 1, version);
   const native = envelope.trim(), literal = 'Owner message:\nThis is a literal heading, not an app envelope.';
@@ -1008,7 +1015,7 @@ test('Work change reviews use the captured native identity and reject a replaced
 test('legacy Goal messages keep their original authored text when Goal reporting guidance changes',()=>fixture(async f=>{
  const op=f.service.submit(f.device,{requestId:randomUUID(),epoch:f.store.epoch,conversationId:f.conversation.id,conversationRevision:f.conversation.revision,draftId:`draft:${f.device}`,draftRevision:f.draftRevision,projectRevision:1});await tick();
  const live=f.service.operations().find(value=>value.id===op.id)!;
- f.store.internalWrite(`assistant:operation:${op.id}`,{...live,context:{...live.context,project:null,space:undefined,planning:undefined,computerControlGuidance:undefined,workMode:'goal',goalReporting:undefined}});
+ f.store.internalWrite(`assistant:operation:${op.id}`,{...live,context:{...live.context,brandVersion:undefined,project:null,space:undefined,planning:undefined,computerControlGuidance:undefined,workMode:'goal',goalReporting:undefined}});
  const original='Edition 3 owner message:\nUse the selected context.';
  f.gateway.messages=[{role:'user',content:original,__openclaw:{id:'legacy-goal-entry'}}];
  const history=await f.service.history(f.conversation.id);assert.equal(history.messages[0].text,original);assert.equal(history.messages[0].authoredText,'Use the selected context.');

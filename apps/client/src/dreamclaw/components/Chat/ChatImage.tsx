@@ -31,7 +31,7 @@ function extractFilename(src: string, alt?: string): string {
   return `image-${Date.now()}.png`;
 }
 
-// ── Save through the Edition 3 attachment boundary ──
+// ── Save through the Nova Dream attachment boundary ──
 const saveImage = saveInboxImage;
 
 // ═══════════════════════════════════════════════════════════

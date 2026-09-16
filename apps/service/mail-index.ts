@@ -23,7 +23,7 @@ const pageKey = (scope: string, runId: string, n: number) => `${dataPrefix(scope
 const token = (head: Head) => `${head.runId}.${head.revision}`;
 const available = (account?: ConnectedAccount) => !!account && ['connected', 'refreshing'].includes(account.state) && account.capabilities.mailRead;
 
-/** Original Dream Claw paging/merge lifecycle, using Edition 3 authority and storage.
+/** Original Dream Claw paging/merge lifecycle, using Nova Dream authority and storage.
  * Each immutable page is encrypted and committed with its cursor. Completed refreshes
  * replace the old crawl; partial refreshes keep its searchable rows until then. */
 export class MailIndexService {

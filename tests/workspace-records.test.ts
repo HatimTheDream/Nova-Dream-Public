@@ -132,7 +132,7 @@ test('future portrait data survives unrelated edits without replacement, and fut
     assert.deepEqual(f.store.readEntity('profile', 'profile:owner')?.value.appearance, appearance);
     const resolved = resolvePortraitRecipe(appearance); assert.notEqual(resolved.status, 'ready'); assert.deepEqual(resolved.source, appearance);
     const db = new DatabaseSync(join(f.path, 'workspace.sqlite')); db.exec('PRAGMA user_version=999'); db.close();
-    const before = readFileSync(join(f.path, 'workspace.sqlite')); assert.throws(() => new Store(f.path), /newer Edition 3/); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
+    const before = readFileSync(join(f.path, 'workspace.sqlite')); assert.throws(() => new Store(f.path), /newer Nova Dream/); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
   } finally { f.close(); }
 });
 

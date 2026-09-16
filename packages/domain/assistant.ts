@@ -70,7 +70,7 @@ export type ConversationChanges = Partial<Pick<Conversation, 'title' | 'archived
 export type ContextManifest = {
   space?: AssistantSpace;
   memory?: import('./memory.js').MemorySnapshot;
-  workMode?: WorkMode; messageVersion?: 2; planning?: true; goalReporting?: true;
+  workMode?: WorkMode; messageVersion?: 2; brandVersion?: 1; planning?: true; goalReporting?: true;
   computerControlGuidance?: string;
   project: { id: string; revision: number; name: string; purpose: string; instructions?: string; workspace?: { folder: string; environment: 'local' | 'worktree'; path?: string; branch?: string }; attachments?: Attachment[] } | null;
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;

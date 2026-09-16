@@ -237,7 +237,7 @@ export async function startServer(options: { directory: string; port: number; pr
       if (url.pathname.startsWith('/api/')) {
         if (!['GET', 'POST'].includes(request.method ?? '')) throw new Fault(405, 'method', 'This method is not available.');
         if (url.pathname === '/api/health' && request.method === 'GET') return json(200, { application: 'nova-dream-edition-3', apiVersion: 1, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, status: 'ready' });
-        if (request.method === 'POST' && request.headers['x-edition3-client'] !== '1') throw new Fault(403, 'client_required', 'Use the Edition 3 client for this operation.');
+        if (request.method === 'POST' && request.headers['x-edition3-client'] !== '1') throw new Fault(403, 'client_required', 'Use the Nova Dream client for this operation.');
         // The native transport is independently signed and versioned. Host,
         // proxy, origin and recovery guards above still apply; device proof
         // grants no access to any other API or browser session.
@@ -662,7 +662,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if (reconcileMatch && request.method === 'GET') return json(200, await assistant.reconcile(reconcileMatch[1]));
         throw new Fault(404, 'not_found', 'This operation is unavailable.');
       }
-      if (request.method !== 'GET' || !options.clientDirectory) throw new Fault(404, 'not_found', 'Open the Edition 3 client.');
+      if (request.method !== 'GET' || !options.clientDirectory) throw new Fault(404, 'not_found', 'Open the Nova Dream client.');
       const root = resolve(options.clientDirectory);
       const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
       if (path !== root && !path.startsWith(root + sep)) throw new Fault(403, 'path_rejected', 'This path is not available.');

@@ -1,7 +1,7 @@
 {
   "id": "edition3-sources",
-  "name": "Edition 3 source transfer",
-  "description": "Transfer verified Edition 3 sources into managed native media for an exact conversation.",
+  "name": "Nova Dream source transfer",
+  "description": "Transfer verified Nova Dream sources into managed native media for an exact conversation.",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object", "additionalProperties": false,

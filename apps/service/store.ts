@@ -41,7 +41,7 @@ export class Store {
     this.directory = directory;
     const identityPath = join(directory, 'edition3.identity');
     const identity = 'private.novadream.edition3.preview\n';
-    if (existsSync(directory) && readdirSync(directory).length && (!existsSync(identityPath) || readFileSync(identityPath, 'utf8') !== identity)) throw new Error('This directory is not an Edition 3 workspace. Choose a new empty directory.');
+    if (existsSync(directory) && readdirSync(directory).length && (!existsSync(identityPath) || readFileSync(identityPath, 'utf8') !== identity)) throw new Error('This directory is not an Nova Dream workspace. Choose a new empty directory.');
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (!existsSync(identityPath)) writeFileSync(identityPath, identity, { mode: 0o600, flag: 'wx' });
     mkdirSync(join(directory, 'blobs'), { recursive: true, mode: 0o700 });
@@ -54,7 +54,7 @@ export class Store {
     if (this.key.length !== 32) throw new Error('Invalid workspace key. No data was replaced.');
     this.db = new DatabaseSync(join(directory, 'workspace.sqlite'));
     const schema = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schema > 54) { this.db.close(); throw new Error('This workspace needs a newer Edition 3 build.'); }
+    if (schema > 54) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
     // Authenticate an existing workspace before any schema or journal-mode write.
     try {
       if (schema > 0) {

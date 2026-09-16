@@ -8,7 +8,7 @@ export function EventValues({ value }: { value: LocalEventInput }) {
     <dd>{value.start.date} {value.allDay ? '· All day' : value.start.time} → {value.end.date} {!value.allDay && value.end.time}</dd>
     <dd>{value.timezone.replaceAll('_', ' ')}{value.allDay && ' · End date is exclusive'}</dd>
     {!!value.location && <dd>{value.location}</dd>}
-    <dd>Category in Edition 3: {value.category ?? 'other'}</dd>
+    <dd>Category in Nova Dream: {value.category ?? 'other'}</dd>
     <dd>Reminder: {value.reminderMinutes ? `${value.reminderMinutes} minutes before` : 'Unchanged default or no reminder'}</dd>
     {value.repeat && <dd>Repeat: {value.repeat.cadence}, every {value.repeat.interval}{value.repeat.count ? ` · ${value.repeat.count} dates` : value.repeat.endsOn ? ` · through ${value.repeat.endsOn}` : ''}</dd>}
     <dd className="whitespace-pre-wrap">{value.notes || 'No description'}</dd>

@@ -56,7 +56,7 @@ export function useWorkspace() {
         const cached = readLocal<Snapshot>('e3:snapshot');
         if (cached) { current.current = cached; setSnapshot(cached); }
       }
-      setError('Host unavailable. Start the Edition 3 service, then reconnect.');
+      setError('Host unavailable. Start the Nova Dream service, then reconnect.');
     });
     const timer = setInterval(() => { void refresh(); }, 2500);
     return () => { alive = false; clearInterval(timer); window.removeEventListener('e3:pair-required', denied); window.removeEventListener('e3:update-required', outdated); };

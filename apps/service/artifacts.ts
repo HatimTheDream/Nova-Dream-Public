@@ -34,7 +34,7 @@ export class ArtifactReader {
     const check = () => {
       const status = this.gateway.status();
       if (this.closed || abort.signal.aborted || generation !== this.generation || status.state !== 'ready' || status.generation !== source.connectionGeneration) throw changed();
-      if (!status.grantedScopes.includes('operator.read') || !status.methods.includes('artifacts.download')) throw new Fault(409, 'artifact_unavailable', 'This host does not offer output downloads for Edition 3.');
+      if (!status.grantedScopes.includes('operator.read') || !status.methods.includes('artifacts.download')) throw new Fault(409, 'artifact_unavailable', 'This host does not offer output downloads for Nova Dream.');
       return status;
     };
     try {

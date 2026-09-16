@@ -1,6 +1,6 @@
 /** A context-based fallback while the native background naming service is unavailable. */
 export function initialConversationTitle(message: string) {
-  const text = message.replace(/^(?:Edition 3 owner message|Owner message):\s*/i, '').trim().split(/\n/)[0]
+  const text = message.replace(/^(?:(?:Nova Dream|Edition 3) owner message|Owner message):\s*/i, '').trim().split(/\n/)[0]
     .replace(/^(?:please\s+)?(?:can you|could you|would you)\s+/i, '')
     .replace(/^(?:please\s+)?(?:do (?:some )?research on|help me (?:with|to)|tell me about)\s+/i, '')
     .replace(/\s+/g, ' ').trim();

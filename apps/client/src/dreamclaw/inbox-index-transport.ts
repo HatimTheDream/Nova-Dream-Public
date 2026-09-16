@@ -15,7 +15,7 @@ export const inboxIndexTransport: InboxIndexTransport = {
 type Identity = { provider: NativeMailIndexProvider; accountId: string };
 type Cached = { revision: string; runId?: string; snapshot: NativeMailIndexSnapshot };
 
-/** The original index API over the account-scoped Edition 3 service. */
+/** The original index API over the account-scoped Nova Dream service. */
 export function createInboxIndexApi(epoch: string, account: (provider: ConnectedAccount['provider'], id: string) => ConnectedAccount, signal: AbortSignal, transport: InboxIndexTransport) {
   const cache = new Map<string, Cached>(), watched = new Map<string, ConnectedAccount>();
   const reads = new Map<string, Promise<Cached>>(), commands = new Map<string, Promise<Cached>>();

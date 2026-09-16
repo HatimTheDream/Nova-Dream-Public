@@ -7,7 +7,7 @@ import { mailContactSourceSchema } from './mail-contact.js';
 import { keepInTouchSchema, pipelineStages, relationshipSchema } from './crm.js';
 
 // Original DC People/Content fields, Nova saved records and agent identity,
-// adapted to the single Edition 3 entity/revision authority.
+// adapted to the single Nova Dream entity/revision authority.
 export const recordKinds = ['contact', 'content', 'agent', 'assignment', 'profile'] as const;
 export const recordKindSchema = z.enum(recordKinds);
 export type RecordKind = typeof recordKinds[number];

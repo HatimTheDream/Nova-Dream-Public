@@ -91,7 +91,7 @@ export class Accounts {
     const cmd = connectAccountSchema.parse(raw); this.sweep();
     const receipt = this.store.admit(device, cmd, { type: 'account-signin', ...cmd }, () => {
       const configuration = this.config(cmd.provider);
-      if (!configuration) throw new Fault(409, 'account_client_missing', 'Set up this provider’s Edition 3 OAuth client first.');
+      if (!configuration) throw new Fault(409, 'account_client_missing', 'Set up this provider’s Nova Dream OAuth client first.');
       if (this.attempts().some(a => a.provider === cmd.provider && active(a))) throw new Fault(409, 'account_signin_active', 'This provider already has a sign-in in progress.');
       const existing = cmd.accountId ? this.account(cmd.accountId) : undefined;
       if (cmd.accountId && (!existing || existing.provider !== cmd.provider || existing.revision !== cmd.expectedRevision)) throw new Fault(409, 'account_changed', 'Review the current account before reconnecting.');
@@ -116,7 +116,7 @@ export class Accounts {
     let server: Server | undefined;
     const removeCallback = () => { server?.close(); live.removeCallback?.(); };
     const callback = (req: IncomingMessage, res: ServerResponse) => {
-      const answer = (status: number, message: string) => { res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'", 'X-Content-Type-Options': 'nosniff' }); res.end(`<!doctype html><title>Nova Dream account connection</title><h1>Nova Dream</h1><p>${message}</p><p>Return to Edition 3 to check your account connection.</p>`); };
+      const answer = (status: number, message: string) => { res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'", 'X-Content-Type-Options': 'nosniff' }); res.end(`<!doctype html><title>Nova Dream account connection</title><h1>Nova Dream</h1><p>${message}</p><p>Return to Nova Dream to check your account connection.</p>`); };
       if (req.method !== 'GET' || !redirectUri || `${this.callbackOrigin ? 'https' : 'http'}://${req.headers.host}` !== new URL(redirectUri).origin || (req.url?.length ?? 0) > 7000) return answer(400, 'This callback was not accepted.');
       let url: URL; try { url = new URL(req.url ?? '/', redirectUri); } catch { return answer(400, 'This callback was not accepted.'); }
       if (url.origin !== new URL(redirectUri).origin || url.pathname !== '/oauth/callback' || url.searchParams.getAll('state').length !== 1 || !equal(url.searchParams.get('state') ?? '', state)) return answer(400, 'This callback does not match the sign-in.');
@@ -128,7 +128,7 @@ export class Accounts {
       }
       const code = url.searchParams.get('code');
       if (!code || code.length > 4096 || url.searchParams.getAll('code').length !== 1) return answer(400, 'The provider response was incomplete.');
-      this.writeAttempt({ ...current, state: 'exchanging', message: 'Verifying the provider account…' }); answer(200, 'Sign-in received. Edition 3 is verifying the account.');
+      this.writeAttempt({ ...current, state: 'exchanging', message: 'Verifying the provider account…' }); answer(200, 'Sign-in received. Nova Dream is verifying the account.');
       removeCallback(); void this.track(this.complete(id, live, configuration, code, verifier, redirectUri));
     };
     try {
@@ -192,7 +192,7 @@ export class Accounts {
     return this.store.admit(device, cmd, { type: 'account-disconnect', ...cmd }, () => {
       const a = this.account(cmd.accountId);
       if (!a || a.revision !== cmd.expectedRevision) throw new Fault(409, 'account_changed', 'This account changed. Review the current connection.');
-      const next = this.writeAccount({ ...a, revision: a.revision + 1, generation: randomUUID(), state: 'disconnected', scopes: [], capabilities: accountCapabilities(a.provider, []), message: 'Disconnected from Edition 3. Provider-side consent can be managed in your account settings.' });
+      const next = this.writeAccount({ ...a, revision: a.revision + 1, generation: randomUUID(), state: 'disconnected', scopes: [], capabilities: accountCapabilities(a.provider, []), message: 'Disconnected from Nova Dream. Provider-side consent can be managed in your account settings.' });
       this.store.internalWrite(`accounts:credential:${a.id}`, { disconnected: true }); return next;
     }).value;
   }

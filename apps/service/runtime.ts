@@ -19,7 +19,7 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 // Chromium appends its own directory and SingletonSocket to TMPDIR. Recovered
 // workspaces can exceed Linux's 108-byte Unix socket limit before that suffix.
 export function needsShortRuntimeTemporaryDirectory(root:string,platform:NodeJS.Platform=process.platform){return platform==='linux'&&Buffer.byteLength(join(root,'tmp'))>60;}
-/** Owns only Edition 3's foreground Gateway process. Never uses service install/restart or --force. */
+/** Owns only Nova Dream's foreground Gateway process. Never uses service install/restart or --force. */
 export class ManagedRuntime {
   private child?: ChildProcess;
   private browserNetwork=new BrowserNetwork();
@@ -28,7 +28,7 @@ export class ManagedRuntime {
   private generation = 0;
   private stopping = false;
   private stopPromise?: Promise<void>;
-  private current: RuntimeStatus = { state: 'stopped', phase: 'idle', message: 'Edition 3 can start its own isolated OpenClaw workspace.', platform: process.platform, managedServiceInstalled: false };
+  private current: RuntimeStatus = { state: 'stopped', phase: 'idle', message: 'Nova Dream can start its own isolated OpenClaw workspace.', platform: process.platform, managedServiceInstalled: false };
   constructor(private store: Store, private gateway: Pick<Gateway, 'configure' | 'status'>, private readinessTimeoutMs = 45000, private moduleBridge?:()=>{url:string;token:string}) {}
   async configureBrowser(enabled:boolean) {
     if(this.store.recoveryEffectsPaused)throw new Fault(409,'recovery_held','Host browsing is paused in this recovered copy.');
@@ -80,7 +80,7 @@ export class ManagedRuntime {
   private paths() {
     const root = join(this.store.directory, 'openclaw-runtime');
     const marker = join(root, 'edition3-runtime.identity');
-    if (existsSync(root) && (!existsSync(marker) || readFileSync(marker, 'utf8') !== 'edition3-owned-gateway\n')) throw new Fault(409, 'runtime_identity', 'The selected runtime directory is not owned by Edition 3.');
+    if (existsSync(root) && (!existsSync(marker) || readFileSync(marker, 'utf8') !== 'edition3-owned-gateway\n')) throw new Fault(409, 'runtime_identity', 'The selected runtime directory is not owned by Nova Dream.');
     mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!existsSync(marker)) writeFileSync(marker, 'edition3-owned-gateway\n', { mode: 0o600, flag: 'wx' });
     for (const directory of ['home', 'state', 'workspace', 'tmp']) mkdirSync(join(root, directory), { recursive: true, mode: 0o700 });
@@ -121,7 +121,7 @@ export class ManagedRuntime {
           await this.gateway.configure(url, config.token);
         }
         assertCurrent();
-        this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Edition 3’s isolated OpenClaw runtime is running.' };
+        this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Nova Dream’s isolated OpenClaw runtime is running.' };
         return this.status();
       }
       const entry = this.entry(), { root, config: configPath } = this.paths();
@@ -158,7 +158,7 @@ export class ManagedRuntime {
         renameSync(temporary, configPath);
         if (process.platform !== 'win32') { const folder = openSync(root, 'r'); try { fsyncSync(folder); } finally { closeSync(folder); } }
       }
-      this.current = { ...this.current, state: 'starting', phase: 'process', message: 'Starting the isolated Edition 3 OpenClaw runtime…' };
+      this.current = { ...this.current, state: 'starting', phase: 'process', message: 'Starting the isolated Nova Dream OpenClaw runtime…' };
       let log = '';
       const ownerEntry = join(serviceDirectory, import.meta.url.endsWith('.ts') ? 'runtime-child.ts' : 'runtime-child.js');
       // Keep the verified CLI in the IPC-owned process. Native respawning would
@@ -169,7 +169,7 @@ export class ManagedRuntime {
       const append = (buffer: Buffer) => { log = (log + buffer.toString()).slice(-500000); };
       child.stdout?.on('data', append); child.stderr?.on('data', append);
       child.on('error', () => { if (this.child === child) this.current = { ...this.current, state: 'error', phase: 'failed', message: 'The isolated OpenClaw process could not start.' }; });
-      child.on('exit', () => { writeFileSync(join(root, 'startup.log'), log.replaceAll(config!.token, '[redacted]'), { mode: 0o600 }); if (this.child === child) this.current = { ...this.current, state: 'stopped', phase: 'idle', message: 'The Edition 3 runtime stopped. Existing apps are separate.' }; });
+      child.on('exit', () => { writeFileSync(join(root, 'startup.log'), log.replaceAll(config!.token, '[redacted]'), { mode: 0o600 }); if (this.child === child) this.current = { ...this.current, state: 'stopped', phase: 'idle', message: 'The Nova Dream runtime stopped. Existing apps are separate.' }; });
       const deadline = Date.now() + this.readinessTimeoutMs;
       while (true) {
         assertCurrent();
@@ -190,7 +190,7 @@ export class ManagedRuntime {
             const connection = this.gateway.status(), url = `ws://127.0.0.1:${config.port}`;
             if (connection.state !== 'ready' || connection.url !== url) await this.gateway.configure(url, config.token);
           }
-          assertCurrent(); this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Edition 3’s isolated OpenClaw runtime is running.' }; return this.status();
+          assertCurrent(); this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Nova Dream’s isolated OpenClaw runtime is running.' }; return this.status();
         }
         const slow = Date.now() >= deadline;
         if (slow) this.current = { ...this.current, message: 'OpenClaw is taking longer to start. Still checking this workspace’s process…' };
@@ -225,7 +225,7 @@ export class ManagedRuntime {
       } finally {
         if(this.shortTemporaryDirectory){rmSync(this.shortTemporaryDirectory,{recursive:true,force:true});this.shortTemporaryDirectory=undefined;}
         this.child = undefined; this.stopping = false; this.stopPromise = undefined;
-        this.current = { ...this.current, state: 'stopped', phase: 'idle', message: 'The Edition 3 runtime stopped. Existing apps are separate.' };
+        this.current = { ...this.current, state: 'stopped', phase: 'idle', message: 'The Nova Dream runtime stopped. Existing apps are separate.' };
       }
     })();
     return this.stopPromise;

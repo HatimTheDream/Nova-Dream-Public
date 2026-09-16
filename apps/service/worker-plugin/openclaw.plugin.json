@@ -1,6 +1,6 @@
 {
   "id": "edition3-worker",
-  "name": "Edition 3 assignment worker",
+  "name": "Nova Dream assignment worker",
   "description": "Bounded assignment runs with scoped workspace tools and durable execution receipts.",
   "activation": {
     "onStartup": true

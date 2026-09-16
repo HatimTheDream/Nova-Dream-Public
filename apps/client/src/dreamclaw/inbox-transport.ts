@@ -80,8 +80,8 @@ export function createInboxMailApi(context: InboxMailContext, transport: Read = 
       return { ...fallback, success: false, error: error instanceof Error ? error.message : 'Mail could not be loaded.' };
     }
   };
-  const pending = async (..._args: unknown[]): Promise<Failure> => ({ success: false, error: 'This original mail action is still being connected to Edition 3. Your message has not been changed or sent.' });
-  const settings = async (..._args: unknown[]): Promise<Failure> => ({ success: false, error: 'Open Settings → Connections to manage this Edition 3 account.' });
+  const pending = async (..._args: unknown[]): Promise<Failure> => ({ success: false, error: 'This original mail action is still being connected to Nova Dream. Your message has not been changed or sent.' });
+  const settings = async (..._args: unknown[]): Promise<Failure> => ({ success: false, error: 'Open Settings → Connections to manage this Nova Dream account.' });
   const collect = async <T>(owner: ConnectedAccount, selector: MailReadSelector, key: string, maximum = 1000): Promise<{ items: T[]; partial: boolean; message?: string }> => {
     const items: T[] = [], seen = new Set<string>();
     let cursor: string | undefined, partial = false, message: string | undefined;
@@ -105,7 +105,7 @@ export function createInboxMailApi(context: InboxMailContext, transport: Read = 
   const gmail = {
     async getStatus(): Promise<NativeGmailStatus> {
       assertCurrent();
-      const accounts = statusAccounts('google').map(item => ({ id: item.id, generation: item.generation, email: item.email, client: 'Edition 3', auth: 'OAuth', createdAt: item.connectedAt, services: ['gmail'], scopes: item.scopes, canRead: item.capabilities.mailRead, canSend: item.capabilities.mailSend, canDraft: item.capabilities.mailDraft, canModify: item.scopes.some(scope => scope.endsWith('/gmail.modify') || scope === 'https://mail.google.com/') }));
+      const accounts = statusAccounts('google').map(item => ({ id: item.id, generation: item.generation, email: item.email, client: 'Nova Dream', auth: 'OAuth', createdAt: item.connectedAt, services: ['gmail'], scopes: item.scopes, canRead: item.capabilities.mailRead, canSend: item.capabilities.mailSend, canDraft: item.capabilities.mailDraft, canModify: item.scopes.some(scope => scope.endsWith('/gmail.modify') || scope === 'https://mail.google.com/') }));
       return { success: true, available: accounts.length > 0, credentialsConfigured: !!captured.accounts.clients.find(item => item.provider === 'google')?.configured, accounts, defaultAccount: accounts.length === 1 ? accounts[0].id : undefined };
     },
     async searchThreads(input: { query: string; max?: number; account?: string; page?: string }) {

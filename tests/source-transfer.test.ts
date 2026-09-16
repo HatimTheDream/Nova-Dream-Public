@@ -56,13 +56,13 @@ test('same source bytes can be reused only with a currently matching native conv
 
 test('epoch, native identity, file format, byte length and hash are checked before any native write', async () => {
   const f = fixture(), input = f.input();
-  await assert.rejects(f.invoke({ ...input, epoch: randomUUID() }), /original Edition 3 runtime/);
+  await assert.rejects(f.invoke({ ...input, epoch: randomUUID() }), /original Nova Dream runtime/);
   await assert.rejects(f.invoke({ ...input, nativeId: randomUUID() }), /conversation changed/);
   await assert.rejects(f.invoke({ ...input, file: { ...input.file, size: input.file.size + 1 } }), /length or hash/);
   await assert.rejects(f.invoke({ ...input, file: { ...input.file, sha256: 'f'.repeat(64) } }), /length or hash/);
   await assert.rejects(f.invoke({ ...input, file: { ...input.file, name: 'run.exe' } }), /format/);
   await assert.rejects(f.invoke({ ...input, nativeKey: '../outside' }));
-  f.api.runtime.version = 'future'; await assert.rejects(f.invoke(input), /original Edition 3 runtime/);
+  f.api.runtime.version = 'future'; await assert.rejects(f.invoke(input), /original Nova Dream runtime/);
   assert.equal(f.calls.length, 0);
 });
 
@@ -83,7 +83,7 @@ test('a native target replaced during upload discards only the newly created una
 test('a stopping adapter waits for its upload and never admits a late source', async () => {
   const f = fixture(), input = f.input(); let release!: () => void; f.hold(new Promise(resolve => { release = resolve; }));
   const pending = f.invoke(input); await Promise.resolve(); await Promise.resolve(); const stopped = f.stop(); release();
-  await assert.rejects(pending, /original Edition 3 runtime/); await stopped; assert.equal(readdirSync(f.inbound).length, 0);
+  await assert.rejects(pending, /original Nova Dream runtime/); await stopped; assert.equal(readdirSync(f.inbound).length, 0);
 });
 
 test('unexpected native paths and symlinked cache files are rejected without deleting unrelated files', async () => {

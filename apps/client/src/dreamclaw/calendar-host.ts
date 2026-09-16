@@ -131,7 +131,7 @@ export function createCalendarHost({ snapshot, windowId, previousWindowId, navig
     editingValues(event) { const draft = editor.getState().draft; return draft ? eventForDraft(draft) : event; },
     async listDestinations() {
       return { success: true, destinations: [
-        { id: 'local', provider: 'local', calendarName: 'Edition 3 only', isDefault: true, canWrite: true },
+        { id: 'local', provider: 'local', calendarName: 'Nova Dream only', isDefault: true, canWrite: true },
         ...(latest?.sources ?? []).map(source => ({ id: source.id, provider: source.provider, accountId: source.accountId, accountEmail: source.accountLabel, calendarId: source.calendarId, calendarName: source.name, isDefault: source.primary,
           canWrite: source.state !== 'unavailable' && source.providerCanWrite && Boolean(source.accountCanWrite),
           needsPermission: source.providerCanWrite && !source.accountCanWrite,

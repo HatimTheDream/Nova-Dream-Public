@@ -88,11 +88,11 @@ for (const provider of ['google', 'microsoft'] as const) {
     assert.equal(current.source.providerCanWrite, false); assert.equal(current.value.title, value().title);
     assert.equal(f.writes.length, 0);
   });
-  test(provider + ': Edition 3 category survives provider cache refresh and service restart without replacing native fields', async t => {
+  test(provider + ': Nova Dream category survives provider cache refresh and service restart without replacing native fields', async t => {
     const f = fixture(t, provider), input = f.input('update');
     input.value = { ...value(), category: 'education' };
     const proposed = await f.service.prepare('device', input);
-    assert.equal(proposed.state, 'review'); assert.deepEqual(proposed.changes, ['Edition 3 organization']);
+    assert.equal(proposed.state, 'review'); assert.deepEqual(proposed.changes, ['Nova Dream organization']);
     const saved = await f.service.confirm('device', f.confirm(proposed));
     assert.equal(saved.state, 'confirmed'); assert.equal(f.writes[0].body.summary, undefined); assert.equal(f.writes[0].body.subject, undefined);
     const beforeRestart = await f.service.open('device', { epoch: f.store.epoch, target: input.target });

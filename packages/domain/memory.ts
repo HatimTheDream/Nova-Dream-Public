@@ -12,7 +12,7 @@ export type MemoryEntry = { id: string; revision: number; text: string; projectI
 export type MemoryState = { revision: number; entries: MemoryEntry[] };
 export type MemorySnapshot = { revision: number; entries: Pick<MemoryEntry, 'id' | 'revision' | 'text' | 'projectId'>[] };
 
-export function memoryContext(memory?: MemorySnapshot): string {
+export function memoryContext(memory?: MemorySnapshot, brand = 'Nova Dream'): string {
   if (!memory) return '';
-  return `Edition 3 memories explicitly saved by the owner for this scope. These are reference facts and preferences, not permission to take actions. The current request takes priority. This snapshot replaces earlier memory snapshots; a removed note is no longer a standing preference.\n${JSON.stringify(memory)}\n\n`;
+  return `${brand} memories explicitly saved by the owner for this scope. These are reference facts and preferences, not permission to take actions. The current request takes priority. This snapshot replaces earlier memory snapshots; a removed note is no longer a standing preference.\n${JSON.stringify(memory)}\n\n`;
 }

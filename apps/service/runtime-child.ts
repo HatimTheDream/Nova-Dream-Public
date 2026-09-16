@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 // Launch the pinned public CLI in this same process. The IPC descriptor binds
 // its lifetime to this exact service, without looking up or killing stored PIDs.
 const entry = process.argv[2];
-if (!entry || !isAbsolute(entry) || basename(entry) !== 'openclaw.mjs' || !process.send || !process.connected) throw new Error('The owned Assistant runtime requires its live Edition 3 parent.');
+if (!entry || !isAbsolute(entry) || basename(entry) !== 'openclaw.mjs' || !process.send || !process.connected) throw new Error('The owned Assistant runtime requires its live Nova Dream parent.');
 let stopping = false;
 const stopWithOwner = () => {
   if (stopping) return;

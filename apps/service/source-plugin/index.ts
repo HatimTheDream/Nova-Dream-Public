@@ -56,7 +56,7 @@ export function registerSourceTransfer(api: SourcePluginApi) {
     try {
       const input = sourceStageSchema.parse(params), mimeType = sourceMime(input.file.name);
       const current = () => {
-        if (closing || api.runtime.version !== sourceTransferVersion || input.epoch !== config.epoch) throw new Error('Reconnect this source to its original Edition 3 runtime.');
+        if (closing || api.runtime.version !== sourceTransferVersion || input.epoch !== config.epoch) throw new Error('Reconnect this source to its original Nova Dream runtime.');
         if (api.runtime.agent.session.getSessionEntry({ agentId: 'main', sessionKey: input.nativeKey, readConsistency: 'latest' })?.sessionId !== input.nativeId) throw new Error('The original source conversation changed.');
       };
       current();
@@ -103,4 +103,4 @@ export function registerSourceTransfer(api: SourcePluginApi) {
   api.registerService({ id: sourcePluginId, start() {}, async stop() { closing = true; await Promise.allSettled([...flights.values()].map(flight => flight.promise)); db?.close(); db = undefined; } });
 }
 
-export default { id: sourcePluginId, name: 'Edition 3 source transfer', description: 'Verified source files in the native managed media store.', register: registerSourceTransfer };
+export default { id: sourcePluginId, name: 'Nova Dream source transfer', description: 'Verified source files in the native managed media store.', register: registerSourceTransfer };

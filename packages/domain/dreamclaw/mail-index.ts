@@ -1,5 +1,5 @@
 // Actual original Dream Claw mail-index model, normalization and merge helpers.
-// Edition 3 supplies its existing encrypted storage and account authority.
+// Nova Dream supplies its existing encrypted storage and account authority.
 export type MailIndexProvider = 'gmail' | 'microsoft';
 export type MailIndexStatus = 'idle' | 'indexing' | 'paused' | 'complete' | 'error';
 

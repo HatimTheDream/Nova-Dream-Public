@@ -1,6 +1,7 @@
 const { app, safeStorage } = require('electron');
 const path = require('node:path');
-// Same application identity as the desktop, with a separate helper profile.
+// Legacy OS key-protection identity, with a separate helper profile. Keep this
+// private service name stable so renaming the visible app cannot orphan keys.
 // No window, renderer, networking, or command-line secret input.
 app.setName('Nova Dream — Edition 3 Preview');
 app.setPath('userData', path.join(app.getPath('appData'), 'NovaDream-Edition3-KeyVault'));

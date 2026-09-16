@@ -137,4 +137,4 @@ export function registerWorker(api: WorkerPluginApi) {
     observerTimer = setInterval(() => { if (!closing) { try { for (const receipt of store().pending(config.epoch)) void observe(receipt); } catch { /* Status reports unavailable storage without crashing the native host. */ } } }, 1000); observerTimer.unref();
   }, stop: () => { closing = true; if (observerTimer) clearInterval(observerTimer); journal?.close(); journal = undefined; } });
 }
-export default { id: workerPluginId, name: 'Edition 3 assignment worker', description: 'Tool-free assignment execution for the owning Edition 3 workspace.', register: registerWorker };
+export default { id: workerPluginId, name: 'Nova Dream assignment worker', description: 'Tool-free assignment execution for the owning Nova Dream workspace.', register: registerWorker };

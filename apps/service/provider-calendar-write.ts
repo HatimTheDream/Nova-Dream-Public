@@ -213,7 +213,7 @@ export function planProviderCalendarWrite(provider: Provider, calendarId: string
   if (!timing.interval) fail(timing.error!);
   const changed = (keys: (keyof LocalEventInput)[]) => create || keys.some(key => !same(value[key], previous!.value[key]));
   const body: Record<string, unknown> = {};
-  if (changed(['category', 'projectId', 'taskId'])) changes.push('Edition 3 organization');
+  if (changed(['category', 'projectId', 'taskId'])) changes.push('Nova Dream organization');
   if (value.deliveryChannel && value.deliveryChannel !== 'last') fail('Provider reminders use the connected Calendar. External reminder channels are not connected here.');
   if (!create && changed(['state'])) fail('Use the original Delete action to review cancellation or deletion in this provider.');
   if (changed(['title'])) { body[provider === 'google' ? 'summary' : 'subject'] = value.title; changes.push('Title'); }

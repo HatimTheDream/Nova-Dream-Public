@@ -11,7 +11,7 @@ const pkgBytes = readFileSync(path.join(root, 'package.json')), manifestBytes = 
 const expected = expectedCandidate(JSON.parse(manifestBytes), createHash('sha256').update(Buffer.concat([pkgBytes, manifestBytes])).digest('hex'));
 if (process.env.E3_DESKTOP_CANDIDATE !== expected.candidateId || realpathSync(root) !== realpathSync(path.join(workspace, '.launcher/candidates', expected.candidateId))) throw new Error('Use the Nova Dream launcher to open the verified desktop candidate.');
 // Dedicated preview identity; never opens either predecessor's profile.
-app.setName('Nova Dream — Edition 3 Preview');
+app.setName('Nova Dream');
 app.setAppUserModelId('private.novadream.edition3.preview');
 // The default profile remains NovaDream-Edition3-Preview; QA uses only short,
 // validated names inside the workspace's .tmp-qa directory.

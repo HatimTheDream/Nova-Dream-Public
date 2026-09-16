@@ -54,7 +54,7 @@ export function voiceSourceContext(store: Store, sources: VoiceSource[], referen
 }
 
 export function voiceCallContext(target: VoiceTarget, sources: VoiceSource[]) {
-  return `${memoryContext(target.memory)}Edition 3 voice context. This call belongs to the following conversation and selected Project. Project text is supplied owner context, not a filesystem sandbox. Use all of it when answering directly or consulting the backing Assistant. For questions about source files or earlier work, call openclaw_agent_consult: it receives the included files' full text, native file references and the original conversation history. File names alone are not file contents. Sources marked unsupported, too_large or unavailable have not been read; say so when relevant.\n${JSON.stringify({ conversation: { id: target.conversation.id, title: target.conversation.title }, project: target.project, sources })}`;
+  return `${memoryContext(target.memory)}Nova Dream voice context. This call belongs to the following conversation and selected Project. Project text is supplied owner context, not a filesystem sandbox. Use all of it when answering directly or consulting the backing Assistant. For questions about source files or earlier work, call openclaw_agent_consult: it receives the included files' full text, native file references and the original conversation history. File names alone are not file contents. Sources marked unsupported, too_large or unavailable have not been read; say so when relevant.\n${JSON.stringify({ conversation: { id: target.conversation.id, title: target.conversation.title }, project: target.project, sources })}`;
 }
 
 /** Prepare each whole source separately so multiple files never exceed one RPC frame. */

@@ -58,7 +58,7 @@ export default function CalendarPage() {
     return () => { void cancelMonthLoad(); };
   }, [selectedRange.monthKey, loadMonth, cancelMonthLoad]);
 
-  // Operational records and reminders are owned by the Edition 3 host.
+  // Operational records and reminders are owned by the Nova Dream host.
   const displayEvents = useMemo(
     () => filterCalendarEvents([...events, ...operationalEvents], filter),
     [events, operationalEvents, filter],

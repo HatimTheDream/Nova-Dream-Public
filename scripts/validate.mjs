@@ -10,4 +10,4 @@ assert.ok(readFileSync('README.md', 'utf8').includes(`Version-${pkg.version}-blu
 assert.ok(readFileSync('CHANGELOG.md', 'utf8').includes(`## [${pkg.version}]`));
 const desktop = readFileSync('apps/desktop/main.cjs', 'utf8');
 for (const boundary of ['nodeIntegration: false', 'contextIsolation: true', 'sandbox: true', 'webSecurity: true', 'NovaDream-Edition3-Preview']) assert.ok(desktop.includes(boundary), boundary);
-console.log('Edition 3 release metadata and desktop isolation checks passed.');
+console.log('Nova Dream release metadata and desktop isolation checks passed.');

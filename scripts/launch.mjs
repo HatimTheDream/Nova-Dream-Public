@@ -8,7 +8,7 @@ import policy from '../apps/desktop/launch-policy.cjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-if (pkg.name !== 'nova-dream-edition-3') throw new Error('This is not the Edition 3 workspace.');
+if (pkg.name !== 'nova-dream-edition-3') throw new Error('This is not the Nova Dream workspace.');
 const options = policy.launchOptions(process.argv.slice(2), root);
 const candidate = stageCandidate(root), expected = policy.expectedCandidate(candidate.manifest, candidate.id);
 const binary = process.platform === 'darwin' ? join(root, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron') : process.platform === 'win32' ? join(root, 'node_modules/electron/dist/electron.exe') : join(root, 'node_modules/electron/dist/electron');
@@ -30,7 +30,7 @@ if (!await desktopHealth(options.address, expected)) {
   const child = await detached(process.execPath, [join(candidate.root, 'dist/service/apps/service/main.js')], { ...process.env, E3_PORT: String(options.port), E3_DATA_DIR: directory, E3_CANDIDATE_ID: candidate.id }, options.qa ? `service-${options.profile}.log` : 'service.log', candidate.root);
   const deadline = Date.now() + 30000;
   while (!await desktopHealth(options.address, expected)) {
-    if (child.exitCode !== null || Date.now() > deadline) throw new Error('Edition 3 did not become ready. Review its local service log.');
+    if (child.exitCode !== null || Date.now() > deadline) throw new Error('Nova Dream did not become ready. Review its local service log.');
     await new Promise(r => setTimeout(r, 200));
   }
 }

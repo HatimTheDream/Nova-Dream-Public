@@ -19,7 +19,7 @@ const attemptKey = (id: string) => `assignments:attempt:${id}`;
 const requiredMethods = ['e3.assignments.capabilities', 'e3.assignments.run', 'e3.assignments.stop', 'e3.assignments.status', 'chat.abort', 'chat.history'];
 const publicAttempt = ({ capture, prompt, inputHash, uploadRequestId, pendingResult, ...value }: SavedAttempt): AssignmentAttempt => value;
 
-/** Saved plans and immutable attempts stay in Edition 3's encrypted authority.
+/** Saved plans and immutable attempts stay in Nova Dream's encrypted authority.
  * The native adapter owns only effect receipts. An uncertain call is never a retry. */
 export class AssignmentService {
   private closing = false;

@@ -12,4 +12,4 @@ lock.version = pkg.version; lock.packages[''].version = pkg.version;
 for (const [file, value] of [['package.json', pkg], ['package-lock.json', lock]]) writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 writeFileSync('README.md', readFileSync('README.md', 'utf8').replace(/Version-\d+\.\d+\.\d+-blue/, `Version-${pkg.version}-blue`));
 writeFileSync('release.json', JSON.stringify({ version: pkg.version, ...pkg.edition3, channel: 'local-preview', publishing: false, installation: false }, null, 2) + '\n');
-console.log(`Edition 3 ${pkg.version} · build ${pkg.edition3.buildVersion}`);
+console.log(`Nova Dream ${pkg.version} · build ${pkg.edition3.buildVersion}`);

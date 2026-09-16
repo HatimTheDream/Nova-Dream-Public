@@ -1,3 +1,7 @@
+## [1.5.6] — 2026-09-16
+
+- Use Nova Dream throughout app titles, calendars, connection messages and new Assistant context while preserving existing chats and workspace identities. Restore the accepted red-border logo to the desktop shortcut, Dock and browser tab; retain the shortcut's selected workspace when renaming it.
+
 ## [1.5.5] — 2026-09-16
 
 - Use the primary text color for Assistant reply paragraphs, matching your messages in light and dark themes across desktop, phone, live voice and saved conversations.

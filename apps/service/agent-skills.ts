@@ -2,7 +2,7 @@ import { installedSkillsSchema, type InstalledSkills } from '../../packages/doma
 import type { AssistantTransport } from './gateway.js';
 import { Fault } from './store.js';
 
-/** Read the same native main-agent identity used by the Edition 3 worker. */
+/** Read the same native main-agent identity used by the Nova Dream worker. */
 export class AgentSkills {
   constructor(private gateway: AssistantTransport, private now = Date.now) {}
   async installed(): Promise<InstalledSkills> {

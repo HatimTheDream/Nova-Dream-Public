@@ -50,7 +50,7 @@ type CalendarDestination = {
 const LAST_CALENDAR_DESTINATION_KEY = 'e3:calendar:last-destination';
 
 function calendarDestinationLabel(destination: CalendarDestination): string {
-  if (destination.provider === 'local') return 'Edition 3 only';
+  if (destination.provider === 'local') return 'Nova Dream only';
   const provider = destination.provider === 'google' ? 'Google' : 'Outlook';
   const calendar = destination.calendarName === destination.accountEmail ? 'Primary calendar' : destination.calendarName;
   return `${provider} · ${calendar}${destination.accountEmail ? ` · ${destination.accountEmail}` : ''}`;
@@ -93,7 +93,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
   const [deleteChoice, setDeleteChoice] = useState<DeleteChoice>('event');
   const [selectedSeriesIds, setSelectedSeriesIds] = useState<string[]>([]);
   const [destinations, setDestinations] = useState<CalendarDestination[]>([
-    { id: 'local', provider: 'local', calendarName: 'Edition 3 only', isDefault: true, canWrite: true },
+    { id: 'local', provider: 'local', calendarName: 'Nova Dream only', isDefault: true, canWrite: true },
   ]);
   const [destinationsLoading, setDestinationsLoading] = useState(!isEdit);
   const permissionDestinations = destinations.filter((destination) => destination.needsPermission);
@@ -458,7 +458,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
           <Field label={t('calendar.field.date')}>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="field-input" disabled={isReadOnlyEvent} />
           </Field>
-          <Field label={providerEvent ? 'Category in Edition 3' : t('calendar.field.category')}>
+          <Field label={providerEvent ? 'Category in Nova Dream' : t('calendar.field.category')}>
             <select value={category} onChange={(e) => setCategory(e.target.value as EventCategory)} className="field-input" disabled={isReadOnlyEvent}>
               {ALL_CATEGORIES.map((cat) => (
                 <option key={cat} value={cat}>{t(`calendar.category.${cat}`)}</option>

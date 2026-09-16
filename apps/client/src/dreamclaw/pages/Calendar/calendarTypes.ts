@@ -21,7 +21,7 @@ export type DeliveryChannel =
 export interface CalendarEvent {
   id: string;
   title: string;
-  // Opaque revision identity supplied by the Edition 3 integration, never displayed.
+  // Opaque revision identity supplied by the Nova Dream integration, never displayed.
   writeToken?: string;
 
   // Timing

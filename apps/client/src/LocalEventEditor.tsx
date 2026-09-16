@@ -44,7 +44,7 @@ export function LocalEventEditor({ initial, snapshot, persist, close, saved }: {
   const v = draft.value, timing = localEventInterval(v), parsed = localEventInputSchema.safeParse(v), repeatError = parsed.success ? repeatProblem(parsed.data) : undefined, locked = busy || !!draft.pending || !!draft.review;
   const repeated = (which: 'start' | 'end') => { try { return reminderInstant({ ...v[which], timezone: v.timezone, overlap: undefined }).problem === 'overlap'; } catch { return false; } };
   return <Dialog title={draft.scope === 'occurrence' ? 'Edit this occurrence' : draft.scope === 'series' && draft.revision ? 'Edit entire series' : draft.revision ? 'Local event' : 'New event'} close={close}><form className="calendar-editor" onSubmit={e => { e.preventDefault(); void submit(); }}>
-    <p className="metadata">Saved in your Edition 3 calendar{v.taskId ? ' as a task block. The task’s deadline stays separate.' : '.'}</p>
+    <p className="metadata">Saved in your Nova Dream calendar{v.taskId ? ' as a task block. The task’s deadline stays separate.' : '.'}</p>
     {draft.scope === 'occurrence' && <p className="metadata">Only the occurrence originally scheduled for {draft.originalDate} will change. Moving its date keeps that identity.</p>}
     <fieldset disabled={locked}><label>Event title<input autoFocus required maxLength={300} value={v.title} onChange={e => change({ title: e.target.value })} placeholder="Make room for something good"/></label>
     <label className="calendar-check"><input type="checkbox" checked={v.allDay} onChange={e => change({ allDay: e.target.checked, end: { ...v.end, date: e.target.checked && v.end.date <= v.start.date ? addDays(v.start.date, 1) : v.end.date } })}/>All day</label>

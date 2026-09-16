@@ -3,7 +3,7 @@ import type { AgentRoutineValue } from '../../packages/domain/agent-routines.js'
 import { reminderInstant } from '../../packages/domain/reminders.js';
 import { Fault } from './store.js';
 
-// Croner evaluates dates only. The durable Edition 3 occurrence journal owns
+// Croner evaluates dates only. The durable Nova Dream occurrence journal owns
 // scheduling and admission; no library timers or predecessor jobs are created.
 function cron(value: AgentRoutineValue) {
   if (value.schedule.kind !== 'cron') throw new Error('Expected cron schedule');

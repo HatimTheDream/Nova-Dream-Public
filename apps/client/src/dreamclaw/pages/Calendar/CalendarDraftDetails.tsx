@@ -4,7 +4,7 @@ import type { EventDraft } from '../../../calendar-edit';
 import { CalendarRepeatEditor } from '../../../CalendarRepeatEditor';
 import { valueForDraft } from '../../calendar-editor';
 
-// Reuses Edition 3's existing repeat, clock-choice and exception controls inside
+// Reuses Nova Dream's existing repeat, clock-choice and exception controls inside
 // Dream Claw's original event editor. The common journal owns every change.
 export function CalendarDraftDetails({ draft, change, chooseExceptions }: {
   draft: EventDraft; change(patch: Partial<LocalEventInput>): void; chooseExceptions(policy: 'keep' | 'reset'): void;
