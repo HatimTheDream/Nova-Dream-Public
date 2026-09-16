@@ -1,6 +1,7 @@
+import { transcriptContains, type TranscriptMessage } from './voice-transcript';
 import { createContext, useContext, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode, type Ref } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import type { ConversationMessage, ConversationHistory } from '../../../packages/domain/assistant';
+import type { ConversationHistory } from '../../../packages/domain/assistant';
 import { cacheTranscriptWindow, readTranscriptPosition, saveTranscriptPosition, type TranscriptPosition } from './transcript-position';
 import { saveLocal } from './api';
 import type { useTranscriptScroll } from './useTranscriptScroll';
@@ -11,7 +12,7 @@ const components = { Footer: TranscriptFooter };
 export type TranscriptHandle = { keepReadingPosition: () => void };
 
 /** Virtualized messages with a native-message reading anchor, independent of live following. */
-export function VirtualTranscript({ messages, parent, render, footer, ref, positionKey, cacheKey, history, scroll }: { messages: ConversationMessage[]; parent: HTMLElement; render: (message: ConversationMessage, index: number) => ReactNode; footer: ReactNode; ref?: Ref<TranscriptHandle>; positionKey?: string; cacheKey?: string; history: ConversationHistory; scroll: ReturnType<typeof useTranscriptScroll> }) {
+export function VirtualTranscript({ messages, parent, render, footer, ref, positionKey, cacheKey, history, scroll }: { messages: TranscriptMessage[]; parent: HTMLElement; render: (message: TranscriptMessage, index: number) => ReactNode; footer: ReactNode; ref?: Ref<TranscriptHandle>; positionKey?: string; cacheKey?: string; history: ConversationHistory; scroll: ReturnType<typeof useTranscriptScroll> }) {
   const list = useRef<VirtuosoHandle>(null), current = useRef({ messages, scroll, history }); current.current = { messages, scroll, history };
   const previous = useRef<{ first?: string; index: number }>({ first: messages[0]?.id, index: 100000 });
   const saved = useRef(readTranscriptPosition(positionKey)), pendingPrepend = useRef<TranscriptPosition | undefined>(undefined);
@@ -19,7 +20,7 @@ export function VirtualTranscript({ messages, parent, render, footer, ref, posit
   const initial = useRef<{ index: number | 'LAST'; align: 'start' | 'end'; offset?: number } | null>(null);
   if (!initial.current) {
     const kept = saved.current, anchor = kept?.following === false ? kept.anchor : undefined;
-    const index = anchor ? messages.findIndex(m => m.id === anchor.id && m.role === anchor.role) : -1;
+    const index = anchor ? messages.findIndex(m => transcriptContains(m, anchor.id, anchor.role)) : -1;
     initial.current = index >= 0 ? { index, align: 'start', offset: -anchor!.offset } : { index: 'LAST', align: 'end' };
   }
   useImperativeHandle(ref, () => ({ keepReadingPosition() { current.current.scroll.beginRestore(); current.current.scroll.endRestore(); capture.current(); pendingPrepend.current = saved.current; } }), []);
@@ -49,7 +50,7 @@ export function VirtualTranscript({ messages, parent, render, footer, ref, posit
     const restorePosition = (position: TranscriptPosition) => {
       const anchor = position.following ? undefined : position.anchor;
       if (!anchor || !parent.clientWidth) return;
-      const index = current.current.messages.findIndex(m => m.id === anchor.id && m.role === anchor.role);
+      const index = current.current.messages.findIndex(m => transcriptContains(m, anchor.id, anchor.role));
       if (index < 0) return;
       cancelAnimationFrame(frame); restoring = true; current.current.scroll.beginRestore();
       frame = requestAnimationFrame(() => {
@@ -59,7 +60,9 @@ export function VirtualTranscript({ messages, parent, render, footer, ref, posit
         const settle = () => {
           if (!live) return;
           if (!current.current.scroll.restoring.current || performance.now() > until) { finish(); return; }
-          const item = [...parent.querySelectorAll<HTMLElement>('[data-transcript-id]')].find(node => node.dataset.transcriptId === `${anchor.role}:${anchor.id}`);
+          const row = current.current.messages.find(message => transcriptContains(message, anchor.id, anchor.role));
+          if (!row) { finish(); return; }
+          const item = [...parent.querySelectorAll<HTMLElement>('[data-transcript-id]')].find(node => node.dataset.transcriptId === `${row.role}:${row.id}`);
           if (item) {
             const offset = Math.max(anchor.offset, -Math.max(0, item.getBoundingClientRect().height - 32));
             const delta = item.getBoundingClientRect().top - parent.getBoundingClientRect().top - offset;

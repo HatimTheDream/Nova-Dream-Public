@@ -318,3 +318,7 @@
 
 .assistant-workspace .message-progress { padding-block:6px; }
 .assistant-workspace .transcript-item:has(.message-progress) { padding-bottom:8px; }
+
+.voice-message-parts section + section { margin-top: 28px; }
+.voice-message-parts .chat-message { max-width: 100%; margin: 8px 0 24px; }
+.voice-message-parts .message-actions { position: static; margin-top: 8px; }

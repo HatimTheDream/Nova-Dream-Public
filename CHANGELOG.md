@@ -1,3 +1,7 @@
+## [1.5.4] — 2026-09-16
+
+- Keep consecutive voice captions in one message bubble while you continue speaking, including when part of the message has already saved. Copy the whole spoken message; keep separate calls, typed messages and Assistant replies distinct. Existing conversations and saved readers use the same grouping, with original message actions available for each preserved part.
+
 ## [1.5.3] — 2026-09-16
 
 - Display your original typed or dictated message when the AI runtime trims its surrounding instruction envelope. Repair existing live and saved conversation views, copying, transcript exports and retries without rewriting native history, changing permissions or stripping your own headings.
