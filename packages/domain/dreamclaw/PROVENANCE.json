@@ -1,0 +1,19 @@
+{
+  "baseline": "e0769bd9f8fdd50d0772ae8e188c0be7bf1c7f1b",
+  "sourceApplication": "Dream Claw 0.57.2",
+  "status": "Unreleased Edition 3 0.13.0 integration",
+  "files": [
+    {
+      "source": "electron/mailIndex.ts",
+      "destination": "packages/domain/dreamclaw/mail-index.ts",
+      "sourceSha256": "becd08b5c79f8bbdeff9789091f382a78346f5904351725ddfa35ffa048f038a",
+      "currentSha256": "281bac13b958502dfc632206d62700156d2d6f976b622641685cebd5ea296881",
+      "extraction": "Original MailIndexSnapshot/IndexedMailThread model, sanitization, create/merge/remove, Microsoft immutable-ID migration check and Gmail normalization helpers.",
+      "adaptations": [
+        "Exports the original 100,000-thread cap and retains Gmail sourceMessageId.",
+        "Uses Edition 3 encrypted transactional storage instead of the predecessor EncryptedMailIndexStore, file envelope or key handling. No predecessor store or runtime is opened.",
+        "Original Gmail index searches summary metadata (subject/sender/labels), not full message bodies. Full selected-message reading remains a separate original workflow."
+      ]
+    }
+  ]
+}

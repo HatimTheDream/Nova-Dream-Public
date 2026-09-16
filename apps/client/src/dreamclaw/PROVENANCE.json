@@ -1,0 +1,521 @@
+{
+  "baseline": "e0769bd9f8fdd50d0772ae8e188c0be7bf1c7f1b",
+  "sourceApplication": "Dream Claw 0.57.2",
+  "status": "Integration in progress; 0.17.0 / build 1.0.23 / schema 11 working source, not delivered",
+  "files": [
+    {
+      "source": "src/pages/Calendar/DayView.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/DayView.tsx",
+      "sourceSha256": "41a25cd514f89032e5be957b0a135e83416782a98a0f10f251c56c9070c8a0b4",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "b39ca556999e8d8011dac6e5341dd51cc5bbe94884867225d7cff73ecdd69f3a"
+    },
+    {
+      "source": "src/pages/Calendar/EventCard.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/EventCard.tsx",
+      "sourceSha256": "83772bf269c341544a4ba4ad9afc2fab9f042bc60e4fe6d53a8aed5bf8b99c95",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "0f293ab24b267e68e5b2db5311e516a619fad98445a597b819d8993d56991286"
+    },
+    {
+      "source": "src/pages/Calendar/EventModal.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/EventModal.tsx",
+      "sourceSha256": "6567ffc2fdcc89a69fdc28624bd83ca19fce36e68f08913e8c45ada4d7d65460",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "ab2b7f219b3e3b56049e987d3a1dbe34f6a84b861b4bf0638e57bc749cd19d54"
+    },
+    {
+      "source": "src/pages/Calendar/MonthView.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/MonthView.tsx",
+      "sourceSha256": "2823a52478d4dd81f39ef7008d15b5f4f5d18c77d229df3ea22b125e76516af7",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "b0ce57aa83967861a07c73f8a9063fbd77f9993de9c39a921ef073f468736d9d"
+    },
+    {
+      "source": "src/pages/Calendar/ReminderBadge.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/ReminderBadge.tsx",
+      "sourceSha256": "bbbe599c2c2d80dc62abcebe85f4844781f4f9dae43ac130b54ea4f652d47911",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "a206aa95e56b9369e992d65dd78b22b41d1b463be5064c3fa030d006921402d8"
+    },
+    {
+      "source": "src/pages/Calendar/UpcomingEvents.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/UpcomingEvents.tsx",
+      "sourceSha256": "502853f7934ef2e072436315fcbbe98b0a57c236d653a8c3a54e699e728d9165",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "a9bf70ec6051a56b703a3ba30e17005af29edc53891177ab2e7dc78c3fbe1c3c"
+    },
+    {
+      "source": "src/pages/Calendar/WeekView.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/WeekView.tsx",
+      "sourceSha256": "57daa6dfb266680dcb016b53064d502d5f6c27c4c635335e0cf3956bc6fc02a7",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "6dca52ae7ef4180997c6cdef04bb3918d6f84e6f7a5f766d7f44549520b1fb7e"
+    },
+    {
+      "source": "src/pages/Calendar/calendarTypes.ts",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/calendarTypes.ts",
+      "sourceSha256": "d58891aa056857f542643b801733b88fd3d089a49ef9a0745ae0385118906594",
+      "initialChanges": [],
+      "currentSha256": "5ce232457b6419624109a679230841dd872292d3167dd46c529b9c24b69f4cfc"
+    },
+    {
+      "source": "src/pages/Calendar/calendarUtils.ts",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/calendarUtils.ts",
+      "sourceSha256": "f3db67a8de21c6c3566c2ec79e20ba3512baf2ac64ff9152ae50101769eb8504",
+      "initialChanges": [],
+      "currentSha256": "f3db67a8de21c6c3566c2ec79e20ba3512baf2ac64ff9152ae50101769eb8504"
+    },
+    {
+      "source": "src/pages/Calendar/deliveryChannels.ts",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/deliveryChannels.ts",
+      "sourceSha256": "2c2e8a4129958a7e2ba67b33b4364022fca487f408cf86e36c719c356e01b7c3",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "65170b24445e82e392c612001fee324a66379d172116c8ad6429b0841302da2c"
+    },
+    {
+      "source": "src/pages/Calendar/index.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Calendar/index.tsx",
+      "sourceSha256": "a91be8a9ef2d4a4d5b414cd6218960bbe752b3558f89ca656c3453ceb3d4d670",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "e2482ef34ee479f9d95cc609458c15cd0f6e308a8a0c680befe48a57fbc756cf"
+    },
+    {
+      "source": "src/services/calendar/monthQuery.ts",
+      "destination": "apps/client/src/dreamclaw/services/calendar/monthQuery.ts",
+      "sourceSha256": "05b0df5ff85faa514325ff911745cac4cdc7a07fba388a4a48fe9b45e324f8b2",
+      "initialChanges": [],
+      "currentSha256": "0afaf183dbc5988b1a98b901f3dc9ee74a56c664f3fb02f333ef47cf997abe6f"
+    },
+    {
+      "source": "src/services/calendar/seriesDeletion.ts",
+      "destination": "apps/client/src/dreamclaw/services/calendar/seriesDeletion.ts",
+      "sourceSha256": "3fbea3f9785586cb1da9cb80bce198a45fbf47795ba0893a00043f9702b60732",
+      "initialChanges": [
+        "Import alias isolated to @dreamclaw"
+      ],
+      "currentSha256": "6fcdeea9182edf0026878b1a7c53f26be6efab7654c9925b0aaaaf9e6ef5ef00"
+    },
+    {
+      "source": "src/components/shared/PageTransition.tsx",
+      "destination": "apps/client/src/dreamclaw/components/shared/PageTransition.tsx",
+      "sourceSha256": "71acd18e65c456eca9460996dafb42eb98b3da44fe20cff0aabe8ed660aee5a4",
+      "initialChanges": [],
+      "currentSha256": "71acd18e65c456eca9460996dafb42eb98b3da44fe20cff0aabe8ed660aee5a4"
+    },
+    {
+      "source": "src/components/icons/IconParkIcon.tsx",
+      "destination": "apps/client/src/dreamclaw/components/icons/IconParkIcon.tsx",
+      "sourceSha256": "c4e7c77cd53177af4756a28cae96ae81503a448acec9e9a04009ed60bd620678",
+      "initialChanges": [],
+      "currentSha256": "c4e7c77cd53177af4756a28cae96ae81503a448acec9e9a04009ed60bd620678"
+    },
+    {
+      "source": "src/components/icons/IconParkIconTile.tsx",
+      "destination": "apps/client/src/dreamclaw/components/icons/IconParkIconTile.tsx",
+      "sourceSha256": "c465b95e9d5a90580752fad925d7e37e4b3f5a701f3497da6ee511624a63c33d",
+      "initialChanges": [],
+      "currentSha256": "c465b95e9d5a90580752fad925d7e37e4b3f5a701f3497da6ee511624a63c33d"
+    },
+    {
+      "source": "src/locales/en.json",
+      "destination": "apps/client/src/dreamclaw/calendar-en.json",
+      "sourceSha256": "2dcc80055457b1bb8cbaea2ad48c89726a92b605e935e7e0c774769f593027a9",
+      "currentSha256": "602d4abf0286589382d1c9c78ad3b3a7173c60197489c20aeb258460f8ab0ddc",
+      "initialChanges": [
+        "Only Calendar/common English resource keys extracted."
+      ]
+    },
+    {
+      "source": "tailwind.config.cjs",
+      "destination": "tailwind.original.cjs",
+      "sourceSha256": "b5f8e637c95929b266df3054f653476df5a0c51c8c24b3a78ac8d31a336287cd",
+      "currentSha256": "ebbc618db47a2d577ffd7864283c30e19fb9fef897d83447c7edf7cc26b88cbe",
+      "initialChanges": [
+        "Original theme/utilities scoped to dreamclaw-module; no preflight/global predecessor CSS."
+      ]
+    },
+    {
+      "source": "src/components/icons/index.tsx",
+      "destination": "apps/client/src/dreamclaw/components/icons/index.tsx",
+      "sourceSha256": "c6b2348239f918ba4c26e3bb99cc7b00df04cc746a9f99a214f51d5ba2aa651f",
+      "currentSha256": "09c514d20cff4b5377893abcdb36728002417298467f139e766d5815f5923128",
+      "initialChanges": [
+        "Calendar/Inbox icon subset retains original source mappings and IconPark renderer. Context-colored outline metadata follows the current neutral resting-color preference. Individual factories are pure for tree shaking; broader original RTL/two-tone metadata is not yet restored."
+      ]
+    },
+    {
+      "source": "src/components/Chat/AssistantOrganizationRail.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/AssistantOrganizationRailFrame.tsx",
+      "sourceSha256": "ad3a06fcd2b4f7af0d5a64e880e05a7742ae16568d51a02f77a7587c33b95694",
+      "currentSha256": "3c9205ac23e7320fd2d53d2920ed17e0dfb0647879f2f28fe8cf9183c74e8246",
+      "initialChanges": [
+        "Original frame, header controls, focus return and pointer/keyboard resize handlers extracted. E3 supplies retained saved-work content and actions. Native-dialog shortcut isolation and mobile drawer Escape added. Full original organization menus remain a separate active integration requirement."
+      ]
+    },
+    {
+      "source": "src/components/Chat/ChatTabs.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/ChatTabs.tsx",
+      "sourceSha256": "a13f658917215aafcdde3c4aad29383e7f163c2e9410105b293d658cdb4fa961",
+      "currentSha256": "4850ae528568a78131ab75a1ea0d3b14ae0837ba5e76ca0123daff4ff4385fec",
+      "initialChanges": [
+        "Original reopen control and Ctrl/Cmd+Shift+O retained; existing E3 draft creation supplied by callback. Other original module shortcuts remain deferred until those modules are ported. Shortcuts are fenced behind native and ARIA dialogs."
+      ]
+    },
+    {
+      "source": "src/services/assistant/railLayout.ts",
+      "destination": "apps/client/src/dreamclaw/services/assistant/railLayout.ts",
+      "sourceSha256": "9f4891718dcbf257eec8523b5c877bdd0f02297e48dfcfdc3468293e7ee5ade4",
+      "currentSha256": "9f4891718dcbf257eec8523b5c877bdd0f02297e48dfcfdc3468293e7ee5ade4",
+      "initialChanges": []
+    },
+    {
+      "source": "src/styles/academy.css",
+      "destination": "apps/client/src/dreamclaw/assistant-rail.css",
+      "sourceSha256": "0e8ab65dc315f25ca3d314886bc4103a0055372e99cb91b0651c5f1925613476",
+      "currentSha256": "b93d1203380180b27d8f6e6a0c58acf21dfad219421b90d583371b02cb5b92ee",
+      "initialChanges": [
+        "Original rail frame/control/resize styles extracted from the accepted fixed source. E3 tokens, neutral 44px controls, header reopen placement, responsive drawer and main-navigation collapse are integration additions."
+      ]
+    },
+    {
+      "source": "src/components/Chat/MessageBubble.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/ReplyMarkdown.tsx",
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sourceApplication": "Nova Dream 1.1.3",
+      "sourceSha256": "208b85069f92be1bca5f6df118621ca169a807b84cd25864d6f9752729bbd328",
+      "initialChanges": [
+        "Extract original shared/final/streaming Markdown and scoped reply typography; keep E3 exact authored text and output provenance.",
+        "Pre-node code rendering handles single-line bare fences and valid DOM. Per-reply footnotes resolve unique anchors and accessible labels.",
+        "E3 absolute HTTPS/fragment boundary replaces predecessor URL base; inline remote media remains a source link pending original media bridge. Native file-path materialization is not copied."
+      ],
+      "currentSha256": "8f80bf168460921c6337695043fc5bb2855ff06d927963f54a53f32aa5b6910e"
+    },
+    {
+      "source": "src/components/Chat/CodeBlock.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/CodeBlock.tsx",
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sourceApplication": "Nova Dream 1.1.3",
+      "sourceSha256": "3bfc6a2da58d531b561e312dd1e7d529c56e70b10f587b8d46dd29fd5c6ac5e5",
+      "initialChanges": [
+        "Reuse original registered Prism languages, syntax themes, 30-line collapse/10-line preview and full-source Copy.",
+        "Use isolated IconPark imports, E3 data-theme updates and 44px controls; retain visible failure if clipboard denies copy. Load syntax highlighting only for completed code."
+      ],
+      "currentSha256": "64fa0363d28234e4834b9a9607eec564771f6f9647523ad9a577cac4646fb37b"
+    },
+    {
+      "source": "src/processing/remarkUnderline.ts",
+      "destination": "apps/client/src/dreamclaw/processing/remarkUnderline.ts",
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sourceApplication": "Nova Dream 1.1.3",
+      "sourceSha256": "3daa526464349dd6eb3317a9b952debbf2704edb6da6f6e63559f4b5a61e3807",
+      "initialChanges": [],
+      "currentSha256": "3daa526464349dd6eb3317a9b952debbf2704edb6da6f6e63559f4b5a61e3807"
+    },
+    {
+      "source": "src/utils/safeUrl.ts",
+      "destination": "apps/client/src/dreamclaw/processing/replyUrl.ts",
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sourceApplication": "Nova Dream 1.1.3",
+      "sourceSha256": "a74ce964b207059a99b658d711f04c441fb5ce1c35753366039d9ef11aaaed07",
+      "initialChanges": [
+        "Extract URL policy with explicit absolute HTTPS and local reply fragments, without predecessor URL base or Gateway settings."
+      ],
+      "currentSha256": "04633ef861da96ec2d3a400d52c75d63914b743a9d047771db14067b3ad643c5"
+    },
+    {
+      "source": "src/styles/index.css",
+      "destination": "apps/client/src/dreamclaw/reply-markdown.css",
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sourceApplication": "Nova Dream 1.1.3",
+      "sourceSha256": "04686f1a775ea3504a74ee2487e3fc2bab55906fe9345a806a5fe3d67de603ba",
+      "initialChanges": [
+        "Extract original Markdown typography; scope to dc-reply-markdown and map accepted colors to current E3 tokens. Add original code controls, table overflow and 44px targets."
+      ],
+      "currentSha256": "d113978dab33025c49d95b2593b5a183438245ae9fe89128af91f1703280c1e5"
+    },
+    {
+      "source": "src/services/native/gmail.ts",
+      "destination": "apps/client/src/dreamclaw/services/native/gmail.ts",
+      "sourceSha256": "0be8497313d969d8eee74d16b584f7f763fd3039f8363ef2a4c0462cade18389",
+      "currentSha256": "9d7377404b9edc4ebda313401e6837e654b84cbb579cf9366cb8021ed12da351",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ],
+      "adaptations": [
+        "Replace predecessor native bridge with the explicit Edition 3 Inbox transport. No predecessor credentials, data or runtime access.",
+        "Gmail extraction retains reader/MIME/digest/reply-format helpers; excludes predecessor CLI/autopilot prompt context.",
+        "Stable account IDs and generation-scoped caches, bounded hydration, fixed selectors while paging and explicit incomplete results.",
+        "Write/account-management methods remain explicitly unavailable or direct to existing Connections until their original actions have an Edition 3 authority adapter. Native mail indexing remains unavailable.",
+        "Keep complete literal plain text in the reader while preserving shorter digest summaries; recognize explicit text-file attachments separately from MIME body text.",
+        "Keep sourceMessageId from the service summary; resolve an account by exact ID, rejecting ambiguous email/default selection."
+      ]
+    },
+    {
+      "source": "src/services/native/microsoftMail.ts",
+      "destination": "apps/client/src/dreamclaw/services/native/microsoftMail.ts",
+      "sourceSha256": "00c308d516a2410c6330a0ee24c926afa832597ac866d61515eba6ef73cea67e",
+      "currentSha256": "895c36238e9d27ba683f8a58c8ac0b9e616a5bab3411538557b6af12bc3ba0ea",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ],
+      "adaptations": [
+        "Replace predecessor native bridge with the explicit Edition 3 Inbox transport. No predecessor credentials, data or runtime access.",
+        "Gmail extraction retains reader/MIME/digest/reply-format helpers; excludes predecessor CLI/autopilot prompt context.",
+        "Stable account IDs and generation-scoped caches, bounded hydration, fixed selectors while paging and explicit incomplete results.",
+        "Write/account-management methods remain explicitly unavailable or direct to existing Connections until their original actions have an Edition 3 authority adapter. Native mail indexing remains unavailable."
+      ]
+    },
+    {
+      "source": "src/services/native/mailIndex.ts",
+      "destination": "apps/client/src/dreamclaw/services/native/mailIndex.ts",
+      "sourceSha256": "a69fb3c6beda719c70411cc3819f298b171559dd7d1fa9b109cab9a3d16539af",
+      "currentSha256": "ea025ee02d6c5c108da090d7c4b0bc264baf20368c5189366c58e2688a24032e",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ],
+      "adaptations": [
+        "Replace predecessor native bridge with the explicit Edition 3 Inbox transport. No predecessor credentials, data or runtime access.",
+        "Gmail extraction retains reader/MIME/digest/reply-format helpers; excludes predecessor CLI/autopilot prompt context.",
+        "Stable account IDs and generation-scoped caches, bounded hydration, fixed selectors while paging and explicit incomplete results.",
+        "Write/account-management methods remain explicitly unavailable or direct to existing Connections until their original actions have an Edition 3 authority adapter. Native mail indexing remains unavailable."
+      ]
+    },
+    {
+      "source": "src/services/inbox/inboxSession.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/inboxSession.ts",
+      "sourceSha256": "6e65fef0129155ee981ef399550832479e79b343d96023d4fd94cdc3b16d770d",
+      "currentSha256": "d6a49f5b87ad7f9884c69cc6a04ea22f5483e5ba6d0b29de90c8a74a7163bbdc",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ],
+      "adaptations": [
+        "Stable Edition 3 account IDs/generations; retained folder/scroll state stays within one installed transport scope.",
+        "Scope replacement invalidates active and queued forced loads and clears stale readers without touching future kept compose/reply journals.",
+        "Carry partial-page warnings and immutable Outlook identity through the original snapshots."
+      ]
+    },
+    {
+      "source": "src/services/inbox/mailWorkspace.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/mailWorkspace.ts",
+      "sourceSha256": "b3185d0de1f34a889d744381c0eb17e1aef8eb51bc2a617ef2d7291b19b13310",
+      "currentSha256": "b3185d0de1f34a889d744381c0eb17e1aef8eb51bc2a617ef2d7291b19b13310",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/selectionAfterMutation.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/selectionAfterMutation.ts",
+      "sourceSha256": "ec53ec5e75bc31205ee91f9c930e91795c0a2526d02a9cbe413c7d3d2acd7c0a",
+      "currentSha256": "ec53ec5e75bc31205ee91f9c930e91795c0a2526d02a9cbe413c7d3d2acd7c0a",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/threadLoadIdentity.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/threadLoadIdentity.ts",
+      "sourceSha256": "59f5fd2de5e9f8cc1acca704defb09dae9db19d7b48f54cb40d857cd1e137ff4",
+      "currentSha256": "60918804584eb2a8ccb7aef5ac4c5b6456ffe7d9b7d98e125307ef30dadd8c4d",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ],
+      "adaptations": [
+        "Add account generation to the original reader identity."
+      ]
+    },
+    {
+      "source": "src/services/inbox/scrollOwnership.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/scrollOwnership.ts",
+      "sourceSha256": "fecdb5974c2881212781c39e80eec099ced7772be55303850ead3ba6e81d949a",
+      "currentSha256": "fecdb5974c2881212781c39e80eec099ced7772be55303850ead3ba6e81d949a",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/inboxListControls.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/inboxListControls.ts",
+      "sourceSha256": "5542dc4b31a41f6a1b55423fc38eee7d7d19ee3db84a5cf69b1aa41c6784a833",
+      "currentSha256": "5542dc4b31a41f6a1b55423fc38eee7d7d19ee3db84a5cf69b1aa41c6784a833",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/inboxFilterPanel.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/inboxFilterPanel.ts",
+      "sourceSha256": "713d18901746e540490f30d54449bd0fd90d12a9f82aea03ddc2fe6644e54ed3",
+      "currentSha256": "713d18901746e540490f30d54449bd0fd90d12a9f82aea03ddc2fe6644e54ed3",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/messagePresentation.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/messagePresentation.ts",
+      "sourceSha256": "9a2ff86e4e3faa6ca582a5b474ae6c063d0af5d43a277b4ae3a4a6974f13579e",
+      "currentSha256": "9a2ff86e4e3faa6ca582a5b474ae6c063d0af5d43a277b4ae3a4a6974f13579e",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/services/inbox/attachmentPresentation.ts",
+      "destination": "apps/client/src/dreamclaw/services/inbox/attachmentPresentation.ts",
+      "sourceSha256": "e16e86bf29ec111a400c1e0eb60d022ea88ba659888bbcab8516bdbd9930560e",
+      "currentSha256": "e16e86bf29ec111a400c1e0eb60d022ea88ba659888bbcab8516bdbd9930560e",
+      "initialChanges": [
+        "Original implementation imported from the fixed Dream Claw baseline; import aliases isolated to Edition 3."
+      ]
+    },
+    {
+      "source": "src/pages/Inbox/index.tsx",
+      "destination": "apps/client/src/dreamclaw/pages/Inbox/index.tsx",
+      "sourceSha256": "76012f1fd35e27c016c07f19ea11956eb36833c2977994100772e7851159adcc",
+      "initialChanges": [
+        "Actual original Inbox page imported with its folders, filters, grouping, reader, compose/reply and action presentation. Native calls use the E3 host/transport; no predecessor authority.",
+        "Stable account IDs/generations, raw label IDs, independent alias errors and explicit partial reading are retained. Original native indexing and writes remain unavailable construction work.",
+        "Compose/reply/signature/alias writing is kept per E3 device/window/source. Closed and cloned writing is preserved. Exact provider mutation/source-review journals remain unfinished.",
+        "Original HTML sanitizer is retained. Remote images become explicit source links, while verified inline/attachment bytes remain readable. Sandboxed frame preserves original scroll ownership without executing scripts.",
+        "Portal theme isolation, collapse accessibility/focus, 44px controls and compact phone header/pagination improve the original markup.",
+        "Reload restores an available selected conversation only within the same account generation.",
+        "Connects the existing compose/reply forms to E3 immutable delivery reviews and retained operation status; keeps writing after replies and removes duplicate actions while a review exists.",
+        "Reopens the same saved provider draft inside the original compose/reply form, with linked immutable reviews, remote version comparison and parent restoration on cancelled edits."
+      ],
+      "currentSha256": "9a5bbd0eb7e1da79d994feca79b7d6048b59920ae9e70f57599cc25881560202"
+    },
+    {
+      "source": "src/components/Chat/MailActionCard.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/MailActionCard.tsx",
+      "sourceSha256": "c4a556663eaa0f8d391168a49d3ec12a50880a7058be59e43abda35bc07e30da",
+      "initialChanges": [
+        "Original card presentation retained; optional E3 mailAssistant contract replaces window.api. Action-plan/receipt authority is still unfinished."
+      ],
+      "currentSha256": "9608f972b8000d4f87637e9767c23c1775eeb599ebeb6a68d2945b31a7e856d2"
+    },
+    {
+      "source": "src/components/Chat/ChatImage.tsx",
+      "destination": "apps/client/src/dreamclaw/components/Chat/ChatImage.tsx",
+      "sourceSha256": "bf1ae5c3344ff6fc3264eb35088660a2161ac9b7beede2091a368eb95a7e77e6",
+      "initialChanges": [
+        "Extract original ImageLightbox only. E3 verified attachment-data download replaces predecessor native/gateway path handling.",
+        "Native dialog adds modal focus/Escape/return; download errors remain visible. Wheel zoom uses a non-passive listener and scales relative to fitted dimensions. Scoped original labels initialize independently of Calendar."
+      ],
+      "currentSha256": "413ff40699bae47bf2b93d065b20945cd1ffe88fda0bbe8e9dbecd33b6ff2b0a"
+    },
+    {
+      "source": "src/components/shared/GlassCard.tsx",
+      "destination": "apps/client/src/dreamclaw/components/shared/GlassCard.tsx",
+      "sourceSha256": "9568539b643a402971c439a29ad0eac57f0188449b95098465341308e1169004",
+      "initialChanges": [
+        "Original card structure and styling retained; static div replaces optional Framer Motion wrapper."
+      ],
+      "currentSha256": "35037c2dfa3caaf69d334bf661518155e9f136a5522876285413f80daafbf9a7"
+    },
+    {
+      "source": "src/services/executive/inboxCoverage.ts",
+      "destination": "apps/client/src/dreamclaw/services/executive/inboxCoverage.ts",
+      "sourceSha256": "7ceb44d1df978b0765a6e2bb4451c6c7613811714c2db8831fb2d1a65f7671f3",
+      "initialChanges": [
+        "Original coverage helper; imports isolated to @dreamclaw."
+      ],
+      "currentSha256": "7ceb44d1df978b0765a6e2bb4451c6c7613811714c2db8831fb2d1a65f7671f3"
+    },
+    {
+      "source": "src/services/executive/inboxGrouping.ts",
+      "destination": "apps/client/src/dreamclaw/services/executive/inboxGrouping.ts",
+      "sourceSha256": "03068cf582af8fcb2794cda87408cfe15f83a2d4a1e1dc759f9fd0aa5c013e73",
+      "initialChanges": [
+        "Original grouping helper; imports isolated to @dreamclaw."
+      ],
+      "currentSha256": "03068cf582af8fcb2794cda87408cfe15f83a2d4a1e1dc759f9fd0aa5c013e73"
+    },
+    {
+      "source": "src/services/executive/mailSafety.ts",
+      "destination": "apps/client/src/dreamclaw/services/executive/mailSafety.ts",
+      "sourceSha256": "94c0bce5ed5f29c02fb0f2a5f2ff59fac900765716b8392bb0ce6f139c868337",
+      "initialChanges": [
+        "Original mail safety helper; imports isolated to @dreamclaw."
+      ],
+      "currentSha256": "94c0bce5ed5f29c02fb0f2a5f2ff59fac900765716b8392bb0ce6f139c868337"
+    },
+    {
+      "source": "src/types/RenderBlock.ts",
+      "destination": "apps/client/src/dreamclaw/types/RenderBlock.ts",
+      "sourceSha256": "d6d5e55bcbda0bf0e92b011a68598dee38962eb89a3ffc8f3cd8203ae2a06a58",
+      "initialChanges": [
+        "Extract mail-action kinds, plans and receipts used by the original Inbox/card; no unrelated render-block dependencies."
+      ],
+      "currentSha256": "c7ec505796c5c82cdbf7f8b049a659e5c5135dd27f63beb9cb688e7290db3d21"
+    },
+    {
+      "source": "src/types/missionControl.ts",
+      "destination": "apps/client/src/dreamclaw/types/missionControl.ts",
+      "sourceSha256": "0118c4c224cf7b157dfe70dfb93cc7af7b5b4cde05764cf01a5493c345bdb706",
+      "initialChanges": [
+        "Extract original page/view types through SavedViewRecord."
+      ],
+      "currentSha256": "3ebe92153b964eb69af0b09077f57c45c8449b2305a0a80ef7852a26a29284a7"
+    },
+    {
+      "source": "src/assets/brand/mascot/lynx-inbox.webp",
+      "destination": "apps/client/src/dreamclaw/assets/brand/mascot/lynx-inbox.webp",
+      "sourceSha256": "727fc0d8b5198605d6eb652392802e20b512d0efb146538e3d4b763174ca979f",
+      "initialChanges": [
+        "Exact original accepted Inbox mascot bytes; no image edits."
+      ],
+      "currentSha256": "727fc0d8b5198605d6eb652392802e20b512d0efb146538e3d4b763174ca979f"
+    },
+    {
+      "source": "src/styles/index.css",
+      "destination": "apps/client/src/dreamclaw/inbox.css",
+      "sourceSha256": "04686f1a775ea3504a74ee2487e3fc2bab55906fe9345a806a5fe3d67de603ba",
+      "initialChanges": [
+        "Extract Inbox responsive master-detail styles; scope selectors to dreamclaw-module and map to Edition 3 theme.",
+        "Targeted collapse visibility/focus, 44px controls, readable light-theme notices and phone header/pagination adaptations."
+      ],
+      "currentSha256": "4852983c2d864bdfc5c3f89bae0ff6a8b2cf0f92931bc8279e7646eb4387bf95"
+    },
+    {
+      "source": "src/locales/en.json",
+      "destination": "apps/client/src/dreamclaw/inbox-i18n.ts",
+      "sourceSha256": "2dcc80055457b1bb8cbaea2ad48c89726a92b605e935e7e0c774769f593027a9",
+      "initialChanges": [
+        "Extract original image-control labels into an isolated initialized Inbox instance; browser Save label becomes Download image."
+      ],
+      "currentSha256": "b72e7f4b7ca1f31c250adebcbe73d895bd44d1fa3d8d161525ce264b55e3e7d1"
+    }
+  ],
+  "adaptationNotes": [
+    "Original Calendar page, views, event editor/cards and pure helpers are active in App source.",
+    "Predecessor store/native/gateway imports replaced by an E3 host boundary; no predecessor credentials or runtime are used.",
+    "Original cards gain keyboard access; both timelines reuse existing E3 collision placement; all-day cards gain visible strips.",
+    "Bridge is incomplete and the working source is not a release candidate. Read 16-ORIGINAL-MODULE-REUSE.md before continuing.",
+    "Original EventModal fields now use the existing E3 calendar journal and exact eventSaveCommand/reviewedEventDraft contracts; CalendarEditScope and CalendarRepeatEditor are reused.",
+    "Category and reminder preferences are retained in schema 7. Reminder delivery and connected writes are still unfinished and remain explicitly unavailable/pending.",
+    "Original modal labels gain associations; scoped style defaults and a body portal prevent shell form rules and sidebar bounds from distorting or clipping the editor. Narrow date/time fields stack.",
+    "Assistant rail shell/resize and reopen controls now use the original components around E3 saved-work content. Main navigation gains the explicitly requested top hide/reopen control; full Assistant organization/composer and Inbox reuse remain unfinished.",
+    "Original Nova rich reply rendering now adapts completed and streaming Assistant messages and read-only browsing. Deferred renderer failure keeps exact source text. Full original composer, organization commands, media bridge and Inbox remain unfinished.",
+    "Actual Inbox page and dependencies now mount on the private read bridge. Original provider write/index flows, account-generation/source review and native attachment IO remain open; see 17-ORIGINAL-INBOX-INTEGRATION.md."
+  ]
+}

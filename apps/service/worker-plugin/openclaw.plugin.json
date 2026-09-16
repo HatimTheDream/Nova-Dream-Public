@@ -1,0 +1,40 @@
+{
+  "id": "edition3-worker",
+  "name": "Edition 3 assignment worker",
+  "description": "Bounded assignment runs with scoped workspace tools and durable execution receipts.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "epoch": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "bundlePath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "receiptDirectory": {
+        "type": "string",
+        "minLength": 1
+      },
+      "nativeTools": {
+        "type": "array",
+        "maxItems": 64,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+__[a-zA-Z0-9_-]+$"
+        }
+      }
+    },
+    "required": [
+      "epoch",
+      "bundlePath",
+      "receiptDirectory"
+    ]
+  }
+}

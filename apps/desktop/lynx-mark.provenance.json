@@ -1,0 +1,7 @@
+{
+  "source": "apps/client/public/mascot/lynx-mark.webp",
+  "sourceSha256": "52082d04cb4f8646a435118c901a8dbd1e37841978f32ac22cdf47ee1cbaac63",
+  "output": "apps/desktop/lynx-mark.png",
+  "outputSha256": "8ebaebefb40bfab7bb0a8c4437c9faa3262c9a055487958360740375f712dc82",
+  "conversion": "sips -s format png; existing accepted art, no redraw or crop"
+}

@@ -1,0 +1,87 @@
+/* Original Calendar utilities are scoped; E3's shell keeps its own styles. */
+@tailwind utilities;
+.dreamclaw-module {
+  flex: 1; min-height: 0; min-width: 0; overflow: hidden;
+  --aegis-bg: var(--canvas); --aegis-surface: var(--surface); --aegis-surface-solid: var(--surface);
+  --aegis-elevated: var(--raised); --aegis-elevated-solid: var(--raised); --aegis-panel: var(--surface);
+  --aegis-menu-bg: var(--surface);
+  --aegis-card: var(--surface); --aegis-card-solid: var(--surface); --aegis-bg-solid: var(--canvas);
+  --aegis-bg-frosted: var(--canvas); --aegis-bg-frosted-60: var(--canvas); --aegis-radius: var(--control-radius);
+  --aegis-glass-hover: var(--raised); --aegis-menu-hover: var(--raised); --aegis-border-active: var(--control);
+  --aegis-border: var(--line); --aegis-border-hover: var(--control);
+  --aegis-text: var(--text-rgb); --aegis-text-secondary: var(--muted-rgb); --aegis-text-muted: var(--muted-rgb); --aegis-text-dim: var(--dim-rgb);
+  --aegis-primary: var(--accent-rgb); --aegis-primary-hover: var(--accent-hover-rgb);
+  --aegis-primary-surface: var(--selection); --aegis-btn-primary-text: var(--action-ink);
+  --aegis-overlay: var(--text-rgb); --aegis-danger: 184 49 66; --aegis-warning: 139 90 0; --aegis-success: 28 116 87;
+  --color-amber-400: 232 184 78; --color-red-400: 244 112 103;
+}
+[data-theme=dark] .dreamclaw-module {
+  --aegis-danger: 240 117 133; --aegis-warning: 231 190 89; --aegis-success: 113 207 169;
+}
+.dreamclaw-module *, .dreamclaw-module *::before, .dreamclaw-module *::after {
+  border-style: solid; border-width: 0; border-color: var(--aegis-border);
+  /* Tailwind's global preflight is disabled; supply its transform defaults only
+     inside the imported module so original positioning utilities still work. */
+  --tw-translate-x: 0; --tw-translate-y: 0; --tw-rotate: 0; --tw-skew-x: 0; --tw-skew-y: 0; --tw-scale-x: 1; --tw-scale-y: 1;
+}
+.dreamclaw-module button { min-height: 0; border-radius: 0; padding: 0; gap: 0; background: transparent; box-shadow: none; font-weight: inherit; display: inline-block; }
+.dreamclaw-module button:hover:not(:disabled) { transform: none; }
+.dreamclaw-module label { display: block; flex-direction: row; gap: 0; font-size: inherit; font-weight: inherit; }
+.dreamclaw-module fieldset { display: block; gap: 0; }
+.dreamclaw-module input,.dreamclaw-module select,.dreamclaw-module textarea { min-height: 0; padding: 0; border-radius: 0; background: transparent; font-size: inherit; }
+.dreamclaw-module input[type=checkbox], .dreamclaw-module input[type=radio] { width: 16px; height: 16px; margin: 0; accent-color: rgb(var(--aegis-primary)); }
+.dreamclaw-module h1,.dreamclaw-module h2,.dreamclaw-module h3,.dreamclaw-module p { margin: 0; font-size: inherit; }
+.dreamclaw-module .dc-calendar-page { height: 100%; }
+.dreamclaw-module .field-input {
+  width: 100%; min-height: 44px; padding: 9px 12px; border-radius: var(--control-radius); border: 2px solid var(--control);
+  background: var(--aegis-elevated); color: rgb(var(--aegis-text)); font-size: var(--type-control);
+  transition: border-color .15s;
+}
+.dreamclaw-module .field-input:focus { border-color: var(--focus); }
+.dreamclaw-module .field-input.pl-10 { padding-inline-start: 38px; }
+.dreamclaw-module .field-input:disabled { opacity: .5; cursor: not-allowed; }
+.dreamclaw-module .field-input option { background: var(--aegis-elevated-solid); color: rgb(var(--aegis-text)); }
+.dreamclaw-module .btn-secondary { min-height: 44px; padding: 8px 16px; border-radius: var(--control-radius); font-size: var(--type-control); font-weight: 600; border: 2px solid var(--control); background: var(--aegis-elevated); color: rgb(var(--aegis-text-muted)); }
+.dreamclaw-module .btn-secondary:hover { border-color: var(--aegis-border-hover); color: rgb(var(--aegis-text)); }
+.dreamclaw-module .dc-iconpark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; vertical-align: middle; }
+.dreamclaw-module .dc-iconpark svg { display: block; }
+.dreamclaw-module .scrollbar-thin { scrollbar-width: thin; }
+.dreamclaw-module.dc-calendar-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: #0009; backdrop-filter: blur(3px); }
+.dreamclaw-module [role=dialog] button { min-height: 44px; min-width: 44px; }
+.dreamclaw-module [role=dialog] input:not([type=checkbox]):not([type=radio]),
+.dreamclaw-module [role=dialog] select { min-height: 44px; min-width: 0; }
+.dreamclaw-module [role=dialog] .flex.justify-end { flex-wrap: wrap; }
+.dreamclaw-module .calendar-draft-details,.dreamclaw-module .calendar-draft-review { padding: 12px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.dreamclaw-module .calendar-draft-details summary { cursor: pointer; min-height: 32px; padding-block: 7px; font-weight: 600; }
+.dreamclaw-module .calendar-draft-details label { display: grid; gap: 6px; font-size: 12px; }
+.dreamclaw-module .calendar-draft-details input,.dreamclaw-module .calendar-draft-details select { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--raised); }
+.dreamclaw-module .calendar-draft-details p,.dreamclaw-module .calendar-draft-review p { margin-block: 8px; line-height: 1.5; }
+.dreamclaw-module .calendar-draft-detail-fields { display: grid; gap: 14px; margin-top: 12px; }
+.dreamclaw-module .calendar-draft-details .weekday-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.dreamclaw-module .calendar-draft-details .weekday-options button { padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+.dreamclaw-module .calendar-draft-details .weekday-options button[aria-pressed=true] { background: var(--selection); color: var(--selection-ink); }
+.dreamclaw-module .calendar-draft-review button { margin-top: 8px; white-space: normal; }
+@media (max-width: 480px) {
+  .dreamclaw-module .dc-calendar-dialog .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
+}
+
+.dreamclaw-module .dc-calendar-kept-drafts, .dreamclaw-module .calendar-target-error { padding:8px 20px; border-bottom:1px solid var(--aegis-border); font-size:12px; }
+.dreamclaw-module .dc-calendar-kept-drafts summary { min-height:44px; display:flex; align-items:center; cursor:pointer; }
+.dreamclaw-module .dc-calendar-kept-drafts ul { display:flex; flex-wrap:wrap; gap:8px; list-style:none; padding:8px 0; }
+.dreamclaw-module .dc-calendar-kept-drafts button, .dreamclaw-module .calendar-target-error button { min-height:44px; padding:8px 12px; border:1px solid var(--aegis-border); border-radius:12px; box-shadow:0 3px 0 var(--aegis-border); }
+
+.dc-calendar-mail-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; }
+.dc-calendar-mail-source > span { display: flex; align-items: center; gap: 8px; flex: 1 1 140px; }
+.dc-calendar-mail-source > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+
+/* Original utility classes use the same action roles as the shared shell. */
+.dreamclaw-module .bg-aegis-primary { background-color: var(--action); color: var(--action-ink); }
+.dreamclaw-module .text-aegis-btn-primary-text { color: var(--action-ink); }
+.dreamclaw-module button.bg-aegis-primary { border: 1px solid var(--action-edge); box-shadow: 0 3px 0 var(--action-edge); }
+.dreamclaw-module button.bg-aegis-primary:hover:not(:disabled) { background-color: color-mix(in srgb, var(--action) 88%, white); }
+.dreamclaw-module button.bg-aegis-primary:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--action-edge); }
+.dreamclaw-module :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.dreamclaw-module .dc-calendar-toolbar button { min-height: 44px; min-width: 44px; font-size: 13px; }
+.dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] { border-radius: var(--control-radius); }
+.dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] button { min-height: 36px; box-shadow: none; }
+@media (pointer: coarse) { .dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] button { min-height: 44px; } }

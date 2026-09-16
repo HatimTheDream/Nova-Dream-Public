@@ -1,0 +1,54 @@
+{
+  "revision": "p01",
+  "frames": [
+    {
+      "id": "desk",
+      "x": 0,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "sofa",
+      "x": 64,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "plant",
+      "x": 128,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "bookcase",
+      "x": 192,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "meeting-table",
+      "x": 256,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "chair",
+      "x": 320,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "coffee-bar",
+      "x": 384,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "id": "rug",
+      "x": 448,
+      "width": 64,
+      "height": 64
+    }
+  ],
+  "sha256": "0cdb99478f813fbc3dae8cf94c4cb1463355c6b61ecf47eb48828cbe48bb1f86"
+}

@@ -1,0 +1,223 @@
+{
+  "sourceCommit": "e0769bd9f8fdd50d0772ae8e188c0be7bf1c7f1b",
+  "sourceDirectory": "src/pages/PixelAgents/",
+  "adaptation": "Original room, floor/wall colour and furniture resources only. Human characters and predecessor runtime bindings are excluded. Catalog limited to assets used in original default room.",
+  "catalogSourceSha256": "71241148448b1c3eea5b8128c85ba0b2c2ed2ca95b9fa2cf2d6aac212e3764df",
+  "files": [
+    {
+      "source": "src/pages/PixelAgents/types.ts",
+      "file": "types.ts",
+      "sha256": "b28b57462026a5479a789a643dd130c52015d9af92613a1c890781b7ffd862da"
+    },
+    {
+      "source": "src/pages/PixelAgents/pixelConstants.ts",
+      "file": "pixelConstants.ts",
+      "sha256": "cc0901bbec97ead679048d679021b94e6b507197501896a23f39548616a593ca"
+    },
+    {
+      "source": "src/pages/PixelAgents/colorize.ts",
+      "file": "colorize.ts",
+      "sha256": "3b44fdd88e2e8d4317c2f22b9dd9dcac9e88e562421dfa5756d2fa8aa7a01f6d"
+    },
+    {
+      "source": "src/pages/PixelAgents/floorTiles.ts",
+      "file": "floorTiles.ts",
+      "sha256": "db09f59c9bc3a333235e6c25b11297a67392d0bc8058c537a19df4bc929445e4"
+    },
+    {
+      "source": "src/pages/PixelAgents/wallTiles.ts",
+      "file": "wallTiles.ts",
+      "sha256": "4cb8f0a234aa901870114c79f93d8e3a52fbc5454e481910ce791b4e54e6a358"
+    },
+    {
+      "source": "src/pages/PixelAgents/sprites/spriteCache.ts",
+      "file": "sprites/spriteCache.ts",
+      "sha256": "39f8066be86f7548741df05fb6c20fc67d29f02b80c81edf041512ee72a4b01d"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/default-layout.json",
+      "file": "assets/default-layout.json",
+      "sha256": "29ac43d836b383b785d4b2cd2e38e63860053924beb8469fbdc85ae088ae9b36"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/floors.png",
+      "file": "assets/floors.png",
+      "sha256": "011cc13b1a2ae4683965bb5f9e4cbccfdc20afd0a5e8b4f9b5a567fce3d07e93"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/walls.png",
+      "file": "assets/walls.png",
+      "sha256": "f2afc6dacc44986a388695a720839ed00da03e9b308d6c727f5292740a62adfa"
+    },
+    {
+      "source": "LICENSE",
+      "file": "LICENSE",
+      "sha256": "3784676fb12d15ebeb69f9c99e973d2e942d9589e15530ac51e5bcf77929da5e"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/PAINTING_LANDSCAPE.png",
+      "file": "assets/furniture/wall/PAINTING_LANDSCAPE.png",
+      "sha256": "2b848f29c0bd9c86fddc52af1531367907ba8fa2f89ff42cae88f5f3fa1a75e9"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/CHART_SM_2.png",
+      "file": "assets/furniture/wall/CHART_SM_2.png",
+      "sha256": "4bf1bd5d482aecb78c695a15845178d295aeb090dd94e1c2485adb834ed31799"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/CHART_1.png",
+      "file": "assets/furniture/wall/CHART_1.png",
+      "sha256": "3b758039ab0340d69e41bb9af79fb47be0501d9ed8fd5ea586c5c3075330a12c"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/electronics/MONITOR_BACK.png",
+      "file": "assets/furniture/electronics/MONITOR_BACK.png",
+      "sha256": "b4ec64fc9d6ab6fbb97b57e57f589cdd6136bb03802f2b39464ff6d28fea8d45"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/electronics/PRINTER_DESKTOP.png",
+      "file": "assets/furniture/electronics/PRINTER_DESKTOP.png",
+      "sha256": "912533e64a5aeeecb0b0c07a87135ca6c99746b9da4891c2be4e27acca6d638b"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/decor/PLANT_1.png",
+      "file": "assets/furniture/decor/PLANT_1.png",
+      "sha256": "c4f6cfd66dd515d092ff0fba7109b905ac98d8dfdbbb331f8e271ce23aff1d9f"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/decor/PLANT_2.png",
+      "file": "assets/furniture/decor/PLANT_2.png",
+      "sha256": "94fafb6a22e2d866312c1a9e942a5c333b68ba8a4b0c02c5c46c2a0a3adfd2bd"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/MICROWAVE.png",
+      "file": "assets/furniture/misc/MICROWAVE.png",
+      "sha256": "0cbbc18d030c19897c93afaac956fcdfe24a4482c5a69b0d7fa36037ae67f097"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/storage/FULL_CABINET_TALL.png",
+      "file": "assets/furniture/storage/FULL_CABINET_TALL.png",
+      "sha256": "beab08ae5d5dbf98b69c0d0b196061bec44b00e279d768849a3ca2bf470e4558"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/chairs/CHAIR_CUSHIONED_FRONT.png",
+      "file": "assets/furniture/chairs/CHAIR_CUSHIONED_FRONT.png",
+      "sha256": "09eb842e739e1c0ad51698afcc54d42181ec2db9f5b6411c8cc06c3b9eb3a7d3"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/chairs/CHAIR_CUSHIONED_BACK.png",
+      "file": "assets/furniture/chairs/CHAIR_CUSHIONED_BACK.png",
+      "sha256": "bba78259ce88d4bf578668d1d1426012ef76a3696dee8599fb2e8b9642f21e4c"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/chairs/CHAIR_ROTATING_BACK.png",
+      "file": "assets/furniture/chairs/CHAIR_ROTATING_BACK.png",
+      "sha256": "1294c9d9c939b03eccea941d343a724a4d55e6120b037ec8d898f3f696b46a3e"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/VENDING_MACHINE.png",
+      "file": "assets/furniture/misc/VENDING_MACHINE.png",
+      "sha256": "c1842306050ccbfeac9005307b16ccdd0c7c2963f93040facb651e94b227d701"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/storage/FRIDGE.png",
+      "file": "assets/furniture/storage/FRIDGE.png",
+      "sha256": "ec1f21ee2d8b2d4f197100af93203d196d4dda6d5c7f75a28cfb830fe67ee9ae"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/WATER_COOLER.png",
+      "file": "assets/furniture/misc/WATER_COOLER.png",
+      "sha256": "458dde5a73aa1b07f1f0379ce40d7064a2a212d32200c70e9687ce474e3f6fe2"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/BIN.png",
+      "file": "assets/furniture/misc/BIN.png",
+      "sha256": "7f0e7e5b263c8210cd41efa1e4b1f96ac15dac89593c04a9e11bab0ac8377f26"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/WOOD_COFEE_TABLE.png",
+      "file": "assets/furniture/desks/WOOD_COFEE_TABLE.png",
+      "sha256": "faa13f3b7feac8aed4c32c4d21227ef6a8d475f36999bb6c3f33cfdb41ae0b39"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/COFFEE_MUG.png",
+      "file": "assets/furniture/misc/COFFEE_MUG.png",
+      "sha256": "468a592bc5124ebd5f59f37d081cfdb869a9223a2142b63b05ea0aacd6ee9ac4"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/COFFEE_MACHINE.png",
+      "file": "assets/furniture/misc/COFFEE_MACHINE.png",
+      "sha256": "987ef76f549f5537106ca53e856b3fa33314e4fedf33665061c159e5fc71db25"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/WINDOW_DOUBLE_WOOD.png",
+      "file": "assets/furniture/wall/WINDOW_DOUBLE_WOOD.png",
+      "sha256": "77aab4c41e521513b490d6c9c0c71e936b583a2a122aedbf049b6bc986bf5e8b"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/WINDOW_DOUBLE_WHITE.png",
+      "file": "assets/furniture/wall/WINDOW_DOUBLE_WHITE.png",
+      "sha256": "81833cbea1dbb5f2a445a4ce2a30f564ece1bce4ef84b22a1377fbc81afee078"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/COUNTER_WHITE_SM.png",
+      "file": "assets/furniture/desks/COUNTER_WHITE_SM.png",
+      "sha256": "5b11647c513d6098b422bf27ffc6ccf3b3745de0f48cb7c4081c99a72c1b9f9c"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/decor/BOOK_SINGLE_RED.png",
+      "file": "assets/furniture/decor/BOOK_SINGLE_RED.png",
+      "sha256": "57b841fc256af26aa09df76cb81dbf458706e540185e9e2bf4886499b3a5af3d"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/wall/CLOCK_WALL_COLOR.png",
+      "file": "assets/furniture/wall/CLOCK_WALL_COLOR.png",
+      "sha256": "9c0be9e7b777ecfc57a3df4153beb52f974063d6d19c454136670b6410af1d3a"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/electronics/FULL_COMPUTER_COFFEE_ON.png",
+      "file": "assets/furniture/electronics/FULL_COMPUTER_COFFEE_ON.png",
+      "sha256": "f8ea2da250dcc994469feffeda7e68342906b769f8b1af0a0c69fc299a8e19ef"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/TABLE_PLAIN_WOOD.png",
+      "file": "assets/furniture/desks/TABLE_PLAIN_WOOD.png",
+      "sha256": "8b01247bde44dc04e129040945b066e2963fba3ff5b84b0e81298e411c3dff40"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/chairs/CHAIR_CUSHIONED_LG_FRONT.png",
+      "file": "assets/furniture/chairs/CHAIR_CUSHIONED_LG_FRONT.png",
+      "sha256": "bf83a70e31f4a451c398b569b11c7dc714aca11e95d9a7bda19287902345e37e"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/chairs/CHAIR_CUSHIONED_LG_BACK.png",
+      "file": "assets/furniture/chairs/CHAIR_CUSHIONED_LG_BACK.png",
+      "sha256": "65407e027e91ed4a9da1aa04f1ea07f9c8065200bf71019030d77fb610c8ff6e"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/COFFEE_TABLE_LG.png",
+      "file": "assets/furniture/desks/COFFEE_TABLE_LG.png",
+      "sha256": "aa68e20760fc04c2226bd2f7a21dc786a612067bdab5455d6dcee3f7c29f10f2"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/DESK_GRAY_LG.png",
+      "file": "assets/furniture/desks/DESK_GRAY_LG.png",
+      "sha256": "54bc7f3d001c1989959f814687cabf32e2f929a28f8f552fe5997e960fe92584"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/COOLER_TRASH_RIGHT.png",
+      "file": "assets/furniture/misc/COOLER_TRASH_RIGHT.png",
+      "sha256": "757a751cb9b34387a423ae5e347c9b68c6e7908b6c277747696dab2d3ddb71c0"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/misc/COOLER_TRASH_LEFT.png",
+      "file": "assets/furniture/misc/COOLER_TRASH_LEFT.png",
+      "sha256": "1b3f77cae5c88ea0b35af56fb8b6aa97e1436dc2acaafbd0eea8cc534ef707c8"
+    },
+    {
+      "source": "src/pages/PixelAgents/assets/furniture/desks/TABLE_MICROWAVE.png",
+      "file": "assets/furniture/desks/TABLE_MICROWAVE.png",
+      "sha256": "a5c36dad0ea38123e610e5baaf3500ef5060e561c49e8184934c46bdaa6fd270"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+.lynx-portrait {
+  display: inline-block;
+  position: relative;
+  width: var(--lynx-portrait-size);
+  max-width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 3px solid transparent;
+  border-radius: 8%;
+  vertical-align: middle;
+  background: light-dark(#e4e6e6, #35414d);
+  color: light-dark(#45515e, #dde5ed);
+  contain: paint;
+}
+.lynx-portrait__image { display: block; width: 100%; height: 100%; }
+.lynx-portrait__placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; text-align: center; }
+.lynx-portrait__placeholder-mark { font-size: 18px; line-height: 1; }
+.lynx-portrait__placeholder-text { overflow-wrap: anywhere; font: 12px/1.25 system-ui, sans-serif; }
+.lynx-portrait[data-portrait-size="icon"] { border-width: 2px; }
+.lynx-portrait[data-portrait-size="icon"] .lynx-portrait__placeholder-text { display: none; }

@@ -1,0 +1,23 @@
+import { z } from 'zod';
+import type { Entity } from './contracts.js';
+import { clockTime, timezone } from './tasks.js';
+
+export const contactId = z.string().regex(/^contact:[a-zA-Z0-9:_-]+$/).max(100);
+export const pipelineStages = ['introduced', 'discussing', 'active', 'paused'] as const;
+export const pipelineLabels = { introduced: 'Introduced', discussing: 'Discussing', active: 'Active', paused: 'Paused' };
+export const relationshipKinds = ['introduced_by', 'works_with', 'reports_to'] as const;
+export const relationshipLabels = { introduced_by: 'Introduced by', works_with: 'Works with', reports_to: 'Reports to' };
+export const relationshipSchema = z.object({ contactId, kind: z.enum(relationshipKinds) }).strict();
+export const keepInTouchSchema = z.object({ days: z.number().int().min(1).max(730), time: clockTime.refine(v => !!v), timezone }).strict();
+const envelope = z.object({ requestId: z.uuid(), epoch: z.uuid(), id: z.string().regex(/^[a-zA-Z0-9:_-]+$/).max(100), expectedRevision: z.number().int().nonnegative() });
+const website = z.union([z.literal(''), z.url().max(2000).refine(url => ['https:', 'http:'].includes(new URL(url).protocol), 'Use an https or http website.')]);
+export const organizationSchema = z.object({ name: z.string().trim().min(1).max(240), website, phone: z.string().max(80), industry: z.string().max(240), notes: z.string().max(20000) }).strict();
+export type Organization = z.infer<typeof organizationSchema>;
+export type OrganizationRecord = Entity<Organization> & { memberIds: string[] };
+export const organizationSaveSchema = envelope.extend({ value: organizationSchema }).strict();
+export const activitySchema = z.object({ kind: z.enum(['note', 'call', 'meeting', 'message']), at: z.iso.datetime(), text: z.string().trim().min(1).max(10000), archived: z.boolean() }).strict();
+export type ContactActivity = Entity<z.infer<typeof activitySchema>> & { contactId: string };
+export const activitySaveSchema = envelope.extend({ contactId, value: activitySchema }).strict();
+export const crmReadSchema = z.object({ epoch: z.uuid(), contactId: contactId.optional() }).strict();
+export type KeepInTouchState = { configuredAt: string; signature: string; lastInteraction?: string; taskId?: string; nextDate?: string; completedTask?: string; completedAt?: string };
+export type CrmState = { organizations: OrganizationRecord[]; activities: ContactActivity[]; cadence?: KeepInTouchState; relationships: { contactId: string; label: string; incoming: boolean; kind: typeof relationshipKinds[number] }[] };

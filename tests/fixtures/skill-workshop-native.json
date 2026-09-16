@@ -1,0 +1,276 @@
+{
+  "inspected": {
+    "record": {
+      "schema": "openclaw.skill-workshop.proposal.v1",
+      "id": "edition3-workshop-190c213f-20260909-eba09ea388",
+      "kind": "create",
+      "status": "pending",
+      "title": "Create edition3-workshop-190c213f",
+      "description": "Isolated Edition 3 workshop test.",
+      "createdAt": "2026-09-09T11:11:11.565Z",
+      "updatedAt": "2026-09-09T11:11:11.565Z",
+      "createdBy": "gateway",
+      "origin": {
+        "agentId": "main"
+      },
+      "proposedVersion": "v1",
+      "draftFile": "PROPOSAL.md",
+      "draftHash": "d3d2487c3cb0452ec590d475a2f7adeb0ffeb45a7df7b01f18efdf42da6482f7",
+      "target": {
+        "skillName": "edition3-workshop-190c213f",
+        "skillKey": "edition3-workshop-190c213f",
+        "skillDir": "/private/fixture/workspace/skills/example",
+        "skillFile": "/private/fixture/workspace/skills/example/SKILL.md",
+        "source": "openclaw-workspace"
+      },
+      "scan": {
+        "state": "clean",
+        "scannedAt": "2026-09-09T11:11:11.566Z",
+        "critical": 0,
+        "warn": 0,
+        "info": 0,
+        "findings": []
+      },
+      "supportFiles": [
+        {
+          "path": "references/checklist.md",
+          "sizeBytes": 47,
+          "hash": "1c4bcf2756c6ded3385e682526807c87c768620eb812389c22ec16624bce0716"
+        }
+      ]
+    },
+    "revisionHash": "7ca4cc17580da9709ba304af6b9b52e0e5649723a29a26c30a411a61daae2c0a",
+    "content": "---\nname: \"edition3-workshop-190c213f\"\ndescription: \"Isolated Edition 3 workshop test.\"\nstatus: proposal\nversion: \"v1\"\ndate: \"2026-09-09T11:11:11.565Z\"\n---\n\n# Review a local draft\n\nRead the draft and summarize three clarity improvements. Keep all original files intact.\n",
+    "supportFiles": [
+      {
+        "path": "references/checklist.md",
+        "content": "Check clarity, structure, and missing context.\n"
+      }
+    ]
+  },
+  "revised": {
+    "record": {
+      "schema": "openclaw.skill-workshop.proposal.v1",
+      "id": "edition3-workshop-190c213f-20260909-eba09ea388",
+      "kind": "create",
+      "status": "pending",
+      "title": "Create edition3-workshop-190c213f",
+      "description": "Isolated Edition 3 workshop test.",
+      "createdAt": "2026-09-09T11:11:11.565Z",
+      "updatedAt": "2026-09-09T11:11:11.625Z",
+      "createdBy": "gateway",
+      "origin": {
+        "agentId": "main"
+      },
+      "proposedVersion": "v2",
+      "draftFile": "PROPOSAL.md",
+      "draftHash": "d61d5a6e5761fd57626dd2279676443a4879211476e507cea8ca3d086bf9472f",
+      "target": {
+        "skillName": "edition3-workshop-190c213f",
+        "skillKey": "edition3-workshop-190c213f",
+        "skillDir": "/private/fixture/workspace/skills/example",
+        "skillFile": "/private/fixture/workspace/skills/example/SKILL.md",
+        "source": "openclaw-workspace"
+      },
+      "scan": {
+        "state": "clean",
+        "scannedAt": "2026-09-09T11:11:11.625Z",
+        "critical": 0,
+        "warn": 0,
+        "info": 0,
+        "findings": []
+      },
+      "supportFiles": [
+        {
+          "path": "references/checklist.md",
+          "sizeBytes": 47,
+          "hash": "1c4bcf2756c6ded3385e682526807c87c768620eb812389c22ec16624bce0716"
+        }
+      ]
+    },
+    "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+    "content": "---\nname: \"edition3-workshop-190c213f\"\ndescription: \"Isolated Edition 3 workshop test.\"\nstatus: proposal\nversion: \"v2\"\ndate: \"2026-09-09T11:11:11.625Z\"\n---\n\n# Review a local draft\n\nRead the draft and summarize three clarity improvements. Keep all original files intact.\n\nCheck the heading structure before the final summary.\n"
+  },
+  "revised-inspect": {
+    "record": {
+      "schema": "openclaw.skill-workshop.proposal.v1",
+      "id": "edition3-workshop-190c213f-20260909-eba09ea388",
+      "kind": "create",
+      "status": "pending",
+      "title": "Create edition3-workshop-190c213f",
+      "description": "Isolated Edition 3 workshop test.",
+      "createdAt": "2026-09-09T11:11:11.565Z",
+      "updatedAt": "2026-09-09T11:11:11.625Z",
+      "createdBy": "gateway",
+      "origin": {
+        "agentId": "main"
+      },
+      "proposedVersion": "v2",
+      "draftFile": "PROPOSAL.md",
+      "draftHash": "d61d5a6e5761fd57626dd2279676443a4879211476e507cea8ca3d086bf9472f",
+      "target": {
+        "skillName": "edition3-workshop-190c213f",
+        "skillKey": "edition3-workshop-190c213f",
+        "skillDir": "/private/fixture/workspace/skills/example",
+        "skillFile": "/private/fixture/workspace/skills/example/SKILL.md",
+        "source": "openclaw-workspace"
+      },
+      "scan": {
+        "state": "clean",
+        "scannedAt": "2026-09-09T11:11:11.625Z",
+        "critical": 0,
+        "warn": 0,
+        "info": 0,
+        "findings": []
+      },
+      "supportFiles": [
+        {
+          "path": "references/checklist.md",
+          "sizeBytes": 47,
+          "hash": "1c4bcf2756c6ded3385e682526807c87c768620eb812389c22ec16624bce0716"
+        }
+      ]
+    },
+    "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+    "content": "---\nname: \"edition3-workshop-190c213f\"\ndescription: \"Isolated Edition 3 workshop test.\"\nstatus: proposal\nversion: \"v2\"\ndate: \"2026-09-09T11:11:11.625Z\"\n---\n\n# Review a local draft\n\nRead the draft and summarize three clarity improvements. Keep all original files intact.\n\nCheck the heading structure before the final summary.\n",
+    "supportFiles": [
+      {
+        "path": "references/checklist.md",
+        "content": "Check clarity, structure, and missing context.\n"
+      }
+    ]
+  },
+  "applied-inspect": {
+    "record": {
+      "schema": "openclaw.skill-workshop.proposal.v1",
+      "id": "edition3-workshop-190c213f-20260909-eba09ea388",
+      "kind": "create",
+      "status": "applied",
+      "title": "Create edition3-workshop-190c213f",
+      "description": "Isolated Edition 3 workshop test.",
+      "createdAt": "2026-09-09T11:11:11.565Z",
+      "updatedAt": "2026-09-09T11:11:11.703Z",
+      "createdBy": "gateway",
+      "origin": {
+        "agentId": "main"
+      },
+      "proposedVersion": "v2",
+      "draftFile": "PROPOSAL.md",
+      "draftHash": "d61d5a6e5761fd57626dd2279676443a4879211476e507cea8ca3d086bf9472f",
+      "target": {
+        "skillName": "edition3-workshop-190c213f",
+        "skillKey": "edition3-workshop-190c213f",
+        "skillDir": "/private/fixture/workspace/skills/example",
+        "skillFile": "/private/fixture/workspace/skills/example/SKILL.md",
+        "source": "openclaw-workspace"
+      },
+      "scan": {
+        "state": "clean",
+        "scannedAt": "2026-09-09T11:11:11.690Z",
+        "critical": 0,
+        "warn": 0,
+        "info": 0,
+        "findings": []
+      },
+      "supportFiles": [
+        {
+          "path": "references/checklist.md",
+          "sizeBytes": 47,
+          "hash": "1c4bcf2756c6ded3385e682526807c87c768620eb812389c22ec16624bce0716"
+        }
+      ],
+      "evaluation": {
+        "id": "9644536d-e584-4840-b6f1-581945dc5fe5",
+        "proposedVersion": "v2",
+        "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+        "trigger": "apply",
+        "startedAt": "2026-09-09T11:11:11.685Z",
+        "completedAt": "2026-09-09T11:11:11.685Z",
+        "correlationId": "7134dd75-87b1-4052-b017-96f8d2187c4b",
+        "outcomes": []
+      },
+      "appliedAt": "2026-09-09T11:11:11.703Z"
+    },
+    "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+    "content": "---\nname: \"edition3-workshop-190c213f\"\ndescription: \"Isolated Edition 3 workshop test.\"\nstatus: proposal\nversion: \"v2\"\ndate: \"2026-09-09T11:11:11.625Z\"\n---\n\n# Review a local draft\n\nRead the draft and summarize three clarity improvements. Keep all original files intact.\n\nCheck the heading structure before the final summary.\n",
+    "supportFiles": [
+      {
+        "path": "references/checklist.md",
+        "content": "Check clarity, structure, and missing context.\n"
+      }
+    ]
+  },
+  "events": {
+    "events": [
+      {
+        "sequence": 11,
+        "eventId": "3d837044-e12a-4302-9bf1-84f9933c04ef",
+        "proposalId": "edition3-workshop-190c213f-20260909-eba09ea388",
+        "proposedVersion": "v1",
+        "revisionHash": "7ca4cc17580da9709ba304af6b9b52e0e5649723a29a26c30a411a61daae2c0a",
+        "type": "created",
+        "occurredAt": "2026-09-09T11:11:11.568Z",
+        "actor": {
+          "type": "gateway"
+        }
+      },
+      {
+        "sequence": 12,
+        "eventId": "148fe005-2a07-4a7a-bf71-e6c185a153a9",
+        "proposalId": "edition3-workshop-190c213f-20260909-eba09ea388",
+        "proposedVersion": "v2",
+        "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+        "type": "revised",
+        "occurredAt": "2026-09-09T11:11:11.625Z",
+        "actor": {
+          "type": "gateway"
+        },
+        "correlationId": "fede1d21-52b0-4a75-9732-75c586a90d6d"
+      },
+      {
+        "sequence": 13,
+        "eventId": "077f80d3-dd7b-4353-a8f0-d2e54813a20a",
+        "proposalId": "edition3-workshop-190c213f-20260909-eba09ea388",
+        "proposedVersion": "v2",
+        "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+        "type": "evaluation_completed",
+        "occurredAt": "2026-09-09T11:11:11.685Z",
+        "actor": {
+          "type": "gateway"
+        },
+        "correlationId": "7134dd75-87b1-4052-b017-96f8d2187c4b",
+        "payload": {
+          "evaluationId": "9644536d-e584-4840-b6f1-581945dc5fe5",
+          "trigger": "apply",
+          "outcomeCount": 0
+        },
+        "evaluation": {
+          "id": "9644536d-e584-4840-b6f1-581945dc5fe5",
+          "proposedVersion": "v2",
+          "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+          "trigger": "apply",
+          "startedAt": "2026-09-09T11:11:11.685Z",
+          "completedAt": "2026-09-09T11:11:11.685Z",
+          "correlationId": "7134dd75-87b1-4052-b017-96f8d2187c4b",
+          "outcomes": []
+        }
+      },
+      {
+        "sequence": 14,
+        "eventId": "b4ad4457-a73e-4bcf-9ffb-33c5f67217ab",
+        "proposalId": "edition3-workshop-190c213f-20260909-eba09ea388",
+        "proposedVersion": "v2",
+        "revisionHash": "24570608ca235c125bcc9f0dcca49361ebe955799e41ee34cae9b6faed0a5c6a",
+        "type": "applied",
+        "occurredAt": "2026-09-09T11:11:11.703Z",
+        "actor": {
+          "type": "gateway"
+        },
+        "correlationId": "7134dd75-87b1-4052-b017-96f8d2187c4b",
+        "payload": {
+          "targetSkillFile": "/private/fixture/workspace/skills/example/SKILL.md"
+        }
+      }
+    ]
+  }
+}

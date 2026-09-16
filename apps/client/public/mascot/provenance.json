@@ -1,0 +1,32 @@
+{
+  "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+  "mappingSource": "packages/ui/src/index.tsx",
+  "note": "Actual integrated Nova assets, copied unchanged. Listening/talking are reserved for verified media state; no simulated active voice.",
+  "files": [
+    {
+      "path": "packages/ui/assets/mascot/lynx-mark.webp",
+      "file": "lynx-mark.webp",
+      "sha256": "52082d04cb4f8646a435118c901a8dbd1e37841978f32ac22cdf47ee1cbaac63"
+    },
+    {
+      "path": "packages/ui/assets/mascot/lynx-welcome.webp",
+      "file": "lynx-welcome.webp",
+      "sha256": "3a7fc763222397b1694ac31efbffc6e3ea5d709750c4d48d4f9cd6edeaf7ead9"
+    },
+    {
+      "path": "packages/ui/assets/mascot/lynx-focus.webp",
+      "file": "lynx-focus.webp",
+      "sha256": "702c28d981d3580a958ee566c342ca17e727c5f1e412049e0b109efa70ee6e11"
+    },
+    {
+      "path": "packages/ui/assets/mascot/lynx-listening.webp",
+      "file": "lynx-listening.webp",
+      "sha256": "719f232ef5a0e7df0d25e42cc17c7099513acaf10f6c2438a07201d9a7c146d6"
+    },
+    {
+      "path": "packages/ui/assets/mascot/lynx-talking.webp",
+      "file": "lynx-talking.webp",
+      "sha256": "f3d331792e956026ec33c9fc2d6b7b44217f66013c4b3a6835f00b6be7c6ded6"
+    }
+  ]
+}

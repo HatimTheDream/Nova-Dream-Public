@@ -1,0 +1,91 @@
+{
+  "baseline": "e0769bd9f8fdd50d0772ae8e188c0be7bf1c7f1b",
+  "sourceApplication": "Dream Claw 0.57.2",
+  "status": "Integration in progress; 0.17.0 / build 1.0.23 / schema 11 working source, not delivered",
+  "files": [
+    {
+      "source": "electron/microsoftMail.ts",
+      "destination": "apps/service/dreamclaw/microsoft-mail.ts",
+      "sourceSha256": "f00467ab7521042a6f99faf7fab56fec0f29dfba01f613e278455e135e403dec",
+      "currentSha256": "15b77dca113e979c3fe32b1383ea5d7aa560a4703b76f494529ced11e23e77e2",
+      "extraction": "MicrosoftMailThreadDigest / MicrosoftMailMessageView; isMicrosoftMessageFlagged, htmlToText, addressListFromGraph, attentionScoreForText, deriveCategory; original list grouping and conversation message mapping.",
+      "adaptations": [
+        "Only pure transformations are imported. No native account store, credentials, Electron network session or predecessor runtime is used.",
+        "Provider inputs are checked before calling the original transforms. Account-generation ownership and HTTP transport remain in E3.",
+        "Plain-text Graph bodies retain literal angle brackets; HTML-only conversion is applied only to HTML bodies. Reader dates also retain sent/draft timestamp fallbacks.",
+        "Exports the existing HTML-to-text helper for verified reply-source reading; implementation remains shared with original message transforms."
+      ]
+    },
+    {
+      "source": "electron/main.ts",
+      "destination": "apps/service/mail-index.ts",
+      "sourceSha256": "b5b7d6cfcf3ed366139ebb54fb5c31f5ec92bb40c28d279d205c281874be57af",
+      "currentSha256": "9b323abb6dfe6f153666e544cdbfb83cc40b82d4871e093d09d0ae8dfdc92e06",
+      "extraction": "Adaptation of original runMailIndexJob, fetchMailIndexPage and fetchMailIndexPageWithRetry lifecycle; the E3 service adapter is newly written around the extracted original model.",
+      "adaptations": [
+        "Scopes pages and controls to workspace epoch/account generation and exact device receipts.",
+        "Commits encrypted immutable pages with their cursor; refresh retains the previous crawl until completed replacement, and then prunes retired records in bounded batches.",
+        "Carries monotonic revisions across runs; pause aborts the active provider read; shutdown drains work and restart resumes only indexing state.",
+        "Uses existing dedicated E3 provider reads, Graph continuation checks and capabilities. No predecessor credentials or native runtime are reused."
+      ]
+    },
+    {
+      "source": "electron/microsoftMail.ts",
+      "destination": "apps/service/dreamclaw/mail-message.ts",
+      "sourceSha256": "f00467ab7521042a6f99faf7fab56fec0f29dfba01f613e278455e135e403dec",
+      "currentSha256": "8e2a591584e06f6f61c026c9c0572ac399f81088d7f61eee3df47b534a8d189e",
+      "extraction": "Original toGraphRecipients and createMicrosoftDraft/createReplyDraftInternal subject, body and recipient mappings.",
+      "adaptations": [
+        "Uses the validated E3 message type and retains full text instead of silently truncating subject/body.",
+        "Writes empty Cc/Bcc arrays explicitly so seeded recipients are cleared. No predecessor transport or credentials are imported."
+      ]
+    },
+    {
+      "source": "electron/microsoftMail.ts",
+      "destination": "apps/service/provider-mail-delivery.ts",
+      "sourceSha256": "f00467ab7521042a6f99faf7fab56fec0f29dfba01f613e278455e135e403dec",
+      "currentSha256": "cb9f2b9e1c8e84d946d7d138268dc7113118746b9cffd397b256283673e4da5a",
+      "extraction": "E3 adapter around the original createMicrosoftDraft and createReplyDraftInternal flow; Gmail/MIME dispatch and durable reconciliation are new integration code, not a verbatim original extraction.",
+      "adaptations": [
+        "Preserves original Outlook draft field mapping and create-reply/update sequence, with immutable IDs, receipt steps, source checking and known draft change checks.",
+        "Sends reviewed MIME bytes through supported Graph sendMail/reply methods to avoid sending a subsequently edited mutable draft.",
+        "Uses only dedicated E3 account credentials, verified aliases, exact MIME attachments and read-only operation-marker reconciliation."
+      ]
+    },
+    {
+      "source": "electron/mailAssistant.ts",
+      "destination": "apps/service/dreamclaw/mail-assistant.ts",
+      "sourceSha256": "2f7cebf4e3a9efc1a077ffdc5cca7a4876c3a4e002df880bfb0c8dddeb9f6449",
+      "currentSha256": "0ff3c66e40e87a79d79862c8b412df5b138f35c39cc001d9723bc2614f18ee72",
+      "extraction": "Original MailAssistantService, action parsing, selection previews, plan digest, scopes, receipt and undo types.",
+      "adaptations": [
+        "Type-only mail-index import points to the already imported original E3 model.",
+        "Adds a verified-selection entry point so E3 can bind the original plan to fresh provider messages instead of stale aggregate labels.",
+        "Durable execution and provider transport remain in E3; no native credentials or predecessor runtime is loaded."
+      ]
+    },
+    {
+      "source": "electron/mailAssistant.ts",
+      "destination": "packages/domain/dreamclaw/mail-actions.ts",
+      "sourceSha256": "2f7cebf4e3a9efc1a077ffdc5cca7a4876c3a4e002df880bfb0c8dddeb9f6449",
+      "currentSha256": "5be44c9f22269f202504af789eabdfc35426ca0e3600cebd6c56959ddfc75c0e",
+      "extraction": "Original Mail Assistant plan, action, target, scope and receipt types shared by the E3 service and client.",
+      "adaptations": [
+        "Type-only reference points to the original imported mail-index model."
+      ]
+    },
+    {
+      "source": "electron/microsoftMail.ts",
+      "destination": "apps/service/provider-mail-triage.ts",
+      "sourceSha256": "f00467ab7521042a6f99faf7fab56fec0f29dfba01f613e278455e135e403dec",
+      "extraction": "E3 adapter preserving original Microsoft read/flag/move/category and Gmail label/trash mappings, with fixed per-message identity and guarded undo. Not a verbatim module extraction.",
+      "adaptations": [
+        "Original MailAssistantService constructs the scopes and review; the durable E3 executor tracks each provider effect separately.",
+        "Complete bounded conversation reads and immutable Graph IDs replace unpaged original thread-wide mutation.",
+        "Gmail undo changes only touched labels; Graph category edits merge unrelated categories using actual provider validators when available.",
+        "Lost responses are checked read-only and distinguished from positively confirmed changes."
+      ],
+      "currentSha256": "e765da419e2628fa7dfd3aae542d845c0133f8e95ad24a5999faec0d241d4278"
+    }
+  ]
+}

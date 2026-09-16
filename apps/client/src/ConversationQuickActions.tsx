@@ -1,0 +1,23 @@
+import { assistantSpace } from '../../../packages/domain/assistant-space';
+import type { Snapshot } from '../../../packages/domain/contracts';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import type { Conversation, ConversationChanges } from '../../../packages/domain/assistant';
+import { Archive, ArrowLeft, Copy, ContentIcon, Pin, Folder, Trash2, ArrowRight } from './icons';
+
+export function ConversationQuickActions({ conversation, blocked, edit, copyMessages, close, projects, children }: { conversation: Conversation; blocked: boolean; edit: (changes: ConversationChanges) => Promise<unknown>; copyMessages?: () => Promise<void>; close: () => void; projects: Snapshot['projects']; children?: ReactNode }) {
+  const [projectPicker, setProjectPicker] = useState(false), [copyPicker, setCopyPicker] = useState(false);
+  const chat = assistantSpace(conversation) === 'chat';
+  const [renaming, setRenaming] = useState(false), [name, setName] = useState(conversation.title), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { (root.current?.querySelector<HTMLInputElement>('input') ?? root.current?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus({ preventScroll: true }); }, [projectPicker, copyPicker, renaming]);
+  const save = async (changes: ConversationChanges) => { if (busy || blocked) return; setBusy(true); setNotice(''); try { await edit(changes); close(); } catch (e) { setNotice(e instanceof Error ? e.message : 'The change could not be confirmed.'); } finally { setBusy(false); } };
+  const copy = async (action: () => Promise<void>) => { try { await action(); setNotice('Copied'); } catch { setNotice('Copy was unavailable.'); } };
+  return <div ref={root} className="conversation-quick-actions">{copyPicker ? <><button onClick={() => setCopyPicker(false)}><ArrowLeft size={16}/>Back</button><button onClick={() => void copy(() => navigator.clipboard.writeText(conversation.title))}><Copy size={17}/>Copy title</button>{copyMessages && <button onClick={() => void copy(copyMessages)}><Copy size={17}/>Copy loaded messages</button>}</> : projectPicker ? <><button className="text-button" onClick={() => setProjectPicker(false)}><ArrowLeft size={16}/>Back</button><p className="metadata">Move to project</p>{projects.filter(project => assistantSpace(project.value) === 'chat').map(project => <button key={project.id} disabled={busy || blocked || conversation.projectId === project.id} onClick={() => void save({ projectId: project.id })}><Folder size={17}/>{project.value.name}</button>)}</> : renaming ? <form onSubmit={e => { e.preventDefault(); void save({ title: name.trim() }); }}><button type="button" className="text-button" onClick={() => setRenaming(false)}><ArrowLeft size={16}/>Back</button><label>Conversation name<input autoFocus maxLength={150} required value={name} onChange={e => setName(e.target.value)}/></label><div className="button-row"><button type="button" onClick={close}>Cancel</button><button className="primary" disabled={busy || blocked || !name.trim()}>{busy ? 'Saving…' : 'Save name'}</button></div></form> : <>
+    {!chat && <button disabled={busy || blocked} onClick={() => setRenaming(true)}><ContentIcon size={17}/>Rename</button>}
+    <button disabled={busy || blocked} onClick={() => void save({ pinned: !conversation.pinned })}><Pin size={17}/>{conversation.pinned ? 'Unpin' : 'Pin'}</button>
+    <button disabled={busy || blocked} onClick={() => void save({ archived: !conversation.archived })}><Archive size={17}/>{conversation.archived ? 'Unarchive' : 'Archive'}</button>
+    {chat && <><button className="chat-delete-action" disabled={busy || blocked} onClick={() => void save({ deleted: true })}><Trash2 size={17}/>Delete chat</button>{(conversation.projectId || projects.some(project => assistantSpace(project.value) === 'chat')) && <hr/>}{projects.some(project => assistantSpace(project.value) === 'chat') && <button disabled={busy || blocked} onClick={() => setProjectPicker(true)}><Folder size={17}/>Move to project<ArrowRight className="menu-row-arrow" size={15}/></button>}{conversation.projectId && <button disabled={busy || blocked} onClick={() => void save({ projectId: null })}><Folder size={17}/>Remove from project</button>}</>}
+    {!chat && <button onClick={() => setCopyPicker(true)}><Copy size={17}/>Copy<ArrowRight className="menu-row-arrow" size={15}/></button>}
+    {children}
+  </>}{notice && <p className="metadata" role="status">{notice}</p>}</div>;
+}

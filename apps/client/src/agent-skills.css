@@ -1,0 +1,8 @@
+.agent-skills { min-width:0; }.agent-skills h2 { margin:0 0 8px; }.agent-skills .record-toolbar>div { max-width:760px; }
+.agent-skill-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.agent-skill { min-width:0; padding:22px; overflow-wrap:anywhere; }.agent-skill header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }.agent-skill h3 { margin:0; font-size:17px; }.agent-skill p { line-height:1.6; white-space:pre-wrap; }.agent-skill .metadata { margin-bottom:0; }
+.skill-availability { background:var(--surface); color:var(--muted); border:1px solid var(--line); border-radius:12px; padding:6px 9px; font-size:11px; }.skill-availability[data-ready=true] { color:var(--text); border-color:var(--gold); }
+.agent-skill details { margin-top:16px; }.agent-skill summary { min-height:44px; cursor:pointer; padding:12px 0; font-weight:600; }.agent-skill dl>div { margin-top:12px; }.agent-skill dt { font-size:12px; color:var(--muted); }.agent-skill dd { margin:4px 0 0; font-size:13px; }
+@media(max-width:960px) { .agent-skill-list { grid-template-columns:minmax(0,1fr); } }
+
+.skill-pages { margin-top:20px; justify-content:center; flex-wrap:wrap; }

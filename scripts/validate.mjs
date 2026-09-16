@@ -1,0 +1,13 @@
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+const release = JSON.parse(readFileSync('release.json', 'utf8'));
+assert.equal(pkg.private, true); assert.equal(pkg.version, lock.version); assert.equal(pkg.version, lock.packages[''].version); assert.equal(pkg.version, release.version);
+assert.equal(pkg.edition3.buildVersion, release.buildVersion); assert.equal(release.schemaVersion, 53); assert.equal(pkg.edition3.schemaVersion, release.schemaVersion); assert.equal(release.apiVersion, 1);
+assert.equal(release.appId, 'private.novadream.edition3.preview'); assert.equal(release.publishing, false); assert.equal(release.installation, false);
+assert.ok(readFileSync('README.md', 'utf8').includes(`Version-${pkg.version}-blue`));
+assert.ok(readFileSync('CHANGELOG.md', 'utf8').includes(`## [${pkg.version}]`));
+const desktop = readFileSync('apps/desktop/main.cjs', 'utf8');
+for (const boundary of ['nodeIntegration: false', 'contextIsolation: true', 'sandbox: true', 'webSecurity: true', 'NovaDream-Edition3-Preview']) assert.ok(desktop.includes(boundary), boundary);
+console.log('Edition 3 release metadata and desktop isolation checks passed.');

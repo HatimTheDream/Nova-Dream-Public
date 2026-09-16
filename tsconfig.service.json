@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "module": "NodeNext", "moduleResolution": "NodeNext", "outDir": "dist/service", "rootDir": ".", "noEmit": false, "types": ["node"] },
+  "include": ["apps/service/**/*.ts", "packages/domain/**/*.ts", "packages/adapters/**/*.ts"]
+}

@@ -1,0 +1,32 @@
+{
+  "source": "nova-lynx-navy-suit-source-p09.png",
+  "directions": [
+    "N",
+    "NE",
+    "E",
+    "SE",
+    "S",
+    "SW",
+    "W",
+    "NW"
+  ],
+  "frameSize": 128,
+  "parts": {
+    "blazer": {
+      "file": "nova-lynx-blazer-p02.png",
+      "sha256": "bc372bfedd3cad2320ac6d896689ddc543fe3941c7dd50b3e2af68e325b3ec65"
+    },
+    "suit-trousers": {
+      "file": "nova-lynx-suit-trousers-p02.png",
+      "sha256": "f6b37ef627329b70cbf5c38ca3cb08154410d6cd2cc2c281bdf5b1359e4854ce"
+    },
+    "dress-shirt": {
+      "file": "nova-lynx-dress-shirt-p02.png",
+      "sha256": "1306086ecb6c153fdd89814105900b19cdd5ca687aa077fdbbb8d05fa3bfd7ae"
+    },
+    "tie": {
+      "file": "nova-lynx-tie-p02.png",
+      "sha256": "1fc10a79e6a2a86a53f21f3aa821007bf685a486a94b7d2aec62ddcde745e657"
+    }
+  }
+}

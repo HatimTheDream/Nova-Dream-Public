@@ -1,0 +1,34 @@
+[Unit]
+Description=Nova Dream web workspace
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nova
+Group=nova
+WorkingDirectory=/opt/nova/current
+EnvironmentFile=/etc/nova/host.env
+Environment=HOME=/var/lib/nova
+Environment=PATH=/opt/nova/runtime/node/bin:/usr/local/bin:/usr/bin:/bin
+Environment=E3_DATA_DIR=/var/lib/nova/workspace
+Environment=E3_SERVER_KEY_FILE=/run/nova-dream/workspace-key
+Environment=E3_OPENCLAW_ENTRY=/opt/nova/runtime/openclaw/openclaw.mjs
+LoadCredential=workspace-key:/etc/nova/server.key
+RuntimeDirectory=nova-dream
+RuntimeDirectoryMode=0700
+ExecStartPre=+/usr/bin/install -o nova -g nova -m 0400 %d/workspace-key /run/nova-dream/workspace-key
+ExecStart=/opt/nova/runtime/node/bin/node /opt/nova/current/scripts/host.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nova
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+.routine-history { margin-top: 24px; padding: 24px; }
+.routine-history article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line); }
+.routine-history article p { margin: 6px 0; }
+.routine-enable { display: flex !important; flex-direction: row; align-items: center; gap: 12px; padding: 12px 0; }
+.routine-enable input { width: 20px !important; height: 20px; flex: none; }
+.routine-conflict { padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.routine-conflict pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .routine-history { padding: 20px; } .routine-history article { align-items: flex-start; flex-direction: column; } }

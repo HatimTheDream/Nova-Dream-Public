@@ -1,0 +1,29 @@
+import { useEffect, useRef, useState } from 'react';
+import type { Entity, Snapshot } from '../../../packages/domain/contracts';
+import type { Contact } from '../../../packages/domain/workspace-records';
+import { contactMergeFields, mergedContactValue, type ContactMergeCommand, type ContactMergeField } from '../../../packages/domain/contacts';
+import { ApiError, readLocal, request, saveLocal } from './api';
+import { ContactAvatar } from './ContactPhoto';
+import { Dialog } from './ui';
+
+type Kept = { keep: Entity<Contact>; other: Entity<Contact>; command: ContactMergeCommand };
+export function ContactMerge({ keep, other, snapshot, journalKey, close, saved }: { keep: Entity<Contact>; other?: Entity<Contact>; snapshot: Snapshot; journalKey: string; close(): void; saved(id: string): Promise<void> }) {
+  const [pending, setPending] = useState<Kept | undefined>(() => readLocal(journalKey));
+  const a = pending?.keep ?? keep, b = pending?.other ?? other;
+  const [fields, setFields] = useState<ContactMergeCommand['fields']>(() => pending?.command.fields ?? {}), [notes, setNotes] = useState<ContactMergeCommand['notes']>(() => pending?.command.notes ?? 'both');
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [rejected, setRejected] = useState(false); const flight = useRef(false), alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  let preview: Contact | undefined, validation = '';
+  if (b) try { preview = mergedContactValue(a.value, b.value, { fields, notes }); } catch { validation = 'The combined notes, tags or email links exceed a contact’s limit. Edit the original contacts before combining; nothing has been removed.'; }
+  const label = (field: ContactMergeField, value: Contact) => field === 'keepInTouch' ? value.keepInTouch ? `Every ${value.keepInTouch.days} days at ${value.keepInTouch.time}` : 'Off' : field === 'projectId' ? snapshot.projects.find(project => project.id === value.projectId)?.value.name ?? 'No project' : field === 'photo' ? (value === a.value ? 'First contact’s photo' : 'Second contact’s photo') : String(value[field] || 'Not set');
+  const combine = async () => {
+    if (flight.current || !b || !preview) return;
+    const kept: Kept = pending ?? { keep: a, other: b, command: { requestId: crypto.randomUUID(), epoch: snapshot.epoch, keep: { id: a.id, revision: a.revision }, other: { id: b.id, revision: b.revision }, fields, notes } };
+    if (!saveLocal(journalKey, kept)) { setError('Free browser storage before combining contacts.'); return; }
+    setPending(kept); flight.current = true; setBusy(true); setError('');
+    try { const contact = await request<Entity<Contact>>('contacts/merge', kept.command); if (saveLocal(journalKey, null)) setPending(undefined); if (alive.current) await saved(contact.id); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'The result is unconfirmed. Retry this same combination.'); setRejected(reason instanceof ApiError && ['contact_changed', 'epoch_changed', 'validation', 'missing_project'].includes(reason.code)); }
+    finally { flight.current = false; setBusy(false); }
+  };
+  return <Dialog title="Combine contacts" close={close}>{b ? <div className="contact-merge"><div className="contact-merge-identities"><p><small>First contact</small><ContactAvatar value={a.value} large/><strong>{a.value.name}</strong><span>{a.value.organization || a.value.email}</span></p><p><small>Second contact</small><ContactAvatar value={b.value} large/><strong>{b.value.name}</strong><span>{b.value.organization || b.value.email}</span></p></div><p className="metadata">Choose any differing details below. Organizations, email addresses, tags and linked work stay together. The other original is archived with its history and can be restored separately.</p><fieldset disabled={busy || !!pending}>{contactMergeFields.filter(field => a.value[field] && b.value[field] && JSON.stringify(a.value[field]) !== JSON.stringify(b.value[field])).map(field => <label key={field}>{field === 'keepInTouch' ? 'Keep in touch' : field === 'pipelineStage' ? 'Relationship stage' : field === 'projectId' ? 'Project' : field[0].toUpperCase() + field.slice(1)}<select value={fields[field] ?? 'keep'} onChange={event => setFields({ ...fields, [field]: event.target.value as 'keep' | 'other' })}><option value="keep">{label(field, a.value)}</option><option value="other">{label(field, b.value)}</option></select></label>)}{a.value.notes && b.value.notes && a.value.notes !== b.value.notes && <label>Private notes<select value={notes} onChange={event => setNotes(event.target.value as typeof notes)}><option value="both">Keep both notes</option><option value="keep">Keep the first contact’s notes</option><option value="other">Keep the second contact’s notes</option></select></label>}</fieldset>{preview && <section className="contact-merge-preview"><h3>Combined contact</h3><ContactAvatar value={preview} large/><strong>{preview.name}</strong><p>{[preview.email, ...(preview.otherEmails ?? [])].filter(Boolean).join(' · ')}</p>{preview.notes && <details><summary>Preview notes</summary><p>{preview.notes}</p></details>}</section>}{(error || validation) && <p role="alert" className="field-error">{error || validation}</p>}<div className="button-row"><button onClick={close}>{pending ? 'Close' : 'Cancel'}</button>{rejected ? <button onClick={() => { if (saveLocal(journalKey, null)) { setPending(undefined); void saved(keep.id); } }}>Review current contacts</button> : <button disabled={busy || !preview} onClick={() => void combine()}>{busy ? 'Combining…' : pending ? 'Reconcile combination' : 'Combine contacts'}</button>}</div></div> : <p>This contact is no longer available. Close this review and refresh Contacts.</p>}</Dialog>;
+}

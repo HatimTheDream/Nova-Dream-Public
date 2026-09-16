@@ -1,0 +1,67 @@
+@layer base {
+  /* One set of roles for the shell and the original module adapters. */
+  :root {
+    --canvas: #f7f6f2;
+    --surface: #ffffff;
+    --raised: #ffffff;
+    --text-rgb: 40 38 52;
+    --muted-rgb: 99 95 112;
+    --dim-rgb: 112 107 121;
+    --text: rgb(var(--text-rgb));
+    --muted: rgb(var(--muted-rgb));
+    --line: #e1dfd6;
+    --control: #918b7f;
+    --gold: #f6c453;
+    --gold-ink: #352300;
+    --action: var(--gold);
+    --action-ink: var(--gold-ink);
+    --action-edge: #b78722;
+    --accent-rgb: 132 87 12;
+    --accent-hover-rgb: 107 69 7;
+    --violet: #5b4bb7;
+    --sky: #236889;
+    --green: #16664f;
+    --danger: #b4232f;
+    --focus: #245fac;
+    --focus-rgb: 36 95 172;
+    --soft-gold: #fff0bb;
+    --soft-violet: #efe8ff;
+    --soft-green: #e7f5d9;
+    --soft-sky: #e3f2fc;
+    --soft-peach: #ffe8dc;
+    --selection: var(--soft-gold);
+    --selection-ink: var(--text);
+    --selection-edge: color-mix(in srgb, var(--gold) 40%, var(--line));
+    --control-radius: 14px;
+    --card-radius: 22px;
+    --shadow: 0 3px 0 var(--line);
+    --type-control: 14px;
+    --type-dense: 14px;
+    --type-meta: 12px;
+  }
+
+  :root[data-theme=dark] {
+    color-scheme: dark;
+    --canvas: #171720;
+    --surface: #22222d;
+    --raised: #2c2b39;
+    --text-rgb: 247 244 255;
+    --muted-rgb: 197 191 211;
+    --dim-rgb: 180 174 194;
+    --line: #41404e;
+    --control: #928c9f;
+    --accent-rgb: 246 207 112;
+    --accent-hover-rgb: 255 220 142;
+    --violet: #b8adff;
+    --sky: #79c9ec;
+    --green: #6dd8b1;
+    --danger: #ff909c;
+    --focus: #8ccfff;
+    --focus-rgb: 140 207 255;
+    --soft-gold: #443b23;
+    --soft-violet: #383052;
+    --soft-green: #293d2a;
+    --soft-sky: #273c4d;
+    --soft-peach: #483329;
+  }
+}

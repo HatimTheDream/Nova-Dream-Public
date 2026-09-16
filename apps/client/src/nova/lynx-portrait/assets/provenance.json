@@ -1,0 +1,28 @@
+{
+  "catalogRevision": "lynx-portraits-1",
+  "sourceDirection": "User-restored original detailed Lynx artwork. Geometric proxies are rejected and excluded.",
+  "assets": [
+    {
+      "artId": "nova-original",
+      "file": "nova-detailed-transparent-v1.png",
+      "width": 1024,
+      "height": 1536,
+      "sha256": "2034e8a1b483e2d99a9de7ac2815068a9d7f3eaccb5f763884cc303282746940",
+      "originalSha256": "0fb4477d0a1cae5128d8a028766d08c6296ca990159a6daaca404622dfdb4f91",
+      "method": "Built-in ImageGen background extraction supplied alpha only. Generated RGB discarded; original RGB retained byte-for-byte through deterministic channel assembly.",
+      "alphaSourceSha256": "d419ed913130b68cf687a5962e2df48baf853482ff83ebd921baddb1aff92df3",
+      "limit": "Portrait alpha visually checked on light/dark backgrounds; fine edges remain a prototype and need artist cleanup before final release. Not a layered wardrobe asset."
+    },
+    {
+      "artId": "james-original",
+      "file": "james-detailed-original-v1.png",
+      "width": 1024,
+      "height": 1536,
+      "sha256": "8b5cee3b668111e0dda1c5e4ebb605f6fd3763d6afcbbb1556b80a9f4129ff78",
+      "originalSha256": "8b5cee3b668111e0dda1c5e4ebb605f6fd3763d6afcbbb1556b80a9f4129ff78",
+      "method": "Byte-identical copy of original RGBA. No failed extraction output is used.",
+      "limit": "Original soft glow remains. Not a layered wardrobe asset."
+    }
+  ],
+  "bundling": "Static local URLs. Full-resolution PNGs are separate emitted files, not inline base64. Combined uncompressed source payload is approximately 3.64 MB; release owner must assess loading budget. No runtime remote asset fetch or URL supplied by saved settings."
+}

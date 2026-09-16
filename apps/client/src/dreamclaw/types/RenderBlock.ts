@@ -1,0 +1,2 @@
+export type { MailAssistantAction as MailActionKind, MailAssistantPlanStatus as MailActionStatus, MailAssistantTarget as MailActionTarget, MailAssistantScope as MailActionScope, MailAssistantUndoStatus as MailActionUndoStatus, MailAssistantApprovalReceipt as MailActionReceipt } from '../../../../../packages/domain/dreamclaw/mail-actions';
+export type { MailTriagePlan as MailActionPlan } from '../../../../../packages/domain/mail-triage';

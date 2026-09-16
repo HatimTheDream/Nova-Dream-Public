@@ -1,0 +1,25 @@
+.settings-page { scroll-padding-block: 16px; }
+.settings-page > .page-intro { margin-bottom: 20px; }
+.settings-return, .settings-navigation, .settings-description, .settings-panel { max-width: 1000px; margin-inline: auto; min-width: 0; }
+.settings-return { margin-bottom: 18px; }
+.settings-navigation { padding-block: 8px; background: var(--canvas); }
+.settings-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); scrollbar-width: thin; scroll-padding-inline: 5px; }
+.settings-tabs [role="tab"] { flex: 1 0 auto; min-height: 46px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); white-space: nowrap; box-shadow: none; }
+.settings-tabs [role="tab"]:hover { background: var(--canvas); color: var(--text); box-shadow: none; }
+.settings-tabs [role="tab"][aria-selected="true"] { color: var(--text); background: var(--soft-violet); border-color: var(--line); }
+.settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
+.settings-description { margin-block: 14px 24px; font-size: 14px; line-height: 1.7; color: var(--muted); }
+.settings-panel[hidden] { display: none; }
+.settings-panel { border-radius: 20px; }
+.settings-panel > .settings-card:last-child { margin-bottom: 0; }
+.settings-panel .setting-row strong { font-size: 14px; }
+.settings-panel .setting-row p { font-size: 13px; line-height: 1.7; }
+.settings-panel .setting-row > div { min-width: 0; }
+.settings-panel .settings-card > p { line-height: 1.7; }
+.settings-accounts .provider-connections { border-top: 0; padding-top: 8px; margin-top: 8px; }
+.settings-panel .provider-connections h3 { font-size: 17px; }
+@media (max-width: 650px) {
+  .settings-tabs [role="tab"] { padding-inline: 13px; }
+  .settings-description { font-size: 13px; margin-block: 12px 20px; }
+  .settings-panel .settings-card > h2 { font-size: 18px; }
+}

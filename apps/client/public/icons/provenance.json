@@ -1,0 +1,43 @@
+{
+  "source": "assets/brand/nova-dream-red-outline-source-v1.png",
+  "sourceSha256": "bc60ec2202b0ce564fc28975ffba163a5e50c968937ae6589d5c5ab602019f47",
+  "background": "#f6f3ed",
+  "original": {
+    "commit": "368bfd7",
+    "path": "apps/web/public/nova-mark-512.png",
+    "note": "Original Nova red-outline application icon, copied unchanged."
+  },
+  "conversion": "node scripts/web-icons.mjs; proportional resize and opaque background; original red frame, shadow and lynx preserved",
+  "files": [
+    {
+      "file": "icons/nova-dream-brand-192-v2.png",
+      "size": 192,
+      "scale": 1,
+      "sha256": "80a42f384e0b95875fc5e0145125b8e91189f747806dc4035b1ede6dfd086a36"
+    },
+    {
+      "file": "apple-touch-icon.png",
+      "size": 180,
+      "scale": 0.96,
+      "sha256": "054c6873b732aaf1ac51d15ab7d5dae715840bb1300fbfa5b7cbe5699b7ffec8"
+    },
+    {
+      "file": "icons/nova-dream-192-v2.png",
+      "size": 192,
+      "scale": 0.96,
+      "sha256": "82dcc5a3395236ae858a5ff7fdb9f734fd1893e0d32595142fedda3a8a6ec1ef"
+    },
+    {
+      "file": "icons/nova-dream-512-v2.png",
+      "size": 512,
+      "scale": 0.96,
+      "sha256": "65cfb709755f028fa5d76a3bfe16c84c701a577bcb4682fe65ae6faeb8c0acb5"
+    },
+    {
+      "file": "icons/nova-dream-maskable-512-v2.png",
+      "size": 512,
+      "scale": 0.56,
+      "sha256": "74cd15dbd1b8a35822f26d6cab78c1c4ef404dc84ef9ccb8c4f583b2ce94b6b4"
+    }
+  ]
+}

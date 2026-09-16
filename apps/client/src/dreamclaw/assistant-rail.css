@@ -1,0 +1,141 @@
+/* Original Dream Claw Assistant rail frame, controls and resize styles. */
+.assistant-workspace {
+  --dc-border: var(--line); --dc-surface: var(--surface); --dc-elevated: var(--raised);
+  --dc-ink: var(--text); --dc-muted: var(--muted); --dc-gold-color: var(--violet);
+}
+.dc-assistant-rail {
+  position: relative;
+  z-index: 45;
+  display: flex;
+  width: var(--dc-assistant-rail-width, 272px);
+  min-width: var(--dc-assistant-rail-width, 272px);
+  max-width: 420px;
+  height: 100%;
+  flex-direction: column;
+  overflow: visible;
+  border-inline-end: 1px solid var(--dc-border);
+  background: var(--dc-surface);
+  color: var(--dc-ink);
+  opacity: 1;
+  transition: width 160ms ease, min-width 160ms ease, transform 160ms ease, opacity 120ms ease;
+}
+.dc-assistant-new-chat {
+  display: inline-flex;
+  height: 36px;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding-inline: 11px;
+  background: transparent;
+  color: var(--dc-ink);
+  font-size: 0.76rem;
+  font-weight: 720;
+  text-align: start;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.dc-assistant-new-chat:hover { border-color: color-mix(in srgb, var(--dc-gold-color), transparent 78%); background: color-mix(in srgb, var(--dc-gold-color), var(--dc-surface) 93%); color: var(--dc-gold-color); }
+.dc-assistant-rail--closed {
+  width: 0;
+  min-width: 0;
+  transform: translateX(-100%);
+  border-inline-end-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+[dir='rtl'] .dc-assistant-rail--closed { transform: translateX(100%); }
+.dc-assistant-rail-icon-button,
+.dc-assistant-rail-small-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--dc-border);
+  border-radius: 9px;
+  background: var(--dc-elevated);
+  color: var(--dc-muted);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.dc-assistant-rail-icon-button { width: 36px; height: 36px; }
+.dc-assistant-rail-small-button { width: 26px; height: 26px; }
+.dc-assistant-rail-icon-button:hover,
+.dc-assistant-rail-small-button:hover { border-color: color-mix(in srgb, var(--dc-gold-color), var(--dc-border) 54%); background: color-mix(in srgb, var(--dc-gold-color), var(--dc-surface) 92%); color: var(--dc-ink); }
+.dc-assistant-rail-resizer {
+  position: absolute;
+  z-index: 3;
+  inset-block: 0;
+  inset-inline-end: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.dc-assistant-rail-resizer::after {
+  position: absolute;
+  inset-block: 18px;
+  inset-inline-start: 5px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  content: '';
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.dc-assistant-rail-resizer:hover::after,
+.dc-assistant-rail-resizer:focus-visible::after { background: var(--dc-gold-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dc-gold-color), transparent 76%); }
+
+.dc-assistant-rail-scrim { display: none; }
+.dc-assistant-sidebar-reopen {
+  position: absolute;
+  z-index: 42;
+  inset-block-start: 10px;
+  inset-inline-start: 10px;
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--dc-border);
+  border-radius: 10px;
+  background: var(--dc-elevated);
+  color: var(--dc-muted);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.dc-assistant-sidebar-reopen:hover,
+.dc-assistant-sidebar-reopen:focus-visible { border-color: color-mix(in srgb, var(--dc-gold-color), var(--dc-border) 54%); background: color-mix(in srgb, var(--dc-gold-color), var(--dc-surface) 92%); color: var(--dc-ink); outline: none; }
+
+/* Integration adjustments: keep E3's neutral chunky controls, retained contents
+   and 44px targets inside the original frame. Reopen sits in the chat header. */
+.dc-assistant-rail { flex: none; min-height: 0; }
+.dc-assistant-rail-header { display: flex; align-items: center; gap: 4px; padding: 12px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.dc-assistant-rail-header button,.dc-assistant-sidebar-reopen { min-height: 44px; height: 44px; border-width: 2px; border-radius: 13px; box-shadow: 0 3px 0 var(--line); }
+.dc-assistant-rail-icon-button { width: 44px; min-width: 44px; padding: 10px; }
+.dc-assistant-new-chat { white-space: nowrap; padding-inline: 9px; font-size: 12px; border-color: var(--line); background: var(--surface); }
+.dc-assistant-rail .original-organization-body { display: flex; flex: 1; min-width: 0; min-height: 0; width: auto; position: static; padding: 14px 12px; border: 0; overflow: auto; box-shadow: none; }
+.dc-assistant-rail .organization-note { line-height: 1.6; }
+.dc-assistant-sidebar-reopen { position: static; z-index: auto; flex: none; width: 44px; min-width: 44px; padding: 10px; }
+.dc-assistant-sidebar-reopen:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.primary-rail[hidden] { display: none; }
+.topbar-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar-leading .breadcrumb { min-width: 0; }
+.topbar-leading .breadcrumb strong { overflow: hidden; text-overflow: ellipsis; }
+.navigation-toggle { flex: none; }
+.composer-footnote .text-button { display: inline-flex; align-items: center; vertical-align: middle; margin-inline-start: 8px; min-height: 44px; font-size: inherit; text-decoration: underline; }
+@media (max-width: 1000px) {
+  .dc-assistant-rail { position: absolute; inset-block: 0; inset-inline-start: 0; width: min(var(--dc-assistant-rail-width, 272px), calc(100% - 12px)); min-width: 0; max-width: calc(100% - 12px); box-shadow: 18px 0 48px #0004; }
+  .dc-assistant-rail--closed { transform: translateX(-105%); visibility: hidden; }
+  [dir=rtl] .dc-assistant-rail--closed { transform: translateX(105%); }
+  .dc-assistant-rail-scrim { position: absolute; inset: 0; z-index: 44; display: block; border: 0; border-radius: 0; background: #0005; box-shadow: none; padding: 0; width: 100%; height: 100%; }
+  .dc-assistant-rail-resizer { display: none; }
+}
+@media (max-width: 650px) {
+  .topbar-leading { gap: 4px; }
+  .topbar { gap: 4px; padding-inline: 8px; }
+  .topbar .navigation-toggle { min-width: 44px; width: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-assistant-rail,.dc-assistant-rail-header button,.dc-assistant-sidebar-reopen,.dc-assistant-rail-resizer::after { transition: none; }
+}

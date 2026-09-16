@@ -1,0 +1,119 @@
+{
+  "calendar": {
+    "title": "Calendar",
+    "today": "Today",
+    "views": {
+      "month": "Month",
+      "week": "Week",
+      "day": "Day"
+    },
+    "addEvent": "Add Event",
+    "editEvent": "Edit Event",
+    "newEvent": "New Event",
+    "deleteEvent": "Delete Event",
+    "deleteConfirm": "Are you sure you want to delete this event?",
+    "deleteConfirmHint": "The linked reminder will also be removed.",
+    "upcoming": "Upcoming",
+    "noUpcoming": "No upcoming events",
+    "noEvents": "No events",
+    "allDay": "All day",
+    "loading": "Loading...",
+    "moreEvents": "+{{n}} more",
+    "daySummary": "Day Summary",
+    "eventCount": "{{count}} events",
+    "untitled": "Untitled",
+    "error": "Failed to load events",
+    "field": {
+      "title": "Title",
+      "titlePlaceholder": "Event name...",
+      "date": "Date",
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "location": "Location",
+      "locationPlaceholder": "Optional...",
+      "notes": "Notes",
+      "notesPlaceholder": "Add notes...",
+      "category": "Category",
+      "reminder": "Reminder",
+      "recurrence": "Recurrence"
+    },
+    "category": {
+      "work": "Work",
+      "personal": "Personal",
+      "health": "Health",
+      "social": "Social",
+      "education": "Education",
+      "other": "Other"
+    },
+    "categoryIcon": {
+      "work": "🏢",
+      "personal": "🏠",
+      "health": "🏥",
+      "social": "👥",
+      "education": "📚",
+      "other": "📌"
+    },
+    "reminder": {
+      "none": "No reminder",
+      "5min": "5 minutes before",
+      "15min": "15 minutes before",
+      "30min": "30 minutes before",
+      "1hour": "1 hour before",
+      "2hours": "2 hours before",
+      "1day": "1 day before",
+      "1week": "1 week before",
+      "scheduled": "Scheduled ✓",
+      "pending": "Pending",
+      "fired": "Sent ✓",
+      "failed": "Failed ✗"
+    },
+    "delivery": {
+      "label": "Deliver to",
+      "last": "Last active channel",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "whatsapp": "WhatsApp",
+      "signal": "Signal",
+      "slack": "Slack"
+    },
+    "recurrence": {
+      "none": "No repeat",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "yearly": "Yearly"
+    },
+    "actions": {
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "edit": "Edit",
+      "duplicate": "Duplicate",
+      "markComplete": "Mark Complete",
+      "saving": "Saving...",
+      "back": "Back"
+    },
+    "settings": {
+      "weekStart": "Week starts on",
+      "saturday": "Saturday",
+      "sunday": "Sunday",
+      "monday": "Monday",
+      "defaultReminder": "Default reminder",
+      "defaultView": "Default view"
+    },
+    "systems": {
+      "gregorian": "Gregorian",
+      "hijri": "Hijri",
+      "chinese": "Chinese"
+    }
+  },
+  "common": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "loading": "Loading...",
+    "soon": "Coming Soon",
+    "refresh": "Refresh",
+    "enter": "Enter"
+  }
+}

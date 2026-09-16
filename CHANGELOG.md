@@ -1,0 +1,18 @@
+## [1.1.3] — 2026-09-15
+
+- Publish a standalone, self-hosting source distribution with setup, privacy and recovery instructions and fresh repository history.
+- Remove unused experimental 3D assets and replace the remaining owner-specific test name with a neutral fixture.
+- Include private systemd runtime credential copies with restrictive permissions for Linux hosting.
+- Retain the integrated workspace, pixel character system, provider adapters, encrypted recovery and bounded upload transport from the verified hosted edition.
+
+## [1.1.2] — 2026-09-15
+
+- Transfer large attachments and encrypted backup uploads in authenticated encrypted pieces below the gateway request limit.
+
+## [1.1.0] — 2026-09-15
+
+- Add protected VPS/Vercel hosting and authenticated conditional reads.
+
+## [1.0.0] — 2026-09-15
+
+- Complete the integrated personal web workspace with Assistant, voice, tasks, connected mail/calendar, agents, content and profile progression.

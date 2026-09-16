@@ -1,0 +1,180 @@
+/* Shared density and disclosure, including the existing module adapters. */
+.nova-icon { line-height: 1; }
+.nova-icon[data-emphasis=line] [fill-opacity] { fill-opacity: 0; }
+.nova-icon-absolute * { vector-effect: non-scaling-stroke; }
+.nova-icon[data-state=busy] svg { animation: nova-spin 1s linear infinite; }
+.nova-icon[data-state=disabled] { opacity: .5; }
+@keyframes nova-spin { to { transform: rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .nova-icon[data-state=busy] svg { animation: none; } }
+.topbar { min-height:64px; padding-block:8px; }
+.page-intro { margin-bottom:20px; gap:12px; }
+.page-intro h1 { margin:0; font-size:26px; line-height:1.3; letter-spacing:-.7px; }
+.page-intro > .composer-menu-anchor { margin-left:auto; }
+.record-toolbar .composer-control-button,.page-intro .composer-control-button { width:44px; height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+/* Menus also serve record pages; they keep the same focus and dismissal behavior. */
+.composer-popover > p { margin:8px 10px; font-size:13px; line-height:1.6; color:var(--muted); }
+.records-page.records-page { padding:24px 28px; }
+.records-page .record-toolbar { margin:12px 0; gap:8px; }
+.records-page .record-toolbar .search-input { min-width:160px; }
+.records-page .record-tabs { gap:6px; margin:0 0 14px; }
+.records-page .record-tabs button { min-height:44px; padding:8px 12px; border-width:1px; box-shadow:none; font-size:13px; gap:6px; }
+.records-page .record-filters { margin:0 0 14px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:14px; gap:12px; }
+.records-page .record-filters[hidden] { display:none; }
+.records-page .content-filter-summary { margin:8px 0 14px; font-size:12px; }
+.record-filter-toggle { position:relative; }
+.filter-dot { position:absolute; top:6px; right:6px; width:7px; height:7px; background:rgb(var(--accent-rgb)); border-radius:50%; }
+.records-page .record-workspace { gap:16px; }
+.records-page .record-list { grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:8px; }
+.records-page .record-list-item { padding:14px 16px; min-height:84px; border-radius:14px; border-width:1px; box-shadow:none; gap:12px; }
+.records-page .record-list-item > span:not(.lynx-portrait) { gap:3px; }
+.records-page .record-list-item small { line-height:1.4; }
+.records-page .record-list-item .metadata { font-size:11px; }
+.records-page .record-list-item strong { font-size:15px; }
+.records-page .record-empty { padding:20px; box-shadow:none; }
+.records-page .record-empty .empty { padding:10px 0; }
+.records-page .content-column { border-radius:16px; }
+.records-page .content-column-cards { min-height:120px; }
+.records-page .content-board { gap:10px; }
+.records-page .content-empty { padding:12px 4px; }
+.records-page .record-profile-layout { margin-top:0; gap:18px; grid-template-columns:minmax(0,1.8fr) minmax(260px,1fr); }
+.records-page .record-editor,.records-page .record-earned { padding:22px; }
+.record-profile-layout .record-portrait-picker { display:grid; grid-template-columns:180px minmax(0,1fr); gap:20px; align-items:start; padding-top:0; }
+.record-profile-layout .record-portrait-picker .lynx-portrait { --lynx-portrait-size:180px!important; width:180px; max-width:100%; }
+.record-profile-layout .record-portrait-picker.is-unselected { grid-template-columns:112px minmax(0,1fr); }
+.record-profile-layout .record-portrait-picker.is-unselected .lynx-portrait { --lynx-portrait-size:112px!important; width:112px; }
+.record-profile-layout .record-portrait-controls { min-width:0; }
+.record-profile-layout .record-portrait-controls .button-row { gap:8px; }
+.record-profile-layout .record-portrait-controls .button-row button { flex:1; padding:8px; font-size:12px; }
+.record-profile-layout .record-portrait-controls > p { margin:0 0 12px; }
+.home-page { padding-top:24px; }
+.home-grid { grid-auto-rows:minmax(72px,auto); gap:16px; }
+.home-grid .widget-header { min-height:50px; }
+.home-grid .widget-body { padding:0 18px 16px; }
+.home-grid .widget-link { padding-top:12px; margin-top:12px; }
+.home-grid .attention-content,.home-grid .draft-widget { gap:8px; padding-top:0; }
+.home-grid .soft-icon { width:36px; height:36px; border-radius:11px; }
+.home-grid .attention-content h3,.home-grid .draft-widget h3 { margin:0; font-size:16px; }
+.home-page .board-hint { margin-top:16px; font-size:12px; }
+.sidebar-pin { margin-inline-end:5px; }
+.assistant-workspace .conversation-header { min-height:64px; padding-block:8px; }
+.assistant-workspace .dc-assistant-rail-header { min-height:64px; }
+.assistant-workspace .conversation-title strong { font-size:15px; }
+.assistant-workspace .conversation-header .icon-button { border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 2px 0 var(--line); }
+.assistant-workspace .conversation-header .icon-button:hover { background:var(--canvas); }
+.account-setup { display:flex; flex-direction:column; align-items:center; gap:18px; max-width:540px; margin:clamp(28px,8vh,80px) auto 20px; padding:24px; text-align:center; color:var(--text); }
+.account-setup h2 { margin:0 0 8px; font-size:24px; line-height:1.35; letter-spacing:-.5px; }
+.account-setup p { margin:0; color:var(--muted); font-size:14px; line-height:1.65; }
+.account-setup-mark { display:grid; place-items:center; width:72px; height:72px; border:1px solid var(--line); border-radius:22px; background:var(--surface); box-shadow:0 3px 0 var(--line); }
+.account-setup-inline { flex-direction:row; max-width:none; margin:0; padding:12px 20px; gap:12px; text-align:left; border-bottom:1px solid var(--line); background:var(--surface); flex:none; }
+.account-setup-inline .account-setup-mark { width:44px; height:44px; border:0; box-shadow:none; flex:none; }
+.account-setup-inline h2 { margin:0 0 4px; font-size:14px; letter-spacing:0; }
+.account-setup-inline p { font-size:12px; }
+.account-setup-inline button { margin-left:auto; flex:none; font-size:12px; }
+.inbox-setup-screen { overflow:auto; min-height:0; height:100%; }
+.inbox-setup-screen > .text-button { display:flex; margin:0 auto 24px; }
+.settings-return { display:flex; align-items:center; gap:12px; margin:0 auto 20px; max-width:1000px; }
+.settings-return button { font-size:13px; }
+.dreamclaw-module .dc-inbox-main { gap:10px; }
+.dreamclaw-module .dc-inbox-page-header-stack { gap:8px; }
+.dreamclaw-module .dc-mail-sender { font-weight:650; }
+.dreamclaw-module [data-inbox-unread=true] .dc-mail-sender,.dreamclaw-module [data-inbox-unread=true] .dc-mail-subject { font-weight:700; }
+.dreamclaw-module .dc-mail-subject { flex:1 1 auto; }
+.dreamclaw-module .dc-mail-preview-inline { flex:1 2 35%; }
+.dreamclaw-module [data-inbox-row][data-density=compact] { padding-block:4px; }
+.dreamclaw-module [data-inbox-thread] { min-height:44px; }
+@media(max-width:1100px) { .records-page .record-profile-layout { grid-template-columns:1fr; } }
+@media(max-width:800px) {
+  .records-page.records-page { padding:18px 14px; }
+  .page-intro { margin-bottom:14px; }
+  .page-intro h1 { font-size:23px; }
+  .records-page .record-tabs { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; padding-bottom:4px; }
+  .records-page .record-tabs button { flex:none; white-space:nowrap; }
+  .records-page .record-toolbar .search-input { flex:1 0 100%; min-width:0; }
+  .records-page .record-toolbar > .primary { flex:1; font-size:13px; padding-inline:8px; }
+  .records-page .record-toolbar .composer-menu-anchor { flex:none; }
+  .records-page .record-filters label { min-width:0; flex:1 1 150px; }
+  .records-page .record-filters > .metadata { padding-bottom:0; }
+  .records-page .record-editor,.records-page .record-earned { padding:16px; }
+  .records-page .record-list-item { min-height:78px; padding:12px; }
+  .record-profile-layout .record-portrait-picker { grid-template-columns:1fr; justify-items:center; gap:16px; }
+  .record-profile-layout .record-portrait-picker.is-unselected { grid-template-columns:1fr; }
+  .record-profile-layout .record-portrait-controls { width:100%; }
+  .record-profile-layout .record-portrait-picker .lynx-portrait { --lynx-portrait-size:168px!important; width:168px; }
+  .record-profile-layout .record-portrait-picker.is-unselected .lynx-portrait { --lynx-portrait-size:96px!important; width:96px; }
+  .account-setup-inline { flex-wrap:wrap; padding:10px 14px; gap:8px; }
+  .account-setup-inline .account-setup-mark { display:none; }
+  .account-setup-inline button { margin-left:0; }
+}
+@media(max-width:480px) {
+  .records-page.records-page { padding:16px 11px; }
+  .records-page .record-tabs { gap:4px; }
+  .records-page .record-tabs button { font-size:12px; padding-inline:8px; gap:4px; }
+  .records-page .record-tabs .nova-icon { width:15px!important; height:15px!important; }
+  .records-page .record-empty { padding:14px; }
+  .account-setup { padding:18px; margin-top:24px; gap:16px; }
+  .account-setup h2 { font-size:21px; }
+  .account-setup-inline { margin:0; padding:10px 14px; gap:8px; }
+  .account-setup-inline h2 { font-size:14px; }
+  .dreamclaw-module .dc-mail-preview-inline { display:none; }
+}
+
+.composer-popover { position:fixed; z-index:65; width:270px; max-width:calc(100vw - 32px); max-height:min(430px,55vh); overflow:auto; padding:7px; border:1px solid var(--line); border-radius:15px; background:var(--surface); box-shadow:0 12px 40px #0002; }
+.composer-popover>button { display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; min-height:44px; padding:10px; border:0; border-radius:9px; box-shadow:none; background:transparent; text-align:start; font-size:14px; }
+.composer-popover>button:hover { background:var(--canvas); }
+.dreamclaw-module.calendar-module { display:flex; flex-direction:column; }
+.calendar-module .dc-calendar-page { height:auto; flex:1; min-height:0; }
+.dreamclaw-module .account-setup button,.dreamclaw-module .inbox-setup-screen>.text-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; border:1px solid var(--line); border-radius:14px; padding:10px 14px; background:var(--surface); box-shadow:0 3px 0 var(--line); font-size:13px; font-weight:600; }
+.dreamclaw-module .account-setup button.primary { background:var(--gold); color:var(--gold-ink); border-color:var(--action-edge); box-shadow:0 3px 0 var(--action-edge); }
+.dreamclaw-module .account-setup h2 { margin:0 0 8px; font-size:24px; line-height:1.35; }
+.dreamclaw-module .account-setup p { color:var(--muted); font-size:14px; line-height:1.65; }
+.dreamclaw-module .account-setup-inline h2 { margin-bottom:4px; font-size:14px; }
+.dreamclaw-module .account-setup-inline p { font-size:12px; }
+.dreamclaw-module .account-setup-mark { border:1px solid var(--line); }
+.dreamclaw-module .inbox-setup-screen > .text-button { display:flex; width:max-content; max-width:calc(100% - 36px); margin:0 auto 24px; border:0; background:transparent; box-shadow:none; color:var(--muted); text-decoration:underline; text-underline-offset:4px; }
+.topbar-leading { display:flex; align-items:center; gap:12px; min-width:0; }
+.topbar-leading .breadcrumb { min-width:0; }
+.topbar .navigation-toggle { border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 2px 0 var(--line); }
+.records-page .page-intro { display:flex; flex-direction:row; align-items:center; }
+.records-page .page-intro h1 { margin:0; }
+.records-page .search-input { display:flex; align-items:center; height:44px; border:1px solid var(--control); border-radius:12px; background:var(--surface); padding:0 12px; }
+.records-page .search-input input { border:0; outline:0; box-shadow:none; background:transparent; padding:8px 0; height:42px; }
+.records-page .search-input:focus-within { outline:2px solid var(--focus); outline-offset:2px; }
+.records-page .record-filter-toggle { border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 2px 0 var(--line); padding:0; }
+.settings-return { position:sticky; top:0; z-index:5; padding:8px 0; background:var(--canvas); }
+@media(max-width:800px) { .record-profile-layout .record-editor>.section-heading { margin-bottom:16px; } .record-profile-layout .record-editor h2 { font-size:19px; } }
+@media(max-width:480px) { .topbar-leading { gap:6px; } .topbar { padding-inline:8px; gap:6px; } .topbar .navigation-toggle { width:36px; min-width:36px; } }
+
+/* Sender names remain compact, with a deliberate Contact action. */
+.dreamclaw-module .dc-inbox-contact-link { min-height: 32px; padding: 2px 0; border: 0; border-radius: 4px; box-shadow: none; background: transparent; color: inherit; font: inherit; text-align: start; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.dreamclaw-module .dc-inbox-contact-link:hover { text-decoration-color: currentColor; }
+.dreamclaw-module .dc-inbox-contact-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.content-timing { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
+
+.mail-contact-review { display: grid; gap: 14px; }
+.mail-contact-review p { margin: 0; overflow-wrap: anywhere; }
+.mail-contact-review fieldset { display: grid; gap: 10px; min-width: 0; }
+.mail-contact-review .button-row { margin-top: 8px; }
+.dialog .mail-contact-review .checkbox-label { display: flex; align-items: center; gap: 10px; padding-block: 8px; }
+.dialog .mail-contact-review input[type=radio] { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; margin: 0; padding: 0; accent-color: var(--accent); box-shadow: none; }
+.dialog .mail-contact-review .checkbox-label { flex-direction: row; justify-content: flex-start; }
+
+.phone-settings h2, .phone-address, .phone-actions { display: flex; align-items: center; gap: 12px; }
+.phone-address { padding: 12px 0; }
+.phone-address a { overflow-wrap: anywhere; min-width: 0; }
+.phone-address button { flex: 0 0 auto; }
+.phone-actions { flex-wrap: wrap; }
+.phone-qr { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; padding: 16px 0; }
+.phone-qr img { width: 256px; max-width: 100%; height: auto; flex: 0 1 256px; background: #fff; border: 1px solid var(--line); border-radius: 12px; image-rendering: pixelated; }
+.phone-qr > div { flex: 1 1 220px; min-width: 0; }
+.phone-help { margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.phone-help summary { min-height: 44px; align-content: center; cursor: pointer; font-weight: 600; }
+.phone-help ol { padding-inline-start: 24px; }
+.phone-help li { margin-bottom: 12px; line-height: 1.6; }
+.phone-code { display: grid; gap: 8px; padding: 16px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 14px; }
+.phone-code code { font-size: clamp(15px, 2vw, 22px); overflow-wrap: anywhere; }
+.phone-code span, .phone-pairing .muted { color: var(--muted); font-size: 13px; }
+.phone-pairing { max-width: 460px; margin: 0 auto; padding: 32px 24px; }
+.phone-pairing form { display: grid; gap: 18px; width: 100%; text-align: left; }
+.phone-pairing label { display: grid; gap: 8px; }
+.phone-pairing input { width: 100%; min-width: 0; }
+.phone-pairing button { min-height: 44px; }

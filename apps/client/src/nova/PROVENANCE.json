@@ -1,0 +1,69 @@
+{
+  "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+  "files": [
+    {
+      "source": "apps/web/src/features/lynx-portrait/recipe.ts",
+      "target": "apps/client/src/nova/lynx-portrait/recipe.ts",
+      "sha256": "805d21a6f71ec9184772573fd41ba3f69dffe0a71178687a2aed727043912c7f"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/Portrait.tsx",
+      "target": "apps/client/src/nova/lynx-portrait/Portrait.tsx",
+      "sha256": "08461bdc9f7ae2595442012168b16a18171c1947f1fd0826e022154660d0c4c9"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/assets.ts",
+      "target": "apps/client/src/nova/lynx-portrait/assets.ts",
+      "sha256": "ea171926adb82597e67ad182aaeeb83587520b3f11f76fd35f77bdf94991b631"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/portrait.css",
+      "target": "apps/client/src/nova/lynx-portrait/portrait.css",
+      "sha256": "18f4787312854cfcb93147d61e0d19aef2807587a3f5c3db8e16705c6adfb989"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/assets/nova-detailed-transparent-v1.png",
+      "target": "apps/client/src/nova/lynx-portrait/assets/nova-detailed-transparent-v1.png",
+      "sha256": "2034e8a1b483e2d99a9de7ac2815068a9d7f3eaccb5f763884cc303282746940"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/assets/james-detailed-original-v1.png",
+      "target": "apps/client/src/nova/lynx-portrait/assets/james-detailed-original-v1.png",
+      "sha256": "8b5cee3b668111e0dda1c5e4ebb605f6fd3763d6afcbbb1556b80a9f4129ff78"
+    },
+    {
+      "source": "apps/web/src/features/lynx-portrait/assets/provenance.json",
+      "target": "apps/client/src/nova/lynx-portrait/assets/provenance.json",
+      "sha256": "0deeeebc392985b9d35934282ac9aaab2c40c6741855389361cf5522d0ff36af"
+    }
+  ],
+  "note": "Original portrait renderer, recipe resolver, styles and accepted bundled art. Host persistence belongs to E3.",
+  "adaptedSeams": [
+    {
+      "sourceCommit": "e0769bd9f8fdd50d0772ae8e188c0be7bf1c7f1b",
+      "sources": [
+        "src/pages/MissionControlSuite.tsx",
+        "src/types/missionControl.ts"
+      ],
+      "targets": [
+        "apps/client/src/RecordFields.tsx",
+        "packages/domain/workspace-records.ts"
+      ],
+      "adaptation": "People identity/category/notes and Content brief/body/stage/date/Project fields, mounted through E3 shared controls and its existing entity authority."
+    },
+    {
+      "sourceCommit": "04138bc1f925691f697eada335bd7a763ed91ec5",
+      "sources": [
+        "apps/web/src/pages/CoreModulePage.tsx",
+        "apps/web/src/pages/AgentsPage.tsx",
+        "apps/web/src/pages/ProfilePage.tsx"
+      ],
+      "targets": [
+        "apps/client/src/record-files.ts",
+        "apps/client/src/RecordsPage.tsx",
+        "apps/client/src/RecordFields.tsx"
+      ],
+      "adaptation": "Real saved-version Blob export, separate agent Name/Position and design limits, earned Task history. Persistence and conflict handling use E3 durable journals, not the predecessor in-memory editor or database."
+    }
+  ]
+}

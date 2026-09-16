@@ -1,0 +1,82 @@
+import { calendarWindowIdentity } from './calendar-window';
+import { keepCalendarTarget } from './calendar-target';
+import { useEffect, useRef, useState } from 'react';
+import type { Entity, Snapshot } from '../../../packages/domain/contracts';
+import type { Contact } from '../../../packages/domain/workspace-records';
+import { contactDestination, contactDuplicateReason, contactEmails, contactOrganizations, contactInitials } from '../../../packages/domain/contacts';
+import type { ContactDirectoryResult, InboxSender } from '../../../packages/domain/contact-directory';
+import type { MailContactPrepare, MailContactSource } from '../../../packages/domain/mail-contact';
+import type { ContactsProps } from './Contacts';
+import { ApiError, readLocal, request, saveLocal } from './api';
+import { retainedWindowId, useRetained } from './useWorkspace';
+import { RecordConnections } from './RecordConnections';
+import { ContactCrmControls, ContactTimeline, useContactCrm, type TimelineItem } from './ContactCrm';
+import { ContactAvatar } from './ContactPhoto';
+import { ContactMerge } from './ContactMerge';
+import { MailContactDialog } from './MailContactDialog';
+import { CalendarDays, Copy, Inbox, MoreHorizontal, Pin, Search, Users } from './icons';
+import { ComposerMenu } from './ComposerMenu';
+import { Dialog, Empty } from './ui';
+
+export function ContactPage({ contact, contacts, edit, open, close, organization, ...props }: ContactsProps & { contact: Entity<Contact>; contacts: Entity<Contact>[]; edit(): void; open(id: string): void; close(): void; organization(name: string): void }) {
+  const { snapshot, refresh, openEmail } = props;
+  const editor = useRetained('contact', contact.id, contact.value, contact, snapshot, refresh, { autoSave: false });
+  const [error, setError] = useState(''), [copied, setCopied] = useState('');
+  const mergeKey = `e3:contact-merge:${snapshot.deviceId}:${contact.id}:${retainedWindowId}`;
+  const [merge, setMerge] = useState<string | undefined>(() => readLocal<{ other: Entity<Contact> }>(mergeKey)?.other.id);
+  const [data, setData] = useState<ContactDirectoryResult>(), [loading, setLoading] = useState(true), [readError, setReadError] = useState('');
+  const [attempt, setAttempt] = useState(0); const crm = useContactCrm(snapshot, contact.id);
+  useEffect(() => {
+    if (contact.value.mergedInto) { setLoading(false); return; }
+    const controller = new AbortController(); setLoading(true); setData(undefined); setReadError('');
+    void request<ContactDirectoryResult>('contacts/read', { epoch: snapshot.epoch, contactId: contact.id }, controller.signal, 30000).then(value => { if (!controller.signal.aborted) setData(value); }).catch(reason => { if (!controller.signal.aborted) setReadError(reason instanceof Error ? reason.message : 'Correspondence could not load.'); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [contact.id, contact.revision, snapshot.epoch, attempt]);
+  const save = async (patch: Partial<Contact>) => { setError(''); if (!editor.change({ ...editor.value, ...patch })) return false; const saved = await editor.flush(); if (!saved) setError('This change is kept here. Open Edit to reconcile it with the saved contact.'); else { await crm.refresh(); await refresh(); } return !!saved; };
+  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); setCopied(text); } catch { setError('Copy is unavailable here. Select the address to copy it.'); } };
+  const family = contacts.filter(item => contactDestination(item.id, contacts) === contact.id).map(item => item.id);
+  const duplicates = contact.value.archived ? [] : contacts.filter(other => other.id !== contact.id && !other.value.archived && contactDuplicateReason(contact.value, other.value));
+  const emails = contactEmails(contact.value);
+  const sourceEmails = new Map<string, { source: MailContactSource; date?: string }>();
+  for (const source of contact.value.mailSources ?? []) sourceEmails.set(JSON.stringify([source.provider, source.accountId, source.threadId]), { source });
+  for (const item of [...(data?.correspondence ?? [])].reverse()) sourceEmails.set(JSON.stringify([item.source.provider, item.source.accountId, item.source.threadId]), item);
+  const correspondence = [...sourceEmails.values()].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '')).slice(0, 25);
+  const busy = editor.dirty || editor.saving || !!editor.pending;
+  const timeline: TimelineItem[] = correspondence.map(({ source, date }) => ({ id: JSON.stringify([source.provider, source.accountId, source.threadId]), at: date ?? '', type: 'email', title: source.subject || 'No subject', subtitle: source.sender, open: () => { void openEmail(source).catch(reason => setError(reason instanceof Error ? reason.message : 'Email could not open.')); } }));
+  for (const event of data?.calendar ?? []) timeline.push({ id: event.eventId + event.originalDate, at: event.date + 'T12:00:00Z', type: 'meeting', title: event.title, subtitle: 'Linked Calendar event', open: () => { void calendarWindowIdentity().then(identity => { keepCalendarTarget(snapshot.deviceId, identity.id, event.eventId, event.originalDate); props.openCalendar(); }).catch(e => setError(e instanceof Error ? e.message : 'Calendar could not open.')); } });
+  for (const task of snapshot.tasks.filter(t => t.value.origin?.kind === 'contact' && family.includes(t.value.origin.id) && !t.value.trashed)) timeline.push({ id: task.id, at: task.updatedAt, type: 'task', title: task.value.title, subtitle: task.value.status === 'done' ? 'Completed' : task.value.planned ?? 'Unscheduled', open: () => props.editTask(task) });
+  return <article className="contact-person">
+    <header className="contact-person-heading"><ContactAvatar value={contact.value} large/><div><h2>{contact.value.name}</h2>{(contact.value.position || contactOrganizations(contact.value).length) && <p>{[contact.value.position, ...contactOrganizations(contact.value)].filter(Boolean).join(' · ')}</p>}{contact.value.archived && <span className="metadata">{contact.value.mergedInto ? 'Combined contact · original retained' : 'Archived'}</span>}</div><div className="button-row">{!contact.value.archived && <button className="icon-button" aria-label={editor.value.favorite ? 'Remove favorite' : 'Add favorite'} title={editor.value.favorite ? 'Remove favorite' : 'Add favorite'} aria-pressed={!!editor.value.favorite} disabled={busy} onClick={() => void save({ favorite: !editor.value.favorite })}><Pin size={20}/></button>}{!contact.value.mergedInto && <button onClick={edit}>Edit</button>}<ComposerMenu label="Person options" icon={<MoreHorizontal size={20}/>} placement="below" align="right">{hide => <>{!contact.value.mergedInto && <button disabled={busy} onClick={() => { hide(); void save({ archived: !contact.value.archived }); }}>{contact.value.archived ? 'Restore contact' : 'Archive contact'}</button>}<button onClick={() => { hide(); close(); }}>Close contact</button></>}</ComposerMenu></div></header>
+    {editor.dirty && !error && <p className="metadata">{editor.pending ? 'A saved change needs confirmation.' : 'Your edits are kept on this device.'} <button onClick={edit}>Review edits</button></p>}{error && <p role="alert" className="field-error">{error}</p>}{editor.conflict && <p role="alert" className="field-error">{editor.conflict.message} <button onClick={edit}>Review edits</button></p>}
+    {contact.value.mergedInto && <ContactRestore contact={contact} snapshot={snapshot} refresh={refresh} open={open} destination={contactDestination(contact.id, contacts)}/>}
+    <dl className="contact-methods">{emails.map(email => <div key={email}><dt>Email</dt><dd><span>{email}</span><button className="icon-button" title={copied === email ? 'Copied' : 'Copy email'} aria-label={copied === email ? `Copied ${email}` : `Copy ${email}`} onClick={() => void copy(email)}><Copy size={16}/></button></dd></div>)}{contact.value.phone && <div><dt>Phone</dt><dd><span>{contact.value.phone}</span><button className="icon-button" aria-label="Copy phone number" title="Copy phone number" onClick={() => void copy(contact.value.phone)}><Copy size={16}/></button></dd></div>}{contact.value.handle && <div><dt>Handle</dt><dd>{contact.value.handle}</dd></div>}{contact.value.projectId && <div><dt>Project</dt><dd>{snapshot.projects.find(project => project.id === contact.value.projectId)?.value.name ?? 'Unavailable project'}</dd></div>}<div><dt>Timezone</dt><dd>{contact.value.timezone.replaceAll('_', ' ')}</dd></div></dl>
+    {!!contact.value.tags.length && <div className="contact-tags">{contact.value.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
+    {contact.value.notes && <section className="contact-notes"><h3>Private notes</h3><p>{contact.value.notes}</p></section>}
+    {!!duplicates.length && <details className="contact-duplicates"><summary>{duplicates.length === 1 ? 'Possible duplicate' : `${duplicates.length} possible duplicates`}</summary>{duplicates.map(other => <div key={other.id}><span><strong>{other.value.name}</strong><small>{contactDuplicateReason(contact.value, other.value)}{other.value.organization ? ` · ${other.value.organization}` : ''}</small></span><button disabled={busy} onClick={() => setMerge(other.id)}>Review</button></div>)}</details>}
+    {!contact.value.mergedInto && <ContactCrmControls contact={contact} contacts={contacts} snapshot={snapshot} crm={crm.data} busy={busy} save={save} open={open} organization={organization}/>}
+    <RecordConnections key={contact.id} compact timeline contactIds={family} kind="contact" entity={contact} {...props}/>
+    <ContactTimeline contact={contact} snapshot={snapshot} items={timeline} activities={crm.data?.activities ?? []} refresh={async () => { await crm.refresh(); await refresh(); }}/>
+    {(readError || crm.error) && <p role="alert" className="field-error">{readError || crm.error}<button onClick={() => { setAttempt(n => n + 1); void crm.refresh(); }}>Retry</button></p>}
+    <p className="metadata">{loading ? 'Checking recent Inbox conversations…' : 'Timeline includes recent indexed mail, saved email links, linked Calendar events and follow-up tasks.'}{data?.partial ? ' More mail may appear as indexing continues.' : ''}</p>
+    {snapshot.tasks.some(task => task.value.origin?.kind === 'contact' && family.includes(task.value.origin.id) && task.value.planned) && <button onClick={props.openCalendar}><CalendarDays size={18}/>Open Calendar</button>}
+    {merge && <ContactMerge journalKey={mergeKey} keep={contact} other={contacts.find(item => item.id === merge)} snapshot={snapshot} close={() => setMerge(undefined)} saved={async id => { await refresh(); setMerge(undefined); open(id); }}/>}<span className="sr-only" role="status">{copied ? 'Copied to clipboard' : ''}</span>
+  </article>;
+}
+
+function ContactRestore({ contact, snapshot, refresh, open, destination }: { contact: Entity<Contact>; snapshot: Snapshot; refresh(): Promise<void>; open(id: string): void; destination: string }) {
+  const key = `e3:contact-restore:${snapshot.deviceId}:${contact.id}:${retainedWindowId}`;
+  const [pending, setPending] = useState<{ requestId: string; epoch: string; contact: { id: string; revision: number } } | undefined>(() => readLocal(key));
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [rejected, setRejected] = useState(false); const flight = useRef(false);
+  const restore = async () => { if (flight.current) return; const command = pending ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, contact: { id: contact.id, revision: contact.revision } }; if (!saveLocal(key, command)) { setError('Free browser storage before restoring.'); return; } flight.current = true; setPending(command); setBusy(true); setError(''); try { await request('contacts/restore', command); if (saveLocal(key, null)) setPending(undefined); await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Restore is unconfirmed. Retry the same request.'); setRejected(reason instanceof ApiError && ['contact_changed', 'epoch_changed', 'validation'].includes(reason.code)); } finally { flight.current = false; setBusy(false); } };
+  return <section className="contact-restore"><p>This original and its history are kept. Restoring it creates a separate contact again; the combined contact keeps its information.</p><div className="button-row"><button onClick={() => open(destination)}>Open combined contact</button><button disabled={busy || rejected} onClick={() => void restore()}>{busy ? 'Restoring…' : pending ? 'Reconcile restore' : 'Restore separately'}</button></div>{error && <p role="alert" className="field-error">{error}</p>}{rejected && <button onClick={() => { if (saveLocal(key, null)) { setPending(undefined); setRejected(false); setError(''); void refresh(); } }}>Review current contact</button>}</section>;
+}
+
+export function ContactSenders({ snapshot, refresh, close, open }: { snapshot: Snapshot; refresh(): Promise<void>; close(): void; open(id: string): void }) {
+  const key = `e3:contact-senders:${snapshot.deviceId}:${retainedWindowId}`;
+  const [query, setQuery] = useState(''), [offset, setOffset] = useState(0), [data, setData] = useState<ContactDirectoryResult>(), [busy, setBusy] = useState(true), [error, setError] = useState('');
+  const [input, setInput] = useState<MailContactPrepare | undefined>(() => readLocal<{ input: MailContactPrepare }>(key)?.input), [attempt, setAttempt] = useState(0);
+  useEffect(() => { const controller = new AbortController(); setBusy(true); setError(''); const timer = setTimeout(() => { void request<ContactDirectoryResult>('contacts/read', { epoch: snapshot.epoch, query, offset }, controller.signal, 30000).then(value => { if (!controller.signal.aborted) setData(value); }).catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Inbox senders could not load.'); }).finally(() => { if (!controller.signal.aborted) setBusy(false); }); }, query ? 250 : 0); return () => { clearTimeout(timer); controller.abort(); }; }, [query, offset, attempt, snapshot.epoch]);
+  const choose = (sender: InboxSender) => { if (sender.contactId) { open(sender.contactId); return; } if (!saveLocal(key, { input: sender.input })) { setError('Free browser storage before reviewing this sender.'); return; } setInput(sender.input); };
+  if (input) return <MailContactDialog returnLabel="Back to senders" input={input} journalKey={key + ':link'} close={() => { if (readLocal(key + ':link')) { close(); return; } saveLocal(key, null); setInput(undefined); setAttempt(value => value + 1); }} opened={id => { saveLocal(key, null); open(id); }} refresh={refresh}/>;
+  return <Dialog title="Add from Inbox" close={close}><p className="metadata">Choose a sender to review. Only people you add become contacts.</p><label className="search-input"><Search size={18}/><input autoFocus aria-label="Find an Inbox sender" placeholder="Name or email address…" value={query} onChange={event => { setQuery(event.target.value); setOffset(0); }}/></label>{error && <p role="alert" className="field-error">{error} <button onClick={() => setAttempt(value => value + 1)}>Retry</button></p>}{busy ? <p role="status">Checking your indexed Inbox…</p> : <><div className="contact-senders">{data?.senders.map(sender => <button key={sender.email} onClick={() => choose(sender)}><span className="contact-avatar" aria-hidden="true">{contactInitials(sender.name)}</span><span><strong>{sender.name}</strong><small>{sender.email}</small></span><small>{sender.contactId ? 'Open contact' : 'Review'}</small></button>)}</div>{!data?.senders.length && <Empty title={query ? 'No matching senders' : 'No indexed senders yet'}>{data?.accounts ? 'Inbox indexing will make more senders available here.' : 'Connect your mail accounts in Settings to use this list.'}</Empty>}{data && <footer className="contacts-sender-footer"><span className="metadata">{data.total ? `${offset + 1}–${Math.min(offset + 40, data.total)} of ${data.total} senders` : ''}{data.partial ? ' · Indexing continues' : ''}{data.unavailable ? ' · Some accounts unavailable' : ''}</span><div className="button-row"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 40))}>Previous</button><button disabled={data.next === null} onClick={() => setOffset(data.next!)}>Next</button></div></footer>}</>}</Dialog>;
+}

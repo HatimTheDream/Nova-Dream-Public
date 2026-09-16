@@ -1,0 +1,17 @@
+# PUBLIC_HOST is the exact <project>.vercel.app host, without scheme/path.
+# ORIGIN_HOST is a public DNS name pointing to this VPS, verified before use.
+# A valid automatically renewed public TLS certificate is mandatory.
+{$ORIGIN_HOST} {
+    header >Cache-Control "private, no-store"
+    header >CDN-Cache-Control "no-store"
+    header >Vercel-CDN-Cache-Control "no-store"
+    reverse_proxy 127.0.0.1:4386 {
+        header_up Host {$PUBLIC_HOST}
+        header_up -Tailscale-User-Login
+        transport http {
+            keepalive 4s
+        }
+    }
+}
+# Do not enable request-header logging: the origin credential is a request header.
+# Ports 4383 and 4386 remain loopback-only. Do not proxy the owner admin listener.
