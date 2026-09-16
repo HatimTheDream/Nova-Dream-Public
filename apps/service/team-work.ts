@@ -19,6 +19,17 @@ export class TeamWorkService {
   private closing=false;
   constructor(private store:Store,private assistant:Worker,private now=Date.now){
     for(const team of this.list())if(team.state==='running')this.save({...team,state:'paused',message:'The host restarted. Review the current stage before resuming.'});
+    for(const team of this.list())for(const request of team.requests){const operation=this.assistant.operations().find(o=>o.requestId===request.submit);if(operation)this.clearSubmittedDraft(team,operation);}
+  }
+  private clearSubmittedDraft(team:SavedTeam,operation:AssistantOperation){
+    const captured=operation.context;if(!captured)return;
+    const draft=this.store.readEntity('draft',captured.draftId);
+    if(!draft||draft.revision!==captured.draftRevision||draft.value.text!==operation.input)return;
+    // The complete briefing is already captured by the original operation. Clear
+    // only that exact generated draft; never erase later owner writing.
+    const key='team:draft-clear:'+operation.id;
+    const requestId=this.store.internalRead<string>(key)??this.store.internalWrite(key,randomUUID());
+    this.store.mutate(team.device,{requestId,epoch:team.epoch,kind:'draft',entityId:draft.id,expectedRevision:draft.revision,payload:{...draft.value,text:'',attachments:[]}});
   }
   private list(){return this.store.internalList<SavedTeam>('team:run:').filter(t=>t.epoch===this.store.epoch).sort((a,b)=>b.createdAt-a.createdAt);}
   private read(id:string){const team=this.list().find(t=>t.id===id);if(!team)throw new Fault(404,'team_missing','This team workflow is unavailable.');return team;}
@@ -72,6 +83,7 @@ export class TeamWorkService {
     let team=this.read(id),step=team.steps[team.next];if(!step){this.save({...team,state:team.state==='stopping'?'cancelled':'complete',message:'All team stages are finished. Review the final changes before publishing.'});return;}
     const request=team.requests[team.next];let operation=this.assistant.operations().find(o=>o.requestId===request.submit);
     if(operation){
+      this.clearSubmittedDraft(team,operation);
       if(!step.operationId){team.steps[team.next]={...step,operationId:operation.id,state:'running',startedAt:this.now()};team=this.save(team);step=team.steps[team.next];}
       if(team.state==='attention'&&['failed','cancelled'].includes(step.state)&&step.state===operation.state)return;
       if(!settled(operation)){
@@ -109,6 +121,7 @@ export class TeamWorkService {
     if((draft.value as Draft).text!==brief)throw new Fault(409,'team_draft_changed','This conversation has a changed draft. Your writing is kept; review it before continuing the workflow.');
     if(this.read(id).state!=='running'||this.closing)return;
     operation=this.assistant.submit(team.device,{requestId:request.submit,epoch:team.epoch,conversationId:conversation.id,conversationRevision:conversation.revision,draftId:draft.id,draftRevision:draft.revision,projectRevision:team.projectRevision},false,team.id);
+    this.clearSubmittedDraft(team,operation);
     team=this.read(id);team.steps[team.next]={...step,operationId:operation.id,state:'running',startedAt:this.now()};this.save({...team,message:`${step.agentName} is working on ${step.role}.`});
   }
   async close(){this.closing=true;if(this.timer)clearInterval(this.timer);await this.pending;for(const team of this.list())if(team.state==='running')this.save({...team,state:'paused',message:'The host paused this workflow during shutdown. Review its current stage before resuming.'});}

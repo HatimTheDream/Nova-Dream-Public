@@ -1,3 +1,7 @@
+## [1.5.2] — 2026-09-15
+
+- Clear a team stage’s exact submitted briefing from its composer after saving the original operation. Keep the briefing in history and preserve later owner writing, including after a restart.
+
 ## [1.5.1] — 2026-09-15
 
 - Keep Linux browser temporary socket paths short when a workspace lives inside a long recovery directory; preserve its durable profile and existing sandbox protections.

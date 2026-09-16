@@ -21,7 +21,7 @@ function fixture(t:any){
   const worker={
     conversations:()=>store.internalList<Conversation>('assistant:conversation:'),operations:()=>store.internalList<AssistantOperation>('assistant:operation:'),
     async create(_device:string,raw:any,teamId?:string){calls.push({type:'create',raw,teamId});let id=made.get(raw.requestId);if(!id){id=randomUUID();made.set(raw.requestId,id);store.internalWrite('assistant:conversation:'+id,{...raw,id,revision:1,state:'ready',workspace:project.value.workspace,nativeId:randomUUID()});}return store.internalRead<Conversation>('assistant:conversation:'+id)!;},
-    submit(_device:string,raw:any,_steering?:boolean,teamId?:string){const existing=worker.operations().find(o=>o.requestId===raw.requestId);if(existing)return existing;calls.push({type:'submit',raw,teamId});const op={...raw,id:randomUUID(),nativeRunId:randomUUID(),state:'running',text:''} as AssistantOperation;return store.internalWrite('assistant:operation:'+op.id,op);},
+    submit(_device:string,raw:any,_steering?:boolean,teamId?:string){const existing=worker.operations().find(o=>o.requestId===raw.requestId);if(existing)return existing;calls.push({type:'submit',raw,teamId});const draft=store.readEntity('draft',raw.draftId)!;const op={...raw,id:randomUUID(),input:draft.value.text,context:{draftId:draft.id,draftRevision:draft.revision},nativeRunId:randomUUID(),state:'running',text:''} as AssistantOperation;return store.internalWrite('assistant:operation:'+op.id,op);},
     async cancel(_device:string,raw:any){calls.push({type:'cancel',raw});const op=worker.operations().find(o=>o.id===raw.operationId)!;return store.internalWrite('assistant:operation:'+op.id,{...op,cancelRequested:true,state:'cancelled'});},
     async reconcile(){return {} as any;},
   };
@@ -36,7 +36,7 @@ test('team sessions share a checkout, preserve distinct responsibilities, and ha
   for(let i=0;i<3;i++){
     const run=f.current(),step=run.steps[i];assert(step.operationId,JSON.stringify(run));assert.equal(f.calls.filter(c=>c.type==='submit').length,i+1);
     const start=f.calls.filter(c=>c.type==='create')[i];assert.equal(start.raw.permissionMode,i===1?'workspace':'read-only');assert.equal(start.teamId,run.id);
-    const draft=f.store.readEntity('draft',f.calls.filter(c=>c.type==='submit')[i].raw.draftId)!;assert.match(draft.value.text,new RegExp(f.agents[i].value.name));if(i)assert.match(draft.value.text,new RegExp(`Evidence ${i-1}`));
+    const draft=f.store.readEntity('draft',f.calls.filter(c=>c.type==='submit')[i].raw.draftId)!;assert.equal(draft.value.text,'');const operation=f.worker.operations().find(o=>o.id===step.operationId)!;assert.match(operation.input,new RegExp(f.agents[i].value.name));if(i)assert.match(operation.input,new RegExp(`Evidence ${i-1}`));
     f.finish(`Evidence ${i}`);await f.service.reconcile();await f.service.reconcile();
   }
   assert.equal(f.current().state,'complete');assert.equal(f.calls.filter(c=>c.type==='submit').length,3);assert(f.current().steps.every(s=>s.state==='complete'));
@@ -66,4 +66,14 @@ test('a missing access binding is repaired before resuming a saved stage, and un
   assert(id);f.store.internalDelete('team:conversation:'+id);reject=false;f.control('resume');await f.service.reconcile();
   assert.equal(f.store.internalRead<any>('team:conversation:'+id)?.agentId,f.agents[0].id);
   f.finish('Still checking','unknown');await f.service.reconcile();const revision=f.current().revision;await f.service.reconcile();assert.equal(f.current().revision,revision);
+});
+
+test('submitted team briefings leave an empty composer and preserve later owner writing through restart',async t=>{
+ const f=fixture(t);f.service.create(f.device,f.input);await f.service.reconcile();
+ const operation=f.worker.operations()[0],draft=f.store.readEntity('draft',operation.context.draftId)!;
+ assert.equal(draft.value.text,'');assert.match(operation.input,/Owner request/);
+ f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'draft',entityId:draft.id,expectedRevision:draft.revision,payload:{...draft.value,text:'My unsent follow-up'}});
+ const recovered=new TeamWorkService(f.store,f.worker as unknown as AssistantService);
+ assert.equal(f.store.readEntity('draft',draft.id)!.value.text,'My unsent follow-up');
+ await recovered.close();
 });
