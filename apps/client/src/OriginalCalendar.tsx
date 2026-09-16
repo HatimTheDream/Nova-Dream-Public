@@ -1,3 +1,4 @@
+import { LoadingRing } from './ModuleLoading';
 import { CalendarTaskEditor } from './CalendarTaskEditor';
 import { calendarCompletionKey, calendarCompletionTarget } from '../../../packages/domain/calendar-completion';
 import type { CalendarTaskRow } from './task-calendar-rows';
@@ -10,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
 import { dayInZone } from '../../../packages/domain/tasks';
-import { calendarWindowIdentity } from './calendar-window';
+import { calendarWindowIdentity, preparedCalendarWindow } from './calendar-window';
 import { readLocal, request, saveLocal } from './api';
 import CalendarPage from './dreamclaw/pages/Calendar';
 import { CalendarStoreProvider, createCalendarStore } from './dreamclaw/stores/calendarStore';
@@ -26,9 +27,9 @@ import { CalendarAccountSetup } from './AccountSetup';
 type Props = { snapshot: Snapshot; online: boolean; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void };
 type View = { day: string; view: CalendarSettings['defaultView']; filter?: CalendarFilter };
 export default function OriginalCalendar(props: Props) {
-  const [identity, setIdentity] = useState<{ id: string; previous?: string }>();
+  const [identity, setIdentity] = useState(preparedCalendarWindow);
   useEffect(() => { let live = true; void Promise.all([calendarWindowIdentity(), calendarI18nReady]).then(([identity]) => { if (live) setIdentity(identity); }); return () => { live = false; }; }, []);
-  return identity ? <ConnectedCalendar key={`${props.snapshot.deviceId}:${identity.id}:${props.snapshot.epoch}:${props.snapshot.layout.value.timezone}`} {...props} windowId={identity.id} previousWindowId={identity.previous}/> : <main className="page-scroll"><p>Opening your calendar…</p></main>;
+  return identity ? <ConnectedCalendar key={`${props.snapshot.deviceId}:${identity.id}:${props.snapshot.epoch}:${props.snapshot.layout.value.timezone}`} {...props} windowId={identity.id} previousWindowId={identity.previous}/> : <main className="page-scroll"><LoadingRing label="Opening your calendar…"/></main>;
 }
 function ConnectedCalendar({ snapshot, windowId, previousWindowId, editTask, openSettings, openInbox, openContent, editRoutine }: Props & { windowId: string; previousWindowId?: string }) {
   const [eventTask, setEventTask] = useState<{ row: CalendarTaskRow; state: SharedCalendarState; original: OriginalEvent } | null>(null);

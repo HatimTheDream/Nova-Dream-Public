@@ -89,7 +89,10 @@ import assert from 'node:assert/strict';
 // 1.5.8 adds measured UTF-8 transfer and Inbox preparation progress. Final total:
 // 580,118 (+927 / 0.16% over 1.5.7). Bound this addition at
 // 581 KB; the 180 KB startup and 80 KB deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 581000, deferredChunk: 80000 };
+// 1.5.10 warms existing modules, first views and art before entry. Preview total
+// 582,093 (+1,585 / 0.27% over 1.5.9). Bound at 583 KB while retaining
+// entry/chunk ceilings. Runtime preloading now intentionally fetches deferred JS.
+export const clientLimits = { startup: 180000, total: 583000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

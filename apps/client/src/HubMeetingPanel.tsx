@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { lazy } from './preload-lazy';
 import type { HubMember } from '../../../packages/domain/agent-hub';
 import type { HubMeeting, HubMeetingState } from '../../../packages/domain/hub-meetings';
 import type { HubLayout } from '../../../packages/domain/hub-layout';

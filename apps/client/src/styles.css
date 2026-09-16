@@ -947,9 +947,7 @@
 
 .startup-meter { width: min(280px, 100%); }
 .module-loading { flex: 1; min-height: 240px; display: grid; place-items: center; padding: 32px 24px; }
-.module-loading-card { width: min(100%, 300px); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
-.module-loading-card img { object-fit: contain; }
-.module-loading-card h2 { margin: 0; color: var(--text); font-size: 19px; font-weight: 650; }
-.module-loading-card > p { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.65; }
-.module-loading-card .startup-progress { width: min(220px, 100%); }
-.module-loading-card .startup-track { height: 5px; }
+.module-loading-error { max-width: 300px; text-align: center; }
+.nova-loading-ring, .dreamclaw-module .nova-loading-ring { display: inline-block; flex: 0 0 auto; width: 28px; height: 28px; border: 3px solid var(--brand-red); border-top-color: transparent; border-radius: 50%; animation: nova-loading-clockwise .8s linear infinite; vertical-align: middle; }
+@keyframes nova-loading-clockwise { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .nova-loading-ring, .dreamclaw-module .nova-loading-ring { animation-duration: 2.4s; } }

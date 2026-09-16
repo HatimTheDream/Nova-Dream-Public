@@ -1,4 +1,6 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { LoadingRing } from './ModuleLoading';
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy } from './preload-lazy';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { skillAvailability, type InstalledSkills } from '../../../packages/domain/agent-skills';
 import { readLocal, request, saveLocal } from './api';
@@ -9,7 +11,7 @@ const Workshop = lazy(() => import('./SkillWorkshop'));
 export default function AgentSkills({ snapshot }: { snapshot: Snapshot }) {
   const key = `e3:skills-view:${snapshot.deviceId}:${snapshot.epoch}`;
   const [view, setView] = useState(() => readLocal<string>(key) === 'proposals' ? 'proposals' : 'installed');
-  return <><nav className="record-tabs" aria-label="Skill views"><button aria-pressed={view === 'installed'} onClick={() => { setView('installed'); saveLocal(key, 'installed'); }}>Installed</button><button aria-pressed={view === 'proposals'} onClick={() => { setView('proposals'); saveLocal(key, 'proposals'); }}>Proposals & reviews</button></nav>{view === 'installed' ? <Installed/> : <Suspense fallback={<p role="status">Opening skill proposals…</p>}><Workshop snapshot={snapshot}/></Suspense>}</>;
+  return <><nav className="record-tabs" aria-label="Skill views"><button aria-pressed={view === 'installed'} onClick={() => { setView('installed'); saveLocal(key, 'installed'); }}>Installed</button><button aria-pressed={view === 'proposals'} onClick={() => { setView('proposals'); saveLocal(key, 'proposals'); }}>Proposals & reviews</button></nav>{view === 'installed' ? <Installed/> : <Suspense fallback={<LoadingRing label="Opening skill proposals…"/>}><Workshop snapshot={snapshot}/></Suspense>}</>;
 }
 function Installed() {
   const [state, setState] = useState<InstalledSkills>(), [error, setError] = useState(''), [busy, setBusy] = useState(false), [refresh, setRefresh] = useState(0);

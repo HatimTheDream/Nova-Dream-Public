@@ -1,4 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { LoadingRing } from './ModuleLoading';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy } from './preload-lazy';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import type { AccessContext } from '../../../packages/domain/phone';
 import { Connections } from './Connections';
@@ -27,7 +29,7 @@ function SettingsPanel({ id, active, children }: { id: SettingsTab; active: bool
   const [visited, setVisited] = useState(active);
   useEffect(() => { if (active) setVisited(true); }, [active]);
   return <section id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} tabIndex={0} hidden={!active} className="settings-panel">
-    {(active || visited) && <Suspense fallback={<p role="status">Opening settings…</p>}>{children}</Suspense>}
+    {(active || visited) && <Suspense fallback={<LoadingRing label="Opening settings…"/>}>{children}</Suspense>}
   </section>;
 }
 

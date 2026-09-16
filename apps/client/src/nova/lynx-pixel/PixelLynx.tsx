@@ -1,3 +1,4 @@
+import { LoadingRing } from '../../ModuleLoading';
 import { useEffect, useRef, useState } from 'react';
 import type { LynxAppearance } from '../../../../../packages/domain/lynx-appearance';
 import { drawLynx, loadPixelAssets, type PixelPose } from './compositor';
@@ -40,6 +41,6 @@ export function PixelLynx(props: Props) {
   },[]);
   return <span className="pixel-lynx" data-pixel-state={state} style={{width:size}}>
     <canvas ref={ref} width={128} height={128} role={label?'img':undefined} aria-label={label} aria-hidden={label?undefined:true}/>
-    {state!=='ready'&&<span className="pixel-lynx-placeholder" role="status">{state==='unavailable'?'Character unavailable':'Loading character…'}</span>}
+    {state!=='ready'&&<span className="pixel-lynx-placeholder" role="status">{state==='unavailable'?'Character unavailable':<LoadingRing label="Loading character"/>}</span>}
   </span>;
 }

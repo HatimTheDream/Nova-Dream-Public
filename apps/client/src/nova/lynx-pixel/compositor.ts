@@ -1,3 +1,4 @@
+import furnitureUrl from './assets/nova-hub-furniture-p01.png';
 import { lynxDefaultColors, type LynxAppearance } from '../../../../../packages/domain/lynx-appearance';
 import { lynxDirections, motionPhase, type LynxDirection, type LynxExpression, type LynxMotion } from '../../../../../packages/domain/lynx-motion';
 import manifest from './assets/manifest.json';
@@ -17,7 +18,7 @@ import walkRig from './assets/walk-rig-p02.json';
 import { bendPixels, completeFarArm, largestPixelComponent, torsoEnvelopes } from './raster';
 
 export const SPRITE_SIZE = 128;
-const urls = { body: bodyUrl, regions: regionsUrl, parts: partsUrl, shirt: shirtUrl, trousers: trousersUrl, cardigan: cardiganUrl, jacket: jacketUrl, satchel: satchelUrl, blazer: blazerUrl, suitTrousers: suitTrousersUrl, dressShirt: dressShirtUrl, tie: tieUrl };
+const urls = { furniture: furnitureUrl, body: bodyUrl, regions: regionsUrl, parts: partsUrl, shirt: shirtUrl, trousers: trousersUrl, cardigan: cardiganUrl, jacket: jacketUrl, satchel: satchelUrl, blazer: blazerUrl, suitTrousers: suitTrousersUrl, dressShirt: dressShirtUrl, tie: tieUrl };
 type AssetName = keyof typeof urls;
 type PixelAssets = Record<AssetName, HTMLImageElement>;
 let loaded: Promise<PixelAssets> | undefined;

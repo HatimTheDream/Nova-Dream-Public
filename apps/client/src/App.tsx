@@ -6,7 +6,10 @@ import { savedRecordMatches } from './saved-record-search';
 import { reminderItems, type WorkspaceReminder } from './reminder-items';
 import { keepCalendarTarget } from './calendar-target';
 import { calendarWindowIdentity } from './calendar-window';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, preloadModules } from './preload-lazy';
+import { prepareInitialViews } from './prepared-views';
+import { inboxLoadingPercent } from './inbox-startup-progress';
 import { Bell, Bot, CalendarDays, Check, CheckSquare2, ChevronDown, CircleHelp, CloudOff, ContentIcon, FileText, Home as HomeIcon, Inbox, Menu, PanelLeft, MessageSquare, MoreHorizontal, Moon, Plus, Search, Settings, Sun, Users, UserRound, X, type Icon as AppIcon } from './icons';
 import { defaultLayout, emptyDraft, moduleIds, type Command, type Entity, type Layout, type ModuleId, type Snapshot, type Task } from '../../../packages/domain/contracts';
 import { ApiError, commit, readLocal, saveLocal } from './api';
@@ -53,15 +56,35 @@ function AppUpdate({ initial = false }: { initial?: boolean }) {
 export function App() {
   const workspace = useWorkspace();
   const [startupComplete, setStartupComplete] = useState(false);
+  const [preparation, setPreparation] = useState<number>();
+  const [startupError, setStartupError] = useState(''), [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!workspace.snapshot) { setStartupComplete(false); return; }
-    let second = 0;
-    const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => setStartupComplete(true)); });
-    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
-  }, [!!workspace.snapshot]);
+    setStartupComplete(false); setStartupError('');
+    if (!workspace.snapshot || workspace.access?.requiresPairing) { setPreparation(undefined); return; }
+    let active = true, first = 0, second = 0;
+    const snapshot = workspace.snapshot;
+    const restricted = !workspace.online || workspace.access?.recoveryLocal || workspace.access?.recovery;
+    const parts = { modules: 0, inbox: 0, views: 0, art: 0 };
+    const report = () => { if (active) setPreparation(Math.min(99, Math.floor(10 + parts.modules * 15 + parts.inbox * 60 + parts.views * 10 + parts.art * 5))); };
+    report();
+    if (restricted) { setPreparation(100); setStartupComplete(true); return; }
+    void (async () => {
+      await preloadModules((done, total) => { parts.modules = total ? done / total : 1; report(); });
+      parts.modules = 1; report();
+      await Promise.all([
+        restricted ? Promise.resolve() : import('./OriginalInbox').then(module => module.prepareInboxStartup(snapshot, progress => { parts.inbox = inboxLoadingPercent(progress) / 100; report(); })),
+        restricted ? Promise.resolve() : prepareInitialViews(snapshot).then(() => { parts.views = 1; report(); }),
+        import('./nova/lynx-pixel/compositor').then(module => module.loadPixelAssets()).then(() => { parts.art = 1; report(); }),
+      ]);
+      if (!active) return;
+      setPreparation(100);
+      first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { if (active) setStartupComplete(true); }); });
+    })().catch(() => { if (active) setStartupError('A few things could not get ready. Reconnect and try again.'); });
+    return () => { active = false; cancelAnimationFrame(first); cancelAnimationFrame(second); };
+  }, [workspace.snapshot?.epoch, workspace.snapshot?.deviceId, workspace.access?.requiresPairing, attempt]);
   if (workspace.access?.requiresPairing) return <Suspense fallback={<ModuleLoading module="Phone pairing"/>}><PhonePairingScreen paired={workspace.reconnect}/></Suspense>;
   if (!workspace.snapshot && workspace.updateRequired) return <main className="startup"><AppUpdate initial/></main>;
-  if (!workspace.snapshot || !startupComplete) return <StartupScreen complete={!!workspace.snapshot} phase={workspace.startupPhase} download={workspace.download} error={workspace.error} reconnect={() => void workspace.reconnect()}/>;
+  if (!workspace.snapshot || !startupComplete) return <StartupScreen complete={preparation === 100} preparation={preparation} phase={workspace.startupPhase} download={workspace.download} error={startupError || workspace.error} reconnect={() => { if (workspace.snapshot) setAttempt(value => value + 1); else void workspace.reconnect(); }}/>;
   return <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>;
 }
 function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {

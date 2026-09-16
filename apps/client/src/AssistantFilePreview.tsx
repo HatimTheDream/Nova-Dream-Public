@@ -1,3 +1,4 @@
+import { LoadingRing } from './ModuleLoading';
 import { useEffect, useState } from 'react';
 import type { Attachment } from '../../../packages/domain/contracts';
 import { ReplyText } from './ReplyText';
@@ -24,5 +25,5 @@ export function AssistantFilePreview({ file }: { file: Attachment }) {
     })();
     return () => { abort.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [file.id, file.sha256, file.size, file.name]);
-  return <div className="assistant-file-preview">{error ? <p role="alert">{error}</p> : !content ? <p role="status" className="metadata">Opening file…</p> : content.image ? <img src={content.image} alt={file.name} onError={() => setError('The image could not be displayed. You can download the original.')}/> : content.text !== undefined ? <>{/\.md$/i.test(file.name) ? <ReplyText text={content.text} role="assistant"/> : <pre>{content.text}</pre>}{content.shortened && <p className="metadata">Preview shortened. Download includes the full file.</p>}</> : <p className="metadata">Download this file to open it in its app.</p>}</div>;
+  return <div className="assistant-file-preview">{error ? <p role="alert">{error}</p> : !content ? <LoadingRing label="Opening file…"/> : content.image ? <img src={content.image} alt={file.name} onError={() => setError('The image could not be displayed. You can download the original.')}/> : content.text !== undefined ? <>{/\.md$/i.test(file.name) ? <ReplyText text={content.text} role="assistant"/> : <pre>{content.text}</pre>}{content.shortened && <p className="metadata">Preview shortened. Download includes the full file.</p>}</> : <p className="metadata">Download this file to open it in its app.</p>}</div>;
 }

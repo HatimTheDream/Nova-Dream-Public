@@ -1,3 +1,4 @@
+import { LoadingRing } from './ModuleLoading';
 import { useEffect, useRef, useState } from 'react';
 import { calendarWindowIdentity } from './calendar-window';
 import { canonical } from '../../../packages/domain/contracts';
@@ -14,7 +15,7 @@ type Kept = { id: string; text: string; projectId: string | null; expectedRevisi
 export function MemoryEditor(props: EditorProps) {
   const [owner, setOwner] = useState<{ id: string; previous?: string }>();
   useEffect(() => { let live = true; void calendarWindowIdentity().then(value => { if (live) setOwner(value); }); return () => { live = false; }; }, []);
-  return owner ? <MemoryWriting key={owner.id} {...props} owner={owner}/> : <Dialog title="Save to memory" close={props.close}><p role="status">Opening your saved writing…</p></Dialog>;
+  return owner ? <MemoryWriting key={owner.id} {...props} owner={owner}/> : <Dialog title="Save to memory" close={props.close}><LoadingRing label="Opening your saved writing…"/></Dialog>;
 }
 
 function MemoryWriting({ snapshot, entry, seed, refresh, close, owner }: EditorProps & { owner: { id: string; previous?: string } }) {

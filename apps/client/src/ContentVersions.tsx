@@ -1,4 +1,5 @@
-import {lazy,Suspense,useEffect,useState} from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { lazy } from './preload-lazy';
 import type {Content} from '../../../packages/domain/workspace-records';
 import type {Entity} from '../../../packages/domain/contracts';
 import {request} from './api';

@@ -1,3 +1,4 @@
+import { readPreparedView, keepPreparedView, calendarReadPath, calendarViewRange } from '../prepared-views';
 import { calendarTaskRows, type CalendarTaskRow } from '../task-calendar-rows';
 import type { CalendarState as HostState, LocalCalendarOccurrence, CalendarRange } from '../../../../packages/domain/calendar';
 import type { Snapshot } from '../../../../packages/domain/contracts';
@@ -17,10 +18,7 @@ export function createCalendarHost({ snapshot, windowId, previousWindowId, navig
   const sync = createCalendarSync(snapshot.epoch, snapshot.deviceId);
   const captured = new Map<string, LocalCalendarOccurrence>();
   const providerTargets = new Map<string, ProviderCalendarTarget>();
-  const viewRange = (day: string): CalendarRange => {
-    const first = day.slice(0, 8) + '01', weekday = new Date(first + 'T12:00:00Z').getUTCDay(), from = addDays(first, -weekday);
-    return { from, to: addDays(from, 42), timezone: snapshot.layout.value.timezone };
-  };
+  const viewRange = (day: string): CalendarRange => calendarViewRange(day, snapshot.layout.value.timezone);
   const project = (event: HostState['events'][number], state: HostState) => {
     const result = projectCalendarEvent(event, state);
     if (result.writeToken) {
@@ -33,6 +31,23 @@ export function createCalendarHost({ snapshot, windowId, previousWindowId, navig
       }
     }
     return result;
+  };
+  const projectRead = (state: HostState): CalendarRead => {
+      latest = state;
+      const events = state.events.map(event => project(event, state));
+      const sources = state.sources.filter(source => source.selected);
+      const partial = state.eventsLimited || sources.some(source => ['stale', 'unavailable'].includes(source.state));
+      const providers = new Set(sources.map(source => source.provider));
+      return {
+        calendars: state.sources, accountMessages: state.accountMessages,
+        syncing: state.jobs.some(job => job.state === 'running'),
+        events: events.filter(event => !['task', 'content'].includes(event.source)), operationalEvents: events.filter(event => ['task', 'content'].includes(event.source)),
+        queryState: partial ? 'partial' : 'ready',
+        error: state.eventsLimited ? 'This calendar reached its event limit. Select fewer sources to see more.' : partial ? 'Some connected calendars need a refresh. Saved events remain visible.' : null,
+        syncMode: providers.size > 1 ? 'connected' : providers.has('google') ? 'google' : providers.has('microsoft') ? 'microsoft' : 'local-only',
+        lastSyncedAt: sources.map(source => source.cache?.checkedAt).filter((date): date is string => Boolean(date)).sort()[0] ?? null,
+        sourceStates: sources.map(source => ({ provider: source.provider, account: source.accountLabel, status: source.state === 'ready' ? 'ready' : 'error', eventCount: state.events.filter(event => event.sourceId === source.id).length })),
+      } satisfies CalendarRead;
   };
   const findOriginal = (event: CalendarEvent) => {
     const value = event.writeToken ? captured.get(event.writeToken) : undefined;
@@ -80,24 +95,15 @@ export function createCalendarHost({ snapshot, windowId, previousWindowId, navig
       latest = state;
       editor.getState().begin(project(event, state));
     },
+    readCached(month) {
+      const state = readPreparedView<HostState>(snapshot, calendarReadPath(viewRange(month.startDate)));
+      return state && projectRead(state);
+    },
     async read(month, force, signal) {
       const range = viewRange(month.startDate);
       const state = await sync.load(range, force, signal);
-      latest = state;
-      const events = state.events.map(event => project(event, state));
-      const sources = state.sources.filter(source => source.selected);
-      const partial = state.eventsLimited || sources.some(source => ['stale', 'unavailable'].includes(source.state));
-      const providers = new Set(sources.map(source => source.provider));
-      return {
-        calendars: state.sources, accountMessages: state.accountMessages,
-        syncing: state.jobs.some(job => job.state === 'running'),
-        events: events.filter(event => !['task', 'content'].includes(event.source)), operationalEvents: events.filter(event => ['task', 'content'].includes(event.source)),
-        queryState: partial ? 'partial' : 'ready',
-        error: state.eventsLimited ? 'This calendar reached its event limit. Select fewer sources to see more.' : partial ? 'Some connected calendars need a refresh. Saved events remain visible.' : null,
-        syncMode: providers.size > 1 ? 'connected' : providers.has('google') ? 'google' : providers.has('microsoft') ? 'microsoft' : 'local-only',
-        lastSyncedAt: sources.map(source => source.cache?.checkedAt).filter((date): date is string => Boolean(date)).sort()[0] ?? null,
-        sourceStates: sources.map(source => ({ provider: source.provider, account: source.accountLabel, status: source.state === 'ready' ? 'ready' : 'error', eventCount: state.events.filter(event => event.sourceId === source.id).length })),
-      } satisfies CalendarRead;
+      keepPreparedView(snapshot, calendarReadPath(range), state);
+      return projectRead(state);
     },
     async selectCalendar(id, selected) {
       if (!latest) throw Error('Wait for Calendar to finish opening.');

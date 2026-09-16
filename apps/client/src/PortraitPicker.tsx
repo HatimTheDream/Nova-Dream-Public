@@ -1,4 +1,6 @@
-import { lazy, Suspense } from 'react';
+import { LoadingRing } from './ModuleLoading';
+import { Suspense } from 'react';
+import { lazy } from './preload-lazy';
 import { createLynxAppearance, resolveLynxAppearance } from '../../../packages/domain/lynx-appearance';
 import { Portrait } from './nova/lynx-portrait/Portrait';
 import { createPortraitRecipe, PORTRAIT_BACKGROUNDS, PORTRAIT_FRAMES, resolvePortraitRecipe, type PortraitBackgroundId, type PortraitFrameId, type PortraitCropId } from './nova/lynx-portrait/recipe';
@@ -7,7 +9,7 @@ const LynxAppearancePicker = lazy(() => import('./nova/lynx-pixel/LynxAppearance
 export function PortraitPicker({ value, change, name }: { value: Record<string, unknown> | null; change: (value: Record<string, unknown> | null) => void; name: string }) {
   const resolved = resolvePortraitRecipe(value);
   const lynx = resolveLynxAppearance(value);
-  if (lynx.status === 'ready') return <div className="record-portrait-picker"><h3>Character</h3><Suspense fallback={<p role="status">Opening character choices…</p>}><LynxAppearancePicker value={lynx.recipe} change={change} name={name}/></Suspense><details><summary>Original portraits</summary><div className="button-row"><button type="button" onClick={() => change({ ...createPortraitRecipe('nova-original') })}>Nova original</button><button type="button" onClick={() => change({ ...createPortraitRecipe('james-original') })}>James original</button></div></details><button className="text-button" type="button" onClick={() => change(null)}>Clear character selection</button></div>;
+  if (lynx.status === 'ready') return <div className="record-portrait-picker"><h3>Character</h3><Suspense fallback={<LoadingRing label="Opening character choices…"/>}><LynxAppearancePicker value={lynx.recipe} change={change} name={name}/></Suspense><details><summary>Original portraits</summary><div className="button-row"><button type="button" onClick={() => change({ ...createPortraitRecipe('nova-original') })}>Nova original</button><button type="button" onClick={() => change({ ...createPortraitRecipe('james-original') })}>James original</button></div></details><button className="text-button" type="button" onClick={() => change(null)}>Clear character selection</button></div>;
   return <div className={`record-portrait-picker${resolved.status === 'ready' ? '' : ' is-unselected'}`}>
     <Portrait recipe={value} size="profile" accessibility={{ mode: 'informative', label: `${name || 'Your'} portrait` }}/>
     <div className="record-portrait-controls"><h3>Portrait</h3>

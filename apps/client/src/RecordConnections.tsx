@@ -1,3 +1,4 @@
+import { LoadingRing } from './ModuleLoading';
 import type { MailContactSource } from '../../../packages/domain/mail-contact';
 import type { Contact } from '../../../packages/domain/workspace-records';
 import { ContentSource } from './ContentSource';
@@ -61,7 +62,7 @@ export function RecordHistory({ kind, entity, close }: { kind: RecordKind; entit
     <p className="metadata">Read an exact saved version. Your current device edits stay in the editor.</p>
     {error && <p role="alert" className="field-error">{error}</p>}{!versions.length && !busy && !error && <Empty title="No saved versions yet."/>}
     <div className="record-history-list">{versions.map(version => <button key={version.revision} aria-pressed={selected?.revision === version.revision} onClick={() => setSelected(version)}><strong>Version {version.revision}</strong><span>{new Date(version.updatedAt).toLocaleString()}</span></button>)}</div>
-    {busy && <p role="status">Loading saved history…</p>}{(before || error) && <button disabled={busy} onClick={() => void load(before ?? undefined)}>{error ? 'Retry history' : 'Load earlier versions'}</button>}
+    {busy && <LoadingRing label="Loading saved history…"/>}{(before || error) && <button disabled={busy} onClick={() => void load(before ?? undefined)}>{error ? 'Retry history' : 'Load earlier versions'}</button>}
     {selected && <section className="record-history-preview"><h3>Version {selected.revision}</h3>{kind === 'content' ? <><p>{(selected.value as Content).brief}</p><pre>{(selected.value as Content).body}</pre><button onClick={() => exportContent(selected.value as Content, selected.revision)}>Export version {selected.revision}</button><ContentSource content={selected.value as Content}/></> : <dl>{Object.entries(selected.value).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}</dd></div>)}</dl>}</section>}
   </Dialog>;
 }

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useState, type CSSProperties, type ReactNode } from 'react';
+import { Suspense, useState, type CSSProperties, type ReactNode } from 'react';
+import { lazy } from '../../preload-lazy';
 import { resolveLynxAppearance } from '../../../../../packages/domain/lynx-appearance';
 import { PORTRAIT_ART, PORTRAIT_BACKGROUNDS, PORTRAIT_FRAMES, resolvePortraitRecipe, type PortraitRecipe } from './recipe';
 import { PORTRAIT_ASSET_URLS } from './assets';

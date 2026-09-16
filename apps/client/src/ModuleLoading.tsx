@@ -1,14 +1,8 @@
-import { LoadingProgress } from './LoadingProgress';
-import { moduleLoadingSubtitles } from './loading-progress';
-
-export function ModuleLoading({ module, percent, error, retry }: { module: string; percent?: number; error?: string; retry?: () => void }) {
+export function LoadingRing({ label = 'Loading' }: { label?: string }) {
+  return <span className="nova-loading-ring" role="status" aria-label={label}/>;
+}
+export function ModuleLoading({ module, error, retry }: { module: string; percent?: number; error?: string; retry?: () => void }) {
   return <section className="module-loading" aria-label={`${module} loading`} aria-busy={!error}>
-    <div className="module-loading-card">
-      <img src="/icons/nova-dream-brand-192-v2.png" width="52" height="52" alt=""/>
-      <h2>{module}</h2>
-      <p role={error ? 'alert' : 'status'}>{error || moduleLoadingSubtitles[module] || 'Getting a few good things ready…'}</p>
-      <LoadingProgress percent={percent} label={`${module} loading`} paused={!!error}/>
-      {error && retry && <button onClick={retry}>Try again</button>}
-    </div>
+    {error ? <div className="module-loading-error"><p role="alert">{error}</p>{retry && <button onClick={retry}>Try again</button>}</div> : <LoadingRing label={`Loading ${module}`}/>}
   </section>;
 }

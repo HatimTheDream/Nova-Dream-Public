@@ -1,6 +1,7 @@
 // Extracted from Nova Dream MessageBubble's shared/final/streaming Markdown.
 // Native artifacts continue to use the E3 source-bearing output components.
-import { lazy, memo, Suspense, useId } from 'react';
+import { memo, Suspense, useId } from 'react';
+import { lazy } from '../../../preload-lazy';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';

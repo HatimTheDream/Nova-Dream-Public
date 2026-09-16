@@ -1,3 +1,4 @@
+import { LoadingRing } from '../../../ModuleLoading';
 import { calendarDraftKey } from '../../../calendar-edit';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -168,13 +169,7 @@ export default function CalendarPage() {
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_240px] lg:overflow-hidden">
           <main className="relative flex min-h-[500px] min-w-0 flex-col overflow-hidden lg:min-h-0">
             {loading && events.length === 0 ? (
-              <div className="grid flex-1 place-items-center" aria-live="polite">
-                <div className="w-full max-w-sm space-y-3 px-6 text-center">
-                  <CalendarDays size={28} tone="gold" className="mx-auto opacity-70" />
-                  <p className="text-[13px] font-semibold text-aegis-text-muted">Loading {ENGLISH_DATE.format(selectedDate)}</p>
-                  <div className="mx-auto h-1.5 w-40 overflow-hidden rounded-full bg-aegis-elevated"><div className="h-full w-2/3 animate-pulse rounded-full bg-aegis-primary motion-reduce:animate-none" /></div>
-                </div>
-              </div>
+              <div className="grid flex-1 place-items-center"><LoadingRing label="Loading Calendar"/></div>
             ) : view === 'month' ? (
               <MonthView onDateClick={handleDateClick} onEventClick={handleEventClick} />
             ) : view === 'week' ? (
@@ -182,7 +177,7 @@ export default function CalendarPage() {
             ) : (
               <DayView onEventClick={handleEventClick} />
             )}
-            {loading && events.length > 0 && <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-aegis-elevated"><div className="h-full w-1/3 animate-pulse bg-aegis-primary motion-reduce:animate-none" /></div>}
+            {loading && events.length > 0 && <div className="pointer-events-none absolute right-3 top-3"><LoadingRing label="Refreshing Calendar"/></div>}
           </main>
 
           <aside className="grid min-h-0 gap-3 border-t border-aegis-border bg-aegis-surface-solid p-3 sm:grid-cols-2 lg:block lg:overflow-y-auto lg:border-t-0 lg:p-4" style={{ borderInlineStart: '1px solid var(--aegis-border)' }}>

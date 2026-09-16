@@ -13,7 +13,7 @@ import { useStore } from 'zustand';
 import type { AccountsState } from '../../../packages/domain/accounts';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { readLocal, request, saveLocal } from './api';
-import { calendarWindowIdentity } from './calendar-window';
+import { calendarWindowIdentity, preparedCalendarWindow } from './calendar-window';
 import InboxPage from './dreamclaw/pages/Inbox';
 import { createInboxMailApi, installInboxMailApi, getInboxMailApi, subscribeInboxMailScope } from './dreamclaw/inbox-transport';
 import { createInboxWriting, InboxHostProvider, inboxFiles, type InboxHost, type InboxNotice } from './dreamclaw/inbox-host';
@@ -42,7 +42,7 @@ function acceptMailScope(snapshot: Snapshot, accounts: AccountsState) {
 }
 // Preparation starts on the Inbox route and survives navigation away. Reopening
 // attaches to the same work instead of starting a second preparation pass.
-let startup: { key: string; work: Promise<AccountsState>; progress: InboxStartupProgress; report?: (progress: InboxStartupProgress) => void; settled: boolean } | undefined;
+let startup: { key: string; work: Promise<AccountsState>; progress: InboxStartupProgress; report?: (progress: InboxStartupProgress) => void; settled: boolean; accounts?: AccountsState } | undefined;
 export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: InboxStartupProgress) => void): Promise<AccountsState> {
   const key = `${snapshot.epoch}:${snapshot.deviceId}`;
   if (startup?.key === key && startup.settled && startup.progress.phase === 'ready') {
@@ -61,7 +61,7 @@ export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: Inbo
     if (report) { report(startup.progress); if (!startup.settled) startup.report = report; }
     return startup.work;
   }
-  const state = { key, work: Promise.resolve(undefined as unknown as AccountsState), progress: { phase: 'accounts', completed: 0 } as InboxStartupProgress, report, settled: false };
+  const state: NonNullable<typeof startup> = { key, work: Promise.resolve(undefined as unknown as AccountsState), progress: { phase: 'accounts', completed: 0 } as InboxStartupProgress, report, settled: false };
   startup = state;
   const publish = (progress: InboxStartupProgress) => { state.progress = progress; state.report?.(progress); };
   publish(state.progress);
@@ -93,6 +93,7 @@ export function prepareInboxStartup(snapshot: Snapshot, report?: (progress: Inbo
         api.assertCurrent();
         await api.preloadThread({ provider: account.provider === 'gmail' ? 'google' : 'microsoft', accountId: account.accountId, threadId: thread.id, messageId: thread.sourceMessageId }).catch(() => { api.assertCurrent(); });
     }, publish);
+    state.accounts = accounts;
     publish({ phase: 'ready', completed: recent.length, total: recent.length });
     return accounts;
   })();
@@ -106,10 +107,11 @@ const retainedSources = new Map<string, ReturnType<typeof createInboxSource>>();
 const retainedFollowups = new Map<string, ReturnType<typeof createInboxFollowups>>();
 const retainedDelivery = new Map<string, ReturnType<typeof createInboxDeliveryJournal>>();
 export default function OriginalInbox(props: Props) {
-  const [identity, setIdentity] = useState<{ id: string; previous?: string }>();
-  const [accounts, setAccounts] = useState<AccountsState>();
+  const prepared = startup?.key === `${props.snapshot.epoch}:${props.snapshot.deviceId}` && startup.settled && startup.progress.phase === 'ready' ? startup : undefined;
+  const [identity, setIdentity] = useState(preparedCalendarWindow);
+  const [accounts, setAccounts] = useState<AccountsState | undefined>(prepared?.accounts);
   const [progress, setProgress] = useState<InboxStartupProgress>({ phase: 'accounts', completed: 0 });
-  const [ready, setReady] = useState(false), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
+  const [ready, setReady] = useState(!!prepared && !!identity), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true, first = 0, second = 0;
     setError('');

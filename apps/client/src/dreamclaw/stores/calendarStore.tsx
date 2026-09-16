@@ -22,6 +22,7 @@ export interface CalendarHost {
   editor: ReturnType<typeof createCalendarEditor>;
   openSubtasks?(event: CalendarEvent): void;
   openLinkedEvent?(target: import('../../calendar-target').ProviderCalendarNavigation, signal: AbortSignal): Promise<void>;
+  readCached?(range: CalendarMonthRange): CalendarRead | undefined;
   read(range: CalendarMonthRange, force: boolean, signal: AbortSignal): Promise<CalendarRead>;
   selectCalendar?(id: string, selected: boolean): Promise<void>;
   save(data: CalendarWrite | Partial<CalendarEvent>, original?: CalendarEvent): Promise<void>;
@@ -61,6 +62,7 @@ export function createCalendarStore(host: CalendarHost, initial: { date: Date; v
       filter: initial.filter ?? { ...DEFAULT_FILTER, sources: [...DEFAULT_FILTER.sources], categories: [...DEFAULT_FILTER.categories] },
       activeRange: rangeFor(initial.date), events: [], operationalEvents: [], loading: false,
       queryState: 'ready', error: null, syncMode: 'local-only', sourceStates: [], lastSyncedAt: null,
+      ...host.readCached?.(rangeFor(initial.date)),
       setView(view) { set({ view }); keep(); },
       setSelectedDate(selectedDate) { set({ selectedDate }); keep(); },
       navigate(delta) {
@@ -76,7 +78,7 @@ export function createCalendarStore(host: CalendarHost, initial: { date: Date; v
       async loadMonth(date = get().selectedDate, options = {}) {
         pending?.abort(); const abort = new AbortController(); pending = abort;
         const ownGeneration = ++generation, activeRange = rangeFor(date);
-        set({ activeRange, loading: options.background ? get().loading : true, error: null });
+        set({ activeRange, loading: options.background || host.readCached?.(activeRange) ? get().loading : true, error: null });
         try {
           const result = await host.read(activeRange, options.force ?? false, abort.signal);
           if (ownGeneration === generation && !abort.signal.aborted) set({ ...result, loading: false });

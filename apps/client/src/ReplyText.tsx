@@ -1,4 +1,5 @@
-import { lazy, memo, Suspense } from 'react';
+import { memo, Suspense } from 'react';
+import { lazy } from './preload-lazy';
 import { RenderingFallback } from './RenderingFallback';
 
 const ReplyMarkdown = lazy(() => import('./dreamclaw/components/Chat/ReplyMarkdown').then(module => ({ default: module.ReplyMarkdown })));

@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { workspaceLoadingPercent, playfulStartupSubtitle, moduleLoadingSubtitles } from '../apps/client/src/loading-progress';
+import { workspaceLoadingPercent, playfulStartupSubtitle } from '../apps/client/src/loading-progress';
 import { inboxLoadingPercent } from '../apps/client/src/inbox-startup-progress';
 
 test('workspace progress keeps one denominator and completes only with an accepted workspace', () => {
   assert.equal(workspaceLoadingPercent(), 0);
-  assert.equal(workspaceLoadingPercent({ loadedBytes: 300, totalBytes: 1000 }), 30);
-  assert.equal(workspaceLoadingPercent({ loadedBytes: 1000, totalBytes: 1000, complete: true }), 99);
+  assert.equal(workspaceLoadingPercent({ loadedBytes: 300, totalBytes: 1000 }), 3);
+  assert.equal(workspaceLoadingPercent({ loadedBytes: 1000, totalBytes: 1000, complete: true }), 10);
   assert.equal(workspaceLoadingPercent({ loadedBytes: 1000, totalBytes: 1000, complete: true }, true), 100);
-  assert.equal(workspaceLoadingPercent({ loadedBytes: 300 }), undefined);
+  assert.equal(workspaceLoadingPercent({ loadedBytes: 300 }), 0);
   assert.equal(workspaceLoadingPercent(undefined, true), 100);
 });
 
@@ -25,7 +25,8 @@ test('Inbox progress never restarts at its account, first page and recent messag
   assert.equal(inboxLoadingPercent({ phase: 'ready', completed: 0, total: 0 }), 100);
 });
 
-test('all module routes have playful loading copy; startup does not name Inbox', () => {
-  for (const module of ['Assistant','Calendar','Inbox','Tasks','Settings','Contacts','Agents','Content','Profile','Phone pairing']) assert.ok(moduleLoadingSubtitles[module]);
+test('startup keeps playful copy while preparation continues after the transfer', () => {
+  assert.equal(workspaceLoadingPercent({ loadedBytes: 1000, totalBytes: 1000, complete: true }, false, 72), 72);
+  assert.equal(workspaceLoadingPercent(undefined, false, 100), 99);
   for (const percent of [0,15,55,95,100]) assert.doesNotMatch(playfulStartupSubtitle(percent), /inbox|mail|account|session|bytes/i);
 });

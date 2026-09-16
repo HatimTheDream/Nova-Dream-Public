@@ -1,3 +1,8 @@
+## [1.5.10] — 2026-09-16
+
+- Prepare navigation before opening Home: warm module code and nested views, bundled character and office art, Inbox, and the initial Calendar, team and Profile data behind one playful startup bar.
+- Reuse prepared views for smooth first navigation. Show only a clockwise red loading ring for brief in-app waits; retain clear recovery controls when a connection fails.
+
 ## [1.5.9] — 2026-09-16
 
 - Open the workspace without waiting for mail. Prepare Inbox on its first visit with its own continuous progress bar, reusing completed work across navigation.

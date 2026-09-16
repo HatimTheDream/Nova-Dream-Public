@@ -1,3 +1,4 @@
+import { LoadingRing } from '../../../ModuleLoading';
 import { emailImageUrl, mapEmailImageCss } from '../../../../../../packages/domain/email-images';
 import {inboxReplySource} from '../../inbox-reply-source';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -3681,7 +3682,7 @@ export function InboxPage() {
                   <div className="dc-inbox-page-status flex max-w-full flex-wrap items-center gap-1.5 text-[12px] text-aegis-text-dim tabular-nums">
                     <span className="min-w-0 max-w-full">
                       {loading && snapshots.length === 0
-                        ? `Opening ${activeFolderDefinition.label.toLowerCase()}…`
+                        ? <LoadingRing label={`Loading ${activeFolderDefinition.label}`}/>
                         : activeFolder === 'inbox'
                           ? inboxCoverageLabel
                           : `${inboxCoverage.loadedConversations.toLocaleString('en-US')} conversations loaded`}
@@ -3794,8 +3795,7 @@ export function InboxPage() {
                           </form>
                           {nativeTagOptionsLoading ? (
                             <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-aegis-text-dim">
-                              <Loader2 size={12} className="animate-spin" />
-                              Loading {nativeTagActionLabel.toLowerCase()}…
+                              <LoadingRing label={`Loading ${nativeTagActionLabel.toLowerCase()}`}/>
                             </div>
                           ) : nativeTagOptionsError ? (
                             <div className="px-3 py-2 text-[11px] text-red-300">{nativeTagOptionsError}</div>
@@ -4079,7 +4079,7 @@ export function InboxPage() {
             >
               {loading && threadItems.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-aegis-text-dim">
-                  <Loader2 size={18} className="animate-spin" />
+                  <LoadingRing label="Loading email"/>
                 </div>
               ) : threadItems.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-aegis-text-dim">
@@ -4555,11 +4555,11 @@ export function InboxPage() {
                 aria-busy={threadLoading || threadMessages.length > 0 && !conversationPrepared}
               >
                 {!threadLoading && threadMessages.length > 0 && !conversationPrepared && <div className="dc-email-preparation">
-                  {preparationFailed ? <div className="dc-inbox-reader-error" role="alert"><Mail size={24} aria-hidden="true"/><h3>This email couldn’t finish preparing</h3><p>Some content is unavailable. Try again to open the complete email.</p><button onClick={retryPreparation}><RefreshCw size={15}/>Try again</button></div> : <div role="status" aria-label="Preparing email"><Loader2 size={20} className="animate-spin" aria-hidden="true"/></div>}
+                  {preparationFailed ? <div className="dc-inbox-reader-error" role="alert"><Mail size={24} aria-hidden="true"/><h3>This email couldn’t finish preparing</h3><p>Some content is unavailable. Try again to open the complete email.</p><button onClick={retryPreparation}><RefreshCw size={15}/>Try again</button></div> : <LoadingRing label="Preparing email"/>}
                 </div>}
                 {threadLoading ? (
                   <div className="flex h-full items-center justify-center text-aegis-text-dim">
-                    <Loader2 size={18} className="animate-spin" />
+                    <LoadingRing label="Loading email"/>
                   </div>
                 ) : threadError && threadMessages.length === 0 ? (
                   <div className="dc-inbox-reader-error" role="alert">

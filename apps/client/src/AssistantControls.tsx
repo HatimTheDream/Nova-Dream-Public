@@ -1,3 +1,4 @@
+import { LoadingRing } from './ModuleLoading';
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantModel, Conversation, PermissionMode } from '../../../packages/domain/assistant';
 import { request } from './api';
@@ -36,7 +37,7 @@ export function ResponseControls({ value, models, modelStatus, retryModels, bloc
       <input className="effort-slider" type="range" aria-label="Response effort" aria-valuetext={effortLabel(shown)} min={0} max={Math.max(1, levels.length - 1)} step={1} value={level} disabled={unavailable || !model?.available || levels.length < 2} onChange={e => setPreview({ key, index: Number(e.target.value) })} onPointerUp={applyEffort} onKeyUp={applyEffort} onBlur={applyEffort}/>
       {modelStatus === 'ready' && levels.length < 2 && <p className="metadata effort-unavailable">{model ? 'This model does not expose effort settings.' : 'Choose a model to set effort.'}</p>}<div className="effort-scale"><span>{levels.length > 1 ? 'Default' : ''}</span><span>{levels.length > 1 ? effortLabel(levels.at(-1)) : ''}</span></div>
     </>}
-    {modelStatus !== 'ready' && <p className="metadata" role="status">{modelStatus === 'loading' ? 'Loading models…' : modelStatus === 'offline' ? 'Connect the Assistant to change models.' : <>Models could not load. <button type="button" onClick={() => void retryModels()}>Retry models</button></>}</p>}
+    {modelStatus !== 'ready' && <p className="metadata" role="status">{modelStatus === 'loading' ? <LoadingRing label="Loading models"/> : modelStatus === 'offline' ? 'Connect the Assistant to change models.' : <>Models could not load. <button type="button" onClick={() => void retryModels()}>Retry models</button></>}</p>}
     {busy && <p className="metadata" role="status">Applying…</p>}{error && <p className="field-error" role="alert">{error}</p>}
   </div>;
 }
