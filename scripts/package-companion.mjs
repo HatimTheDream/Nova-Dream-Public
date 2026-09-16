@@ -26,6 +26,7 @@ run('/usr/bin/ditto', ['-x','-k',archive,staging]);
 const app = join(staging, 'Nova Dream Desktop.app'); renameSync(join(staging, 'Electron.app'), app);
 const resources = join(app, 'Contents/Resources'), payload = join(resources, 'app'); mkdirSync(payload);
 rmSync(join(resources, 'default_app.asar'), { force: true });
+for (const name of ['LICENSE', 'LICENSES.chromium.html']) copyFileSync(join(staging, name), join(resources, 'Electron-' + name));
 for (const [name, bytes] of candidate.bytes) if (name.startsWith('dist/desktop/companion')) writeFileSync(join(payload, name.split('/').at(-1)), bytes);
 writeFileSync(join(payload, 'package.json'), JSON.stringify({ name: 'nova-dream-desktop', productName: 'Nova Dream Desktop', version: candidate.manifest.version, private: true, main: 'companion-main.cjs' }, null, 2));
 const license = existsSync(join(root, 'LICENSE')) ? join(root, 'LICENSE') : join(root, '../LICENSE');

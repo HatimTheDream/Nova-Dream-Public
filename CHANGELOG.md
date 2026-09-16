@@ -5,6 +5,10 @@
 - Include private systemd runtime credential copies with restrictive permissions for Linux hosting.
 - Retain the integrated workspace, pixel character system, provider adapters, encrypted recovery and bounded upload transport from the verified hosted edition.
 
+## [1.2.1] — 2026-09-15
+
+- Include Electron and Chromium license notices in the private desktop archive. No runtime or permission behavior changes.
+
 ## [1.2.0] — 2026-09-15
 
 - Add Install & devices with platform-specific installation guidance, actual device-storage status and persistent-storage requests.
