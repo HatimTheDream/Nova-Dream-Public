@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.5.6-blue)
+![Version](https://img.shields.io/badge/Version-1.5.7-blue)
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 

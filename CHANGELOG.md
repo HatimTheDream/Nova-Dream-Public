@@ -1,3 +1,8 @@
+## [1.5.7] — 2026-09-16
+
+- Refresh startup with the red-border Nova Dream logo, matching red progress bar and percentage, and clear step-by-step loading text. Progress follows actual startup checkpoints; slow or unavailable mail never prevents your workspace from opening.
+- Keep numbered updates in GitHub Releases with repository-specific notes and source tags, published after successful quality checks.
+
 ## [1.5.6] — 2026-09-16
 
 - Use Nova Dream throughout app titles, calendars, connection messages and new Assistant context while preserving existing chats and workspace identities. Restore the accepted red-border logo to the desktop shortcut, Dock and browser tab; retain the shortcut's selected workspace when renaming it.

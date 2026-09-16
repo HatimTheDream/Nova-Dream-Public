@@ -222,6 +222,17 @@
   .field-error { color:var(--danger); font-size:12px; padding:6px 0; }
   .startup { min-height:100dvh; padding:30px; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:22px; text-align:center; }
   .startup img { width:90px; height:90px; object-fit:contain; }
+  .startup-screen { gap:28px; padding:32px 24px; background:var(--canvas); color:var(--text); }
+  .startup-screen .startup-logo { width:112px; height:112px; }
+  .startup-copy { width:min(100%,440px); }
+  .startup-copy h1 { margin:0; font-size:clamp(28px,4vw,36px); line-height:1.25; letter-spacing:-.04em; font-weight:680; }
+  .startup-copy p { margin:12px 0 0; font-size:14px; line-height:1.65; color:var(--muted); overflow-wrap:anywhere; }
+  .startup-progress { width:min(280px,100%); }
+  .startup-track { height:8px; overflow:hidden; border-radius:999px; background:var(--line); }
+  .startup-fill { display:block; height:100%; border-radius:inherit; background:var(--brand-red); transition:width 180ms ease-out; }
+  .startup-track[aria-valuenow="100"] .startup-fill { transition:none; }
+  .startup-progress .startup-percent { margin:12px 0 0; font-size:13px; line-height:1.5; font-weight:580; font-variant-numeric:tabular-nums; color:var(--text); }
+  @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } }
   .search-input { flex-direction:row; align-items:center; gap:10px; }
   .search-input input { flex:1; min-width:0; }
   .search-results { padding-top:18px; max-height:55dvh; overflow:auto; }
