@@ -5,7 +5,7 @@ import { request } from './api';
 import { RefreshCw } from './icons';
 
 const count=(value:number|null|undefined)=>value==null?'Unavailable':new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(value);
-const windowLabel=(label:string)=>label==='5h'?'5-hour allowance':label==='7d'||label==='Week'?'Weekly allowance':label==='24h'?'Daily allowance':label;
+const windowLabel=(label:string)=>label==='5h'?'5-hour allowance':label==='7d'||label==='168h'||label==='Week'?'Weekly allowance':label==='24h'?'Daily allowance':label;
 export function UsageSettings({active,online}:{active:boolean;online:boolean}){
   const [usage,setUsage]=useState<UsageState>(),[account,setAccount]=useState<ChatGptAccountStatus>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[refresh,setRefresh]=useState(0);
   useEffect(()=>{

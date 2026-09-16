@@ -1,3 +1,7 @@
+## [1.4.1] — 2026-09-15
+
+- Show the provider’s 168-hour quota window as “Weekly allowance” in Settings.
+
 ## [1.4.0] — 2026-09-15
 
 - Simplify Settings into six compact categories, with readable rows and expandable setup, account management and device-storage details.
