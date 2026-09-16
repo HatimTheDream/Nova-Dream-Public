@@ -14,7 +14,7 @@ test('live voice remains in its original conversation until exact native history
 });
 
 import { groupVoiceMessages, voiceHistoryMessages, transcriptText, transcriptContains, type TranscriptMessage } from '../apps/client/src/voice-transcript.js';
-const call = '345f2170-979e-4fb6-b773-5e22baebd103';
+const call = '00000000-0000-4000-8000-000000000001';
 const message = (entry: string, text: string, role: TranscriptMessage['role'] = 'user', callId = call): TranscriptMessage => ({ id: `voice:${callId}:${entry}`, role, text, textHash: `hash-${entry}`, attachments: [] });
 
 test('continuous voice segments form one display bubble with exact words and immutable native parts', () => {
