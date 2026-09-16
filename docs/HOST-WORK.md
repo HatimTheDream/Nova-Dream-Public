@@ -5,6 +5,26 @@ on that host, using the same workspace from desktop or phone. A local host must
 remain online; an always-on server can continue while your personal computer is
 off. Desktop app control still requires a linked, awake desktop.
 
+## What needs to stay online?
+
+The host is the computer or server running Nova's service. Opening Nova on a
+phone or installing its desktop companion does not move that service or its
+repository checkouts to the viewing device.
+
+| Action | Required connection |
+| --- | --- |
+| Chat with Assistant | A reachable Nova host and its configured AI connection |
+| Edit a GitHub project or run a team | The host with that checkout and the configured AI connection |
+| Push a branch or open a draft pull request | The host and its connected GitHub account |
+| Browse a public website | The host with Chrome or Chromium and Host browser enabled |
+| Control a desktop app | A linked, online desktop with the companion running and access enabled |
+
+With Nova hosted on a server, the first four actions work while your personal
+computer is off. With Nova hosted locally, that computer needs to stay online.
+A desktop linked for computer control is a separate requirement; it does not
+replace the host. Reading and saving your workspace require a reachable host,
+but do not require an AI connection. A VPS remains optional.
+
 ## GitHub
 
 Install Git and [GitHub CLI](https://cli.github.com/) on the host. In Settings →
