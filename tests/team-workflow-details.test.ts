@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Parser } from 'htmlparser2';
 import type { TeamHandoff, TeamHandoffPage, TeamStep, TeamWork } from '../packages/domain/team-work';
+import type { TeamReviewReport } from '../packages/domain/team-review';
 import { TeamWorkflowDetails, TeamHandoffPreview, teamActions } from '../apps/client/src/TeamWorkflowDetails';
 import { emptyHandoffRead, TeamHandoffReader, type HandoffReadState } from '../apps/client/src/team-handoff-reader';
 
@@ -55,6 +56,39 @@ test('pending requests disable mutations while reads remain available, and progr
   assert.match(render(complete).markup, /3 of 3 stages finished/);
   assert.match(render(complete).markup, /do not mean the changes have been accepted or published/);
   assert.deepEqual(teamActions(complete), []);
+});
+
+const review: TeamReviewReport = { verdict: 'needs_changes', summary: 'The retry path loses the original request.', findings: [{ id: 'retry', priority: 'high', title: 'Keep the original request', detail: 'Reload after a lost response must reconcile the saved command.', location: 'src/panel.tsx:30' }], checks: [{ name: 'Recovery check', outcome: 'failed', detail: 'A reload currently creates another request.' }], operationId: 'review-operation', stage: 2, attempt: 1, createdAt: 8, digest: 'review-digest' };
+function reviewed(report: TeamReviewReport = review): TeamWork {
+  const value = run({}, 'complete'); value.next = 3; value.steps = value.steps.map(step => ({ ...step, state: 'complete' }));
+  value.steps[2].review = report; value.reviewOutcome = report.verdict; value.reviewRound = 0;
+  value.applyFindings = { available: report.verdict === 'needs_changes', round: 0, limit: 3 };
+  return value;
+}
+test('structured findings offer an explicit bounded fix round while an unreported or ready review cannot start fixes', () => {
+  const changes = render(reviewed());
+  assert.ok(changes.labels.includes('Apply findings')); assert.match(changes.markup, /Needs changes/);
+  assert.match(changes.markup, /src\/panel.tsx:30/); assert.match(changes.markup, /Reviewer-reported checks/);
+  assert.match(changes.markup, /Starts fix round 1 of 3/);
+  assert.equal(render(reviewed(), true).buttons.find(button => button.text === 'Apply findings')?.disabled, true);
+  const ready = reviewed({ ...review, verdict: 'ready_for_review', findings: [], checks: [{ name: 'Recovery check', outcome: 'passed', detail: 'The original request is retained.' }] });
+  assert.match(render(ready).markup, /Ready for your review/); assert.ok(!render(ready).labels.includes('Apply findings'));
+  assert.match(render(ready).markup, /before accepting or publishing/);
+  const absent = reviewed(); absent.reviewOutcome = 'unreported'; absent.steps[2].review = undefined; absent.applyFindings = { available: false, round: 0, limit: 3 };
+  assert.match(render(absent).markup, /Review report unavailable/); assert.ok(!render(absent).labels.includes('Apply findings'));
+  assert.doesNotMatch(render(absent).markup, /Ready for your review/);
+});
+test('fix rounds retain earlier reports without presenting them as a new verdict or offering duplicate fixes', () => {
+  const value = reviewed(); value.state = 'running'; value.reviewOutcome = undefined; value.reviewRound = 1;
+  value.applyFindings = { available: false, round: 1, limit: 3 };
+  value.steps.push({ ...value.steps[1], state: 'running', reviewRound: 1 }, { ...value.steps[2], state: 'waiting', review: undefined, reviewRound: 1 });
+  const active = render(value);
+  assert.match(active.markup, /Earlier review/); assert.match(active.markup, /Fix round 1 of 3/); assert.match(active.markup, /Re-review/);
+  assert.ok(!active.labels.includes('Apply findings')); assert.match(active.markup, /Keep the original request/);
+  const limited = reviewed(); limited.reviewRound = 3; limited.applyFindings = { available: false, reason: 'All three fix rounds have been used. Review the remaining findings manually.', round: 3, limit: 3 };
+  assert.match(render(limited).markup, /All three fix rounds have been used/); assert.ok(!render(limited).labels.includes('Apply findings'));
+  const escaped = reviewed({ ...review, summary: '<script>summary</script>', findings: [{ ...review.findings[0], detail: '<img src=x onerror=alert(1)>' }] });
+  assert.match(render(escaped).markup, /&lt;script&gt;summary&lt;\/script&gt;/); assert.doesNotMatch(render(escaped).markup, /<script>|<img src=x/);
 });
 
 const handoff: TeamHandoff = { id: 'handoff', sha256: 'immutable-hash', characters: 30000, bytes: 30000, state: 'completed', createdAt: 4 };

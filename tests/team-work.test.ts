@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../apps/service/store.js';
 import { TeamWorkService } from '../apps/service/team-work.js';
+import { submitTeamReview } from '../apps/service/team-review.js';
 import { legacyTeamBrief } from '../apps/service/team-brief.js';
 import { blankRecord } from '../packages/domain/workspace-records.js';
 import type { AgentDesign } from '../packages/domain/workspace-records.js';
@@ -13,6 +14,7 @@ import type { Draft,Entity,Project } from '../packages/domain/contracts.js';
 import type { AssistantService } from '../apps/service/assistant.js';
 import type { AssistantOperation,Conversation } from '../packages/domain/assistant.js';
 import type { TeamConversationAccess } from '../packages/domain/team-work.js';
+import { teamReviewRoundLimit, type TeamReviewInput } from '../packages/domain/team-review.js';
 
 function fixture(t:any){
   const directory=mkdtempSync(join(tmpdir(),'nova-team-')),store=new Store(directory),device=store.session().deviceId;
@@ -28,7 +30,7 @@ function fixture(t:any){
       const existing=worker.operations().find(o=>o.requestId===raw.requestId);if(existing)return existing;
       calls.push({type:'submit',raw,teamId});const draft=store.readEntity('draft',raw.draftId)!,conversation=worker.conversations().find(c=>c.id===raw.conversationId)!;
       const binding=store.internalRead<TeamConversationAccess>('team:conversation:'+conversation.id);
-      const op:AssistantOperation={...raw,id:randomUUID(),deviceId:_device,connectionGeneration:conversation.connectionGeneration,nativeKey:conversation.nativeKey,nativeId:conversation.nativeId!,input:draft.value.text,context:{draftId:draft.id,draftRevision:draft.revision,project:{id:project.id,revision:project.revision,...project.value},attachments:[],digest:'fixture',...(binding?{teamHandoffs:{teamId:binding.teamId,ids:[...(binding.handoffIds??[])]}}:{})},nativeRunId:randomUUID(),state:'running',text:'',model:null,thinking:null,lastSequence:0,createdAt:new Date(time).toISOString(),updatedAt:new Date(time).toISOString()};
+      const op:AssistantOperation={...raw,id:randomUUID(),deviceId:_device,connectionGeneration:conversation.connectionGeneration,nativeKey:conversation.nativeKey,nativeId:conversation.nativeId!,input:draft.value.text,context:{draftId:draft.id,draftRevision:draft.revision,project:{id:project.id,revision:project.revision,...project.value},attachments:[],digest:'fixture',...(binding?{teamHandoffs:{teamId:binding.teamId,ids:[...(binding.handoffIds??[])]},...(binding.review?{teamReview:binding.review}:{})}:{})},nativeRunId:randomUUID(),state:'running',text:'',model:null,thinking:null,lastSequence:0,createdAt:new Date(time).toISOString(),updatedAt:new Date(time).toISOString()};
       return store.internalWrite('assistant:operation:'+op.id,op);
     },
     async cancel(_device:string,raw:any){calls.push({type:'cancel',raw});const op=worker.operations().find(o=>o.id===raw.operationId)!;return store.internalWrite('assistant:operation:'+op.id,{...op,cancelRequested:true,state:'cancelled'});},
@@ -285,3 +287,214 @@ test('restart after a legacy draft upgrade reuses the saved revision and submits
     assert.equal(f.calls.filter(c=>c.type==='submit').length,2);assert.equal(f.calls.filter(c=>c.type==='create').length,2);
   }finally{await recovered.close();}
 });
+
+type TeamFixture = ReturnType<typeof fixture>;
+function reportReview(f:TeamFixture,verdict:TeamReviewInput['verdict']='needs_changes') {
+  const operation=f.worker.operations().find(o=>o.state==='running')!;
+  assert(operation,'Fixture has an active review execution');
+  const conversation=f.worker.conversations().find(c=>c.id===operation.conversationId)!;
+  const report:TeamReviewInput={verdict,summary:verdict==='needs_changes'?'One regression needs a fix.':'The requested checks passed; owner review remains.',
+    findings:verdict==='needs_changes'?[{id:'retain-final-constraint',priority:'high',title:'Retain the complete requirement',detail:'The final requirement is omitted from the result. Preserve it and check the full saved handoff.',location:'src/fixture.ts:24'}]:[],
+    checks:[{name:'Requirement retention',outcome:verdict==='needs_changes'?'failed':'passed',detail:'Compared the final requirement with the resulting output.'}]};
+  return submitTeamReview(f.store,{operation,conversation,generation:operation.connectionGeneration,report},f.now());
+}
+async function finishStage(f:TeamFixture,text='Saved stage evidence') { f.finish(text);await f.service.reconcile();await f.service.reconcile(); }
+async function atFinalReview(t:any,withoutBuilder=false) {
+  const f=fixture(t);
+  if(withoutBuilder)f.input.steps=f.input.steps.filter(s=>s.role!=='build');
+  f.service.create(f.device,f.input);await f.service.reconcile();
+  for(let i=0;i<f.input.steps.length-1;i++)await finishStage(f,`Original stage ${i} evidence`);
+  assert.equal(f.current().steps[f.current().next].role,'review');return f;
+}
+async function reviewedTeam(t:any,withoutBuilder=false) {
+  const f=await atFinalReview(t,withoutBuilder),review=reportReview(f);
+  await finishStage(f,'The structured findings describe the required correction.');
+  assert.equal(f.current().state,'complete');return {...f,review};
+}
+
+async function previousReviewDraft(t:any) {
+  const f=fixture(t);f.service.create(f.device,f.input);await f.service.reconcile();await finishStage(f,'Original full research evidence');
+  f.finish('Original full build evidence');f.control('pause');await f.service.reconcile();
+  assert.equal(f.current().next,2);assert.equal(f.current().state,'paused');
+  const key='team:run:'+f.current().id,saved=f.store.internalRead<any>(key),request=saved.requests[2],step=saved.steps[2];
+  const conversation=await f.worker.create(f.device,{requestId:request.create,epoch:f.store.epoch,space:'work',title:'Prepared 1.6.0 review',projectId:f.project.id,permissionMode:'read-only'},saved.id);
+  step.conversationId=conversation.id;f.store.internalWrite(key,saved);
+  // Reconstruct the frozen 1.6.0 handoff section; the main role instructions
+  // were unchanged from the existing 1.5.13 migration fixture.
+  const previous=legacyTeamBrief({team:saved,captured:saved.agents[2].value,step}),marker='\n\nPrior handoffs:\n';
+  const excerpts=saved.steps.slice(0,2).map((s:any)=>`${s.agentName} (${s.role}, ${s.state}):\nComplete saved result: ${s.handoff.id}, ${s.handoff.characters} characters, SHA-256 ${s.handoff.sha256}. This briefing may contain only an excerpt. Use nova_read operation team.handoffs.read with input {id: "${s.handoff.id}", offset: 0, limit: 12000}; continue with nextOffset until null. Read omitted content before relying on the handoff.\n${s.result.slice(0,4500)}`).join('\n\n');
+  const text=previous.slice(0,previous.lastIndexOf(marker)+marker.length)+excerpts;
+  const draft=f.store.mutate(f.device,{requestId:request.draft,epoch:f.store.epoch,kind:'draft',entityId:`draft:${f.device}:${conversation.id}`,expectedRevision:0,payload:{space:'work',title:conversation.title,text,projectId:f.project.id,conversationId:conversation.id,attachments:[]}}) as Entity<Draft>;
+  assert.doesNotMatch(text,/team.review.submit/);return {...f,draft,request};
+}
+
+test('an untouched 1.6.0 review draft gains typed reporting guidance and submits its original request once',async t=>{
+  const f=await previousReviewDraft(t);f.control('resume');await f.service.reconcile();await f.service.reconcile();
+  const operation=f.worker.operations().find(o=>o.id===f.current().steps[2].operationId)!;
+  assert(operation);assert.equal(operation.requestId,f.request.submit);assert.equal(operation.context.draftRevision,f.draft.revision+1);
+  assert.match(operation.input,/team.review.submit/);assert.match(operation.input,new RegExp(f.current().steps[1].handoff!.id));
+  assert.equal(f.store.readEntity('draft',f.draft.id)!.value.text,'');assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+});
+
+test('owner amendments to a prepared 1.6.0 review draft remain untouched and stop automatic dispatch',async t=>{
+  const f=await previousReviewDraft(t),ownerDraft=f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'draft',entityId:f.draft.id,expectedRevision:f.draft.revision,payload:{...f.draft.value,text:f.draft.value.text+'\nOwner instruction: wait for the final requirement.'}});
+  f.control('resume');await f.service.reconcile();
+  assert.equal(f.current().state,'attention');assert.match(f.current().message,/changed draft/);assert.deepEqual(f.store.readEntity('draft',f.draft.id),ownerDraft);
+  assert.equal(f.current().steps[2].operationId,undefined);assert.equal(f.calls.filter(c=>c.type==='submit').length,2);
+});
+
+test('restart after upgrading a prepared review draft keeps the exact submission identity',async t=>{
+  const f=await previousReviewDraft(t),submit=f.worker.submit;f.worker.submit=()=>{throw new Error('Interrupted after the reporting guidance upgrade');};
+  f.control('resume');await f.service.reconcile();const upgraded=f.store.readEntity('draft',f.draft.id)!;
+  assert.equal(upgraded.revision,f.draft.revision+1);assert.match(upgraded.value.text,/team.review.submit/);await f.service.close();f.worker.submit=submit;
+  const recovered=new TeamWorkService(f.store,f.worker as unknown as AssistantService,f.now);
+  try {
+    const run=recovered.state().runs[0],command={requestId:randomUUID(),epoch:f.store.epoch,id:run.id,revision:run.revision,action:'resume'};
+    recovered.control(f.device,command);await recovered.reconcile();recovered.control(f.device,command);await recovered.reconcile();
+    const operation=f.worker.operations().find(o=>o.id===recovered.state().runs[0].steps[2].operationId)!;
+    assert.equal(operation.input,upgraded.value.text);assert.equal(operation.requestId,f.request.submit);assert.equal(operation.context.draftRevision,upgraded.revision);
+    assert.equal(f.calls.filter(c=>c.type==='submit').length,3);assert.equal(f.calls.filter(c=>c.type==='create').length,3);
+  } finally { await recovered.close(); }
+});
+
+test('applying exact findings creates one preserved fix/review pair across duplicate requests and restart',async t=>{
+  const f=await reviewedTeam(t),before=f.current();
+  assert.equal(before.reviewOutcome,'needs_changes');assert.equal(before.applyFindings?.available,true);
+  const originalDraft=f.store.readEntity('draft',f.worker.operations().find(o=>o.id===before.steps[1].operationId)!.context.draftId)!;
+  const ownerDraft=f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'draft',entityId:originalDraft.id,expectedRevision:originalDraft.revision,payload:{...originalDraft.value,text:'Keep my unsent follow-up before fixing the findings.'}});
+  const file=join(f.folder,'existing-change.txt');writeFileSync(file,'An existing project change must survive review fixes.');
+  for(const agent of f.agents.slice(1))f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'agent',entityId:agent.id,expectedRevision:agent.revision,payload:{...agent.value,instructions:'New agent instructions do not replace the captured workflow.',access:{}}});
+  const command={requestId:randomUUID(),epoch:f.store.epoch,id:before.id,revision:before.revision,action:'apply_findings'};
+  const admitted=f.service.control(f.device,command);assert.deepEqual(f.service.control(f.device,command),admitted);
+  await f.service.reconcile();
+  const current=f.current(),fix=current.steps[3],review=current.steps[4];
+  assert.equal(current.reviewRound,1);assert.equal(current.steps.length,5);assert.deepEqual(current.steps.slice(0,3),before.steps);
+  assert.equal(fix.role,'build');assert.equal(fix.agentId,before.steps[1].agentId);assert.equal(fix.agentRevision,before.steps[1].agentRevision);
+  assert.equal(review.role,'review');assert.equal(review.agentId,before.steps[2].agentId);assert.equal(review.agentRevision,before.steps[2].agentRevision);
+  assert.notEqual(fix.conversationId,before.steps[1].conversationId);assert.notEqual(fix.operationId,before.steps[1].operationId);
+  const operation=f.worker.operations().find(o=>o.id===fix.operationId)!,conversation=f.worker.conversations().find(c=>c.id===fix.conversationId)!;
+  assert.equal(conversation.workspace?.folder,f.folder);assert.equal(f.calls.filter(c=>c.type==='create').at(-1)!.raw.permissionMode,'workspace');
+  assert.match(operation.input,new RegExp(f.review.operationId));assert.match(operation.input,/team.reviews.read/);assert.match(operation.input,/Use actual evidence/);
+  assert.doesNotMatch(operation.input,/New agent instructions/);assert.match(operation.input,/Do not delegate, commit, push, merge, deploy or contact/);
+  assert.equal(operation.context.teamHandoffs?.ids.includes(before.steps[2].handoff!.id),true);
+  assert.deepEqual(f.store.internalRead<TeamConversationAccess>('team:conversation:'+conversation.id)!.access,f.agents[1].value.access);
+  assert.deepEqual(f.store.readEntity('draft',ownerDraft.id),ownerDraft);assert.equal(readFileSync(file,'utf8'),'An existing project change must survive review fixes.');
+  assert.throws(()=>f.control('apply_findings'));assert.equal(f.current().steps.length,5);assert.equal(f.calls.filter(c=>c.type==='submit').length,4);
+  await f.service.close();
+  const recovered=new TeamWorkService(f.store,f.worker as unknown as AssistantService,f.now);
+  try {
+    assert.deepEqual(recovered.control(f.device,command),admitted);await recovered.reconcile();
+    const resumed=recovered.state().runs[0];assert.equal(resumed.steps.length,5);assert.equal(resumed.reviewRound,1);assert.deepEqual(resumed.steps.slice(0,3),before.steps);
+    assert.equal(f.calls.filter(c=>c.type==='submit').length,4);assert.deepEqual(f.store.readEntity('draft',ownerDraft.id),ownerDraft);
+    assert.equal(fullHandoff(recovered,before.id,before.steps[2].handoff!.id),'The structured findings describe the required correction.');
+    assert.equal(readFileSync(file,'utf8'),'An existing project change must survive review fixes.');
+  } finally { await recovered.close(); }
+});
+
+test('the fresh reviewer checks the fixes and ready output remains for owner review',async t=>{
+  const f=await reviewedTeam(t);f.control('apply_findings');await f.service.reconcile();
+  await finishStage(f,'Fixed the omitted final requirement; targeted regression passed.');
+  const run=f.current(),step=run.steps[4],operation=f.worker.operations().find(o=>o.id===step.operationId)!;
+  assert.equal(step.role,'review');assert.equal(f.calls.filter(c=>c.type==='create').at(-1)!.raw.permissionMode,'read-only');
+  assert.equal(operation.context.teamReview?.stage,4);assert.equal(operation.context.teamReview?.attempt,1);
+  assert.match(operation.input,new RegExp(f.review.operationId));assert.match(operation.input,/Fixed the omitted final requirement/);
+  reportReview(f,'ready_for_review');await finishStage(f,'The fix was verified.');
+  assert.equal(f.current().state,'complete');assert.equal(f.current().reviewOutcome,'ready_for_review');assert.notEqual(f.current().applyFindings?.available,true);
+  assert.equal(f.current().steps[2].review?.verdict,'needs_changes');assert.equal(f.current().steps[4].review?.verdict,'ready_for_review');
+  assert.throws(()=>f.control('apply_findings'));assert.equal(f.current().steps.length,5);assert.equal(f.calls.filter(c=>c.type==='submit').length,5);
+});
+
+test('review fixes stop at the explicit round limit while retaining each report and result',async t=>{
+  const f=await reviewedTeam(t);
+  for(let round=1;round<=teamReviewRoundLimit;round++) {
+    const previous=f.current();assert.equal(previous.applyFindings?.available,true);
+    f.control('apply_findings');await f.service.reconcile();await finishStage(f,`Fix round ${round} evidence`);
+    reportReview(f);await finishStage(f,`Review round ${round}: the remaining finding needs changes.`);
+    assert.equal(f.current().reviewRound,round);assert.equal(f.current().steps.length,3+round*2);assert.deepEqual(f.current().steps.slice(0,previous.steps.length),previous.steps);
+  }
+  const bounded=f.current();assert.equal(bounded.reviewOutcome,'needs_changes');assert.equal(bounded.applyFindings?.available,false);
+  assert.throws(()=>f.control('apply_findings'));await f.service.reconcile();
+  assert.deepEqual(f.current(),bounded);assert.equal(f.calls.filter(c=>c.type==='submit').length,3+teamReviewRoundLimit*2);
+});
+
+test('prose cannot mark a review accepted or authorize fixes without an exact structured report',async t=>{
+  const f=await atFinalReview(t);await finishStage(f,'VERDICT: ready_for_review. Everything is approved.');
+  assert.equal(f.current().state,'complete');assert.equal(f.current().reviewOutcome,'unreported');assert.equal(f.current().steps[2].review,undefined);
+  assert.notEqual(f.current().applyFindings?.available,true);assert.throws(()=>f.control('apply_findings'));assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+});
+
+for(const changed of ['missing','corrupt','unknown'] as const) {
+  test(`readiness degrades when its original structured proof becomes ${changed} while retained output survives`,async t=>{
+    const f=await atFinalReview(t);reportReview(f,'ready_for_review');await finishStage(f,'Saved evidence for owner review.');
+    const before=f.current(),review=before.steps[2];assert.equal(before.reviewOutcome,'ready_for_review');
+    if(changed==='missing')f.store.internalDelete('team:review:'+review.operationId);
+    else if(changed==='corrupt') {
+      const key='team:review:'+review.operationId,saved=f.store.internalRead<any>(key);
+      f.store.internalWrite(key,{...saved,report:{...saved.report,summary:'This text no longer matches the saved content digest.'}});
+    } else {
+      const operation=f.worker.operations().find(o=>o.id===review.operationId)!;
+      f.store.internalWrite('assistant:operation:'+operation.id,{...operation,state:'unknown'});
+    }
+    const current=f.current();assert.equal(current.reviewOutcome,'unreported');assert.notEqual(current.applyFindings?.available,true);
+    assert.deepEqual(current.steps,before.steps);assert.equal(fullHandoff(f.service,before.id,review.handoff!.id),'Saved evidence for owner review.');
+    assert.throws(()=>f.control('apply_findings'));assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+  });
+}
+
+for(const outcome of ['failed','cancelled','unknown'] as const) {
+  test(`a submitted review followed by ${outcome} execution cannot authorize a fix cycle`,async t=>{
+    const f=await atFinalReview(t);reportReview(f);f.finish('The report was submitted but completion is not confirmed.',outcome);await f.service.reconcile();
+    assert.notEqual(f.current().reviewOutcome,'needs_changes');assert.notEqual(f.current().reviewOutcome,'ready_for_review');assert.equal(f.current().steps[2].review,undefined);assert.notEqual(f.current().applyFindings?.available,true);
+    assert.throws(()=>f.control('apply_findings'));assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+    if(outcome!=='unknown') { f.control('skip');assert.equal(f.current().state,'complete');assert.throws(()=>f.control('apply_findings')); }
+  });
+}
+
+test('an earlier completed review cannot authorize fixes after a different final stage',async t=>{
+  const f=fixture(t);f.input.steps=[f.input.steps[0],f.input.steps[2],f.input.steps[1]];
+  f.service.create(f.device,f.input);await f.service.reconcile();await finishStage(f);reportReview(f);await finishStage(f,'Earlier review findings');await finishStage(f,'Final builder result');
+  assert.equal(f.current().state,'complete');assert.equal(f.current().reviewOutcome,'unreported');assert.notEqual(f.current().applyFindings?.available,true);
+  assert.throws(()=>f.control('apply_findings'));assert.equal(f.current().steps.length,3);
+});
+
+test('findings from a workflow without a captured builder cannot start an invented implementation stage',async t=>{
+  const f=await reviewedTeam(t,true);assert.equal(f.current().reviewOutcome,'needs_changes');assert.notEqual(f.current().applyFindings?.available,true);
+  assert.throws(()=>f.control('apply_findings'));assert.equal(f.current().steps.length,2);assert.equal(f.calls.filter(c=>c.type==='submit').length,2);
+});
+
+for(const changed of ['project','builder_archived','reviewer_archived','checkout_busy','stale'] as const) {
+  test(`applying findings rejects ${changed} without extending the saved workflow`,async t=>{
+    const f=await reviewedTeam(t),before=f.current();
+    if(changed==='project')f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'project',entityId:f.project.id,expectedRevision:f.project.revision,payload:{...f.project.value,purpose:'Different project context'}});
+    else if(changed==='builder_archived'||changed==='reviewer_archived') {
+      const agent=f.agents[changed==='builder_archived'?1:2];
+      f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'agent',entityId:agent.id,expectedRevision:agent.revision,payload:{...agent.value,archived:true}});
+    } else if(changed==='checkout_busy') {
+      const old=f.worker.operations()[0];f.store.internalWrite('assistant:operation:fixture-other',{...old,id:randomUUID(),requestId:randomUUID(),state:'running'});
+    }
+    assert.throws(()=>f.service.control(f.device,{requestId:randomUUID(),epoch:f.store.epoch,id:before.id,revision:before.revision-(changed==='stale'?1:0),action:'apply_findings'}));
+    assert.equal(f.current().steps.length,before.steps.length);assert.equal(f.current().reviewRound,before.reviewRound);assert.deepEqual(f.current().steps,before.steps);
+    assert.equal(f.calls.filter(c=>c.type==='submit').length,3);assert.equal(f.calls.filter(c=>c.type==='create').length,3);
+  });
+}
+
+for(const changed of ['request','conversation','epoch','scope','state','missing'] as const) {
+  test(`findings cannot be applied when the original completed review has changed ${changed}`,async t=>{
+    const f=await reviewedTeam(t),before=f.current(),operation=f.worker.operations().find(o=>o.id===before.steps[2].operationId)!;
+    if(changed==='missing')f.store.internalDelete('team:review:'+operation.id);
+    else f.store.internalWrite('assistant:operation:'+operation.id,{...operation,...(changed==='request'?{requestId:randomUUID()}:changed==='conversation'?{conversationId:randomUUID()}:changed==='epoch'?{epoch:randomUUID()}:changed==='scope'?{context:{...operation.context,teamReview:{...operation.context.teamReview!,stage:0}}}:{state:'unknown'})});
+    assert.throws(()=>f.service.control(f.device,{requestId:randomUUID(),epoch:f.store.epoch,id:before.id,revision:before.revision,action:'apply_findings'}));
+    assert.equal(f.current().steps.length,3);assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+  });
+}
+
+for(const action of ['pause','stop'] as const) {
+  test(`${action} during fix session creation prevents dispatch while keeping the original review`,async t=>{
+    const f=await reviewedTeam(t),before=f.current(),create=f.worker.create,held=deferred(),entered=deferred();
+    f.worker.create=async(...args:Parameters<typeof create>)=>{entered.resolve();await held.promise;return create(...args);};
+    f.control('apply_findings');await entered.promise;f.control(action);held.resolve();await f.service.reconcile();
+    const current=f.current();assert.equal(current.state,action==='stop'?'cancelled':'paused');assert.equal(current.steps.length,5);
+    assert.deepEqual(current.steps.slice(0,3),before.steps);assert(current.steps[3].conversationId);assert.equal(current.steps[3].operationId,undefined);
+    assert.equal(f.worker.conversations().length,4);assert.equal(f.calls.filter(c=>c.type==='submit').length,3);
+  });
+}

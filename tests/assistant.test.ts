@@ -1136,3 +1136,30 @@ test('ordinary conversation submission cannot inherit team handoff authority fro
   assert.equal(f.service.submit(f.device, submission(f)).context.teamHandoffs, undefined);
   await tick();
 }));
+
+test('only the exact trusted review dispatch captures report authority and its immutable digest', () => fixture(async f => {
+  const teamId = randomUUID(), input = submission(f);
+  const review = { teamId, stage: 2, attempt: 1, agentId: 'agent:reviewer', agentRevision: 3, submitRequestId: input.requestId };
+  const binding = { epoch: f.store.epoch, teamId, agentId: review.agentId, agentRevision: review.agentRevision, role: 'review', access: {}, handoffIds: [randomUUID()], review };
+  for (const invalid of [{ ...binding, role: 'build' }, { ...binding, review: { ...review, submitRequestId: randomUUID() } }, { ...binding, review: { ...review, agentRevision: 4 } }]) {
+    f.store.internalWrite('team:conversation:' + f.conversation.id, invalid);
+    assert.throws(() => f.service.submit(f.device, input, false, teamId), /review stage no longer matches/);
+  }
+  f.store.internalWrite('team:conversation:' + f.conversation.id, binding);
+  const operation = f.service.submit(f.device, input, false, teamId);
+  assert.deepEqual(operation.context.teamReview, review);
+  const { digest, ...manifest } = operation.context;
+  assert.equal(digest, createHash('sha256').update(canonical(manifest)).digest('hex'));
+  f.store.internalWrite('team:conversation:' + f.conversation.id, { ...binding, review: { ...review, attempt: 2 } });
+  assert.deepEqual(f.service.submit(f.device, input, false, teamId).context.teamReview, review);
+  await tick();
+}));
+
+test('a manual message in a reviewer conversation cannot acquire report or handoff authority', () => fixture(async f => {
+  const teamId = randomUUID(), input = submission(f);
+  f.store.internalWrite('team:conversation:' + f.conversation.id, { epoch: f.store.epoch, teamId, agentId: 'agent:reviewer', agentRevision: 1, role: 'review', access: {}, handoffIds: [randomUUID()], review: { teamId, stage: 2, attempt: 1, agentId: 'agent:reviewer', agentRevision: 1, submitRequestId: input.requestId } });
+  const operation = f.service.submit(f.device, input);
+  assert.equal(operation.context.teamReview, undefined);
+  assert.equal(operation.context.teamHandoffs, undefined);
+  await tick();
+}));

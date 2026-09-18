@@ -6,6 +6,12 @@
 .assistant-workspace .assistant-space-switch > button:hover:not(:disabled):not([aria-pressed=true]) { background: var(--canvas); }
 .assistant-workspace .assistant-space-switch > button:focus-visible { position: relative; outline: 2px solid var(--focus); outline-offset: -3px; }
 
+.assistant-workspace .assistant-navigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.assistant-workspace .assistant-navigation .assistant-space-switch { flex: 0 1 160px; }
+.assistant-workspace .assistant-team-button { flex: none; min-height: 44px; padding: 8px 14px; border-radius: 13px; font-size: 13px; }
+.assistant-workspace .assistant-team-button[aria-expanded=true] { background: var(--soft-gold); color: var(--gold-ink); }
+@media (max-width: 650px) { .assistant-workspace .assistant-navigation { padding: 7px 10px; gap: 10px; } }
+
 .work-project-changes { overflow-wrap: anywhere; min-width: 0; margin-bottom: 20px; }
 .work-project-changes details { padding: 8px 0; border-top: 1px solid var(--line); }
 .work-project-changes summary { cursor: pointer; font-size: 13px; }

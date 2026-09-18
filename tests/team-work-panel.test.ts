@@ -116,6 +116,14 @@ test('a retained retry blocks a separate start on reload and keeps the exact com
   assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:retry')!), retry);
 });
 
+test('an unconfirmed Apply findings request survives reopening and blocks new work until reconciled', () => {
+  const pending = { requestId: 'original-findings', epoch: 'epoch', id: 'reviewed-team', revision: 14, action: 'apply_findings' };
+  const form = renderForm([member('Researcher'), member('Maker'), member('Reviewer')], undefined, undefined, pending);
+  assert.equal(form.fieldsetDisabled, true); assert.equal(form.disabled, true);
+  assert.match(form.markup, /Reconcile findings request/);
+  assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:retry')!), pending);
+});
+
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 function readerFixture() {
   let state: TeamWorkStatus = { runs: [], readError: '', actionError: '' };

@@ -7,9 +7,9 @@ import { workRequestRejected } from './work-request';
 import { RefreshReader } from './refresh-reader';
 import { suggestedTeamMembers,teamWorkStatus } from './team-work-state';
 import { TeamWorkflowDetails,type TeamAction } from './TeamWorkflowDetails';
+import { runRetainedTeamAction,type PendingTeamAction } from './team-work-action';
 import './team-workflow-details.css';
 type Form={projectId:string;title:string;brief:string;maxMinutes:number;steps:{agentId:string;role:typeof teamRoles[number]}[]};
-type PendingRetry={requestId:string;epoch:string;id:string;revision:number;action:'retry'};
 type Props={snapshot:Snapshot;projectId?:string|null;openConversation:(id:string)=>void;active?:boolean};
 export function TeamWorkPanel(props:Props){
   return <TeamWorkSession key={`${props.snapshot.epoch}:${props.snapshot.deviceId}`} {...props}/>;
@@ -20,7 +20,8 @@ function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props
   const [form,setForm]=useState<Form>(()=>readLocal(key)??{projectId:projectId??projects[0]?.id??'',title:'',brief:'',maxMinutes:10,steps:suggestedTeamMembers(agents)});
   const [{runs,readError,actionError},dispatch]=useReducer(teamWorkStatus,{runs:[],readError:'',actionError:''});
   const [selected,setSelected]=useState<string>(),[editing,setEditing]=useState(false),[pending,setPending]=useState<(Form&{requestId:string;epoch:string})|undefined>(()=>readLocal(key+':pending')),[busy,setBusy]=useState(false);
-  const [pendingRetry,setPendingRetry]=useState<PendingRetry|undefined>(()=>readLocal(key+':retry'));
+  // Keep the original storage key so retries saved by older clients still reconcile.
+  const [pendingAction,setPendingAction]=useState<PendingTeamAction|undefined>(()=>readLocal(key+':retry'));
   const mounted=useRef(false),flight=useRef(false),reader=useRef<RefreshReader<{runs:TeamWork[]}>>(undefined);
   const setError=(message:string)=>dispatch({type:'actionError',message});
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
@@ -39,7 +40,7 @@ function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props
   },[key,active]);
   const change=(value:Form)=>{if(!saveLocal(key,value)){setError('Free browser storage before changing this team brief.');return;}setForm(value);};
   const start=async()=>{
-    if(flight.current||!pending&&(pendingRetry||readLocal(key+':retry')))return;
+    if(flight.current||!pending&&(pendingAction||readLocal(key+':retry')))return;
     const cmd=pending??{...form,requestId:crypto.randomUUID(),epoch:snapshot.epoch};
     if(!saveLocal(key+':pending',cmd)){setError('Free browser storage before starting.');return;}
     setPending(cmd);setBusy(true);flight.current=true;setError('');
@@ -54,35 +55,29 @@ function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props
     }finally{flight.current=false;if(mounted.current)setBusy(false);}
   };
   const current=runs.find(r=>r.id===selected)??runs[0];
-  const retry=async()=>{
-    const retained=pendingRetry??readLocal<PendingRetry>(key+':retry');
+  const durableAction=async(action?:PendingTeamAction['action'])=>{
+    const retained=pendingAction??readLocal<PendingTeamAction>(key+':retry');
     if(flight.current||pending&&!retained)return;
-    const cmd:PendingRetry|undefined=retained??(current?{requestId:crypto.randomUUID(),epoch:snapshot.epoch,id:current.id,revision:current.revision,action:'retry'}:undefined);
+    const cmd:PendingTeamAction|undefined=retained??(current&&action?{requestId:crypto.randomUUID(),epoch:snapshot.epoch,id:current.id,revision:current.revision,action}:undefined);
     if(!cmd)return;
-    if(!saveLocal(key+':retry',cmd)){setError('Free browser storage before retrying. The failed attempt is kept.');return;}
-    setPendingRetry(cmd);setBusy(true);flight.current=true;setError('');
-    const clearRetry=()=>readLocal<PendingRetry>(key+':retry')?.requestId===cmd.requestId&&saveLocal(key+':retry',null);
+    setBusy(true);flight.current=true;setError('');
     try{
-      await request('work/team/control',cmd);
-      const cleared=clearRetry();
-      if(mounted.current){setSelected(cmd.id);setEditing(false);if(cleared)setPendingRetry(undefined);else setError('The retry was confirmed, but its local receipt could not clear. Reconcile the same retry after freeing browser storage.');}
-    }catch(e){
-      if(workRequestRejected(e)&&clearRetry()&&mounted.current)setPendingRetry(undefined);
-      if(mounted.current)setError(e instanceof Error?e.message:'The retry was not confirmed. Reconcile the same request.');
+      const result=await runRetainedTeamAction({read:()=>readLocal<PendingTeamAction>(key+':retry'),write:value=>saveLocal(key+':retry',value),retained:value=>{if(mounted.current)setPendingAction(value);},send:value=>request('work/team/control',value)},cmd);
+      if(mounted.current){setPendingAction(result.pending);setError(result.error);if(result.confirmed&&result.command){setSelected(result.command.id);setEditing(false);}}
     }finally{if(mounted.current)await reader.current?.refresh();flight.current=false;if(mounted.current)setBusy(false);}
   };
   const control=async(action:TeamAction)=>{
-    if(action==='retry'){await retry();return;}
-    if(!current||flight.current||pending||pendingRetry||readLocal(key+':retry'))return;
+    if(action==='retry'||action==='apply_findings'){await durableAction(action);return;}
+    if(!current||flight.current||pending||pendingAction||readLocal(key+':retry'))return;
     setBusy(true);flight.current=true;setError('');
     try{await request('work/team/control',{requestId:crypto.randomUUID(),epoch:snapshot.epoch,id:current.id,revision:current.revision,action});}
     catch(e){if(mounted.current)setError(e instanceof Error?e.message:'This workflow action was not confirmed.');}
     finally{if(mounted.current)await reader.current?.refresh();flight.current=false;if(mounted.current)setBusy(false);}
   };
   return <section className="team-work-panel"><div className="section-heading"><h3>Team work</h3><button type="button" onClick={()=>setEditing(v=>!v)}>{editing?'Back to runs':'New workflow'}</button></div><p className="metadata">Different members, one shared checkout. Each stage receives the earlier handoffs. You review and publish the final changes.</p>
-    {(editing||!runs.length)&&<form onSubmit={e=>{e.preventDefault();void start();}}><fieldset disabled={busy||!!pending||!!pendingRetry}><label>Work Project<select required value={form.projectId} onChange={e=>change({...form,projectId:e.target.value})}><option value="">Choose a project</option>{projects.map(p=><option key={p.id} value={p.id}>{p.value.name}</option>)}</select></label>{!projects.length&&<p className="metadata">Create a Work Project from GitHub or a host folder first.</p>}<label>Title<input required maxLength={120} value={form.title} onChange={e=>change({...form,title:e.target.value})}/></label><label>What should the team do?<textarea required rows={4} maxLength={15000} value={form.brief} onChange={e=>change({...form,brief:e.target.value})} placeholder="Describe the outcome and how you will know it works."/></label><div className="team-stage-edit">{form.steps.map((step,i)=><label key={i}>{i+1}. {step.role==='research'?'Research & plan':step.role==='build'?'Implement':'Review'}<select required value={step.agentId} onChange={e=>change({...form,steps:form.steps.map((s,n)=>n===i?{...s,agentId:e.target.value}:s)})}><option value="">Choose an agent</option>{agents.map(a=><option key={a.id} value={a.id}>{a.value.name} · {a.value.position}</option>)}</select></label>)}</div><label>Time limit per stage<select value={form.maxMinutes} onChange={e=>change({...form,maxMinutes:Number(e.target.value)})}>{[5,10,20,30].map(minutes=><option key={minutes} value={minutes}>{minutes} minutes</option>)}</select></label><p className="metadata">Implementation can edit the checkout. Research and review use read-only sessions. Uses your existing connected AI allowance.</p></fieldset><button className="primary" disabled={busy||!!pendingRetry||(!pending&&(!form.title.trim()||!form.brief.trim()||!form.projectId||form.steps.some(s=>!s.agentId)||new Set(form.steps.map(s=>s.agentId).filter(Boolean)).size<2))}>{pending?'Reconcile start':'Start team work'}</button></form>}
-    {!editing&&current&&<><label>Workflow<select value={current.id} onChange={e=>setSelected(e.target.value)}>{runs.map(r=><option key={r.id} value={r.id}>{r.title} · {r.state}</option>)}</select></label><TeamWorkflowDetails key={current.id} run={current} blocked={busy||!!pending||!!pendingRetry} control={action=>void control(action)} openConversation={openConversation} refresh={()=>void reader.current?.refresh()}/></>}
-    {pendingRetry&&<div className="team-retry"><p role="status">A retry request is unconfirmed. Check the original request before starting or changing a workflow.</p><button disabled={busy} onClick={()=>void retry()}>Reconcile retry</button></div>}
+    {(editing||!runs.length)&&<form onSubmit={e=>{e.preventDefault();void start();}}><fieldset disabled={busy||!!pending||!!pendingAction}><label>Work Project<select required value={form.projectId} onChange={e=>change({...form,projectId:e.target.value})}><option value="">Choose a project</option>{projects.map(p=><option key={p.id} value={p.id}>{p.value.name}</option>)}</select></label>{!projects.length&&<p className="metadata">Create a Work Project from GitHub or a host folder first.</p>}<label>Title<input required maxLength={120} value={form.title} onChange={e=>change({...form,title:e.target.value})}/></label><label>What should the team do?<textarea required rows={4} maxLength={15000} value={form.brief} onChange={e=>change({...form,brief:e.target.value})} placeholder="Describe the outcome and how you will know it works."/></label><div className="team-stage-edit">{form.steps.map((step,i)=><label key={i}>{i+1}. {step.role==='research'?'Research & plan':step.role==='build'?'Implement':'Review'}<select required value={step.agentId} onChange={e=>change({...form,steps:form.steps.map((s,n)=>n===i?{...s,agentId:e.target.value}:s)})}><option value="">Choose an agent</option>{agents.map(a=><option key={a.id} value={a.id}>{a.value.name} · {a.value.position}</option>)}</select></label>)}</div><label>Time limit per stage<select value={form.maxMinutes} onChange={e=>change({...form,maxMinutes:Number(e.target.value)})}>{[5,10,20,30].map(minutes=><option key={minutes} value={minutes}>{minutes} minutes</option>)}</select></label><p className="metadata">Implementation can edit the checkout. Research and review use read-only sessions. Uses your existing connected AI allowance.</p></fieldset><button className="primary" disabled={busy||!!pendingAction||(!pending&&(!form.title.trim()||!form.brief.trim()||!form.projectId||form.steps.some(s=>!s.agentId)||new Set(form.steps.map(s=>s.agentId).filter(Boolean)).size<2))}>{pending?'Reconcile start':'Start team work'}</button></form>}
+    {!editing&&current&&<><label>Workflow<select value={current.id} onChange={e=>setSelected(e.target.value)}>{runs.map(r=><option key={r.id} value={r.id}>{r.title} · {r.state}</option>)}</select></label><TeamWorkflowDetails key={current.id} run={current} blocked={busy||!!pending||!!pendingAction} control={action=>void control(action)} openConversation={openConversation} refresh={()=>void reader.current?.refresh()}/></>}
+    {pendingAction&&<div className="team-retry"><p role="status">{pendingAction.action==='apply_findings'?'An Apply findings request':'A retry request'} is unconfirmed. Check the original request before starting or changing a workflow.</p><button disabled={busy} onClick={()=>void durableAction()}>{pendingAction.action==='apply_findings'?'Reconcile findings request':'Reconcile retry'}</button></div>}
     {pending&&!editing&&runs.length>0&&<button disabled={busy} onClick={()=>void start()}>Reconcile pending start</button>}{actionError&&<p role="alert" className="field-error">{actionError}</p>}{readError&&<p role="alert" className="field-error">{readError}</p>}
   </section>;
 }

@@ -1,3 +1,10 @@
+## [1.7.0] — 2026-09-18
+
+- Keep Chat, Work and Team work controls visible above existing conversations, with a direct Team work entry that preserves the current conversation and unsent writing.
+- Save structured reviewer findings, priorities, locations and reported checks. Distinguish Needs changes, Ready for your review and missing or unconfirmed reports; a finished response alone is never accepted as a clean review.
+- Apply confirmed findings through an explicit builder fix and independent re-review, capped at three owner-started rounds. Preserve captured member settings, checkout changes, every prior stage and review, and the same command after uncertain responses or reloads.
+- Scope report submission and reading to the original authorized team execution, keep reviewers read-only apart from their report, and preserve older generated briefings without overwriting owner edits.
+
 ## [1.6.0] — 2026-09-18
 
 - Preserve complete immutable team handoffs, with bounded excerpts and paginated reads for the owner and the next authorized agent. Keep results after their original conversation is removed.

@@ -1,6 +1,6 @@
 # Proposed improvement backlog
 
-Status: correctness slice implemented in 1.5.13; complete handoffs, explicit failed-stage retry and focused team recovery clarity implemented in 1.6.0. Remaining slices are proposals. Audit baseline: Nova Dream 1.5.12 / build 1.0.169 / schema 54. Priority: stronger Assistant and agent workflows. This document contains generic product/source findings only; installation-specific operations belong in private records.
+Status: correctness slice implemented in 1.5.13; complete handoffs, explicit failed-stage retry and focused team recovery clarity implemented in 1.6.0; structured reviews, explicit fix/re-review rounds and persistent Assistant navigation implemented in 1.7.0. Remaining slices are proposals. Audit baseline: Nova Dream 1.5.12 / build 1.0.169 / schema 54. Priority: stronger Assistant and agent workflows. This document contains generic product/source findings only; installation-specific operations belong in private records.
 
 P1 = next product/reliability tranche; P2 = following work. S/M/L are relative effort, not delivery promises. Source paths below are relative to the application root. Preserve existing retained writing, exact run identity, receipt deduplication, permission intersections and unknown-outcome reconciliation.
 
@@ -32,7 +32,7 @@ Evidence: `apps/service/team-work.ts:63–69,96–99`; `packages/domain/team-wor
 
 Slice 1 implemented in 1.6.0: explicit retry creates a new attempt for a confirmed failed stage, preserving the failure and showing current checkout/context. Unknown original outcomes must reconcile first.
 
-Slice 2: structured review findings and Ready for owner review / Needs changes outcomes; explicit Apply findings creates a bounded new build/review iteration. A model's finished response alone is not acceptance; publication remains a separate reviewed action.
+Slice 2 implemented in 1.7.0: immutable structured findings and reviewer-reported checks, Ready for your review / Needs changes / unavailable outcomes, and explicit Apply findings appending a builder/reviewer pair. Three owner-started fix rounds per workflow; all prior stages, attempts, captured settings and file changes remain. Missing, failed or unverifiable review evidence is not acceptance. Publication stays with the owner. Applying findings requires the exact retained completed review execution; reports remain readable after conversation removal.
 
 Done when: retry is idempotent, old attempts remain visible, unconfirmed executions cannot duplicate, a review reporting defects yields Needs changes, and finite iteration limits return control to the owner. Depends on ND-02 and stable result identities.
 

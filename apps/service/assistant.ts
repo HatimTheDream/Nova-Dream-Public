@@ -534,7 +534,9 @@ export class AssistantService {
         const binding = this.store.internalRead<import('../../packages/domain/team-work.js').TeamConversationAccess>('team:conversation:' + conversation.id);
         if (!binding || binding.epoch !== this.store.epoch || binding.teamId !== teamId) throw new Fault(409, 'team_context_changed', 'The saved team context is unavailable.');
         const { digest: _digest, ...captured } = context.manifest;
-        const manifest = { ...captured, teamHandoffs: { teamId, ids: [...(binding.handoffIds ?? [])] } };
+        const review = binding.review;
+        if (review && (binding.role !== 'review' || review.teamId !== teamId || review.submitRequestId !== input.requestId || review.agentId !== binding.agentId || review.agentRevision !== binding.agentRevision)) throw new Fault(409, 'team_review_changed', 'The captured review stage no longer matches this request.');
+        const manifest = { ...captured, teamHandoffs: { teamId, ids: [...(binding.handoffIds ?? [])] }, ...(review ? { teamReview: { ...review } } : {}) };
         context.manifest = { ...manifest, digest: digest(manifest) };
       }
       if (target && canonical(context.manifest.project) !== canonical(target.context.project)) throw new Fault(409, 'steer_project_changed', 'Project context changed since this reply started. Queue your message to use the updated sources. Your draft is kept.');
