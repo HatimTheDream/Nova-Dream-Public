@@ -9,6 +9,7 @@ import { startServer } from '../apps/service/http.js';
 import { ServerKeyProtector } from '../apps/service/server-key.js';
 import { authorizePrivateWeb, privateWebOptions } from '../apps/service/private-web.js';
 const canonical = 'https://nova-owner.vercel.app', candidateId = 'd'.repeat(64);
+const posixCredential = { skip: process.platform === 'win32' ? 'Requires POSIX private-file modes and ownership; exercised in Linux CI.' : false };
 function fixture(t: import('node:test').TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'nova-vercel-')), directory = join(root, 'data'), serverKey = join(root, 'server.key'), proxyKey = join(root, 'proxy.key'), key = randomBytes(32);
   mkdirSync(directory); writeFileSync(serverKey, randomBytes(32), { mode: 0o600 }); writeFileSync(proxyKey, key, { mode: 0o600 });
@@ -23,7 +24,7 @@ function call(origin: string, path: string, headers: Record<string, string>, bod
     }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
-test('Vercel setup rejects mixed modes, shared encryption keys and unsafe credential files', t => {
+test('Vercel setup rejects mixed modes, shared encryption keys and unsafe credential files', posixCredential, t => {
   const f = fixture(t);
   for (const change of [{ E3_WEB_AUTH: 'headers' }, { E3_WEB_OWNER_LOGIN: 'owner@github' }, { E3_WEB_AUTH: 'tailscale' }, { E3_WEB_ORIGIN: 'https://nova-owner.vercel.app.evil.example' }, { E3_WEB_ORIGIN: 'http://nova-owner.vercel.app' }, { E3_WEB_ORIGIN: canonical + '/' }, { E3_WEB_ORIGIN: canonical + ':8443' }, { E3_WEB_PROXY_KEY_FILE: '' }, { E3_WEB_PROXY_KEY_FILE: 'relative.key' }, { E3_SERVER_KEY_FILE: f.proxyKey }]) assert.throws(() => privateWebOptions({ ...f.env, ...change }));
   const internal = join(f.directory, 'proxy.key'); writeFileSync(internal, f.key, { mode: 0o600 }); assert.throws(() => privateWebOptions({ ...f.env, E3_WEB_PROXY_KEY_FILE: internal }));
@@ -31,7 +32,7 @@ test('Vercel setup rejects mixed modes, shared encryption keys and unsafe creden
   const linked = join(f.root, 'link.key'); symlinkSync(f.proxyKey, linked); assert.throws(() => privateWebOptions({ ...f.env, E3_WEB_PROXY_KEY_FILE: linked }));
   assert.throws(() => authorizePrivateWeb({ socket: { remoteAddress: '192.0.2.1' }, headers: { 'x-nova-proxy-key': f.key.toString('hex'), 'x-nova-public-origin': canonical } } as never, f.web));
 });
-test('Vercel owner sessions retain guarded writes across restart and reject direct-origin or stale credentials', async t => {
+test('Vercel owner sessions retain guarded writes across restart and reject direct-origin or stale credentials', posixCredential, async t => {
   const f = fixture(t), clientDirectory = join(f.root, 'client'); mkdirSync(clientDirectory); writeFileSync(join(clientDirectory, 'index.html'), '<html><head><title>Nova fixture</title></head><body>Owner landing</body></html>');
   const options = { directory: f.directory, port: 0, privateWeb: { ...f.web, port: 0 }, keyProtector: new ServerKeyProtector(f.serverKey, f.directory), candidateId, clientDirectory };
   let host = await startServer(options); t.after(() => host.close());

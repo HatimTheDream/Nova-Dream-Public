@@ -94,7 +94,10 @@ import assert from 'node:assert/strict';
 // entry/chunk ceilings. Runtime preloading now intentionally fetches deferred JS.
 // 1.5.11 adds device-local startup timing estimates (+1,122 gzip bytes, 0.19%).
 // Bound total at 584 KB; startup and individual chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 584000, deferredChunk: 80000 };
+// 1.5.13 corrects team defaults, Home deadline states and Inbox preview text.
+// Measured total 585,326 (+2,121 gzip bytes, 0.36% over 1.5.12).
+// Bound total at 586 KB; startup and individual chunk ceilings stay fixed.
+export const clientLimits = { startup: 180000, total: 586000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { constants, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
@@ -44,6 +44,18 @@ test('download chunks match the archive, reject changed bytes and never resolve 
   assert.deepEqual(Buffer.concat([await downloads.chunk(name, 0), await downloads.chunk(name, 1)]), bytes);
   await assert.rejects(downloads.chunk('../secret', 0)); await assert.rejects(downloads.chunk(name, -1));
   writeFileSync(join(directory, name), Buffer.alloc(bytes.length, 7)); await assert.rejects(downloads.chunk(name, 0), /integrity/);
-  rmSync(join(directory, name)); symlinkSync(join(directory, 'downloads.json'), join(directory, name)); await assert.rejects(downloads.chunk(name, 0));
+  await t.test('terminal archive links cannot substitute otherwise valid download bytes', {
+    skip: typeof constants.O_NOFOLLOW !== 'number' ? 'Requires native O_NOFOLLOW file-link protection; exercised in Linux CI.' : false,
+  }, async linkTest => {
+    const target = join(directory, 'linked-archive.zip'); writeFileSync(target, bytes); rmSync(join(directory, name));
+    try { symlinkSync(target, join(directory, name)); }
+    catch (error) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+        linkTest.skip('Windows file-symlink privilege is unavailable; the real terminal-link security check runs in Linux CI.'); return;
+      }
+      throw error;
+    }
+    await assert.rejects(downloads.chunk(name, 0));
+  });
   assert.deepEqual(await new CompanionDownloads().list(), []);
 });

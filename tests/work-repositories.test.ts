@@ -43,6 +43,15 @@ test('changed files, busy work, changed destinations and custom executable Git c
   await f.git('remote','set-url','origin','https://github.com/somebody/else.git');await assert.rejects(f.work.review(f.conversationId),/destination changed/);await f.git('remote','set-url','origin','https://github.com/sample/project.git');
   await f.git('config','filter.bad.clean','echo unwanted');await assert.rejects(f.work.review(f.conversationId),/custom Git/);
 });
+test('ordinary disabled Git symlinks permit review while unexpected values still fail closed',async t=>{
+  const f=await fixture(t);await f.git('config','core.symlinks','false');
+  assert.equal((await f.work.review(f.conversationId)).canPublish,true);
+  for(const value of ['true','no','0','false\nextra']){
+    await f.git('config','core.symlinks',value);await assert.rejects(f.work.review(f.conversationId),/custom Git/);
+  }
+  await f.git('config','core.symlinks','false');assert.equal((await f.work.review(f.conversationId)).canPublish,true);
+});
+
 test('uncertain pushes keep their receipt and never automatically repeat remote effects',async t=>{
   let pushes=0;const run:HostCommand=async(exe,args,options)=>{if(exe==='git'&&args.includes('push')){pushes++;throw Error('Connection lost');}return hostCommand(exe,args,options);};
   const f=await fixture(t,run),review=await f.work.review(f.conversationId),cmd={requestId:randomUUID(),epoch:f.store.epoch,conversationId:f.conversationId,fingerprint:review.fingerprint,title:'Publish',body:'',action:'push'};

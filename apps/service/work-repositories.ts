@@ -76,7 +76,7 @@ export class WorkRepositories {
     if(!conversation || !c || conversation.deleted)throw new Fault(409,'work_unmanaged','Publishing is available for repositories opened with Nova’s GitHub picker.');
     if(await realpath(c.folder)!==join(await realpath(this.root),c.id) || !(await stat(join(c.folder,'.git'))).isDirectory() || await realpath(join(c.folder,'.git'))!==join(await realpath(c.folder),'.git'))throw new Fault(409,'work_folder_changed','The checkout location changed. Reopen the original project.');
     const config=(await this.git(c.folder,['config','--local','--list','--null'])).toString().split('\0').filter(Boolean);
-    if(config.some(line=>! /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|remote\.origin\.(url|fetch)|branch\.[^\n]+\.(remote|merge))\n/.test(line)))throw new Fault(409,'work_config_changed','The repository has custom Git execution settings. Review them outside Nova before publishing.');
+    if(config.some(line=>line!=='core.symlinks\nfalse'&&! /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|remote\.origin\.(url|fetch)|branch\.[^\n]+\.(remote|merge))\n/.test(line)))throw new Fault(409,'work_config_changed','The repository has custom Git execution settings. Review them outside Nova before publishing.');
     const remote=(await this.git(c.folder,['remote','get-url','origin'])).toString().trim();
     if(remote!==`https://github.com/${c.repository.fullName}.git`)throw new Fault(409,'work_remote_changed','The repository destination changed. Review its remote before publishing.');
     const branch=(await this.git(c.folder,['symbolic-ref','--short','HEAD'])).toString().trim();

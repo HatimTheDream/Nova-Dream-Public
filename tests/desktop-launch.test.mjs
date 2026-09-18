@@ -28,7 +28,7 @@ test('Windows QA stays inside windows-profiles and directory symlinks cannot red
     const profile = policy.profileDirectory(options, workspace, outside, 'win32');
     assert.equal(profile, join(workspace, '.tmp-qa/windows-profiles/release-069'));
     assert.equal(policy.prepareQaDirectory(profile, workspace), profile);
-    const redirect = join(workspace, '.tmp-qa/redirect'); symlinkSync(outside, redirect, 'dir');
+    const redirect = join(workspace, '.tmp-qa/redirect'); symlinkSync(outside, redirect, process.platform === 'win32' ? 'junction' : 'dir');
     assert.throws(() => policy.prepareQaDirectory(join(redirect, 'new-profile'), workspace), /symlinks/);
     assert.equal(existsSync(join(outside, 'new-profile')), false);
     assert.throws(() => policy.prepareQaDirectory(outside, workspace), /inside/);

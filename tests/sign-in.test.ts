@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 const { canOpenExternal } = createRequire(import.meta.url)('../apps/desktop/external.cjs');
 import type { IPty } from 'node-pty';
 import { Store } from '../apps/service/store.js';
@@ -25,7 +28,7 @@ class Terminal implements Pick<IPty, 'pid' | 'onData' | 'onExit' | 'kill'> {
 async function fixture(run: (f: { store: Store; service: ChatGptSignIn; terminals: Terminal[]; command: { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }; device: string }) => Promise<void>) {
   const directory = mkdtempSync(join(tmpdir(), 'edition3-signin-'));
   const store = new Store(directory), terminals: Terminal[] = [];
-  const command = { file: process.execPath, args: ['fixture'], cwd: directory, env: { PATH: process.env.PATH } };
+  const command = { file: process.execPath, args: ['fixture'], cwd: directory, env: { PATH: process.env.PATH, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) } };
   const service = new ChatGptSignIn(store, { signInCommand: () => command }, () => { const terminal = new Terminal(); terminals.push(terminal); return terminal; });
   try { await run({ store, service, terminals, command, device: store.session().deviceId }); }
   finally { await service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -86,15 +89,14 @@ test('restart does not replay sign-in or allow another attempt while the previou
   } finally { await restored.close(); }
 }));
 
-test('real PTY code note is read without exposing the terminal stream', () => fixture(async f => {
-  const service = new ChatGptSignIn(f.store, { signInCommand: () => ({ ...f.command, args: ['-e', `console.log(${JSON.stringify(note)}); setInterval(()=>{},1000);`] }) });
-  try {
-    service.start(f.device, request(f.store));
-    const deadline = Date.now()+4000;
-    while (service.status().state === 'starting' && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
-    assert.equal(service.status().state, 'waiting'); assert.equal(service.status().userCode, 'TEST-CODE');
-  } finally { await service.close(); }
-}));
+test('real PTY code note is read without exposing the terminal stream', async () => {
+  // ConPTY's synchronous pipe startup must not inherit tsx/test-runner worker
+  // hooks. Run the native smoke in a plain Node process, as in the packaged app.
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT; delete env.NODE_OPTIONS;
+  const result = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./fixtures/sign-in-pty.mjs', import.meta.url))], { env, timeout: 15000, windowsHide: true });
+  assert.deepEqual(JSON.parse(result.stdout), { state: 'waiting', userCode: 'TEST-CODE' });
+});
 
 const authorization = new URL('https://auth.openai.com/oauth/authorize');
 for (const [key, value] of Object.entries({response_type:'code',client_id:'fixture-client',redirect_uri:'http://localhost:1455/auth/callback',code_challenge_method:'S256',code_challenge:'a'.repeat(43),state:'b'.repeat(32)})) authorization.searchParams.set(key,value);

@@ -57,7 +57,18 @@ test('untrusted inventory paths, duplicates and symlinks cannot escape the owned
   const f = fixture(); try {
     const original = f.manifest.artifacts[0]; f.manifest.artifacts.push({ path: 'dist/client/../../../outside', sha256: digest('') }); f.saveManifest(); assert.throws(() => stageCandidate(f.root), /Invalid candidate path/);
     f.manifest.artifacts.pop(); f.manifest.artifacts.push(original); f.saveManifest(); assert.throws(() => stageCandidate(f.root), /Duplicate candidate/);
-    f.manifest.artifacts.pop(); f.saveManifest(); rmSync(join(f.root, original.path)); f.put('outside', '<h1>First candidate</h1>'); symlinkSync(join(f.root, 'outside'), join(f.root, original.path)); assert.throws(() => stageCandidate(f.root), /symlinks/);
+    f.manifest.artifacts.pop(); f.saveManifest();
+    if (process.platform === 'win32') {
+      // Junctions need no Windows symlink privilege and exercise the same
+      // forbidden path-component escape with an otherwise valid artifact.
+      rmSync(join(f.root, 'dist/client'), { recursive: true }); f.put('outside/index.html', '<h1>First candidate</h1>');
+      symlinkSync(join(f.root, 'outside'), join(f.root, 'dist/client'), 'junction');
+    } else {
+      rmSync(join(f.root, original.path)); f.put('outside', '<h1>First candidate</h1>');
+      symlinkSync(join(f.root, 'outside'), join(f.root, original.path));
+    }
+    assert.equal(readFileSync(join(f.root, original.path), 'utf8'), '<h1>First candidate</h1>');
+    assert.throws(() => stageCandidate(f.root), /symlinks/);
   } finally { f.close(); }
 });
 test('an altered frozen candidate fails without repairing or overwriting its bytes', () => {

@@ -12,13 +12,17 @@ import { startServer } from '../apps/service/http.js';
 import { privateWebOptions, authorizePrivateWeb } from '../apps/service/private-web.js';
 import { Providers, readScopes } from '../apps/service/providers.js';
 
+// The server-secret protector requires POSIX ownership/mode enforcement. NTFS
+// does not implement chmod(0600); exercise that real boundary in Linux CI.
+const posixCredential = { skip: process.platform === 'win32' ? 'Requires POSIX private-file modes and ownership; exercised in Linux CI.' : false };
+
 function fixture(t: import('node:test').TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'nova-server-')), directory = join(root, 'data'), credential = join(root, 'server.key');
   mkdirSync(directory); writeFileSync(credential, randomBytes(32), { mode: 0o600 });
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return { root, directory, credential, protector: new ServerKeyProtector(credential, directory) };
 }
-test('server credential reopens encrypted records without Electron or a plaintext workspace key', async t => {
+test('server credential reopens encrypted records without Electron or a plaintext workspace key', posixCredential, async t => {
   const f = fixture(t), store = new Store(f.directory), keys = new WorkspaceKeys(f.directory, f.protector, 'linux');
   const task = store.mutate('owner', { requestId: randomUUID(), epoch: store.epoch, entityId: 'task:server', kind: 'task', expectedRevision: 0, payload: { title: 'Server retained task', notes: 'same saved work', status: 'open', planned: '', due: '' } });
   const original = readFileSync(join(f.directory, 'preview.key'));
@@ -34,7 +38,7 @@ test('server credential reopens encrypted records without Electron or a plaintex
   assert.deepEqual(readFileSync(join(f.directory, 'workspace-key.json')), wrapper);
   writeFileSync(f.credential, credential); assert.deepEqual(await new WorkspaceKeys(f.directory, f.protector, 'linux').readProtected(), original);
 });
-test('server credential rejects corruption, public permissions, links, wrong size and storage inside data', async t => {
+test('server credential rejects corruption, public permissions, links, wrong size and storage inside data', posixCredential, async t => {
   const f = fixture(t), plain = randomBytes(32), sealed = await f.protector.wrap(plain);
   assert.deepEqual(await f.protector.unwrap(sealed), plain);
   for (const offset of [0, 1, 13, 29, 60]) { const corrupt = Buffer.from(sealed); corrupt[offset] ^= 1; await assert.rejects(f.protector.unwrap(corrupt)); }
@@ -53,7 +57,7 @@ async function call(origin: string, path: string, body?: unknown, extra: Record<
     }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
-test('private owner web access uses exact proxy identity, secure separate sessions and canonical guarded writes across restart', async t => {
+test('private owner web access uses exact proxy identity, secure separate sessions and canonical guarded writes across restart', posixCredential, async t => {
   const f = fixture(t);
   const options = { directory: f.directory, port: 0, privateWeb: web, keyProtector: f.protector, candidateId };
   let host = await startServer(options);
@@ -87,7 +91,7 @@ test('private web configuration is off by default and rejects ambiguous origins,
   assert.throws(() => authorizePrivateWeb({ socket: { remoteAddress: '10.0.0.2' }, headers: { 'tailscale-user-login': web.ownerLogin } } as never, web));
 });
 
-for (const provider of ['google', 'microsoft'] as const) test(`${provider} server OAuth returns to HTTPS and consumes its state once without a local browser callback`, async t => {
+for (const provider of ['google', 'microsoft'] as const) test(`${provider} server OAuth returns to HTTPS and consumes its state once without a local browser callback`, posixCredential, async t => {
   const f = fixture(t), exchanges: URLSearchParams[] = [];
   const providers = new Providers((async (input, init = {}) => {
     const url = String(input), json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });

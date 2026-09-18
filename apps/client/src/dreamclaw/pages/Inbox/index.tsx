@@ -164,6 +164,7 @@ import {
   formatInboxConversationSummary,
   formatInboxSenderLabel,
 } from '@dreamclaw/services/inbox/messagePresentation';
+import { pickThreadPreviewText } from '@dreamclaw/services/inbox/previewText';
 import {
   describeInboxAttachment,
   formatInboxAttachmentSize,
@@ -289,15 +290,6 @@ function isPresentObject<T extends object>(value: T | null | undefined): value i
 
 function normalizeEmail(value: string): string {
   return String(value || '').trim().toLowerCase();
-}
-
-function normalizeCopy(value: string): string {
-  return String(value || '')
-    .replace(/\r/g, '\n')
-    .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 function extractEmail(value: string): string {
@@ -565,25 +557,6 @@ function buildMicrosoftCategoryOptions(categories: NativeMicrosoftMailCategoryOp
     }))
     .filter((category) => category.id.length > 0)
     .sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function pickThreadPreviewText(thread: ThreadDigestCommon): string {
-  const subject = normalizeCopy(thread.subject).toLowerCase();
-  const candidates = [thread.summary, thread.latestBody, thread.latestSnippet];
-  const sender = normalizeCopy(thread.from).toLowerCase();
-  for (const candidate of candidates) {
-    const normalized = normalizeCopy(candidate);
-    if (!normalized) continue;
-    const lower = normalized.toLowerCase();
-    if (lower === subject || lower === sender || lower === `${subject} - ${sender}`) continue;
-    if (lower.startsWith(`${subject}\n`) || lower.startsWith(`${subject} `)) {
-      const trimmed = normalized.slice(thread.subject.length).trim();
-      if (trimmed) return trimmed;
-      continue;
-    }
-    return normalized;
-  }
-  return '';
 }
 
 function formatThreadListDate(value?: string): string {

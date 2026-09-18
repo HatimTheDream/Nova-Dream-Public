@@ -97,15 +97,21 @@ test('reauthorization failure removes the incomplete upload and creates no usabl
 });
 test('restored HTTP workspace exposes saved work but cannot mutate, reconnect providers or start an agent', async t => {
   const f = fixture(t), target = join(f.root, 'http-copy'), recovered = Store.restoreBackup(target, f.snapshot()); recovered.close();
-  const service = await startServer({ directory: target, port: 0 }); t.after(() => service.close());
-  const login = await fetch(service.origin + '/api/session', { method: 'POST', headers: { 'X-Edition3-Client': '1' } });
-  const cookie = login.headers.get('set-cookie')!.split(';')[0];
-  const context = await fetch(service.origin + '/api/access/context'); assert.equal((await context.json()).recovery, true);
-  const snapshot = await fetch(service.origin + '/api/snapshot', { headers: { Cookie: cookie } }); assert.equal((await snapshot.json()).tasks[0].value.title, 'Private recovery proof');
-  for (const path of ['commands', 'phone/enable', 'accounts/connect', 'assignments/start', 'assistant/connection', 'storage/backups/create']) {
-    const response = await fetch(service.origin + '/api/' + path, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-Edition3-Client': '1' }, body: '{}' }); assert.equal(response.status, 409); assert.equal((await response.json()).code, 'recovery_held');
+  const service = await startServer({ directory: target, port: 0 });
+  try {
+    const login = await fetch(service.origin + '/api/session', { method: 'POST', headers: { 'X-Edition3-Client': '1' } });
+    const cookie = login.headers.get('set-cookie')!.split(';')[0];
+    const context = await fetch(service.origin + '/api/access/context'); assert.equal((await context.json()).recovery, true);
+    const snapshot = await fetch(service.origin + '/api/snapshot', { headers: { Cookie: cookie } }); assert.equal((await snapshot.json()).tasks[0].value.title, 'Private recovery proof');
+    for (const path of ['commands', 'phone/enable', 'accounts/connect', 'assignments/start', 'assistant/connection', 'storage/backups/create']) {
+      const response = await fetch(service.origin + '/api/' + path, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-Edition3-Client': '1' }, body: '{}' }); assert.equal(response.status, 409); assert.equal((await response.json()).code, 'recovery_held');
+    }
+    assert.equal(service.gateway.status().state, 'unconfigured'); assert.equal(service.store.profileProgress().earnedXp, 10);
+  } finally {
+    // Close SQLite before the fixture's after hook removes its directory. After
+    // hooks run in registration order, and Windows keeps open databases locked.
+    await service.close();
   }
-  assert.equal(service.gateway.status().state, 'unconfigured'); assert.equal(service.store.profileProgress().earnedXp, 10);
 });
 
 test('failed native verification removes staging, preserves the live workspace and never publishes a recovery', async t => {

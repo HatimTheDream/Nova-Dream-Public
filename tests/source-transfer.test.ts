@@ -89,9 +89,12 @@ test('a stopping adapter waits for its upload and never admits a late source', a
 test('unexpected native paths and symlinked cache files are rejected without deleting unrelated files', async () => {
   const f = fixture(); f.outside(true); await assert.rejects(f.invoke(f.input()), /outside the native media store/);
   assert.ok(readdirSync(f.directory).some(name => name.endsWith('.file')));
-  const other = fixture(), input = other.input(), staged = await other.invoke(input), ownerPath = join(other.directory, 'owner.txt');
-  writeFileSync(ownerPath, Buffer.from(input.content, 'base64')); rmSync(staged.path); symlinkSync(ownerPath, staged.path);
-  await assert.rejects(other.invoke(input)); assert.equal(readFileSync(ownerPath).toString(), 'Whole source bytes');
+  const other = fixture(), input = other.input(), staged = await other.invoke(input), ownerDirectory = join(other.directory, 'owner'), ownerPath = join(ownerDirectory, 'owner.txt');
+  mkdirSync(ownerDirectory); writeFileSync(ownerPath, Buffer.from(input.content, 'base64')); rmSync(staged.path);
+  // Both native link kinds must hit the same lstat guard before any file read.
+  if (process.platform === 'win32') symlinkSync(ownerDirectory, staged.path, 'junction');
+  else symlinkSync(ownerPath, staged.path);
+  await assert.rejects(other.invoke(input), /outside the native media store/); assert.equal(readFileSync(ownerPath).toString(), 'Whole source bytes');
 });
 
 test('files exceeding the full attachment limit are rejected without a native write', async () => {

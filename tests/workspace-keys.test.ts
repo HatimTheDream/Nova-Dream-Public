@@ -8,6 +8,11 @@ import { Store } from '../apps/service/store.js';
 import { WorkspaceKeys, type KeyProtector } from '../apps/service/workspace-keys.js';
 import { startServer } from '../apps/service/http.js';
 
+// Exercise the host's filesystem durability behavior while supplying a fixture
+// OS vault on platforms without an OS-protection provider.
+const protectedPlatform = process.platform === 'win32' ? 'win32' : 'darwin';
+const otherPlatform = protectedPlatform === 'win32' ? 'darwin' : 'win32';
+
 class FixtureVault implements KeyProtector {
   private key = randomBytes(32);
   wraps = 0; reads = 0; failRead = 0;
@@ -16,7 +21,7 @@ class FixtureVault implements KeyProtector {
 }
 function fixture(t: import('node:test').TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'edition3-key-')), vault = new FixtureVault();
-  const store = new Store(directory), keys = new WorkspaceKeys(directory, vault, 'darwin');
+  const store = new Store(directory), keys = new WorkspaceKeys(directory, vault, protectedPlatform);
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   return { directory, store, vault, keys, legacy: join(directory, 'preview.key'), wrapper: join(directory, 'workspace-key.json') };
 }
@@ -28,7 +33,7 @@ test('protected wrapper reopens exact saved data without retaining a plaintext w
   assert.equal(f.vault.wraps, 1); assert.equal(existsSync(f.legacy), false);
   assert.equal(f.keys.status().protection, 'os'); assert.equal(f.keys.status().verified, true);
   assert.equal(readFileSync(f.wrapper).includes(key.toString('base64')), false);
-  const recovered = await new WorkspaceKeys(f.directory, f.vault, 'darwin').readProtected(); assert.deepEqual(recovered, key);
+  const recovered = await new WorkspaceKeys(f.directory, f.vault, protectedPlatform).readProtected(); assert.deepEqual(recovered, key);
   const reopened = new Store(f.directory, undefined, recovered); recovered!.fill(0);
   try { assert.deepEqual(reopened.readEntity('task', saved.id), saved); } finally { reopened.close(); }
   assert.equal(existsSync(f.legacy), false); await f.keys.protect(value => f.store.matchesKey(value)); assert.equal(f.vault.wraps, 1);
@@ -52,7 +57,7 @@ test('wrong key, corrupt wrapper and a different OS never fall back or replace e
   await assert.rejects(f.keys.readProtected(), /operating system/); await assert.rejects(f.keys.protect(value => f.store.matchesKey(value)), /operating system/);
   assert.deepEqual(readFileSync(f.legacy), original); assert.equal(readFileSync(f.wrapper, 'utf8'), '{broken');
   writeFileSync(f.wrapper, wrapper);
-  await assert.rejects(new WorkspaceKeys(f.directory, f.vault, 'win32').readProtected(), /operating system/);
+  await assert.rejects(new WorkspaceKeys(f.directory, f.vault, otherPlatform).readProtected(), /operating system/);
   assert.deepEqual(readFileSync(f.wrapper), wrapper);
 });
 

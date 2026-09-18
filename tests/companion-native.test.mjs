@@ -30,7 +30,11 @@ async function harness(t, initial) {
   class Mcp {constructor(){this.child=new Child();children.push(this.child);} async ready(){if(delayReady)await new Promise(r=>readyResolve=r);return {tools:policy.tools.map(name=>({name,inputSchema:{}}))};}close(){} }
   const browser={setPermissionRequestHandler(){},setPermissionCheckHandler(){},fetch:async()=>({ok:admitted,status:admitted?200:403,text:async()=>'{}'})};
   const electron={app,BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showMessageBox:async()=>({response:dialogs.shift()??0}),showErrorBox:(_,message)=>{throw Error(message);}},session:{fromPartition:()=>browser},safeStorage:{isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()},nativeImage:{createFromPath:()=>({resize:()=>({})})},Tray:class{setTitle(){}setToolTip(){}setContextMenu(){}},Menu:{buildFromTemplate:v=>v}};
-  const wrappedFs={...fs,mkdtempSync:()=>fs.mkdtempSync(join(dir,'helper-'))};
+  const wrappedFs={...fs,mkdtempSync:()=>fs.mkdtempSync(join(dir,'helper-')),
+    // This VM simulates macOS. Windows requires writable handles for fsync,
+    // so retain real disk flushing while adapting its newly written fixtures.
+    openSync:(path,flags,...args)=>fs.openSync(path,process.platform==='win32'&&flags==='r'?'r+':flags,...args),
+  };
   const mocks={electron,'node:fs':wrappedFs,'node:os':{homedir:()=>dir,hostname:()=>'fixture-host'},'node:child_process':{spawn:(_bin,args)=>{const child=new Child();children.push(child);fs.writeFileSync(args[args.indexOf('--socket')+1],'fixture');return child;},execFileSync(){throw Error('Unexpected app lookup');}},'./companion-client.cjs':{CompanionClient:Client},'./companion-mcp.cjs':{CompanionMcp:Mcp},'./companion-access.cjs':policy};
   runInNewContext(source,{require:name=>mocks[name]??require(name),__dirname:'/fixture-app',process:{env:{NOVA_COMPANION_QA_PROFILE:'fixture'},platform:'darwin'},Buffer,URL,AbortSignal,setTimeout,clearTimeout,setInterval:fn=>{intervals.push(fn);return fn;},clearInterval(){},console});
   await settle();await settle();

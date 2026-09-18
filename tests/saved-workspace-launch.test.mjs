@@ -33,8 +33,16 @@ test('saved selection rejects ambiguous flags, traversal, unexpected keys and re
   for(const delta of [{port:80},{port:65536},{port:4398.5},{port:'4398'},{version:2},{host:'example.com'},{dataDirectory:'../outside'},{dataDirectory:'/tmp/outside'},{dataDirectory:'.tmp-qa/../retained'},{dataDirectory:'.tmp-qa\\retained'}]){save({...value,...delta});assert.throws(()=>policy.launchOptions(['--workspace=main'],root));}
 }));
 test('symlinked saved selections and data paths cannot redirect launch',()=>fixture(({root,save,value})=>{
-  symlinkSync(join(root,'.tmp-qa/retained'),join(root,'.tmp-qa/alias'),'dir');save({...value,dataDirectory:'.tmp-qa/alias'});
+  symlinkSync(join(root,'.tmp-qa/retained'),join(root,'.tmp-qa/alias'),process.platform==='win32'?'junction':'dir');save({...value,dataDirectory:'.tmp-qa/alias'});
   assert.throws(()=>policy.launchOptions(['--workspace=main'],root),/symlink/);
-  save(value);const config=join(root,'.launcher/workspaces/main.json');rmSync(config);writeFileSync(join(root,'selection.json'),JSON.stringify(value));symlinkSync(join(root,'selection.json'),config);
+  save(value);
+  if(process.platform==='win32'){
+    // Redirect a component of the same valid selection path without requiring
+    // elevated file-symlink privileges. POSIX keeps the terminal file case.
+    const selections=join(root,'.launcher/workspaces'),outside=join(root,'outside-selections');
+    rmSync(selections,{recursive:true});mkdirSync(outside);writeFileSync(join(outside,'main.json'),JSON.stringify(value));symlinkSync(outside,selections,'junction');
+  }else{
+    const config=join(root,'.launcher/workspaces/main.json');rmSync(config);writeFileSync(join(root,'selection.json'),JSON.stringify(value));symlinkSync(join(root,'selection.json'),config);
+  }
   assert.throws(()=>policy.launchOptions(['--workspace=main'],root),/symlink/);
 }));

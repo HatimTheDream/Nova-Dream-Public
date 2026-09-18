@@ -1,6 +1,6 @@
 {
   "name": "nova-dream-edition-3",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "private": true,
   "type": "module",
   "description": "Nova Dream daily workspace",
@@ -8,7 +8,7 @@
     "node": ">=22.19.0"
   },
   "edition3": {
-    "buildVersion": "1.0.169",
+    "buildVersion": "1.0.170",
     "schemaVersion": 54,
     "apiVersion": 1,
     "appId": "private.novadream.edition3.preview"
@@ -42,6 +42,7 @@
     "@openclaw/gateway-protocol": "2026.8.1",
     "clsx": "2.1.1",
     "croner": "10.0.1",
+    "decode-named-character-reference": "1.3.0",
     "htmlparser2": "10.1.0",
     "i18next": "26.4.2",
     "mailparser": "3.9.23",

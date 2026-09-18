@@ -1,3 +1,11 @@
+## [1.5.13] — 2026-09-18
+
+- Choose suitable team members for Research, Implement and Review without consuming specialists as fallbacks. Keep ambiguous roles explicit and preserve saved choices and pending starts.
+- Clear recovered team-status read errors without hiding failed actions, and cancel obsolete reads when leaving the view.
+- Open the correct Home settings category, include overdue deadlines in Attention, and distinguish future or completed work from an empty workspace.
+- Show connection checks as pending until observed, and decode Inbox preview entities and invisible preheader padding while preserving meaningful Unicode and original messages.
+- Support Windows Git checkout reviews with the normal symlink setting, and make development test fixtures portable across Windows and POSIX hosts.
+
 ## [1.5.12] — 2026-09-16
 
 - Show startup waiting time as a plain duration in seconds and minutes, recalculated with one-second precision as observed loading speed changes.
