@@ -57,7 +57,77 @@ async function fixture(run: (f: { store: Store; service: AssistantService; gatew
   finally { service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 }
 const tick = () => new Promise(r => setTimeout(r, 15));
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void, reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 const queueDraft = (f: Parameters<Parameters<typeof fixture>[0]>[0]) => f.service.enqueue(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 });
+
+for (const [eventState, operationState] of [['final', 'completed'], ['error', 'failed'], ['aborted', 'cancelled']] as const) {
+  test(`delayed active history cannot reopen a ${operationState} run or replace its final output`, () => fixture(async f => {
+    const input = submission(f), submitted = f.service.submit(f.device, input); await tick();
+    const live = f.service.operations().find(op => op.id === submitted.id)!;
+    const held = deferred(); f.gateway.holdHistory = held.promise;
+    f.gateway.inFlightRun = { runId: live.nativeRunId!, text: 'Stale partial output' };
+    const reading = f.service.reconcile(live.conversationId);
+    for (const listener of f.gateway.listeners) listener({ type: 'event', event: 'chat', payload: { runId: live.nativeRunId, sessionKey: live.nativeKey, state: eventState, message: { role: 'assistant', content: 'Retained final output' } } });
+    const settled = f.service.operations().find(op => op.id === submitted.id)!;
+    assert.equal(settled.state, operationState);
+    held.resolve(); await reading; await tick();
+    assert.deepEqual(f.service.operations().find(op => op.id === submitted.id), settled);
+    assert.deepEqual(f.service.submit(f.device, input), settled);
+    assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1);
+  }));
+}
+
+test('a delayed abort rejection preserves a confirmed failure and replay never aborts again', () => fixture(async f => {
+  const submitted = f.service.submit(f.device, submission(f)); await tick();
+  const live = f.service.operations().find(op => op.id === submitted.id)!;
+  const abort = deferred<unknown>(), entered = deferred(), request = f.gateway.request.bind(f.gateway);
+  let aborts = 0;
+  f.gateway.request = async <T>(method: string, raw: unknown): Promise<T> => {
+    if (method !== 'chat.abort') return request<T>(method, raw);
+    aborts++; entered.resolve(); return await abort.promise as T;
+  };
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, operationId: live.id };
+  const cancelling = f.service.cancel(f.device, input); await entered.promise;
+  for (const listener of f.gateway.listeners) listener({ type: 'event', event: 'chat', payload: { runId: live.nativeRunId, sessionKey: live.nativeKey, state: 'error', message: { role: 'assistant', content: 'Failure with retained partial work' } } });
+  const settled = f.service.operations().find(op => op.id === submitted.id)!;
+  assert.equal(settled.state, 'failed'); assert.equal(settled.cancelRequested, true);
+  abort.reject(new Error('Abort response lost after the failure event'));
+  assert.deepEqual(await cancelling, settled);
+  assert.deepEqual(await f.service.cancel(f.device, input), settled);
+  assert.equal(aborts, 1);
+}));
+
+test('conflicting terminal receipts keep the first outcome while matching receipts enrich proof only once', () => fixture(async f => {
+  const submitted = f.service.submit(f.device, submission(f)); await tick();
+  const live = f.service.operations().find(op => op.id === submitted.id)!;
+  const status = f.gateway.status.bind(f.gateway), request = f.gateway.request.bind(f.gateway);
+  const receipt = deferred<unknown>(), entered = deferred();
+  f.gateway.status = () => ({ ...status(), methods: [...status().methods, 'agent.wait'] });
+  let result: unknown;
+  f.gateway.request = async <T>(method: string, raw: unknown): Promise<T> => {
+    if (method !== 'agent.wait') return request<T>(method, raw);
+    entered.resolve(); return (result ?? await receipt.promise) as T;
+  };
+  const reading = f.service.reconcile(live.conversationId); await entered.promise;
+  for (const listener of f.gateway.listeners) listener({ type: 'event', event: 'chat', payload: { runId: live.nativeRunId, sessionKey: live.nativeKey, state: 'error', message: { role: 'assistant', content: 'Original terminal failure' } } });
+  const settled = f.service.operations().find(op => op.id === submitted.id)!;
+  const proof = { runId: live.nativeRunId, sessionId: live.nativeId, turnId: 'exact-turn', effective: { provider: 'fixture', model: 'verified' } };
+  result = { runId: live.nativeRunId, status: 'ok', terminalReceipt: proof, terminalReply: { text: 'Conflicting delayed completion' } };
+  receipt.resolve(result); await reading; await tick();
+  assert.deepEqual(f.service.operations().find(op => op.id === submitted.id), settled);
+  result = { runId: live.nativeRunId, status: 'error', terminalReceipt: proof, terminalReply: { text: 'Different terminal receipt output' } };
+  await f.service.reconcile(live.conversationId);
+  const enriched = f.service.operations().find(op => op.id === submitted.id)!;
+  assert.equal(enriched.state, 'failed'); assert.equal(enriched.text, settled.text); assert.equal(enriched.error, settled.error);
+  assert.equal(enriched.effectiveModel, 'fixture/verified'); assert.equal(enriched.nativeTurnId, 'exact-turn');
+  await f.service.reconcile(live.conversationId);
+  assert.deepEqual(f.service.operations().find(op => op.id === submitted.id), enriched);
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1);
+}));
 
 test('duplicate conversation names get stable readable suffixes and rejected creation is not unknown', () => fixture(async f => {
   const input = { requestId: randomUUID(), epoch: f.store.epoch, title: f.conversation.title, projectId: f.projectId };
@@ -1044,4 +1114,25 @@ for (const retained of [undefined, 'Original captured control instructions']) te
     assert.equal((await restarted.history(f.conversation.id)).messages[0].authoredText, queued.input);
     assert.equal(restarted.conversations()[0].permissionMode, f.conversation.permissionMode);
   } finally { restarted.close(); }
+}));
+
+test('only the trusted team dispatcher captures immutable handoff read authority', () => fixture(async f => {
+  const teamId = randomUUID(), original = randomUUID();
+  const binding = { epoch: f.store.epoch, teamId, agentId: 'agent:fixture', agentRevision: 1, role: 'research', access: {}, handoffIds: [original] };
+  const input = submission(f);
+  assert.throws(() => f.service.submit(f.device, input, false, teamId), /saved team context/);
+  f.store.internalWrite('team:conversation:' + f.conversation.id, binding);
+  const operation = f.service.submit(f.device, input, false, teamId);
+  assert.deepEqual(operation.context.teamHandoffs, { teamId, ids: [original] });
+  const { digest, ...manifest } = operation.context;
+  assert.equal(digest, createHash('sha256').update(canonical(manifest)).digest('hex'));
+  f.store.internalWrite('team:conversation:' + f.conversation.id, { ...binding, handoffIds: [randomUUID()] });
+  assert.deepEqual(f.service.submit(f.device, input, false, teamId).context.teamHandoffs, { teamId, ids: [original] });
+  await tick();
+}));
+
+test('ordinary conversation submission cannot inherit team handoff authority from its binding', () => fixture(async f => {
+  f.store.internalWrite('team:conversation:' + f.conversation.id, { epoch: f.store.epoch, teamId: randomUUID(), handoffIds: [randomUUID()] });
+  assert.equal(f.service.submit(f.device, submission(f)).context.teamHandoffs, undefined);
+  await tick();
 }));

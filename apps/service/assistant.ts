@@ -219,7 +219,22 @@ export class AssistantService {
   }
   state(): AssistantState { return { removals: this.removals.list(), connection: this.gateway.status(), conversations: this.conversations(), operations: this.operations(), queue: this.queue(), pins: this.pins.list(), memory: this.memory.state(), historyVersions: { ...this.historyVersions } }; }
   private saveConversation(value: Conversation) { if (this.closed || this.removals.removed(value.id) || this.removals.pending(value.id)) return value; return this.store.internalWrite(conversationKey(value.id), { ...value, updatedAt: now() }); }
-  private saveOperation(value: AssistantOperation) { if (this.closed || this.removals.removed(value.conversationId)) return value; if (terminal.has(value.state) || value.state === 'unknown') value = { ...value, ...(value.tools ? { tools: value.tools.map(tool => tool.state === 'running' ? { ...tool, state: 'unknown' as const } : tool) } : {}) }; return this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: now() }); }
+  private saveOperation(value: AssistantOperation) {
+    if (this.closed || this.removals.removed(value.conversationId)) return value;
+    const current = this.store.internalRead<AssistantOperation>(operationKey(value.id));
+    if (current && terminal.has(current.state)) {
+      // History, abort and terminal receipts can return after a newer event.
+      // Once settled, the original outcome and output are safe to retain or
+      // retry; a late response must never make that execution active again.
+      if (value.state !== current.state) return current;
+      value = { ...value, text: current.text, error: current.error,
+        effectiveModel: current.effectiveModel ?? value.effectiveModel,
+        nativeTurnId: current.nativeTurnId ?? value.nativeTurnId, updatedAt: current.updatedAt };
+    }
+    if (terminal.has(value.state) || value.state === 'unknown') value = { ...value, ...(value.tools ? { tools: value.tools.map(tool => tool.state === 'running' ? { ...tool, state: 'unknown' as const } : tool) } : {}) };
+    if (current && terminal.has(current.state) && canonical(value) === canonical(current)) return current;
+    return this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: now() });
+  }
   private conversation(id: string): Conversation {
     this.removals.assertAvailable(id);
     const value = this.store.internalRead<Conversation>(conversationKey(id));
@@ -513,6 +528,15 @@ export class AssistantService {
         if (this.operations().some(op => op.conversationId === conversation.id && op.steerTarget && !terminal.has(op.state))) throw new Fault(409, 'steer_unconfirmed', 'Check the previous direction before sending another.');
       } else if (this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Finish or reconcile the existing run before sending another message.');
       const context = this.context(device, input.draftId, input.draftRevision, input.projectRevision, conversation, !target);
+      // Only the trusted workflow dispatcher can capture handoff authority. A
+      // client-supplied draft or a later message cannot select arbitrary results.
+      if (teamId) {
+        const binding = this.store.internalRead<import('../../packages/domain/team-work.js').TeamConversationAccess>('team:conversation:' + conversation.id);
+        if (!binding || binding.epoch !== this.store.epoch || binding.teamId !== teamId) throw new Fault(409, 'team_context_changed', 'The saved team context is unavailable.');
+        const { digest: _digest, ...captured } = context.manifest;
+        const manifest = { ...captured, teamHandoffs: { teamId, ids: [...(binding.handoffIds ?? [])] } };
+        context.manifest = { ...manifest, digest: digest(manifest) };
+      }
       if (target && canonical(context.manifest.project) !== canonical(target.context.project)) throw new Fault(409, 'steer_project_changed', 'Project context changed since this reply started. Queue your message to use the updated sources. Your draft is kept.');
       if (target && context.manifest.attachments.length) throw new Fault(409, 'steer_attachments', 'Queue messages with files so their attachments stay intact.');
       const operation: AssistantOperation = { id: randomUUID(), requestId: input.requestId, deviceId: device, epoch: input.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId, nativeRunId: null, state: 'prepared', ...(target ? { steerTarget: target.id } : {}), input: context.input, context: context.manifest, model: conversation.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null, createdAt: now(), updatedAt: now(), text: '', lastSequence: 0 };

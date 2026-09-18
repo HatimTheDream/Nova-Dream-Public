@@ -9,6 +9,8 @@ import { startServer } from '../apps/service/http.js';
 import { PhoneHost } from '../apps/service/phone-host.js';
 import { PhoneAccess } from '../apps/service/phone-access.js';
 import { Store } from '../apps/service/store.js';
+import { captureTeamHandoff } from '../apps/service/team-handoffs.js';
+import type { AssistantOperation } from '../packages/domain/assistant.js';
 import { routeOwnership, TailscalePhoneTransport } from '../apps/service/phone-transport.js';
 import { blankRecord } from '../packages/domain/workspace-records.js';
 import { hubLayoutKey, type HubLayout } from '../packages/domain/hub-layout.js';
@@ -244,4 +246,22 @@ test('paired phones can inspect host work and browser state without linking a de
   assert.equal((await f.phone('work/browser')).data.enabled,false);
   assert.equal((await f.phone('work/github',{...f.command(),epoch:randomUUID(),action:'disconnect'})).status,409);
   assert.equal((await f.phone('work/team/start',{...f.command(),projectId:'missing',title:'Work',brief:'Check',steps:[{agentId:'a',role:'research'},{agentId:'b',role:'build'}]})).status,409);
+});
+
+test('paired phone reads complete team handoffs through the same bounded owner route', async t => {
+  const f = await pairedWorkflow(t), teamId = randomUUID(), text = 'x'.repeat(30000) + 'Complete final evidence 🧭';
+  const operation = { id: randomUUID(), epoch: f.service.store.epoch, conversationId: randomUUID(), requestId: randomUUID(), nativeId: randomUUID(), nativeKey: 'agent:main:e3:' + randomUUID(), connectionGeneration: randomUUID(), nativeRunId: randomUUID(), state: 'completed', text } as AssistantOperation;
+  const handoff = captureTeamHandoff(f.service.store, { epoch: f.service.store.epoch, teamId, stage: 0, attempt: 1, operation });
+  f.service.store.internalWrite('team:run:' + teamId, { id: teamId, epoch: f.service.store.epoch, state: 'complete', revision: 1, createdAt: Date.now(), steps: [{ handoff }] });
+  const path = `work/team/handoff?teamId=${teamId}&id=${handoff.id}&offset=29999&limit=100`;
+  assert.equal((await call(f.service.phoneHost.localOrigin, path, undefined, remote)).status, 401);
+  assert.equal((await call(f.service.origin, path)).status, 401);
+  const phone = await f.phone(path), owner = await call(f.service.origin, path, undefined, f.ownerHeaders);
+  assert.equal(phone.status, 200); assert.deepEqual(phone.data, owner.data);
+  assert.equal(phone.data.text, text.slice(29999)); assert.equal(phone.data.nextOffset, null);
+  assert.equal((await f.phone(`work/team/handoff?teamId=${teamId}&id=${handoff.id}&limit=24001`)).status, 400);
+  assert.equal((await f.phone(`work/team/handoff?teamId=${randomUUID()}&id=${handoff.id}`)).status, 404);
+  assert.equal((await f.phone('work/team/handoff', {})).data.code, 'desktop_required');
+  await call(f.service.origin, 'phone/revoke', { ...f.command(), deviceId: f.phoneId }, f.ownerHeaders);
+  assert.equal((await f.phone(path)).status, 401);
 });

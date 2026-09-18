@@ -363,6 +363,7 @@ export async function startServer(options: { directory: string; port: number; pr
         }
         if (!remote && url.pathname === '/api/phone/revoke' && request.method === 'POST') return json(200, phoneAccess.revoke(device, await commandBody(request, 2048)).value);
         if (url.pathname === '/api/work/team' && request.method === 'GET') return json(200,teamWork.state());
+        if (url.pathname === '/api/work/team/handoff' && request.method === 'GET') return json(200,teamWork.handoff(url.searchParams.get('teamId'),{id:url.searchParams.get('id'),offset:Number(url.searchParams.get('offset')??0),limit:Number(url.searchParams.get('limit')??12000)}));
         if (url.pathname === '/api/work/team/start' && request.method === 'POST') return json(200,teamWork.create(device,await commandBody(request,32768)));
         if (url.pathname === '/api/work/team/control' && request.method === 'POST') return json(200,teamWork.control(device,await commandBody(request,2048)));
         if (url.pathname === '/api/work/browser' && request.method === 'GET') return json(200, await hostBrowser.state());

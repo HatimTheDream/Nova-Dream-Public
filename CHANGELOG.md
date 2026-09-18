@@ -1,3 +1,10 @@
+## [1.6.0] — 2026-09-18
+
+- Preserve complete immutable team handoffs, with bounded excerpts and paginated reads for the owner and the next authorized agent. Keep results after their original conversation is removed.
+- Retry a confirmed failed stage as a new attempt in the same checkout. Retain earlier attempts, outputs and unsent writing; reconcile the same retry request after a lost response or restart.
+- Show finished-stage counts, explicit unknown and stop-requested states, and the need for owner review. Keep unsafe retry and resume actions unavailable while the original outcome is unconfirmed.
+- Protect settled Assistant outcomes from late status or cancellation responses, and upgrade exact older generated briefings without replacing owner edits.
+
 ## [1.5.13] — 2026-09-18
 
 - Choose suitable team members for Research, Implement and Review without consuming specialists as fallbacks. Keep ambiguous roles explicit and preserve saved choices and pending starts.

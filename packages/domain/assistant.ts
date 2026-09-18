@@ -72,6 +72,7 @@ export type ContextManifest = {
   memory?: import('./memory.js').MemorySnapshot;
   workMode?: WorkMode; messageVersion?: 2; brandVersion?: 1; planning?: true; goalReporting?: true;
   computerControlGuidance?: string;
+  teamHandoffs?: { teamId: string; ids: string[] };
   project: { id: string; revision: number; name: string; purpose: string; instructions?: string; workspace?: { folder: string; environment: 'local' | 'worktree'; path?: string; branch?: string }; attachments?: Attachment[] } | null;
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;
 };

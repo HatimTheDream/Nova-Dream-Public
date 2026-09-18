@@ -52,11 +52,12 @@ test('competing and multi-role specialists, and multiple fallback choices requir
   assert.deepEqual(selected([archived, member('Researcher'), member('Reviewer')]), ['Researcher', '', 'Reviewer']);
 });
 
-function renderForm(agents: ReturnType<typeof member>[], saved?: object, pending?: object) {
+function renderForm(agents: ReturnType<typeof member>[], saved?: object, pending?: object, retry?: object) {
   const key = 'e3:team-work:epoch:device';
   const storage = new Map<string, string>();
   if (saved) storage.set(key, JSON.stringify(saved));
   if (pending) storage.set(key + ':pending', JSON.stringify(pending));
+  if (retry) storage.set(key + ':retry', JSON.stringify(retry));
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (name: string) => storage.get(name) ?? null } });
   try {
@@ -105,6 +106,14 @@ test('rendered saved choices, writing and pending request identity survive new s
   const reconcile = renderForm(roster, draft, pending);
   assert.equal(reconcile.fieldsetDisabled, true); assert.equal(reconcile.disabled, false);
   assert.deepEqual(JSON.parse(reconcile.storage.get('e3:team-work:epoch:device:pending')!), pending);
+});
+
+test('a retained retry blocks a separate start on reload and keeps the exact command for reconciliation', () => {
+  const retry = { requestId: 'original-retry', epoch: 'epoch', id: 'failed-team', revision: 7, action: 'retry' };
+  const form = renderForm([member('Researcher'), member('Maker'), member('Reviewer')], undefined, undefined, retry);
+  assert.equal(form.fieldsetDisabled, true); assert.equal(form.disabled, true);
+  assert.match(form.markup, /Reconcile retry/);
+  assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:retry')!), retry);
 });
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));

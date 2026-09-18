@@ -1,6 +1,6 @@
 # Proposed improvement backlog
 
-Status: first correctness slice implemented in 1.5.13; remaining items are proposals. Audit baseline: Nova Dream 1.5.12 / build 1.0.169 / schema 54. Priority: stronger Assistant and agent workflows. This document contains generic product/source findings only; installation-specific operations belong in private records.
+Status: correctness slice implemented in 1.5.13; complete handoffs, explicit failed-stage retry and focused team recovery clarity implemented in 1.6.0. Remaining slices are proposals. Audit baseline: Nova Dream 1.5.12 / build 1.0.169 / schema 54. Priority: stronger Assistant and agent workflows. This document contains generic product/source findings only; installation-specific operations belong in private records.
 
 P1 = next product/reliability tranche; P2 = following work. S/M/L are relative effort, not delivery promises. Source paths below are relative to the application root. Preserve existing retained writing, exact run identity, receipt deduplication, permission intersections and unknown-outcome reconciliation.
 
@@ -18,6 +18,8 @@ Done when: Maker/Reviewer/Researcher rosters select the intended roles independe
 
 ### ND-02 — Preserve complete, retrievable handoffs (P1, M)
 
+Implemented in 1.6.0: immutable complete output records, bounded excerpts with full-read instructions, scoped agent pagination, and authenticated owner/phone reads. Original results survive conversation removal and restart; legacy incomplete excerpts remain labeled.
+
 Evidence: `apps/service/team-work.ts:96,118` shortens the stage result to 20,000 characters, then supplies only 9,000 divided across prior stages. Original conversation output is separate and retained.
 
 Action: immutable complete result references plus bounded summaries with explicit omission notices and a supported full-content read path. Include changes, checks, constraints, unresolved issues and artifact references.
@@ -28,7 +30,7 @@ Done when: a constraint beyond the old cutoffs is retrievable by the next stage;
 
 Evidence: `apps/service/team-work.ts:63–69,96–99`; `packages/domain/team-work.ts:6`. Failed stages cannot resume; operation completion advances the chain without a structured review verdict.
 
-Slice 1: explicit retry creates a new attempt for a confirmed failed stage, preserving the failure and showing current checkout/context. Unknown original outcomes must reconcile first.
+Slice 1 implemented in 1.6.0: explicit retry creates a new attempt for a confirmed failed stage, preserving the failure and showing current checkout/context. Unknown original outcomes must reconcile first.
 
 Slice 2: structured review findings and Ready for owner review / Needs changes outcomes; explicit Apply findings creates a bounded new build/review iteration. A model's finished response alone is not acceptance; publication remains a separate reviewed action.
 
@@ -43,6 +45,8 @@ Action: paginated archived history and explicit retention/export/removal rules. 
 Done when: 100 completed/archived workflows do not block a new one; limits still bound simultaneous work; archived outcomes and restored backups remain consistent; removal cannot permit a replay.
 
 ### ND-05 — Show actual progress and recovery choices (P1, M)
+
+Team recovery slice implemented in 1.6.0: stage counts, prior attempts, exact retry reconciliation, unavailable unsafe actions, explicit unknown/stop-requested/owner-review states, and stable unchanged failure observations. Assignment timelines and distinct observed/progress timestamps remain future work.
 
 Evidence: `packages/domain/assignments.ts:12`, `packages/domain/worker.ts:21`, `apps/service/assignments.ts:53,256,270`. Repeated observation updates are not proof of progress.
 

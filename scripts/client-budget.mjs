@@ -97,7 +97,10 @@ import assert from 'node:assert/strict';
 // 1.5.13 corrects team defaults, Home deadline states and Inbox preview text.
 // Measured total 585,326 (+2,121 gzip bytes, 0.36% over 1.5.12).
 // Bound total at 586 KB; startup and individual chunk ceilings stay fixed.
-export const clientLimits = { startup: 180000, total: 586000, deferredChunk: 80000 };
+// 1.6 adds paginated complete team handoffs and retained failed-attempt recovery.
+// Measured 587,658 total (+2,332 / 0.40% over 1.5.13); cap at589 KB.
+// Startup and deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 589000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);
