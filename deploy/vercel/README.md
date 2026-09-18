@@ -26,3 +26,15 @@ To disconnect the gateway, disable its enable switch and stop the VPS web route.
 Hobby is for personal/non-commercial usage. Its current allowances include one million edge requests/month and 10 GB origin transfer; API polling and downloads consume these. Exceeding a limit can pause service. Review current provider terms and limits before choosing a plan. Background agents execute on the VPS independently of browser requests; the browser needs to be open only for interaction.
 
 See [the host recipe](../README.md) for deployment and recovery. Official references: [external rewrites](https://vercel.com/docs/routing/rewrites), [request-header replacement](https://vercel.com/kb/guide/modify-request-headers), [production authentication](https://vercel.com/changelog/protect-production-deployments-for-free-on-every-plan), [Hobby limits](https://vercel.com/docs/plans/hobby), [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
+
+## Changing the hosted address
+
+Back up the host configuration and persistent databases before changing the canonical origin. Keep Vercel Authentication required for All Deployments throughout the change.
+
+1. Attach the new production domain to the existing protected project.
+2. Replace the web callback URL in each configured OAuth provider with the new origin plus `/oauth/callback`. Preserve desktop callbacks and existing credentials.
+3. Update Production `NOVA_PUBLIC_ORIGIN` and redeploy the gateway. Update host `E3_WEB_ORIGIN` and Caddy's upstream `Host` to the same origin/hostname, validate and reload Caddy, then restart the service. Expect a short access interruption while these settings differ.
+4. Verify the signed-in app and saved workspace at the new address, API health, anonymous authentication requirements and direct-origin rejection before removing the old domain.
+5. Update current links and local deployment metadata. Historical deployment URLs and Git history remain historical records. Browser-local drafts/settings belong to the original browser origin and do not automatically migrate.
+
+A hosting configuration/documentation change alone does not change the application version or require rebuilding its installer.
