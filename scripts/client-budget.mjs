@@ -104,7 +104,11 @@ import assert from 'node:assert/strict';
 // animated reordering. Measured 608,023 total (+19,172 / 3.26% over 1.7.1),
 // startup 142,806 and largest deferred chunk below 72 KB. Bound total at610 KB;
 // preserve the 180 KB startup and 80 KB individual deferred-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 610000, deferredChunk: 80000 };
+// 1.8.6 retains uncertain Assistant requests and validates fresh work inputs.
+// Shared field predicates avoid bundling whole server schemas. Measured total
+// 610,339 gzip bytes (+765 / 0.13% over 1.8.5); bound at 611 KB.
+// Startup and individual deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 611000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

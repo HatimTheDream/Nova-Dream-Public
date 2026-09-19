@@ -3,6 +3,7 @@ import type { GitHubRepository, WorkCheckout } from '../../../packages/domain/wo
 import { readLocal, request, saveLocal } from './api';
 import { GitHubConnection } from './GitHubConnection';
 import './work-tools.css';
+import { validGitBranch, validGitHubName } from '../../../packages/domain/work-input';
 import { workRequestRejected } from './work-request';
 
 type CheckoutRequest={requestId:string;epoch:string;repository:string;baseBranch:string};
@@ -19,6 +20,7 @@ export function GitHubRepositoryPicker({epoch,deviceId,projectId,onSelect}:{epoc
   const choose=(checkout:WorkCheckout)=>{if(onSelect(checkout)){saveLocal(key,null);setPending(undefined);}else setError('Free browser storage before selecting this repository.');};
   const prepare=async()=>{
     if(!pending&&(!repository||!branch))return;const command=pending??{requestId:crypto.randomUUID(),epoch,repository:repository!.fullName,baseBranch:branch};
+    if(!pending&&(!validGitHubName(command.repository)||!validGitBranch(command.baseBranch))){setError('Choose a supported repository and branch (200 characters maximum).');return;}
     if(!saveLocal(key,command)){setError('Free browser storage before preparing this repository.');return;}
     setPending(command);setBusy(true);setError('');
     try{const c=await request<WorkCheckout>('work/checkout',command,undefined,30000);setCheckouts(old=>[c,...old.filter(item=>item.id!==c.id)]);}catch(e){if(workRequestRejected(e)){saveLocal(key,null);setPending(undefined);}setError((e as Error).message);}finally{setBusy(false);}

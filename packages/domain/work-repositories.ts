@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { githubNamePattern, validGitBranch } from './work-input.js';
 
 export const workEnvelope = { requestId: z.uuid(), epoch: z.uuid() };
-export const githubName = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).max(220);
-export const gitBranch = z.string().min(1).max(200).refine(v => !/[\x00-\x20\x7f~^:?*\[\\]/.test(v) && !v.startsWith('-') && !v.startsWith('/') && !v.endsWith('/') && !v.endsWith('.') && !v.endsWith('.lock') && !v.includes('..') && !v.includes('@{') && !v.includes('//') && v.split('/').every(p => !p.startsWith('.')));
+export const githubName = z.string().regex(githubNamePattern).max(220);
+export const gitBranch = z.string().min(1).max(200).refine(validGitBranch);
 export const githubActionSchema = z.object({ ...workEnvelope, action: z.enum(['connect', 'cancel', 'disconnect']) }).strict();
 export type GitHubIdentity = { id: number; login: string; name: string; email: string };
 export type GitHubState = { available: boolean; message: string; account: GitHubIdentity | null; attempt: null | { id: string; state: 'starting'|'waiting'|'connected'|'cancelled'|'failed'; code?: string; url?: string; expiresAt: number; message: string } };

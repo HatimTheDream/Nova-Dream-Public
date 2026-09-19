@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { Attachment } from './contracts.js';
+import { validBrowserUrl } from './work-input.js';
 const target=z.string().min(1).max(200),ref=z.string().min(1).max(100);
-const url=z.url().max(4000).refine(v=>{const u=new URL(v);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password;});
+const url=z.url().max(4000).refine(validBrowserUrl);
 export const browserInputSchema=z.discriminatedUnion('action',[
   z.object({action:z.literal('open'),url}).strict(),
   z.object({action:z.literal('navigate'),targetId:target,url,observationId:z.uuid()}).strict(),

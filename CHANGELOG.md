@@ -1,3 +1,9 @@
+## [1.8.6] — 2026-09-19
+
+- Preserve uncertain Assistant work requests across sign-in, app-update, access and workspace interruptions. Reconciliation reuses the original request after reconnecting instead of allowing duplicate team work or other work actions.
+- Keep unsupported browser addresses and repository branches editable before a work request is saved; share the field rules with the server.
+- Include the 1.8.5 history, draft/attachment, team-recovery and question refinements together with the approved button styling.
+
 ## [1.8.5] — 2026-09-19
 
 - Keep Assistant history steady while background updates arrive: finish requested pages, preserve loaded messages after failed reads, and retain the same archived reading view during refresh.

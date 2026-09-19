@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { BrowserActionResult, BrowserObservation, HostBrowserState } from '../../../packages/domain/host-browser';
 import { readLocal, request, saveLocal } from './api';
 import './work-tools.css';
+import { validBrowserUrl } from '../../../packages/domain/work-input';
 import { workRequestRejected } from './work-request';
 export function HostBrowserPanel({epoch,active=true}:{epoch:string;active?:boolean}){
   const key=`e3:host-browser:${epoch}`;
@@ -10,6 +11,7 @@ export function HostBrowserPanel({epoch,active=true}:{epoch:string;active?:boole
   useEffect(()=>{if(!active)return;void refresh();const timer=setInterval(()=>void refresh(),15000);return()=>clearInterval(timer);},[epoch,active]);
   const enable=async(enabled:boolean)=>{setBusy(true);setError('');try{setState(await request<HostBrowserState>('work/browser/configure',{requestId:crypto.randomUUID(),epoch,enabled},undefined,40000));if(!enabled)setObservation(undefined);}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
   const act=async(input:{action:'open';url:string}|{action:'close';targetId:string})=>{
+    if(!pending&&!(input.action==='open'?validBrowserUrl(input.url):input.targetId.length>0&&input.targetId.length<=200)){setError(input.action==='open'?'Use HTTP or HTTPS without credentials (up to 4,000 characters).':'Refresh the browser tabs and try again.');return;}
     const cmd=pending??{requestId:crypto.randomUUID(),epoch,input};if(!saveLocal(key,cmd)){setError('Free browser storage before opening this page.');return;}setPending(cmd);setBusy(true);setError('');
     try{const response=await request<BrowserActionResult>('work/browser/action',cmd,undefined,40000);setResult(response);saveLocal(key,null);setPending(undefined);if(cmd.input.action==='close'&&observation?.targetId===cmd.input.targetId)setObservation(undefined);await refresh();}catch(e){if(workRequestRejected(e)){saveLocal(key,null);setPending(undefined);}setError((e as Error).message);}finally{setBusy(false);}
   };
