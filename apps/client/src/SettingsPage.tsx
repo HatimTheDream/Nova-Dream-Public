@@ -1,7 +1,7 @@
 import { LoadingRing } from './ModuleLoading';
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { lazy } from './preload-lazy';
-import type { Snapshot } from '../../../packages/domain/contracts';
+import type { AppIconChoice, Snapshot } from '../../../packages/domain/contracts';
 import type { AccessContext } from '../../../packages/domain/phone';
 import { Connections } from './Connections';
 import { ProviderAccounts } from './ProviderAccounts';
@@ -33,8 +33,8 @@ function SettingsPanel({ id, active, children }: { id: SettingsTab; active: bool
   </section>;
 }
 
-export function SettingsPage({ selected, select, snapshot, online, access, general, openAssistant, returnTo }: {
-  selected: SettingsTab; select: (tab: SettingsTab) => void; snapshot: Snapshot; online: boolean;
+export function SettingsPage({ appIcon, selected, select, snapshot, online, access, general, openAssistant, returnTo }: {
+  appIcon: AppIconChoice; selected: SettingsTab; select: (tab: SettingsTab) => void; snapshot: Snapshot; online: boolean;
   access?: AccessContext; general: ReactNode; openAssistant: () => void;
   returnTo?: { label: string; open: () => void };
 }) {
@@ -73,7 +73,7 @@ export function SettingsPage({ selected, select, snapshot, online, access, gener
     </section></SettingsPanel>}
     {!phone && <SettingsPanel id="assistant" active={current.id === 'assistant'}><Connections recoveryPaused={recoveryPaused} remoteHost={access?.surface === 'web'} snapshot={snapshot} online={online} openAssistant={openAssistant}/></SettingsPanel>}
     {!phone && <SettingsPanel id="usage" active={current.id === 'usage'}><UsageSettings active={current.id === 'usage'} online={online && !recoveryPaused}/></SettingsPanel>}
-    <SettingsPanel id="phone" active={current.id === 'phone'}><InstallSettings epoch={snapshot.epoch} access={access}/>{access?.surface === 'web' ? <details className="settings-disclosure"><summary>Optional Tailscale device pairing</summary><div className="settings-disclosure-body"><PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/></div></details> : <PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/>}</SettingsPanel>
+    <SettingsPanel id="phone" active={current.id === 'phone'}><InstallSettings appIcon={appIcon} epoch={snapshot.epoch} access={access}/>{access?.surface === 'web' ? <details className="settings-disclosure"><summary>Optional Tailscale device pairing</summary><div className="settings-disclosure-body"><PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/></div></details> : <PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/>}</SettingsPanel>
     {!phone && <SettingsPanel id="data" active={current.id === 'data'}><StorageSettings remoteHost={access?.surface === 'web'} epoch={snapshot.epoch} deviceId={snapshot.deviceId}/></SettingsPanel>}
     </div></div>
   </main>;

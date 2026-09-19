@@ -10,4 +10,4 @@ rmSync('dist/desktop', { recursive: true, force: true });
 mkdirSync('dist/desktop', { recursive: true });
 for (const name of names) copyFileSync(join('apps/desktop', name), join('dist/desktop', name));
 
-copyFileSync('apps/client/public/icons/nova-dream-512-v2.png', 'dist/desktop/companion-icon.png');
+copyFileSync('apps/client/public/icons/nova-dream-red-512-v4.png', 'dist/desktop/companion-icon.png');

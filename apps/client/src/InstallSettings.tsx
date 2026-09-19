@@ -5,11 +5,13 @@ import { computerAccessActive } from '../../../packages/domain/companion';
 import { request, readLocal, saveLocal, ApiError } from './api';
 import { installationRoute, installAvailable, installNova, subscribeInstall } from './install';
 import { Dialog } from './ui';
+import type { AppIconChoice } from '../../../packages/domain/contracts';
+import { NovaAppMark } from './AppIcon';
 
 type NativeCompanion = { linked(): Promise<{ deviceId: string; epoch: string } | null>; prepareLink(challenge: CompanionChallenge): Promise<Record<string, unknown>>; finishLink(value: { epoch: string; deviceId: string }): Promise<void>; openControls(): Promise<void> };
 import { downloadCompanion, type CompanionDownload as Download } from './companion-download';
 const size = (value?: number) => value === undefined ? 'Unavailable' : value < 1024 * 1024 ? `${Math.ceil(value / 1024)} KB` : `${Math.round(value / 1024 / 1024)} MB`;
-export function InstallSettings({ epoch, access }: { epoch: string; access?: AccessContext }) {
+export function InstallSettings({ epoch, access, appIcon }: { epoch: string; access?: AccessContext; appIcon: AppIconChoice }) {
   const available = useSyncExternalStore(subscribeInstall, installAvailable);
   const [installed, setInstalled] = useState(() => matchMedia('(display-mode: standalone)').matches || !!(navigator as Navigator & { standalone?: boolean }).standalone);
   const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [devices, setDevices] = useState<CompanionDevice[]>([]), [downloads, setDownloads] = useState<Download[]>([]);
@@ -28,7 +30,7 @@ export function InstallSettings({ epoch, access }: { epoch: string; access?: Acc
   useEffect(() => { let alive = true; const load = () => request<{ devices: CompanionDevice[]; downloads?: Download[] }>('companions/state').then(state => { if (alive) { setDevices(state.devices); setDownloads(state.downloads ?? []); void native?.linked().then(value => setLinked(value?.epoch === epoch), () => setLinked(false)); } }, () => { if (alive) setMessage('Device status is unavailable. Reconnect to your workspace host.'); }); void load(); void readStorage(); const timer = setInterval(() => void load(), 10000); return () => { alive = false; clearInterval(timer); }; }, [epoch]);
   const act = async (work: () => Promise<void>) => { if (acting.current) return; acting.current = true; setBusy(true); setMessage(''); try { await work(); } catch (error) { setMessage(error instanceof Error ? error.message : 'This action could not be confirmed.'); } finally { acting.current = false; setBusy(false); } };
   return <>
-    <section className="card settings-card"><div className="install-summary"><img src="/icons/nova-dream-192-v2.png" width="44" height="44" alt=""/><div><h2>{route.title}</h2><p>{route.instructions}</p></div></div>{available && !installed && <button className="primary" disabled={busy} onClick={() => void act(async () => { const accepted = await installNova(); setMessage(accepted ? 'Installation accepted. Open Nova from your device’s app list.' : 'You can install Nova later.'); })}>Install Nova</button>}<p className="settings-footnote">{access?.surface === 'web' ? 'Use your hosted workspace from any device. A linked desktop is only needed for computer use.' : 'Run Nova on your computer, or choose an optional always-online host.'}</p></section>
+    <section className="card settings-card"><div className="install-summary"><NovaAppMark choice={appIcon} width="44" height="44"/><div><h2>{route.title}</h2><p>{route.instructions}</p></div></div>{available && !installed && <button className="primary" disabled={busy} onClick={() => void act(async () => { const accepted = await installNova(); setMessage(accepted ? 'Installation accepted. Open Nova from your device’s app list.' : 'You can install Nova later.'); })}>Install Nova</button>}<p className="settings-footnote">{access?.surface === 'web' ? 'Use your hosted workspace from any device. A linked desktop is only needed for computer use.' : 'Run Nova on your computer, or choose an optional always-online host.'}</p></section>
     <section className="card settings-card"><h2>Desktop access</h2><p>Link a computer for local apps and files, or remote computer use. The companion must be open and access enabled.</p>
       {native ? <div className="button-row"><button className="primary" disabled={busy || linked} onClick={() => void act(async () => { const key = 'nova-desktop-link:' + epoch;
         let command = readLocal<Record<string, unknown>>(key);

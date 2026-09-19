@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { AccessContext, PhonePairing, PhoneState } from '../../../packages/domain/phone';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { Copy, Device } from './icons';
+import { NovaAppMark, useAppIcon } from './AppIcon';
+import { readCachedAppIcon } from './app-icon';
 
 type Pending = { path: string; body: { requestId: string; epoch: string; deviceId?: string } };
 export function PhoneSettings({ epoch, deviceId, access }: { epoch: string; deviceId: string; access?: AccessContext }) {
@@ -56,6 +58,7 @@ type PairRequest = { requestId: string; code: string; name: string };
 const pairKey = 'e3:phone-pair';
 function keptPair(): PairRequest | undefined { try { return JSON.parse(sessionStorage.getItem(pairKey) ?? 'null') ?? undefined; } catch { return undefined; } }
 export function PhonePairingScreen({ paired }: { paired: () => Promise<void> }) {
+  const appIcon = useAppIcon(readCachedAppIcon());
   const [pending, setPending] = useState(keptPair);
   const [name, setName] = useState(pending?.name ?? 'My phone');
   const [code, setCode] = useState(pending?.code ?? '');
@@ -73,5 +76,5 @@ export function PhonePairingScreen({ paired }: { paired: () => Promise<void> }) 
       if (error instanceof ApiError && error.status && error.status < 500) { sessionStorage.removeItem(pairKey); setPending(undefined); }
     } finally { active.current = false; setBusy(false); }
   };
-  return <main className="startup phone-pairing"><img src="/mascot/lynx-mark.webp" alt="Nova"/><h1>Pair your phone</h1><p>On your computer, open Settings → Phone & devices and create a code.</p><form onSubmit={event => { event.preventDefault(); void pair(); }}><label>Device name<input value={name} maxLength={80} required disabled={busy || !!pending} onChange={event => setName(event.target.value)}/></label><label>Pairing code<input inputMode="numeric" autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} maxLength={80} required disabled={busy || !!pending} onChange={event => setCode(event.target.value)}/></label><button className="primary" disabled={busy || !code.trim() || !name.trim()}>{busy ? 'Pairing…' : pending ? 'Retry pairing' : 'Connect phone'}</button></form>{message && <p role="alert">{message}</p>}<p className="muted">Existing unsent drafts remain stored on this device.</p></main>;
+  return <main className="startup phone-pairing"><NovaAppMark choice={appIcon} alt="Nova"/><h1>Pair your phone</h1><p>On your computer, open Settings → Phone & devices and create a code.</p><form onSubmit={event => { event.preventDefault(); void pair(); }}><label>Device name<input value={name} maxLength={80} required disabled={busy || !!pending} onChange={event => setName(event.target.value)}/></label><label>Pairing code<input inputMode="numeric" autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} maxLength={80} required disabled={busy || !!pending} onChange={event => setCode(event.target.value)}/></label><button className="primary" disabled={busy || !code.trim() || !name.trim()}>{busy ? 'Pairing…' : pending ? 'Retry pairing' : 'Connect phone'}</button></form>{message && <p role="alert">{message}</p>}<p className="muted">Existing unsent drafts remain stored on this device.</p></main>;
 }

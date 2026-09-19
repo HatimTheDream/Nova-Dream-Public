@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import './install';
+import { applyDocumentAppIcon, readCachedAppIcon } from './app-icon';
 import '@fontsource-variable/sora';
 import { App } from './App';
 import './styles.css';
@@ -13,5 +14,7 @@ import './home-widget-motion.css';
 import './home-widget-colors.css';
 import './buttons.css';
 import './home-widget-controls.css';
+import './app-icon.css';
 
+applyDocumentAppIcon(readCachedAppIcon());
 createRoot(document.getElementById('root')!).render(<App/>);

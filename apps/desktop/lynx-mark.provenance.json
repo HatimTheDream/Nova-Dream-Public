@@ -1,9 +1,9 @@
 {
-  "source": "assets/brand/nova-dream-red-outline-source-v1.png",
-  "sourceSha256": "bc60ec2202b0ce564fc28975ffba163a5e50c968937ae6589d5c5ab602019f47",
+  "source": "assets/brand/nova-dream-red-source-v4.png",
+  "sourceSha256": "8f596a1cdbf2fc99df918df646981b497f6b3a580c1ea9fc66993cbbdba515f4",
   "output": "apps/desktop/lynx-mark.png",
-  "outputSha256": "bc60ec2202b0ce564fc28975ffba163a5e50c968937ae6589d5c5ab602019f47",
-  "conversion": "Unchanged approved red-outline source; no redraw or crop",
+  "outputSha256": "24d8e10e95125e51d44d439ebe1cef5a8c9032558ad548faa42d3085c4da7aad",
+  "conversion": "Proportional resize of approved Red artwork; no redraw",
   "windowsIcon": {
     "file": "apps/desktop/nova-dream.ico",
     "sizes": [
@@ -14,7 +14,7 @@
       128,
       256
     ],
-    "sha256": "09257b9c0a43d5441684d6e3dbf0666b62394f4a8f91b2c0b0dd87b15899b233",
-    "conversion": "Proportional PNG resizing in a standard ICO container"
+    "sha256": "48a38a9f174914fa412b7c90b6e3276ffb0d1355435ddddefb36b54cb56f4210",
+    "conversion": "PNG sizes in a standard ICO container"
   }
 }

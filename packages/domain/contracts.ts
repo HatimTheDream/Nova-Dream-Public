@@ -15,16 +15,19 @@ export type WidgetId = typeof widgetIds[number];
 export const sizes = homeWidgetSizes;
 const id = z.string().min(1).max(100).regex(/^[a-zA-Z0-9:_-]+$/);
 const unique = <T>(items: T[]) => new Set(items).size === items.length;
+export const appIconSchema = z.enum(['red', 'cream']);
+export type AppIconChoice = z.infer<typeof appIconSchema>;
 export const layoutSchema = z.object({
   nav: z.array(z.enum(moduleIds)).length(moduleIds.length).refine(unique),
   widgets: z.array(homeWidgetSchema).max(homeWidgetLimit).refine(v => unique(v.map(w => w.id))),
   theme: z.enum(['light', 'dark', 'system']),
+  appIcon: appIconSchema.default('red'),
   timezone: z.string().max(80).refine(v => { try { new Intl.DateTimeFormat('en', { timeZone: v }); return true; } catch { return false; } }),
   showCompleted: z.boolean(),
 });
 export type Layout = z.infer<typeof layoutSchema>;
 export const defaultLayout: Layout = {
-  nav: [...moduleIds], theme: 'light', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  nav: [...moduleIds], theme: 'light', appIcon: 'red', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   showCompleted: false,
   widgets: [{ id: 'welcome', size: 'wide', hidden: false }, { id: 'next', size: 'wide', hidden: false }, { id: 'draft', size: 'square', hidden: false }, { id: 'attention', size: 'square', hidden: false }, { id: 'setup', size: 'wide', hidden: false }],
 };

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Snapshot } from '../../../packages/domain/contracts';
+import type { AppIconChoice, Snapshot } from '../../../packages/domain/contracts';
+import { appIconAssets } from './app-icon';
 import { reminderItems, reminderTitle, reminderRoute, type WorkspaceReminder } from './reminder-items';
 import { ApiError, readLocal, request, saveLocal } from './api';
-export function useReminders(snapshot: Snapshot, online: boolean, refresh: () => Promise<void>, openReminder: (item: WorkspaceReminder) => void) {
+export function useReminders(snapshot: Snapshot, online: boolean, refresh: () => Promise<void>, openReminder: (item: WorkspaceReminder) => void, appIcon: AppIconChoice = 'red') {
   const key = `e3:notifications:${snapshot.deviceId}`;
   const [enabled, setEnabled] = useState(() => readLocal<boolean>(key) === true), [notice, setNotice] = useState('');
   const [clientId] = useState(() => crypto.randomUUID());
-  const current = useRef({ snapshot, online, enabled, openReminder }); current.current = { snapshot, online, enabled, openReminder };
+  const current = useRef({ snapshot, online, enabled, openReminder, appIcon }); current.current = { snapshot, online, enabled, openReminder, appIcon };
   const supported = typeof Notification !== 'undefined' && isSecureContext;
   const enable = async () => {
     if (!supported) { setNotice('Device notifications are unavailable here. Due reminders remain in this app.'); return; }
@@ -46,7 +47,7 @@ export function useReminders(snapshot: Snapshot, online: boolean, refresh: () =>
         const taskClosed = 'taskId' in reminder && !latest.tasks.some(task => task.id === reminder.taskId && !['done', 'skipped'].includes(task.value.status));
         if (!live || !claim.notification || !alive || !current.current.enabled || latest.epoch !== state.snapshot.epoch || current.current.snapshot.epoch !== state.snapshot.epoch || live?.notification?.attemptId !== claim.notification?.attemptId || live.state !== 'ready' || taskClosed) return;
         let notification: Notification;
-        try { notification = new Notification(`Nova Dream · ${'eventId' in reminder ? 'Calendar' : 'task'} reminder`, { body: reminderTitle(latest, live), tag: claim.notification!.attemptId, icon: '/mascot/lynx-mark.webp' }); }
+        try { notification = new Notification(`Nova Dream · ${'eventId' in reminder ? 'Calendar' : 'task'} reminder`, { body: reminderTitle(latest, live), tag: claim.notification!.attemptId, icon: appIconAssets(current.current.appIcon).launcher }); }
         catch { await report(claim, 'unavailable'); return; }
         notification.onshow = () => { void report(claim, 'shown'); };
         notification.onerror = () => { void report(claim, 'unavailable'); };

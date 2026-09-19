@@ -1,0 +1,15 @@
+/* Square, opaque artwork fills the tile; the interface owns its rounded corners. */
+:root img.nova-app-mark { display:block; object-fit:cover; border-radius:var(--app-tile-radius,24%); corner-shape:var(--app-tile-corner,round); background:transparent; flex:none; }
+:root .primary-rail > .brand {
+  align-self:center; flex:0 0 var(--app-tile-size);
+  width:var(--app-tile-size); min-width:var(--app-tile-size); max-width:var(--app-tile-size);
+  height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
+  padding:0; border:0; border-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner); background:transparent; box-shadow:none;
+}
+:root .primary-rail > .brand img.nova-app-mark { width:100%; height:100%; border-radius:inherit; }
+.settings-page .app-icon-setting { align-items:center; }
+.settings-page .app-icon-setting > div:first-child { flex:1 1 260px; }
+.settings-page .app-icon-setting > .app-icon-options { display:flex; flex:0 0 auto; gap:12px; padding-bottom:4px; }
+:root .app-icon-options > button { display:flex; flex-direction:column; gap:8px; min-width:94px; padding:12px 14px; }
+.app-icon-options > button > span { font-size:13px; line-height:1.4; }
+@media(max-width:650px) { .settings-page .app-icon-setting > .app-icon-options { flex:1 1 100%; } .app-icon-options > button { flex:1; } }

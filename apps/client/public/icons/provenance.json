@@ -1,43 +1,94 @@
 {
-  "source": "assets/brand/nova-dream-red-outline-source-v1.png",
-  "sourceSha256": "bc60ec2202b0ce564fc28975ffba163a5e50c968937ae6589d5c5ab602019f47",
-  "background": "#f6f3ed",
-  "original": {
-    "commit": "368bfd7",
-    "path": "apps/web/public/nova-mark-512.png",
-    "note": "Original Nova red-outline application icon, copied unchanged."
-  },
-  "conversion": "node scripts/web-icons.mjs; proportional resize and opaque background; original red frame, shadow and lynx preserved",
+  "sources": [
+    {
+      "id": "red",
+      "source": "assets/brand/nova-dream-red-source-v4.png",
+      "sha256": "8f596a1cdbf2fc99df918df646981b497f6b3a580c1ea9fc66993cbbdba515f4"
+    },
+    {
+      "id": "cream",
+      "source": "assets/brand/nova-dream-cream-source-v4.png",
+      "sha256": "4e77a44610ea2a9082104c0a27d7afad8427011591529be610996d4ae4978a1a"
+    }
+  ],
+  "conversion": "node scripts/web-icons.mjs; approved borderless source pixels retained, proportional resizing, no padding or recoloring",
   "files": [
     {
-      "file": "icons/nova-dream-brand-192-v2.png",
+      "file": "icons/nova-dream-red-brand-192-v4.png",
+      "sha256": "b31d5fb5a26a5330bd6bdb56f98aed967065553e7a8ddabfa2ad4e8ef4177544",
+      "variant": "red",
       "size": 192,
-      "scale": 1,
-      "sha256": "80a42f384e0b95875fc5e0145125b8e91189f747806dc4035b1ede6dfd086a36"
+      "purpose": "in-app"
+    },
+    {
+      "file": "icons/apple-touch-icon-red-v4.png",
+      "sha256": "f73bcfd65b4d2bf0fc3f7c9c6675c3f8d1ec582f33c82e2aa5fde587e8438922",
+      "variant": "red",
+      "size": 180,
+      "purpose": "launcher"
     },
     {
       "file": "apple-touch-icon.png",
+      "sha256": "f73bcfd65b4d2bf0fc3f7c9c6675c3f8d1ec582f33c82e2aa5fde587e8438922",
+      "variant": "red",
       "size": 180,
-      "scale": 0.96,
-      "sha256": "054c6873b732aaf1ac51d15ab7d5dae715840bb1300fbfa5b7cbe5699b7ffec8"
+      "purpose": "legacy-fallback"
     },
     {
-      "file": "icons/nova-dream-192-v2.png",
+      "file": "icons/nova-dream-red-192-v4.png",
+      "sha256": "b31d5fb5a26a5330bd6bdb56f98aed967065553e7a8ddabfa2ad4e8ef4177544",
+      "variant": "red",
       "size": 192,
-      "scale": 0.96,
-      "sha256": "82dcc5a3395236ae858a5ff7fdb9f734fd1893e0d32595142fedda3a8a6ec1ef"
+      "purpose": "launcher"
     },
     {
-      "file": "icons/nova-dream-512-v2.png",
+      "file": "icons/nova-dream-red-512-v4.png",
+      "sha256": "24d8e10e95125e51d44d439ebe1cef5a8c9032558ad548faa42d3085c4da7aad",
+      "variant": "red",
       "size": 512,
-      "scale": 0.96,
-      "sha256": "65cfb709755f028fa5d76a3bfe16c84c701a577bcb4682fe65ae6faeb8c0acb5"
+      "purpose": "launcher"
     },
     {
-      "file": "icons/nova-dream-maskable-512-v2.png",
+      "file": "icons/nova-dream-red-1024-v4.png",
+      "sha256": "4b3ce966a67f858a827fee22127b2e60f1b9c5761b9cb320532f43fb9e4d316e",
+      "variant": "red",
+      "size": 1024,
+      "purpose": "launcher"
+    },
+    {
+      "file": "icons/nova-dream-cream-brand-192-v4.png",
+      "sha256": "d9f00f6f97dd4334b417e6fc2d9df42e48d53758229a522bfe41a5b663283ecc",
+      "variant": "cream",
+      "size": 192,
+      "purpose": "in-app"
+    },
+    {
+      "file": "icons/apple-touch-icon-cream-v4.png",
+      "sha256": "8eb469f9c3657269829d00d76b35dc8cd8acc951b3376bca58433ff849aaf2e3",
+      "variant": "cream",
+      "size": 180,
+      "purpose": "launcher"
+    },
+    {
+      "file": "icons/nova-dream-cream-192-v4.png",
+      "sha256": "d9f00f6f97dd4334b417e6fc2d9df42e48d53758229a522bfe41a5b663283ecc",
+      "variant": "cream",
+      "size": 192,
+      "purpose": "launcher"
+    },
+    {
+      "file": "icons/nova-dream-cream-512-v4.png",
+      "sha256": "d7ae6088bfbe6ef509db999eaa0ee84b186cda7e941b40974f9de1d1348f47c9",
+      "variant": "cream",
       "size": 512,
-      "scale": 0.56,
-      "sha256": "74cd15dbd1b8a35822f26d6cab78c1c4ef404dc84ef9ccb8c4f583b2ce94b6b4"
+      "purpose": "launcher"
+    },
+    {
+      "file": "icons/nova-dream-cream-1024-v4.png",
+      "sha256": "aa82c732426dcc81d3a03047960190a3cba6d1b1dfd235be88127731081a3886",
+      "variant": "cream",
+      "size": 1024,
+      "purpose": "launcher"
     }
   ]
 }

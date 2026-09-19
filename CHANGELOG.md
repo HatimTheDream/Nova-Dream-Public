@@ -1,3 +1,9 @@
+## [1.8.2] — 2026-09-19
+
+- Introduce borderless Red and Cream executive lynx icons. Choose either in Settings → General → Appearance; the saved choice updates Nova's in-app identity, browser icon and notification artwork independently of the color theme.
+- Match the logo and module buttons at 60 × 60 with soft squircle corners. Fill the logo tile edge to edge and preserve the same dimensions on narrow screens.
+- Preserve the chosen icon across reopening, connected clients, backups and older layout edits. Add matching browser-install exports and a shared design reference for future UI work.
+
 ## [1.8.1] — 2026-09-19
 
 - Match sidebar module rearrangement to Home widgets: a lifted icon follows the pointer, neighboring icons animate into place, and the drop settles into its saved position. Support holding to move, touch scrolling before pickup, keyboard moves, reduced motion and cancellation without accidentally opening a module.

@@ -15,7 +15,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, readdirSync, openSync, closeSync, fsyncSync, realpathSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { attachmentSchema, canonical, commandSchema, defaultLayout, draftSchema, layoutSchema, projectSchema, taskSchema, type Attachment, type Command, type Draft, type Entity, type Kind, type Snapshot, type Values, type Project, type Task } from '../../packages/domain/contracts.js';
+import { attachmentSchema, canonical, commandSchema, defaultLayout, draftSchema, layoutSchema, projectSchema, taskSchema, type Attachment, type Command, type Draft, type Entity, type Kind, type Snapshot, type Values, type Project, type Task, type Layout } from '../../packages/domain/contracts.js';
 
 import { dailyOrderSchema, inTaskView, dayInZone, focusElapsed, focusLeaseMs, focusSchema, nextDay, routineSchema, scheduled, taskHistorySchema, type DailyOrder, type Focus, type Occurrence, type Routine, type RoutineEvent, type TaskEvent, type TaskState } from '../../packages/domain/tasks.js';
 import { blankRecord, contentFromAssignmentSchema, contentFromOutputSchema, contentSchema, isRecordKind, recordHistorySchema, recordSchemas, recordTaskSchema, type Assignment, type Content, type RecordKind, type RecordValue } from '../../packages/domain/workspace-records.js';
@@ -310,6 +310,8 @@ export class Store {
       const current = this.get(cmd.kind, cmd.entityId);
       const currentRevision = current?.revision ?? (cmd.kind === 'draft' ? this.internalRead<DraftRemoval>(`assistant:draft-removed:${cmd.entityId}`)?.revision : 0) ?? 0;
       if (currentRevision !== cmd.expectedRevision) throw new Fault(409, 'revision_conflict', 'Another window saved a newer version. Your proposal is kept.', current);
+      // Older layout editors do not know the icon field and cannot reset it.
+      if (cmd.kind === 'layout' && (cmd.payload as Partial<Layout>).appIcon === undefined) (value as Layout).appIcon = (current?.value as Layout | undefined)?.appIcon ?? 'red';
       if (isRecordKind(cmd.kind)) this.validateRecord(cmd.kind, cmd.entityId, value as RecordValue, current as Entity<RecordValue> | undefined);
       if (cmd.kind === 'project') {
         const project = value as Project, previousProject = current?.value as Project | undefined;

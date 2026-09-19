@@ -29,7 +29,25 @@
 :root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
 :root button:disabled { translate:none; box-shadow:0 2px 0 var(--button-edge,var(--line)); }
 :root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
-:root .primary-rail .nav-item { --button-radius:20px; }
+/* The logo and module tiles share one square geometry at every viewport. */
+:root { --app-tile-size:60px; --app-tile-radius:24%; --app-tile-corner:round; }
+@supports(corner-shape:squircle) {
+  :root { --app-tile-radius:50%; --app-tile-corner:squircle; }
+}
+:root .app-shell > nav.primary-rail { width:76px; min-width:76px; padding-inline:7px; }
+:root .primary-rail .rail-modules,:root .primary-rail .rail-footer { padding-inline:0; }
+:root .primary-rail .nav-item {
+  --button-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner);
+  width:var(--app-tile-size); min-width:var(--app-tile-size); max-width:var(--app-tile-size);
+  height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
+  padding:0; flex:none;
+}
+/* Let the title yield before the topbar actions are clipped on narrow screens. */
+:root .topbar { flex-wrap:wrap; }
+:root .topbar-leading { flex:1 1 120px; min-width:0; }
+:root .topbar-leading .breadcrumb { min-width:0; }
+:root .topbar-leading .breadcrumb strong { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+:root .topbar-actions { flex:none; }
 :root .primary-rail .nav-item:focus-visible { outline-offset:-4px; }
 :root .widget-options > button,:root .composer-popover > button { margin-block:3px; }
 @media(prefers-reduced-motion:reduce) { :root button { transition:none; } }

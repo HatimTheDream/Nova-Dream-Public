@@ -1,6 +1,8 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.8.1-blue)
+![Version](https://img.shields.io/badge/Version-1.8.2-blue)
+
+The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 
