@@ -12,8 +12,9 @@ const box = (element: HTMLElement): ReorderBox => {
 };
 
 /** Opt-in motion adds a move handle and a surface hold; Alt+arrows stay equivalent. */
-export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void, group: string, options: { motion?: boolean } = {}) {
+export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void, group: string, options: { motion?: boolean; touchHold?: boolean } = {}) {
   const motion = Boolean(options.motion);
+  const touchHold = Boolean(options.touchHold);
   const [preview, setPreview] = useState<T[] | null>(null);
   const [dragging, setDragging] = useState<T | null>(null);
   const [announcement, announce] = useState('');
@@ -25,6 +26,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
   const ending = useRef<Visual | null>(null);
   const focusAfterMove = useRef<HTMLElement | null>(null);
   const suppressClick = useRef(false);
+  const clickGuard = useRef<{ surface: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
   const latest = useRef({ items, save }); latest.current = { items, save };
   const nodes = () => [...(containerRef.current?.children ?? [])].filter((node): node is HTMLElement => node instanceof HTMLElement && node.dataset.reorderGroup === group && Boolean(node.dataset.reorderItem));
   const layoutBox = (node: HTMLElement) => {
@@ -41,6 +43,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     if (ending.current === visual) ending.current = null;
   };
   const stopAnimations = () => { for (const animation of animations.current.values()) animation.cancel(); animations.current.clear(); };
+  const clearClickGuard = () => { if (clickGuard.current) clearTimeout(clickGuard.current.timer); clickGuard.current = null; suppressClick.current = false; };
   const followPointer = (drag: Drag<T>) => {
     if (drag.visual) drag.visual.ghost.style.transform = `translate3d(${drag.point.x - drag.x}px,${drag.point.y - drag.y}px,0)`;
   };
@@ -66,7 +69,9 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     state.current = null; setPreview(null); setDragging(null);
     if (containerRef.current) delete containerRef.current.dataset.reorderActive;
     if (drag.active) {
-      suppressClick.current = true; setTimeout(() => { suppressClick.current = false; }, 0);
+      clearClickGuard(); suppressClick.current = true;
+      if (motion) clickGuard.current = { surface: drag.capture, timer: setTimeout(clearClickGuard, 500) };
+      else setTimeout(() => { suppressClick.current = false; }, 0);
       const next = motion ? reorderCommit(drag.initial, latest.current.items, drag.order, commit) : commit && !sameOrder(drag.order, latest.current.items) ? drag.order : null;
       if (next) {
         try { if (latest.current.save(next) === false) announce('Move could not be saved.'); else announce(`Moved to position ${next.indexOf(drag.id) + 1} of ${next.length}.`); }
@@ -87,7 +92,11 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       for (const child of ghost.querySelectorAll('[id]')) child.removeAttribute('id');
       ghost.classList.remove('dragging'); ghost.classList.add('reorder-floating'); ghost.setAttribute('aria-hidden', 'true'); ghost.inert = true;
       Object.assign(ghost.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-      node.closest('.home-page')?.append(ghost);
+      // Keep inherited component styling, outside its clipping scroll surface.
+      // Fixed positioning lets the picked-up item follow the pointer unchanged.
+      const host = node.closest<HTMLElement>('[data-reorder-host],.home-page');
+      if (!host) { finish(false); return; }
+      host.append(ghost);
       node.dataset.reorderPlaceholder = 'true';
       drag.visual = { node, ghost, left: rect.left, top: rect.top };
       if (containerRef.current) containerRef.current.dataset.reorderActive = 'true';
@@ -158,6 +167,14 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     }
   });
   useEffect(() => {
+    const click = (event: MouseEvent) => {
+      const guard = clickGuard.current;
+      if (!guard) return;
+      // A delayed touch click belongs to the drop. A fresh press or keyboard
+      // activation remains navigation, including immediately after a move.
+      if (event.detail !== 0 && event.target instanceof Node && guard.surface.contains(event.target)) { event.preventDefault(); event.stopPropagation(); }
+      clearClickGuard();
+    };
     const cancel = (event: KeyboardEvent) => { if (event.key === 'Escape') finish(false); };
     const touchMove = (event: TouchEvent) => { if (state.current?.active) event.preventDefault(); };
     const move = (event: PointerEvent) => {
@@ -165,7 +182,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       drag.point = { x: event.clientX, y: event.clientY };
       const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
       if (!drag.active) {
-        const action = reorderGesture(distance, drag.surface, drag.touch, motion);
+        const action = reorderGesture(distance, drag.surface, drag.touch, motion, touchHold);
         if (action === 'cancel') { finish(false); return; }
         if (action === 'start') start(drag);
       }
@@ -184,10 +201,12 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     const blur = () => finish(false);
     const resize = () => { if (motion) { finish(false); stopAnimations(); positions.current.clear(); } };
     window.addEventListener('keydown', cancel); document.addEventListener('touchmove', touchMove, { passive: false });
+    document.addEventListener('pointerdown', clearClickGuard, true); document.addEventListener('click', click, true);
     window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', lost); window.addEventListener('lostpointercapture', lost); window.addEventListener('blur', blur);
     window.addEventListener('resize', resize);
     return () => {
       window.removeEventListener('keydown', cancel); document.removeEventListener('touchmove', touchMove);
+      document.removeEventListener('pointerdown', clearClickGuard, true); document.removeEventListener('click', click, true); clearClickGuard();
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', lost); window.removeEventListener('lostpointercapture', lost); window.removeEventListener('blur', blur);
       window.removeEventListener('resize', resize);
       const drag = state.current; state.current = null;
@@ -209,9 +228,10 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
         if (interactive && event.currentTarget.contains(interactive)) return;
       }
       if (ending.current) clearVisual(ending.current);
-      const drag: Drag<T> = { id, x: event.clientX, y: event.clientY, point: { x: event.clientX, y: event.clientY }, pointer: event.pointerId, target: event.currentTarget, capture: event.currentTarget.closest<HTMLElement>('[data-reorder-scroll]') ?? event.currentTarget, touch: event.pointerType === 'touch', surface, active: false, initial: [...latest.current.items], order: [...latest.current.items] };
+      const touch = event.pointerType === 'touch';
+      const drag: Drag<T> = { id, x: event.clientX, y: event.clientY, point: { x: event.clientX, y: event.clientY }, pointer: event.pointerId, target: event.currentTarget, capture: event.currentTarget.closest<HTMLElement>('[data-reorder-scroll]') ?? event.currentTarget, touch, surface, active: false, initial: [...latest.current.items], order: [...latest.current.items] };
       state.current = drag;
-      if (surface || drag.touch) drag.timer = setTimeout(() => { if (state.current === drag) start(drag); }, 350);
+      if (surface || drag.touch || motion) drag.timer = setTimeout(() => { if (state.current === drag) start(drag); }, 350);
     },
   });
   const bindSurface = (id: T) => ({

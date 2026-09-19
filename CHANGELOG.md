@@ -1,3 +1,7 @@
+## [1.8.1] — 2026-09-19
+
+- Match sidebar module rearrangement to Home widgets: a lifted icon follows the pointer, neighboring icons animate into place, and the drop settles into its saved position. Support holding to move, touch scrolling before pickup, keyboard moves, reduced motion and cancellation without accidentally opening a module.
+
 ## [1.8.0] — 2026-09-19
 
 - Rebuild the Home widget library around visual previews and clear size choices. Create multiple independent widgets with names, readable color choices, filters, notes and website bookmarks; duplicate, hide, restore or remove them while preserving unfinished editor drafts.

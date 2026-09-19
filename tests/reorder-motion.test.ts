@@ -16,6 +16,26 @@ test('Holding a widget surface yields to text selection and touch scrolling befo
   assert.equal(reorderGesture(9, false, true, false), 'cancel');
 });
 
+test('Module icons allow immediate mouse dragging while touch movement scrolls before pickup', () => {
+  assert.equal(reorderGesture(4, false, false, true, true), 'wait', 'A small mouse movement is still a normal module click');
+  assert.equal(reorderGesture(7, false, false, true, true), 'start', 'Mouse dragging matches a widget move handle');
+  assert.equal(reorderGesture(7, false, true, true, true), 'wait', 'Touch waits for the hold timer');
+  assert.equal(reorderGesture(9, false, true, true, true), 'cancel', 'Swiping the module rail remains native scrolling');
+  assert.equal(reorderGesture(100, false, true, true, true), 'cancel');
+});
+
+test('Module icons target measured narrow rail slots and ignore distant content', () => {
+  const slots = [
+    { id: 'home', left: 9, top: 40, width: 44, height: 47 },
+    { id: 'assistant', left: 9, top: 98, width: 44, height: 47 },
+    { id: 'tasks', left: 9, top: 156, width: 44, height: 47 },
+  ];
+  assert.equal(reorderTarget({ x: 30, y: 122 }, slots), 'assistant');
+  assert.equal(reorderTarget({ x: 30, y: 154 }, slots), 'tasks');
+  assert.equal(reorderTarget({ x: 110, y: 122 }, slots), null);
+  assert.equal(reorderTarget({ x: 30, y: 122 }, slots.map(slot => ({ ...slot, top: slot.top - 58 }))), 'tasks', 'Scrolled targets follow their new viewport positions');
+});
+
 test('Drag targeting follows actual variable grid sizes and recognizes the landing placeholder', () => {
   const slots = [
     { id: 'wide', left: 10, top: 20, width: 616, height: 352 },
