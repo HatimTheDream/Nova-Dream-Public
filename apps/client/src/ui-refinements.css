@@ -47,15 +47,23 @@
 .record-profile-layout .record-portrait-controls .button-row button { flex:1; padding:8px; font-size:12px; }
 .record-profile-layout .record-portrait-controls > p { margin:0 0 12px; }
 .home-page { padding-top:24px; }
-.home-grid { grid-auto-rows:minmax(72px,auto); gap:16px; }
-.home-grid .widget-header { min-height:50px; }
-.home-grid .widget-body { padding:0 18px 16px; }
-.home-grid .widget-link { margin-top:12px; }
-.home-grid .attention-content,.home-grid .draft-widget { gap:8px; padding-top:0; }
-.home-grid .soft-icon { width:36px; height:36px; border-radius:11px; }
-.home-grid .attention-content h3,.home-grid .draft-widget h3 { margin:0; font-size:16px; }
 .home-page .board-hint { margin-top:16px; font-size:12px; }
 .sidebar-pin { margin-inline-end:5px; }
+/* Navigation keeps wheel, touch and keyboard scrolling without a visible bar.
+   Fluid button widths retain complete edges inside the saved rail width. */
+.primary-rail > .brand,.primary-rail > .rail-footer { flex:0 0 auto; }
+.primary-rail .rail-modules,.primary-rail .rail-footer { min-width:0; padding-inline:2px; }
+.primary-rail .rail-modules { min-height:0; padding-block:6px 8px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; scrollbar-gutter:auto; scroll-padding-block:8px; }
+.primary-rail .rail-modules::-webkit-scrollbar { display:none; width:0; height:0; }
+.primary-rail .nav-item-wrap { display:flex; justify-content:center; flex:none; }
+.primary-rail .nav-item-wrap:last-child { margin-bottom:0; }
+.primary-rail .nav-item { flex:none; width:100%; min-width:44px; max-width:58px; scroll-margin-block:8px; }
+.primary-rail .nav-item:focus-visible { outline-offset:-4px; }
+.primary-rail .rail-footer { display:flex; justify-content:center; align-items:center; padding-bottom:8px; }
+@media(max-width:650px) {
+  .primary-rail .rail-modules,.primary-rail .rail-footer { padding-inline:0; }
+  .primary-rail .nav-item { max-width:44px; }
+}
 .assistant-workspace .conversation-header { min-height:64px; padding-block:8px; }
 .assistant-workspace .dc-assistant-rail-header { min-height:64px; }
 .assistant-workspace .conversation-title strong { font-size:15px; }

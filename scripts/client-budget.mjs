@@ -100,7 +100,11 @@ import assert from 'node:assert/strict';
 // 1.6 adds paginated complete team handoffs and retained failed-attempt recovery.
 // Measured 587,658 total (+2,332 / 0.40% over 1.5.13); cap at589 KB.
 // Startup and deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 589000, deferredChunk: 80000 };
+// 1.8 adds independent widgets, deferred gallery/editor, weather, calendar and
+// animated reordering. Measured 608,023 total (+19,172 / 3.26% over 1.7.1),
+// startup 142,806 and largest deferred chunk below 72 KB. Bound total at610 KB;
+// preserve the 180 KB startup and 80 KB individual deferred-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 610000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

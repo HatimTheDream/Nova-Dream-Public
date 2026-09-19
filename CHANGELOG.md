@@ -1,3 +1,13 @@
+## [1.8.0] — 2026-09-19
+
+- Rebuild the Home widget library around visual previews and clear size choices. Create multiple independent widgets with names, readable color choices, filters, notes and website bookmarks; duplicate, hide, restore or remove them while preserving unfinished editor drafts.
+- Add separate Clock, Weather, Next action, Daily routines and Next appointment widgets. Use saved task readiness, recurring occurrences and calendar data; keep stale or incomplete external data clearly labeled.
+- Add visible drag-and-drop placement and smooth widget rearrangement, including keyboard moves and a hold-to-move gesture. Replace Home mascot art with size-specific date/time layouts and condition-aware weather graphics; retain the red calendar event accent. Hide Home and sidebar scrollbars while preserving scrolling; use compact icon controls with readable labels.
+- Give equal widget sizes consistent dimensions and fit useful content to each size without internal scrolling, make Home actions readable without redundant arrows or decorative badges, and open specific tasks directly from attention items.
+- Unify action buttons around the rounded, raised navigation style and keep list-item typography consistent across tasks, routines, links and appointments.
+- Center and evenly space Settings tabs, show the release version clearly with internal build details tucked away, clarify optional Tailscale pairing, and fix clipped controls in the collapsed navigation rail.
+- Preserve saved boards, custom writing, task history and backup restoration with the schema 55 upgrade. Resetting the Home arrangement keeps custom widget content.
+
 ## [1.7.1] — 2026-09-19
 
 - Make Home setup steps and destination actions visibly clickable before hover, with persistent borders, filled backgrounds, stronger labels and comfortable spacing.

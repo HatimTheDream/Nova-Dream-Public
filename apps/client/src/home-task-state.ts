@@ -1,6 +1,7 @@
 import type { Entity, Layout, Snapshot, Task } from '../../../packages/domain/contracts';
 import { reminderInstant } from '../../../packages/domain/reminders';
 import { dayInZone, inTaskView, sortTasks } from '../../../packages/domain/tasks';
+import { taskBlockers } from '../../../packages/domain/task-presentation';
 
 export type HomeAttentionReason = 'waiting' | 'blocked' | 'past-plan' | 'overdue';
 export type HomeEmptyState = 'empty' | 'finished' | 'future' | 'not-ready';
@@ -18,12 +19,14 @@ function pastDeadline(task: Task, homeTimezone: string, today: string, now: numb
   return instant !== undefined && instant < now;
 }
 
-export function homeTaskState(snapshot: Pick<Snapshot, 'tasks' | 'taskState'>, layout: Pick<Layout, 'timezone' | 'showCompleted'>, now: number) {
+export function homeTaskState(snapshot: Pick<Snapshot, 'tasks' | 'taskState'>, layout: Pick<Layout, 'timezone' | 'showCompleted'>, now: number, dependencyTasks = snapshot.tasks) {
   const today = dayInZone(layout.timezone, now);
   const saved = snapshot.tasks.filter(task => inTaskView(task.value, 'All', today));
   const active = saved.filter(task => !inTaskView(task.value, 'History', today));
-  const ready = active.filter(task => ['open', 'active'].includes(task.value.status) && (!task.value.planned || task.value.planned <= today));
-  const tasks = sortTasks(layout.showCompleted ? saved : ready, snapshot.taskState?.orders?.find(order => order.date === today && order.timezone === layout.timezone)?.taskIds);
+  const order = snapshot.taskState?.orders?.find(order => order.date === today && order.timezone === layout.timezone)?.taskIds;
+  const ready = sortTasks(active.filter(task => ['open', 'active'].includes(task.value.status) && (!task.value.planned || task.value.planned <= today) && taskBlockers(task.value, dependencyTasks).length === 0), order);
+  const ordered = sortTasks(saved, order);
+  const tasks = layout.showCompleted ? ordered : ready;
   const completed = saved.filter(task => task.value.status === 'done').length;
   const attention: { task: Entity<Task>; reasons: HomeAttentionReason[] }[] = [];
   for (const task of active) {
@@ -34,5 +37,5 @@ export function homeTaskState(snapshot: Pick<Snapshot, 'tasks' | 'taskState'>, l
     if (reasons.length) attention.push({ task, reasons });
   }
   const emptyState: HomeEmptyState = !saved.length ? 'empty' : !active.length ? 'finished' : active.every(task => inTaskView(task.value, 'Upcoming', today)) ? 'future' : 'not-ready';
-  return { saved, active, tasks, completed, attention, emptyState };
+  return { saved, active, tasks, ready, ordered, completed, attention, emptyState };
 }

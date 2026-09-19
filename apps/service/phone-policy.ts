@@ -36,6 +36,8 @@ GET /api/assistant/models
 GET /api/assistant/outputs
 GET /api/assistant/state
 GET /api/assistant/voice/catalog
+GET /api/home/weather
+GET /api/home/weather/locations
 GET /api/calendar/state
 GET /api/snapshot
 GET /api/content/library

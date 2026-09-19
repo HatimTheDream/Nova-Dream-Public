@@ -5,18 +5,19 @@ import { reminderSchema } from './reminders.js';
 import { clockTime, timezone, type Routine, type TaskState } from './tasks.js';
 import { recordKinds, recordOriginSchema, type RecordValues } from './workspace-records.js';
 import { attachmentSchema } from './attachments.js';
+import { homeWidgetLimit, homeWidgetSchema, homeWidgetSizes, legacyHomeWidgetIds } from './home-widgets.js';
 export { attachmentSchema } from './attachments.js';
 
 export const moduleIds = ['home', 'assistant', 'tasks', 'calendar', 'inbox', 'contacts', 'agents', 'content', 'profile'] as const;
 export type ModuleId = typeof moduleIds[number];
-export const widgetIds = ['welcome', 'next', 'draft', 'attention', 'setup'] as const;
+export const widgetIds = legacyHomeWidgetIds;
 export type WidgetId = typeof widgetIds[number];
-export const sizes = ['compact', 'square', 'wide', 'large'] as const;
+export const sizes = homeWidgetSizes;
 const id = z.string().min(1).max(100).regex(/^[a-zA-Z0-9:_-]+$/);
 const unique = <T>(items: T[]) => new Set(items).size === items.length;
 export const layoutSchema = z.object({
   nav: z.array(z.enum(moduleIds)).length(moduleIds.length).refine(unique),
-  widgets: z.array(z.object({ id: z.enum(widgetIds), size: z.enum(sizes), hidden: z.boolean() })).length(widgetIds.length).refine(v => unique(v.map(w => w.id))),
+  widgets: z.array(homeWidgetSchema).max(homeWidgetLimit).refine(v => unique(v.map(w => w.id))),
   theme: z.enum(['light', 'dark', 'system']),
   timezone: z.string().max(80).refine(v => { try { new Intl.DateTimeFormat('en', { timeZone: v }); return true; } catch { return false; } }),
   showCompleted: z.boolean(),

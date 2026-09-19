@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.7.1-blue)
+![Version](https://img.shields.io/badge/Version-1.8.0-blue)
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 
@@ -116,3 +116,11 @@ The accepted pixel character and current runtime assets are included. Unused exp
 ## License
 
 MIT; see [LICENSE](LICENSE). Original third-party copyright and license notices are retained. Dependencies keep their respective licenses. Bundled original/generated artwork is provided under the project license to the extent the contributors hold applicable rights; no exclusivity or trademark rights are promised.
+
+## Optional weather widgets
+
+Add a Weather widget and choose a city explicitly. Nova sends that city search and the selected location's coordinates to Open-Meteo; it does not request device geolocation. Forecasts are fetched by the host and cached for 15 minutes across matching widgets. A failed refresh keeps the last available forecast visibly marked stale; an unavailable forecast is never replaced with example data.
+
+The default Open-Meteo endpoint is for personal and other non-commercial use within its published limits. A public source repository does not itself grant commercial API access. For commercial deployments, obtain an appropriate [Open-Meteo subscription](https://open-meteo.com/en/pricing), set `OPEN_METEO_API_KEY` in the host service environment, and restart the service. Nova then uses the customer forecast and geocoding endpoints. Keep this key out of client configuration, widget settings, and source control. See the current [service terms](https://open-meteo.com/en/terms) before deployment.
+
+Weather data uses [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Preserve the adjacent Open-Meteo attribution and licence links in weather widgets, and identify modifications when applicable. City-search data is credited to GeoNames. These data licences are distinct from access to the hosted API; see [Open-Meteo's attribution requirements](https://open-meteo.com/en/licence) and [geocoding documentation](https://open-meteo.com/en/docs/geocoding-api).

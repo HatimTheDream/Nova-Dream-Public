@@ -1,15 +1,15 @@
 .settings-page { scroll-padding-block: 16px; }
-.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 1100px; margin-inline: auto; }
+.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 1000px; margin-inline: auto; }
 .settings-page > .page-intro { margin-bottom: 24px; }
 .settings-page .page-intro h1 { font-size: 28px; }
 .settings-page .page-intro p { font-size: 14px; margin-top: 6px; }
 .settings-return { margin-bottom: 16px; }
-.settings-layout { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 28px; align-items: start; }
-.settings-navigation { position: sticky; top: 0; }
-.settings-tabs { display: flex; flex-direction: column; gap: 4px; }
-.settings-tabs [role="tab"] { justify-content: flex-start; gap: 10px; min-height: 46px; padding: 10px 14px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); box-shadow: none; white-space: nowrap; }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.settings-navigation { min-width:0; }
+.settings-tabs { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; padding:6px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+.settings-tabs [role="tab"] { justify-content: center; text-align:center; gap:0; min-width:0; min-height:48px; padding:10px 8px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); box-shadow: none; white-space: nowrap; }
 .settings-tabs [role="tab"]:hover { background: var(--surface); color: var(--text); box-shadow: none; }
-.settings-tabs [role="tab"][aria-selected="true"] { color: var(--text); background: var(--soft-violet); border-color: var(--line); }
+.settings-tabs [role="tab"][aria-selected="true"] { color: var(--text); background: var(--selection); border-color: var(--control); }
 .settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
 .settings-content, .settings-panel { min-width: 0; }
 .settings-panel[hidden] { display: none; }
@@ -84,9 +84,9 @@
 @media (max-width: 999px) {
   .settings-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
   .settings-navigation { position: static; }
-  .settings-tabs { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+
   .settings-tabs [role="tab"] { justify-content: center; padding-inline: 8px; }
-  .settings-tabs [role="tab"] svg { display: none; }
+
 }
 @media (max-width: 650px) {
   .settings-page > .page-intro { margin-bottom: 16px; }
@@ -106,3 +106,7 @@
 .settings-page .setting-row:has(+ .settings-details) { border-bottom: 0; }
 
 .usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
+
+.settings-tabs [role=tab] > span { display:block; width:100%; text-align:center; }
+.settings-about details { margin-top:6px; }
+.settings-about details p { font-size:12px; }

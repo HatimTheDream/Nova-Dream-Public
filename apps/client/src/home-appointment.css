@@ -1,0 +1,21 @@
+/* Calendar-red date and event stripe stay recognizable in every saved palette. */
+.home-appointment { --appointment-accent:#c6283b; }
+:root[data-theme=dark] .home-appointment,.widget[data-widget-color=slate] .home-appointment { --appointment-accent:#ff919c; }
+.home-appointment-date { display:flex; align-items:center; gap:12px; color:var(--appointment-accent); height:42px; }
+.home-appointment-date span { font-size:12px; font-weight:600; text-transform:uppercase; }
+.home-appointment-date strong { font-size:38px; line-height:1; font-weight:500; }
+.home-appointment-events { display:grid; gap:12px; min-width:0; }
+.home-appointment-event { min-width:0; display:flex; flex-direction:column; gap:5px; border-inline-start:3px solid var(--appointment-accent); padding:8px 12px; background:color-mix(in srgb,var(--appointment-accent) 4%,transparent); }
+.home-page .home-appointment-event h3 { font-size:var(--widget-item-size,13px); font-weight:600; line-height:1.4; }
+.home-page .home-appointment-event .home-appointment-time { font-size:12px; line-height:1.4; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.home-page .home-appointment-event .home-appointment-status,.home-page .home-appointment-event .home-appointment-location { font-size:11px; line-height:1.4; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.home-page .size-compact .home-appointment { gap:6px; }
+.home-page .size-compact .home-appointment-event { gap:2px; padding:2px 8px; }
+.home-page .size-compact .home-appointment-event h3 { -webkit-line-clamp:1; font-size:var(--widget-item-size,13px); line-height:1.3; }
+.home-page .size-compact .home-appointment-event .home-appointment-time { font-size:11px; }
+.home-page .size-large .home-appointment { gap:20px; }
+.home-page .size-large .home-appointment-date { height:76px; gap:18px; }
+.home-page .size-large .home-appointment-date strong { font-size:68px; }
+.home-page .size-large .home-appointment-event { padding:14px 16px; gap:6px; }
+.home-page .size-large .home-appointment-events { gap:16px; }
+.home-page .size-large .home-appointment-event:nth-child(n+2) h3 { -webkit-line-clamp:1; }

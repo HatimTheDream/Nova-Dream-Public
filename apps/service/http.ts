@@ -1,4 +1,5 @@
 import { TeamWorkService } from './team-work.js';
+import { HomeWeatherService } from './home-weather.js';
 import { HostBrowser } from './host-browser.js';
 import { browserInputSchema } from '../../packages/domain/host-browser.js';
 import { GitHubConnection } from './github.js';
@@ -104,7 +105,7 @@ const staleClientCleanup = new Set([
   '/api/assistant/voice/end', '/api/assistant/sign-in/cancel', '/api/assistant/cancel',
 ]);
 
-export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; gateway?: AssistantTransport; providers?: Providers; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
+export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; gateway?: AssistantTransport; providers?: Providers; weatherFetch?: typeof fetch; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
   if (options.privateWeb) validatePrivateWeb(options.privateWeb);
   if (options.candidateId !== undefined && !/^[a-f0-9]{64}$/.test(options.candidateId)) throw new Error('Use a verified candidate identity.');
   if (options.developmentOrigin && (!options.development || !/^http:\/\/127\.0\.0\.1:[0-9]{4,5}$/.test(options.developmentOrigin) || Number(new URL(options.developmentOrigin).port) < 1024 || Number(new URL(options.developmentOrigin).port) > 65535)) throw new Error('Use an explicit loopback development origin.');
@@ -118,6 +119,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const github = new GitHubConnection(store);
   const workRepositories = new WorkRepositories(store, github);
   const accounts = new Accounts(store, options.providers, undefined, options.privateWeb?.origin);
+  const homeWeather = new HomeWeatherService(store, options.weatherFetch);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
   const calendarGroups = new CalendarGroups(store, accounts, calendar, calendarWrites);
@@ -269,6 +271,14 @@ export async function startServer(options: { directory: string; port: number; pr
         if (remote && !phoneRouteAllowed(url.pathname, request.method ?? '')) throw new Fault(403, 'desktop_required', 'Manage host setup and connected devices in Settings on your computer.');
         if (options.candidateId && (url.pathname === '/api/snapshot' || request.method === 'POST' && !staleClientCleanup.has(url.pathname)) && (request.headers['x-edition3-candidate'] !== options.candidateId || request.headers['x-edition3-desktop'] !== undefined && request.headers['x-edition3-desktop'] !== options.candidateId)) {
           throw new Fault(409, 'client_update', 'This window needs the latest app. Keep your writing and reopen the app to continue saving.');
+        }
+        if (url.pathname === '/api/home/weather' && request.method === 'GET') {
+          if ([...url.searchParams.keys()].some(key => key !== 'widgetId') || url.searchParams.getAll('widgetId').length !== 1) throw new Fault(400, 'weather_query', 'Choose one saved Weather widget.');
+          const result = await homeWeather.read(url.searchParams.get('widgetId')); reauthorize.get(request)?.(); return json(200, result);
+        }
+        if (url.pathname === '/api/home/weather/locations' && request.method === 'GET') {
+          if ([...url.searchParams.keys()].some(key => key !== 'q') || url.searchParams.getAll('q').length !== 1) throw new Fault(400, 'weather_query', 'Enter one city or postal code.');
+          const result = await homeWeather.search(url.searchParams.get('q')); reauthorize.get(request)?.(); return json(200, result);
         }
         const transferOwner = surface + ':' + device;
         if (url.pathname === '/api/companions/state' && request.method === 'GET') return json(200, { devices: companions.devices(), downloads: await companionDownloads.list(), protocol: 1 });
@@ -712,7 +722,7 @@ export async function startServer(options: { directory: string; port: number; pr
   let closePromise: Promise<void> | undefined;
   const close = () => {
     if (closePromise) return closePromise;
-    closing = true; companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
+    closing = true; homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
     // Stop admission before closing any authority. Browsers may retain sockets
     // without a complete HTTP request, so idle-connection cleanup is insufficient.
     const httpClosed = new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));

@@ -1,0 +1,40 @@
+/* Shared action-button language, modeled on the main navigation rail.
+   Content rows, calendar surfaces, checkboxes and drag handles keep their
+   specialized geometry. Their nested action controls use this same system. */
+:root { --button-radius:16px; --button-depth:4px; }
+:root button:not(.widget-handle,.task-open,.check-button,.brand,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type) {
+  --button-edge:var(--line);
+  --button-fill:var(--surface);
+  border:2px solid var(--button-edge);
+  border-radius:var(--button-radius);
+  background:var(--button-fill);
+  color:var(--text);
+  box-shadow:0 var(--button-depth) 0 var(--button-edge);
+  font-weight:650;
+  text-transform:capitalize;
+  transition:background .12s,border-color .12s,box-shadow .12s,translate .12s;
+}
+:root button:not(.widget-handle,.task-open,.check-button,.brand,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type):hover:not(:disabled) {
+  background:color-mix(in srgb,var(--button-fill) 85%,var(--soft-gold));
+  border-color:color-mix(in srgb,var(--button-edge) 75%,var(--control));
+  box-shadow:0 var(--button-depth) 0 var(--button-edge);
+}
+:root button:not(.widget-handle,.task-open,.check-button,.brand,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type):active:not(:disabled) {
+  translate:0 2px;
+  transform:none;
+  box-shadow:0 2px 0 var(--button-edge);
+}
+:root button:is(.primary,.nav-item.active) { --button-fill:var(--action); --button-edge:var(--action-edge); color:var(--action-ink); }
+:root button:is([aria-pressed=true],[aria-selected=true]):not(.check-button,.nav-item.active) { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); color:var(--text); }
+:root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
+:root button:disabled { translate:none; box-shadow:0 2px 0 var(--button-edge,var(--line)); }
+:root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
+:root .primary-rail .nav-item { --button-radius:20px; }
+:root .primary-rail .nav-item:focus-visible { outline-offset:-4px; }
+:root .widget-options > button,:root .composer-popover > button { margin-block:3px; }
+@media(prefers-reduced-motion:reduce) { :root button { transition:none; } }
+
+.home-page .home-link-list a,.home-widget-preview .home-preview-action {
+  border:2px solid var(--line); border-radius:var(--button-radius); background:var(--surface);
+  box-shadow:0 3px 0 var(--line); color:var(--text); font-weight:650;
+}

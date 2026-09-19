@@ -1,0 +1,56 @@
+/* One palette powers saved widgets, their editor previews, and color swatches. */
+[data-widget-color=cream] { --widget-color-bg:#fbf0c9; --widget-color-ink:#52492f; --widget-color-muted:#6c634b; --widget-color-border:#dccb91; --widget-color-ink-rgb:82 73 47; }
+[data-widget-color=sky] { --widget-color-bg:#cce9f5; --widget-color-ink:#123c51; --widget-color-muted:#365d6b; --widget-color-border:#a6cada; --widget-color-ink-rgb:18 60 81; }
+[data-widget-color=sage] { --widget-color-bg:#e0efd8; --widget-color-ink:#27452e; --widget-color-muted:#46684d; --widget-color-border:#bad0ad; --widget-color-ink-rgb:39 69 46; }
+[data-widget-color=rose] { --widget-color-bg:#f5e0df; --widget-color-ink:#59363c; --widget-color-muted:#78565c; --widget-color-border:#d9b9be; --widget-color-ink-rgb:89 54 60; }
+[data-widget-color=lavender] { --widget-color-bg:#e9e2f6; --widget-color-ink:#443957; --widget-color-muted:#655775; --widget-color-border:#c9bcde; --widget-color-ink-rgb:68 57 87; }
+[data-widget-color=slate] { --widget-color-bg:#27252f; --widget-color-ink:#fff6df; --widget-color-muted:#d8cdb7; --widget-color-border:#5d566b; --widget-color-ink-rgb:255 246 223; }
+
+:root[data-theme=dark] [data-widget-color=cream] { --widget-color-bg:#3c3628; --widget-color-ink:#f5edd1; --widget-color-muted:#c8bea3; --widget-color-border:#6e6246; --widget-color-ink-rgb:245 237 209; }
+:root[data-theme=dark] [data-widget-color=sky] { --widget-color-bg:#243744; --widget-color-ink:#e1f3fb; --widget-color-muted:#aacbd9; --widget-color-border:#4c6a7d; --widget-color-ink-rgb:225 243 251; }
+:root[data-theme=dark] [data-widget-color=sage] { --widget-color-bg:#2b3a2c; --widget-color-ink:#e6f5df; --widget-color-muted:#b9cfb2; --widget-color-border:#556f50; --widget-color-ink-rgb:230 245 223; }
+:root[data-theme=dark] [data-widget-color=rose] { --widget-color-bg:#402e34; --widget-color-ink:#ffe8ec; --widget-color-muted:#d2b4be; --widget-color-border:#805968; --widget-color-ink-rgb:255 232 236; }
+:root[data-theme=dark] [data-widget-color=lavender] { --widget-color-bg:#352d45; --widget-color-ink:#f0e8ff; --widget-color-muted:#cbbddd; --widget-color-border:#725f8b; --widget-color-ink-rgb:240 232 255; }
+
+/* Explicit choices replace the entire local palette, including popup controls. */
+:is(.home-page .widget,.home-widget-preview)[data-widget-color]:not([data-widget-color=default]) {
+  --surface:var(--widget-color-bg);
+  --raised:color-mix(in srgb,var(--widget-color-bg) 95%,var(--widget-color-ink));
+  --canvas:var(--raised);
+  --text:var(--widget-color-ink);
+  --muted:var(--widget-color-muted);
+  --text-rgb:var(--widget-color-ink-rgb);
+  --muted-rgb:var(--widget-color-ink-rgb);
+  --line:var(--widget-color-border);
+  --control:color-mix(in srgb,var(--widget-color-ink) 62%,var(--widget-color-bg));
+  --focus:var(--widget-color-ink);
+  --soft-gold:color-mix(in srgb,var(--widget-color-bg) 88%,var(--widget-color-ink));
+  --soft-violet:var(--soft-gold);
+  --soft-green:var(--soft-gold);
+  --soft-peach:var(--soft-gold);
+  --soft-sky:var(--soft-gold);
+  --green:#285438;
+  --violet:#583c7e;
+  --danger:#943345;
+  background:var(--widget-color-bg);
+  color:var(--widget-color-ink);
+  border-color:var(--widget-color-border);
+}
+
+:root[data-theme=dark] :is(.home-page .widget,.home-widget-preview)[data-widget-color]:not([data-widget-color=default]),
+:is(.home-page .widget,.home-widget-preview)[data-widget-color=slate],
+.home-page .widget-clock[data-widget-color=default] {
+  --green:#b5e3ba;
+  --violet:#dfc9ff;
+  --danger:#ffb1ba;
+}
+
+.home-widget-preview[data-widget-color]:not([data-widget-color=default]) small,
+.home-widget-preview[data-widget-color]:not([data-widget-color=default]) .home-preview-draft {
+  color:var(--widget-color-muted);
+}
+.home-widget-preview[data-widget-color]:not([data-widget-color=default]) .home-preview-attention-item small { color:var(--danger); }
+
+:root[data-theme=dark] .home-widget-preview.preview-weather[data-widget-color=default] { background:var(--soft-sky); color:var(--text); border-color:var(--line); }
+:root[data-theme=dark] .home-widget-preview.preview-weather[data-widget-color=default] small { color:var(--muted); }
+:root[data-theme=dark] .home-widget-preview.preview-note[data-widget-color=default] { background:color-mix(in srgb,var(--surface) 65%,var(--soft-gold)); color:var(--text); border-color:var(--line); }

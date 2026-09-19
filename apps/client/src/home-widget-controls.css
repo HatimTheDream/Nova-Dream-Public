@@ -1,0 +1,28 @@
+/* Small, inset header controls leave the widget title and content in charge. */
+.home-page .widget-header { height:46px; min-height:46px; padding:0 14px 0 18px; gap:10px; }
+.home-page .widget-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:18px; font-weight:600; }
+.home-page .widget-header-controls { display:flex; align-items:center; gap:5px; flex:none; }
+.home-page .widget-header-controls .icon-button,
+.home-page .widget-options .widget-options-close { display:flex; align-items:center; justify-content:center; width:32px; min-width:32px; height:32px; min-height:32px; padding:6px; border:2px solid var(--line); border-radius:10px; background:var(--surface); color:var(--text); box-shadow:0 2px 0 var(--line); }
+.home-page .widget-move-handle { cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+.home-page .widget-move-handle:active { cursor:grabbing; }
+.home-page .widget-header-controls .icon-button:hover { background:var(--soft-gold); border-color:var(--text); }
+.home-page .widget-options { top:44px; inset-inline-end:14px; width:min(238px,calc(100% - 28px)); max-height:none; overflow:visible; padding:12px; border-radius:15px; }
+.home-page .widget-options .section-heading { gap:10px; padding:0; margin:0 0 10px; }
+.home-page .widget-options .section-heading > strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+.home-page .widget-options .widget-customize { justify-content:flex-start; align-items:center; gap:8px; min-height:38px; padding:7px 9px; border:2px solid var(--line); border-radius:10px; background:var(--surface); font-size:12px; font-weight:600; }
+.home-page .widget-options .size-options { grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; margin:10px 0; }
+.home-page .widget-options .size-options button { display:flex; align-items:center; justify-content:center; min-width:0; height:42px; min-height:42px; padding:6px; border:2px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:0 2px 0 var(--line); }
+.home-page .widget-options .size-options button[aria-pressed=true] { background:var(--soft-gold); border-color:var(--selection-edge); box-shadow:0 2px 0 var(--selection-edge); }
+.home-page .widget-options .home-size-diagram { width:100%; max-width:30px; height:28px; }
+.home-page .widget-options .home-size-diagram::after { bottom:50%; transform:translate(-50%,50%); width:44%; height:auto; aspect-ratio:1.5; border-color:currentColor; background:transparent; }
+.home-page .widget-options .diagram-square::after { height:auto; aspect-ratio:.8; }
+.home-page .widget-options .diagram-wide::after { width:95%; height:auto; aspect-ratio:1.6; }
+.home-page .widget-options .diagram-large::after { width:95%; height:auto; aspect-ratio:1; }
+.home-page .widget-option-actions { display:flex; align-items:center; gap:8px; padding-top:10px; border-top:1px solid var(--line); }
+.home-page .widget-option-actions .icon-button { display:flex; align-items:center; justify-content:center; width:38px; min-width:38px; height:38px; min-height:38px; padding:8px; border:2px solid var(--line); border-radius:10px; background:var(--surface); box-shadow:0 2px 0 var(--line); }
+.home-page .widget-option-actions .widget-remove { margin-inline-start:auto; color:var(--danger); }
+.home-page .widget-options .check-label { padding:5px 0 10px; font-size:11px; }
+.home-page .widget-options > button:not(.widget-customize) { min-height:36px; padding:6px 8px; font-size:12px; }
+
+.home-page .widget-header-controls button,.home-page .widget-options button { --button-depth:2px; --button-radius:10px; }

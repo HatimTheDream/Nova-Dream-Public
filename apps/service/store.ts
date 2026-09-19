@@ -54,7 +54,7 @@ export class Store {
     if (this.key.length !== 32) throw new Error('Invalid workspace key. No data was replaced.');
     this.db = new DatabaseSync(join(directory, 'workspace.sqlite'));
     const schema = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schema > 54) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
+    if (schema > 55) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
     // Authenticate an existing workspace before any schema or journal-mode write.
     try {
       if (schema > 0) {
@@ -71,7 +71,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, bytes INTEGER NOT NULL, payload BLOB NOT NULL);
       CREATE TABLE IF NOT EXISTS blob_refs (entity_id TEXT NOT NULL REFERENCES entities(id), blob_id TEXT NOT NULL REFERENCES blobs(id), PRIMARY KEY(entity_id,blob_id));
-      PRAGMA user_version=54;`);
+      PRAGMA user_version=55;`);
     try {
       if (!this.db.prepare("SELECT value FROM meta WHERE key='epoch'").get()) this.transaction(() => {
         this.db.prepare('INSERT INTO meta VALUES (?,?)').run('epoch', randomUUID());
@@ -169,7 +169,7 @@ export class Store {
       const services = (this.db.prepare('SELECT * FROM service_records ORDER BY id').all() as { id: string; revision: number; payload: Uint8Array }[]).filter(row => !row.id.startsWith('backup:')).map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
       const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.download(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
       const references = (this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id,blob_id').all() as { entity_id: string; blob_id: string }[]).map(row => ({ entityId: row.entity_id, fileId: row.blob_id }));
-      const value: BackupSnapshot = { format: backupFormat, schema: 54, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
+      const value: BackupSnapshot = { format: backupFormat, schema: 55, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
       Store.verifyBackup(value); return value;
     });
   }

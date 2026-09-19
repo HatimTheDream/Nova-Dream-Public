@@ -1,0 +1,9 @@
+.home-grid[data-reorder-motion] > .widget[data-reorder-placeholder] { opacity:1; outline:2px dashed var(--focus); outline-offset:-3px; box-shadow:none; }
+.home-grid[data-reorder-motion] > .widget[data-reorder-placeholder] > * { opacity:.16; }
+.home-grid[data-reorder-motion] > .widget { touch-action:pan-y pinch-zoom; }
+.home-page .widget.reorder-floating { position:fixed!important; margin:0; z-index:60; pointer-events:none; cursor:grabbing; opacity:1; outline:2px solid var(--focus); outline-offset:2px; box-shadow:0 18px 42px rgb(0 0 0 / .22); transform-origin:top left; will-change:transform; overflow:clip; }
+.home-page .widget.reorder-floating .widget-options { display:none; }
+.home-grid[data-reorder-motion] :is(.widget-handle,.widget-move-handle) { touch-action:none; }
+.home-grid[data-reorder-motion][data-reorder-active] :is(.widget-handle,.widget-move-handle) { cursor:grabbing; }
+.home-grid[data-reorder-motion][data-reorder-active] { user-select:none; -webkit-user-select:none; }
+@media(prefers-reduced-motion:reduce) { .home-page .widget.reorder-floating { will-change:auto; } }

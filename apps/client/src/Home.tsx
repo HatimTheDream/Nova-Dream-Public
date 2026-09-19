@@ -1,46 +1,93 @@
-import { useEffect, useState } from 'react';
-import { ArrowRight, Check, ChevronDown, Clock3, GripVertical, MoreHorizontal, Plus, Sparkles, Sun, X } from './icons';
-import { statusNames } from '../../../packages/domain/tasks';
-import { sizes, type Draft, type Entity, type Layout, type ModuleId, type Snapshot, type Task, type WidgetId } from '../../../packages/domain/contracts';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Clock3, Copy, EyeOff, GripVertical, MoreHorizontal, Plus, Settings2, Trash2, X } from './icons';
+import { sizes, type Draft, type Entity, type Layout, type ModuleId, type Snapshot, type Task } from '../../../packages/domain/contracts';
+import { createHomeWidget, resolveWidgetType, widgetTitle, homeWidgetNames, type HomeWidget } from '../../../packages/domain/home-widgets';
 import { useReorder } from './useReorder';
-import { Empty } from './ui';
-import { homeTaskState, type HomeAttentionReason } from './home-task-state';
+import { HomeWidgetContent } from './HomeWidgets';
+import { Dialog } from './ui';
+import { LoadingRing } from './ModuleLoading';
+const HomeWidgetDialog = lazy(() => import('./HomeWidgetDialog').then(module => ({ default: module.HomeWidgetDialog })));
+import { homeTaskState } from './home-task-state';
+import { retainedWindowId } from './useWorkspace';
 
-export const widgetNames: Record<WidgetId, string> = { welcome: 'Your day', next: 'Next work', draft: 'Continue a draft', attention: 'Attention', setup: 'Make yourself at home' };
-const attentionLabels: Record<HomeAttentionReason, [string, string]> = { waiting: ['waiting task', 'waiting tasks'], blocked: ['blocked task', 'blocked tasks'], 'past-plan': ['missed plan', 'missed plans'], overdue: ['overdue deadline', 'overdue deadlines'] };
-const nextEmptyCopy = {
-  empty: { title: 'What would move today forward?', detail: 'Capture something small. You can give it a plan and a deadline later.', action: 'Add your first task' },
-  future: { title: 'Your next tasks are planned for later', detail: 'Review All tasks to see your upcoming work, or capture something for today.', action: 'Add a task' },
-  finished: { title: 'Your tasks are completed or skipped', detail: 'Show completed tasks to review them, or capture your next step.', action: 'Add a task' },
-  'not-ready': { title: 'No tasks are ready right now', detail: 'Review All tasks for work that is planned for later, waiting, or blocked.', action: 'Add a task' },
+export const widgetNames = homeWidgetNames;
+type Props = {
+  snapshot: Snapshot; layout: Layout; saveLayout: (value: Layout) => boolean | void;
+  open: (id: ModuleId) => void; openSettings: (tab: 'general' | 'accounts') => void;
+  newTask: (defaults?: Partial<Task>) => void; editTask: (task: Entity<Task>) => void; complete: (task: Entity<Task>) => void;
+  draft: Draft; dirty: boolean; draftStatus: string;
 };
-export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask, editTask, complete, draft, dirty, draftStatus }: { snapshot: Snapshot; layout: Layout; saveLayout: (value: Layout) => void; open: (id: ModuleId) => void; openSettings: (tab: 'general' | 'accounts') => void; newTask: () => void; editTask: (task: Entity<Task>) => void; complete: (task: Entity<Task>) => void; draft: Draft; dirty: boolean; draftStatus: string }) {
-  const [menu, setMenu] = useState<WidgetId | null>(null);
-  const [catalog, setCatalog] = useState(false);
+export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask, editTask, complete, draft, dirty, draftStatus }: Props) {
+  const [menu, setMenu] = useState<string | null>(null);
+  const [editor, setEditor] = useState<HomeWidget | 'new' | null>(null);
+  const [notice, setNotice] = useState('');
+  const [removing, setRemoving] = useState<HomeWidget | null>(null);
+  const [removed, setRemoved] = useState<{ widget: HomeWidget; index: number } | null>(null);
   const [clock, setClock] = useState(Date.now());
-  // Minute updates are enough for this date/time widget.
-  useEffect(() => { const id = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(id); }, []);
-  const reorder = useReorder(layout.widgets.filter(w => !w.hidden).map(w => w.id), order => {
-    const hidden = layout.widgets.filter(w => w.hidden);
-    saveLayout({ ...layout, widgets: [...order.map(id => layout.widgets.find(w => w.id === id)!), ...hidden] });
-  }, 'widgets');
-  const changeWidget = (id: WidgetId, values: Partial<Layout['widgets'][number]>) => saveLayout({ ...layout, widgets: layout.widgets.map(w => w.id === id ? { ...w, ...values } : w) });
-  const date = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: layout.timezone }).format(clock);
-  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: layout.timezone }).format(clock);
-  const { saved, active: activeTasks, tasks, completed, attention, emptyState } = homeTaskState(snapshot, layout, clock);
-  const emptyCopy = nextEmptyCopy[emptyState];
-  const attentionSummary = (Object.keys(attentionLabels) as HomeAttentionReason[]).flatMap(reason => {
-    const count = attention.filter(item => item.reasons.includes(reason)).length;
-    return count ? [`${count} ${attentionLabels[reason][count === 1 ? 0 : 1]}`] : [];
-  }).join(' · ');
-  const contents = (id: WidgetId) => {
-    if (id === 'welcome') return <div className="welcome-content"><div><span className="eyebrow"><Sun size={16}/> A little space for your day</span><div className="clock">{time}</div><p>{date}</p><button className="text-button" onClick={() => openSettings('general')} title="Change timezone">{layout.timezone.replaceAll('_', ' ')} <ChevronDown size={14}/></button></div><img className="welcome-lynx" src="/mascot/lynx-welcome.webp" alt="Nova, ready to help" draggable={false}/></div>;
-    if (id === 'next') return <><div className="widget-summary"><p>{activeTasks.length ? `${activeTasks.length} open ${activeTasks.length === 1 ? 'task' : 'tasks'} · ${completed} completed` : 'One clear next step is enough.'}</p><button className="icon-button" aria-label="Add a task" onClick={newTask}><Plus size={19}/></button></div>{tasks.length ? <div className="task-list">{tasks.map(task => <div className={`task-row ${task.value.status === 'done' ? 'completed' : ''}`} key={task.id}><button className={`check-button ${task.value.status === 'done' ? 'checked' : ''}`} aria-label={`${['done', 'skipped'].includes(task.value.status) ? 'Reopen' : 'Complete'} ${task.value.title}`} onClick={() => complete(task)}>{task.value.status === 'done' && <Check size={15}/>}</button><button className="task-open" onClick={() => editTask(task)}><strong>{task.value.title}</strong><span>{`${statusNames[task.value.status]}${task.value.planned ? ` · Planned ${task.value.planned}` : ''}`}{task.value.due ? ` · Due ${task.value.due}` : ''}</span></button></div>)}</div> : <Empty title={emptyCopy.title} action={<button className="primary" onClick={newTask}><Plus size={17}/>{emptyCopy.action}</button>}>{emptyCopy.detail}</Empty>}<button className="widget-link" onClick={() => open('tasks')}>All tasks <ArrowRight size={16}/></button></>;
-    if (id === 'draft') return <div className="draft-widget"><div className="soft-icon violet"><Sparkles size={23}/></div><h3>{draft.text || draft.attachments.length ? draft.title : 'Room for your next thought'}</h3><p className="draft-excerpt">{draft.text || 'Start a conversation draft. Your words and attachments will be here when you return.'}</p>{draft.attachments.length > 0 && <p className="metadata">{draft.attachments.length} saved {draft.attachments.length === 1 ? 'attachment' : 'attachments'}</p>}{dirty && <span className="save-label pending">{draftStatus}</span>}<button className="widget-link" onClick={() => open('assistant')}>{draft.text ? 'Continue in Assistant' : 'Open Assistant'}<ArrowRight size={16}/></button></div>;
-    if (id === 'attention') return <div className="attention-content"><div className="soft-icon green"><Check size={23}/></div><h3>{dirty ? 'A draft is still on this device' : attention.length ? `${attention.length} ${attention.length === 1 ? 'step needs' : 'steps need'} a fresh look` : 'No task needs intervention'}</h3>{(dirty || attention.length > 0) && <p>{dirty ? 'Open Assistant to check its save state.' : attentionSummary}</p>}{attention.length > 0 && <button className="widget-link" onClick={() => open('tasks')}>Review tasks<ArrowRight size={16}/></button>}{dirty && <button className="widget-link" onClick={() => open('assistant')}>Review draft<ArrowRight size={16}/></button>}</div>;
-    return <div className="setup-content"><div><h3>A workspace that keeps your work.</h3><p>Start with a task, make the board yours, and keep a draft ready for your Assistant connection.</p></div><div className="setup-steps"><button onClick={newTask}><span className={`step-number ${saved.length ? 'done' : ''}`}>{saved.length ? <Check size={16}/> : '1'}</span><span>Capture your first task</span><ArrowRight size={16}/></button><button onClick={() => open('assistant')}><span className={`step-number ${draft.text ? 'done' : ''}`}>{draft.text ? <Check size={16}/> : '2'}</span><span>Keep a conversation draft</span><ArrowRight size={16}/></button><button onClick={() => openSettings('accounts')}><span className="step-number">3</span><span>Review connections</span><ArrowRight size={16}/></button></div></div>;
+  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(timer); }, []);
+  const persist = (next: Layout) => {
+    if (saveLayout(next) === false) throw Error('Browser storage is full. Keep this page open until your changes can be saved.');
   };
-  return <div className="home-page page-scroll" data-reorder-scroll><div className="page-intro"><div><h1>Today</h1></div><div className="catalog-wrap"><button onClick={() => setCatalog(!catalog)}><Plus size={17}/>Add widget</button>{catalog && <div className="popover catalog"><div className="section-heading"><strong>Home widgets</strong><button className="icon-button" aria-label="Close widget catalog" onClick={() => setCatalog(false)}><X size={17}/></button></div>{layout.widgets.map(widget => <button key={widget.id} onClick={() => changeWidget(widget.id, { hidden: !widget.hidden })}><span>{widgetNames[widget.id]}</span>{widget.hidden ? <Plus size={16}/> : <Check size={16}/>}</button>)}</div>}</div></div>
-    <div className="home-grid">{reorder.order.map(id => { const widget = layout.widgets.find(w => w.id === id)!; return <section className={`widget widget-${id} size-${widget.size} ${reorder.dragging === id ? 'dragging' : ''}`} key={id} data-reorder-group="widgets" data-reorder-item={id} aria-label={widgetNames[id]}><div className="widget-header"><button className="widget-handle" {...reorder.bind(id)} onKeyDown={event => { if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); reorder.move(id, reorder.order.indexOf(id) + (event.key === 'ArrowUp' ? -1 : 1)); } }} aria-label={`${widgetNames[id]} widget. Drag to move or use Alt and arrow keys.`}><GripVertical size={14}/><span>{widgetNames[id]}</span></button><button className="icon-button" aria-label={`${widgetNames[id]} options`} aria-expanded={menu === id} onClick={() => setMenu(menu === id ? null : id)}><MoreHorizontal size={20}/></button></div>{menu === id && <div className="popover widget-options"><div className="section-heading"><strong>Widget options</strong><button className="icon-button" aria-label="Close widget options" onClick={() => setMenu(null)}><X size={16}/></button></div><span className="metadata">Size</span><div className="size-options">{sizes.map(size => <button key={size} aria-pressed={widget.size === size} onClick={() => changeWidget(id, { size })}>{size}</button>)}</div>{id === 'next' && <label className="check-label"><input type="checkbox" checked={layout.showCompleted} onChange={event => saveLayout({ ...layout, showCompleted: event.target.checked })}/>Show completed tasks</label>}{id === 'welcome' && <button onClick={() => openSettings('general')}><Clock3 size={16}/>Change timezone</button>}<button disabled={reorder.order.indexOf(id) === 0} onClick={() => reorder.move(id, reorder.order.indexOf(id) - 1)}>Move earlier</button><button disabled={reorder.order.indexOf(id) === reorder.order.length - 1} onClick={() => reorder.move(id, reorder.order.indexOf(id) + 1)}>Move later</button><button onClick={() => { changeWidget(id, { hidden: true }); setMenu(null); }}>Hide widget</button></div>}<div className="widget-body">{contents(id)}</div></section>; })}</div><p className="board-hint">Make this board yours. Drag a widget header, or use its options to move and resize it.</p><span className="sr-only" role="status">{reorder.announcement}</span>
+  const update = (next: Layout) => { try { persist(next); setNotice(''); return true; } catch (error) { setNotice((error as Error).message); return false; } };
+  const reorder = useReorder(layout.widgets.filter(widget => !widget.hidden).map(widget => widget.id), order => {
+    return update({ ...layout, widgets: [...order.map(id => layout.widgets.find(widget => widget.id === id)!), ...layout.widgets.filter(widget => widget.hidden)] });
+  }, 'widgets', { motion: true });
+  const changeWidget = (id: string, values: Partial<HomeWidget>) => update({ ...layout, widgets: layout.widgets.map(widget => widget.id === id ? { ...widget, ...values } : widget) });
+  const saveWidget = (widget: HomeWidget) => {
+    const exists = layout.widgets.some(item => item.id === widget.id);
+    if (!exists && layout.widgets.length >= 24) throw Error('Your board already has 24 widgets. Restore a hidden widget or edit an existing one.');
+    persist({ ...layout, widgets: exists ? layout.widgets.map(item => item.id === widget.id ? widget : item) : [...layout.widgets, widget] });
+    setNotice(exists ? 'Widget changes are kept on this device while the board saves.' : 'Widget added. Your board is saving.');
+  };
+  const duplicate = (widget: HomeWidget) => {
+    if (layout.widgets.length >= 24) { setNotice('Your board already has 24 widgets.'); return; }
+    const copy = { ...structuredClone(widget), id: createHomeWidget(resolveWidgetType(widget)).id, type: resolveWidgetType(widget), title: `${widgetTitle(widget).slice(0, 73)} copy`, hidden: false };
+    if (update({ ...layout, widgets: [...layout.widgets, copy] })) { setMenu(null); setNotice('Widget duplicated.'); }
+  };
+  return <div className="home-page page-scroll" data-reorder-scroll tabIndex={0} aria-label="Home board">
+    <div className="page-intro"><div><h1>Today</h1></div><button className="primary" onClick={() => { setMenu(null); setEditor('new'); }}><Plus size={17}/>Add Widget</button></div>
+    {notice && <div className="home-board-notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss board notice" onClick={() => setNotice('')}><X size={16}/></button></div>}
+    {reorder.order.length === 0 && <div className="home-empty-board"><h2>Make room for what matters</h2><p>Add tasks, a note, useful links, or a clock. Hidden widgets are kept in your widget library.</p><button className="primary" onClick={() => setEditor('new')}>Browse Widgets</button></div>}
+    <div className="home-grid" ref={reorder.containerRef}>{reorder.order.map(id => {
+      const widget = layout.widgets.find(item => item.id === id)!;
+      const type = resolveWidgetType(widget), title = widgetTitle(widget);
+      const timezone = widget.settings?.timezone ?? layout.timezone;
+      const projectId = widget.settings?.projectId;
+      const projectMissing = Boolean(projectId && !snapshot.projects.some(project => project.id === projectId));
+      const source = projectId ? { ...snapshot, tasks: snapshot.tasks.filter(task => task.value.projectId === projectId) } : snapshot;
+      const state = homeTaskState(source, { ...layout, timezone }, clock, snapshot.tasks);
+      const date = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', timeZone: timezone }).format(clock);
+      const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(clock);
+      return <section className={`widget widget-${type} size-${widget.size} ${reorder.dragging === id ? 'dragging' : ''}`} key={id} {...reorder.bindSurface(id)} data-reorder-group="widgets" data-reorder-item={id} data-widget-color={widget.color ?? 'default'} aria-label={title}>
+        <div className="widget-header"><strong className="widget-title" title={title}>{title}</strong><div className="widget-header-controls"><button className="icon-button widget-move-handle" {...reorder.bind(id)} title="Move Widget · Drag Or Alt + Up/Down" onKeyDown={event => {
+          if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); reorder.move(id, reorder.order.indexOf(id) + (event.key === 'ArrowUp' ? -1 : 1)); }
+        }} aria-label={`Move ${title}. Drag or use Alt and arrow keys.`}><GripVertical size={16}/></button><button className="icon-button widget-options-toggle" title="Widget Options" aria-label={`${title} options`} aria-expanded={menu === id} aria-controls={`widget-options-${id}`} onClick={() => setMenu(menu === id ? null : id)}><MoreHorizontal size={17}/></button></div></div>
+        {menu === id && <div className="popover widget-options" id={`widget-options-${id}`} role="group" aria-label={`${title} Widget Options`} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null); } }}><div className="section-heading"><strong>{title}</strong><button className="icon-button widget-options-close" title="Close Widget Options" aria-label="Close Widget Options" onClick={() => setMenu(null)}><X size={16}/></button></div>
+          <button className="widget-customize" onClick={() => { setMenu(null); setEditor(widget); }}><Settings2 size={16}/>Customize Widget</button>
+          <div className="size-options" role="group" aria-label="Widget Size">{sizes.map(size => {
+            const label = size === 'square' ? 'Standard' : size.charAt(0).toUpperCase() + size.slice(1);
+            return <button key={size} aria-label={label} title={label} aria-pressed={widget.size === size} onClick={() => changeWidget(id, { size })}><span className={`home-size-diagram diagram-${size}`} aria-hidden="true"/></button>;
+          })}</div>
+          {type === 'next' && !widget.type && <label className="check-label"><input type="checkbox" checked={layout.showCompleted} onChange={event => update({ ...layout, showCompleted: event.target.checked })}/>Show Completed Tasks</label>}
+          {type === 'welcome' && <button onClick={() => openSettings('general')}><Clock3 size={16}/>Home Timezone</button>}
+          <div className="widget-option-actions"><button className="icon-button" title="Duplicate Widget" aria-label="Duplicate Widget" disabled={layout.widgets.length >= 24} onClick={() => duplicate(widget)}><Copy size={17}/></button>
+          <button className="icon-button" title="Hide Widget" aria-label="Hide Widget" onClick={() => { if (changeWidget(id, { hidden: true })) { setMenu(null); setNotice('Widget hidden. Restore it from Add Widget; its content is kept.'); } }}><EyeOff size={17}/></button>
+          <button className="icon-button widget-remove" title="Remove Widget" aria-label="Remove Widget" onClick={() => { setMenu(null); setRemoving(widget); }}><Trash2 size={17}/></button></div>
+        </div>}
+        <div className="widget-body" aria-label={`${title} content`}><HomeWidgetContent id={type} snapshot={snapshot} widget={widget} state={state} draft={draft} dirty={dirty} draftStatus={draftStatus} time={time} date={date} timezone={timezone} now={clock} projectMissing={projectMissing} customize={() => setEditor(widget)} open={open} openSettings={openSettings} newTask={() => newTask(projectId ? { projectId } : undefined)} editTask={editTask} complete={complete}/></div>
+      </section>;
+    })}</div>
+    {reorder.order.length > 0 && <p className="board-hint">Use a widget’s move control, or hold its background, to rearrange it. Options include customization, size, and visibility.</p>}
+    {removed && <div className="home-board-notice"><span>{widgetTitle(removed.widget)} removed.</span><button onClick={() => {
+      if (layout.widgets.length >= 24) { setNotice('Remove another widget before restoring this one.'); return; }
+      const widgets = [...layout.widgets]; widgets.splice(Math.min(removed.index, widgets.length), 0, removed.widget);
+      if (update({ ...layout, widgets })) setRemoved(null);
+    }}>Undo Removal</button></div>}
+    {removing && <Dialog title={`Remove ${widgetTitle(removing)}?`} close={() => setRemoving(null)}><p>This removes this widget and its settings from your board. Notes and links inside it will also be removed. Hide it instead to keep everything.</p><div className="button-row"><button onClick={() => setRemoving(null)}>Keep Widget</button><button className="danger" onClick={() => {
+      const current = layout.widgets.find(widget => widget.id === removing.id);
+      if (current && update({ ...layout, widgets: layout.widgets.filter(widget => widget.id !== current.id) })) { setRemoved({ widget: current, index: layout.widgets.indexOf(current) }); setRemoving(null); }
+    }}>Remove Widget</button></div></Dialog>}
+    <span className="sr-only" role="status">{reorder.announcement}</span>
+    {editor && <Suspense fallback={<Dialog title="Opening widget library" close={() => setEditor(null)}><LoadingRing label="Loading widget choices…"/></Dialog>}><HomeWidgetDialog key={editor === 'new' ? 'new' : editor.id} widget={editor === 'new' ? undefined : editor} widgets={layout.widgets} projects={snapshot.projects} defaultTaskView={layout.showCompleted ? 'all' : 'ready'} storageKey={`e3:home-widget:${snapshot.epoch}:${snapshot.deviceId}:${retainedWindowId}`} onSave={saveWidget} onRestore={id => { persist({ ...layout, widgets: layout.widgets.map(widget => widget.id === id ? { ...widget, hidden: false } : widget) }); setNotice('Widget restored.'); }} close={() => setEditor(null)}/></Suspense>}
   </div>;
 }

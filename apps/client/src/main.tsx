@@ -5,5 +5,13 @@ import { App } from './App';
 import './styles.css';
 import './theme.css';
 import './ui-refinements.css';
+import './home.css';
+import './home-widget-dialog.css';
+import './home-appointment.css';
+import './home-weather-visual.css';
+import './home-widget-motion.css';
+import './home-widget-colors.css';
+import './buttons.css';
+import './home-widget-controls.css';
 
 createRoot(document.getElementById('root')!).render(<App/>);

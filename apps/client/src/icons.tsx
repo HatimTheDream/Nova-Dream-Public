@@ -80,3 +80,6 @@ export const Zap = /* @__PURE__ */ novaIcon(<><path d="m13.5 2-10 12h7L9.5 22l11
 export const ArrowLeft = /* @__PURE__ */ novaIcon(<><path d="M20 12H4m7-7-7 7 7 7" /></>, 'arrow-left', 'ArrowLeft');
 
 export const Device = /* @__PURE__ */ novaIcon(<><rect x="3" y="4" width="18" height="13" rx="2.5" fill="currentColor" fillOpacity=".14"/><path d="M12 17v4m-5 0h10" /></>, 'device', 'Device');
+
+export const Link2 = /* @__PURE__ */ novaIcon(<><path d="m10 13 4-4M8.5 15.5 7 17a4.2 4.2 0 0 1-6-6l3-3a4.2 4.2 0 0 1 6 0m3.5.5L15 7a4.2 4.2 0 0 1 6 6l-3 3a4.2 4.2 0 0 1-6 0" transform="translate(1 -1)"/></>, 'link', 'Link2');
+export const EyeOff = /* @__PURE__ */ novaIcon(<><path d="M3 3 21 21M10 5.2c.7-.1 1.3-.2 2-.2 5.5 0 9 7 9 7a18 18 0 0 1-3.1 4.1M6.1 6.1C3.5 8.1 2 12 2 12s4 7 10 7c1.7 0 3.2-.5 4.5-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>, 'hide', 'EyeOff');
