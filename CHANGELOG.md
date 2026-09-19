@@ -1,3 +1,8 @@
+## [1.7.1] — 2026-09-19
+
+- Make Home setup steps and destination actions visibly clickable before hover, with persistent borders, filled backgrounds, stronger labels and comfortable spacing.
+- Keep completed-step badges, clear hover and pressed feedback, keyboard focus, dark-theme contrast and wrapping in narrow widgets.
+
 ## [1.7.0] — 2026-09-18
 
 - Keep Chat, Work and Team work controls visible above existing conversations, with a direct Team work entry that preserves the current conversation and unsent writing.

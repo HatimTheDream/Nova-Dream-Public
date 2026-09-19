@@ -50,7 +50,7 @@
 .home-grid { grid-auto-rows:minmax(72px,auto); gap:16px; }
 .home-grid .widget-header { min-height:50px; }
 .home-grid .widget-body { padding:0 18px 16px; }
-.home-grid .widget-link { padding-top:12px; margin-top:12px; }
+.home-grid .widget-link { margin-top:12px; }
 .home-grid .attention-content,.home-grid .draft-widget { gap:8px; padding-top:0; }
 .home-grid .soft-icon { width:36px; height:36px; border-radius:11px; }
 .home-grid .attention-content h3,.home-grid .draft-widget h3 { margin:0; font-size:16px; }
