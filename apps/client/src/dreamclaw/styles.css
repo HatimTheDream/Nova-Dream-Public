@@ -25,7 +25,6 @@
   --tw-translate-x: 0; --tw-translate-y: 0; --tw-rotate: 0; --tw-skew-x: 0; --tw-skew-y: 0; --tw-scale-x: 1; --tw-scale-y: 1;
 }
 .dreamclaw-module button { min-height: 0; border-radius: 0; padding: 0; gap: 0; background: transparent; box-shadow: none; font-weight: inherit; display: inline-block; }
-.dreamclaw-module button:hover:not(:disabled) { transform: none; }
 .dreamclaw-module label { display: block; flex-direction: row; gap: 0; font-size: inherit; font-weight: inherit; }
 .dreamclaw-module fieldset { display: block; gap: 0; }
 .dreamclaw-module input,.dreamclaw-module select,.dreamclaw-module textarea { min-height: 0; padding: 0; border-radius: 0; background: transparent; font-size: inherit; }
@@ -58,8 +57,8 @@
 .dreamclaw-module .calendar-draft-details p,.dreamclaw-module .calendar-draft-review p { margin-block: 8px; line-height: 1.5; }
 .dreamclaw-module .calendar-draft-detail-fields { display: grid; gap: 14px; margin-top: 12px; }
 .dreamclaw-module .calendar-draft-details .weekday-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.dreamclaw-module .calendar-draft-details .weekday-options button { padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
-.dreamclaw-module .calendar-draft-details .weekday-options button[aria-pressed=true] { background: var(--selection); color: var(--selection-ink); }
+.dreamclaw-module .calendar-draft-details .weekday-options button { padding: 8px; }
+.dreamclaw-module .calendar-draft-details .weekday-options button[aria-pressed=true] { color: var(--selection-ink); }
 .dreamclaw-module .calendar-draft-review button { margin-top: 8px; white-space: normal; }
 @media (max-width: 480px) {
   .dreamclaw-module .dc-calendar-dialog .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
@@ -68,20 +67,17 @@
 .dreamclaw-module .dc-calendar-kept-drafts, .dreamclaw-module .calendar-target-error { padding:8px 20px; border-bottom:1px solid var(--aegis-border); font-size:12px; }
 .dreamclaw-module .dc-calendar-kept-drafts summary { min-height:44px; display:flex; align-items:center; cursor:pointer; }
 .dreamclaw-module .dc-calendar-kept-drafts ul { display:flex; flex-wrap:wrap; gap:8px; list-style:none; padding:8px 0; }
-.dreamclaw-module .dc-calendar-kept-drafts button, .dreamclaw-module .calendar-target-error button { min-height:44px; padding:8px 12px; border:1px solid var(--aegis-border); border-radius:12px; box-shadow:0 3px 0 var(--aegis-border); }
+.dreamclaw-module .dc-calendar-kept-drafts button, .dreamclaw-module .calendar-target-error button { min-height:44px; padding:8px 12px; }
 
 .dc-calendar-mail-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; }
 .dc-calendar-mail-source > span { display: flex; align-items: center; gap: 8px; flex: 1 1 140px; }
-.dc-calendar-mail-source > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.dc-calendar-mail-source > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 
 /* Original utility classes use the same action roles as the shared shell. */
 .dreamclaw-module .bg-aegis-primary { background-color: var(--action); color: var(--action-ink); }
 .dreamclaw-module .text-aegis-btn-primary-text { color: var(--action-ink); }
-.dreamclaw-module button.bg-aegis-primary { border: 1px solid var(--action-edge); box-shadow: 0 3px 0 var(--action-edge); }
-.dreamclaw-module button.bg-aegis-primary:hover:not(:disabled) { background-color: color-mix(in srgb, var(--action) 88%, white); }
-.dreamclaw-module button.bg-aegis-primary:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--action-edge); }
 .dreamclaw-module :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .dreamclaw-module .dc-calendar-toolbar button { min-height: 44px; min-width: 44px; font-size: 13px; }
 .dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] { border-radius: var(--control-radius); }
-.dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] button { min-height: 36px; box-shadow: none; }
+.dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] button { min-height: 36px; }
 @media (pointer: coarse) { .dreamclaw-module .dc-calendar-toolbar [aria-label="Calendar view"] button { min-height: 44px; } }

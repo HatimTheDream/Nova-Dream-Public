@@ -31,14 +31,13 @@
   .dreamclaw-module .dc-mail-row-tools input { width: 20px; height: 20px; margin: 0; }
 }
 .dreamclaw-module .dc-inbox-edit-provider-draft,
-.dreamclaw-module .dc-inbox-draft-format button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--aegis-border); border-radius: 12px; box-shadow: 0 3px 0 var(--aegis-border); background: rgb(var(--aegis-overlay) / .03); font-size: 12px; color: rgb(var(--aegis-text)); }
+.dreamclaw-module .dc-inbox-draft-format button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; font-size: 12px; color: rgb(var(--aegis-text)); }
 .dreamclaw-module .dc-inbox-draft-format { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; color: rgb(var(--aegis-text-muted)); }
 .dreamclaw-module .dc-inbox-draft-preview { padding: 16px; border: 1px solid var(--aegis-border); border-radius: 12px; background: #fff; }
 .dreamclaw-module .dc-inbox-compose fieldset { margin: 0; border: 0; padding: 0; }
 .dreamclaw-module .dc-inbox-compose-switcher { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--aegis-border); }
 .dreamclaw-module .dc-inbox-compose-switcher select { flex: 1; min-width: 0; width: 0; padding: 8px; min-height: 44px; border: 1px solid var(--aegis-border); border-radius: 12px; background: rgb(var(--aegis-overlay) / .03); color: rgb(var(--aegis-text)); font-size: 12px; }
-.dreamclaw-module .dc-inbox-compose-switcher button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--aegis-border); border-radius: 12px; box-shadow: 0 3px 0 var(--aegis-border); background: rgb(var(--aegis-overlay) / .03); color: rgb(var(--aegis-text)); font-size: 12px; }
-.dreamclaw-module .dc-inbox-compose-switcher button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--aegis-border); }
+.dreamclaw-module .dc-inbox-compose-switcher button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; color: rgb(var(--aegis-text)); font-size: 12px; }
 .dreamclaw-module .dc-inbox-compose button { min-height: 44px; }
 .dreamclaw-module .dc-inbox-compose button[aria-label="Close new message"] { min-width: 44px; }
 .dreamclaw-module .dc-inbox-compose select.field-input { min-height: 44px !important; }
@@ -69,10 +68,9 @@
 .dreamclaw-module .dc-mail-delivery dd { margin: 0; }
 .dreamclaw-module .dc-mail-delivery pre { margin-block: 12px; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 240px; overflow: auto; background: rgb(var(--aegis-overlay) / .03); border-radius: 10px; }
 .dreamclaw-module .dc-mail-delivery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.dreamclaw-module .dc-mail-delivery-actions button { flex: 1 1 auto; min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--aegis-border); border-radius: 12px; box-shadow: 0 3px 0 var(--aegis-border); background: rgb(var(--aegis-overlay) / .03); color: inherit; text-align: center; }
-.dreamclaw-module .dc-mail-delivery-actions button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--aegis-border); }
+.dreamclaw-module .dc-mail-delivery-actions button { flex: 1 1 auto; min-height: 44px; max-width: 100%; padding: 8px 12px; color: inherit; text-align: center; }
 .dreamclaw-module .dc-mail-delivery-actions button:disabled { opacity: .5; cursor: wait; }
-.dreamclaw-module .dc-mail-delivery-actions .dc-mail-delivery-confirm { background: rgb(var(--aegis-primary) / .15); border-color: rgb(var(--aegis-primary) / .35); color: rgb(var(--aegis-primary)); }
+.dreamclaw-module .dc-mail-delivery-actions .dc-mail-delivery-confirm { --button-fill: rgb(var(--aegis-primary) / .15); --button-edge: rgb(var(--aegis-primary) / .35); color: rgb(var(--aegis-primary)); }
 .dreamclaw-module .dc-inbox-workspace {
   grid-template-columns: var(--dc-inbox-rail-width, 224px) minmax(0, 1fr);
   direction: ltr;

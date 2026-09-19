@@ -1,3 +1,9 @@
+## [1.8.3] — 2026-09-19
+
+- Give the Home logo a red accent shadow and the same tactile press feedback as the other action buttons, preserving the borderless artwork and 60 × 60 tile.
+- Make Assistant actions, compact widget controls and button-shaped links use consistent raised, hover, pressed and focus states. Preserve positioned controls when pressed and keep dismissal overlays translucent.
+- Return keyboard focus to the widget Options button after closing its menu or customization dialog.
+
 ## [1.8.2] — 2026-09-19
 
 - Introduce borderless Red and Cream executive lynx icons. Choose either in Settings → General → Appearance; the saved choice updates Nova's in-app identity, browser icon and notification artwork independently of the color theme.

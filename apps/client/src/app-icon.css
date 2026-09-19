@@ -1,11 +1,14 @@
 /* Square, opaque artwork fills the tile; the interface owns its rounded corners. */
 :root img.nova-app-mark { display:block; object-fit:cover; border-radius:var(--app-tile-radius,24%); corner-shape:var(--app-tile-corner,round); background:transparent; flex:none; }
 :root .primary-rail > .brand {
+  --button-edge:color-mix(in srgb,var(--brand-red) 76%,black);
+  --button-fill:transparent;
   align-self:center; flex:0 0 var(--app-tile-size);
   width:var(--app-tile-size); min-width:var(--app-tile-size); max-width:var(--app-tile-size);
   height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
-  padding:0; border:0; border-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner); background:transparent; box-shadow:none;
+  padding:0; border:0; border-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner); background:transparent;
 }
+:root .primary-rail > .brand:focus-visible { outline-offset:-4px; }
 :root .primary-rail > .brand img.nova-app-mark { width:100%; height:100%; border-radius:inherit; }
 .settings-page .app-icon-setting { align-items:center; }
 .settings-page .app-icon-setting > div:first-child { flex:1 1 260px; }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Clock3, Copy, EyeOff, GripVertical, MoreHorizontal, Plus, Settings2, Trash2, X } from './icons';
 import { sizes, type Draft, type Entity, type Layout, type ModuleId, type Snapshot, type Task } from '../../../packages/domain/contracts';
 import { createHomeWidget, resolveWidgetType, widgetTitle, homeWidgetNames, type HomeWidget } from '../../../packages/domain/home-widgets';
@@ -19,6 +19,12 @@ type Props = {
 };
 export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask, editTask, complete, draft, dirty, draftStatus }: Props) {
   const [menu, setMenu] = useState<string | null>(null);
+  const optionsButtons = useRef(new Map<string, HTMLButtonElement>());
+  const closeMenu = () => {
+    const trigger = menu ? optionsButtons.current.get(menu) : undefined;
+    setMenu(null);
+    if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+  };
   const [editor, setEditor] = useState<HomeWidget | 'new' | null>(null);
   const [notice, setNotice] = useState('');
   const [removing, setRemoving] = useState<HomeWidget | null>(null);
@@ -61,9 +67,9 @@ export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask
       return <section className={`widget widget-${type} size-${widget.size} ${reorder.dragging === id ? 'dragging' : ''}`} key={id} {...reorder.bindSurface(id)} data-reorder-group="widgets" data-reorder-item={id} data-widget-color={widget.color ?? 'default'} aria-label={title}>
         <div className="widget-header"><strong className="widget-title" title={title}>{title}</strong><div className="widget-header-controls"><button className="icon-button widget-move-handle" {...reorder.bind(id)} title="Move Widget · Drag Or Alt + Up/Down" onKeyDown={event => {
           if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); reorder.move(id, reorder.order.indexOf(id) + (event.key === 'ArrowUp' ? -1 : 1)); }
-        }} aria-label={`Move ${title}. Drag or use Alt and arrow keys.`}><GripVertical size={16}/></button><button className="icon-button widget-options-toggle" title="Widget Options" aria-label={`${title} options`} aria-expanded={menu === id} aria-controls={`widget-options-${id}`} onClick={() => setMenu(menu === id ? null : id)}><MoreHorizontal size={17}/></button></div></div>
-        {menu === id && <div className="popover widget-options" id={`widget-options-${id}`} role="group" aria-label={`${title} Widget Options`} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null); } }}><div className="section-heading"><strong>{title}</strong><button className="icon-button widget-options-close" title="Close Widget Options" aria-label="Close Widget Options" onClick={() => setMenu(null)}><X size={16}/></button></div>
-          <button className="widget-customize" onClick={() => { setMenu(null); setEditor(widget); }}><Settings2 size={16}/>Customize Widget</button>
+        }} aria-label={`Move ${title}. Drag or use Alt and arrow keys.`}><GripVertical size={16}/></button><button ref={node => { if (node) optionsButtons.current.set(id, node); else optionsButtons.current.delete(id); }} className="icon-button widget-options-toggle" title="Widget Options" aria-label={`${title} options`} aria-expanded={menu === id} aria-controls={`widget-options-${id}`} onClick={() => setMenu(menu === id ? null : id)}><MoreHorizontal size={17}/></button></div></div>
+        {menu === id && <div className="popover widget-options" id={`widget-options-${id}`} role="group" aria-label={`${title} Widget Options`} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(); } }}><div className="section-heading"><strong>{title}</strong><button className="icon-button widget-options-close" title="Close Widget Options" aria-label="Close Widget Options" onClick={closeMenu}><X size={16}/></button></div>
+          <button className="widget-customize" onClick={() => { closeMenu(); setEditor(widget); }}><Settings2 size={16}/>Customize Widget</button>
           <div className="size-options" role="group" aria-label="Widget Size">{sizes.map(size => {
             const label = size === 'square' ? 'Standard' : size.charAt(0).toUpperCase() + size.slice(1);
             return <button key={size} aria-label={label} title={label} aria-pressed={widget.size === size} onClick={() => changeWidget(id, { size })}><span className={`home-size-diagram diagram-${size}`} aria-hidden="true"/></button>;
