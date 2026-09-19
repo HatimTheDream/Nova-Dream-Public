@@ -1,3 +1,8 @@
+## [1.8.4] — 2026-09-19
+
+- Adopt the approved Nova × Duo button treatment: clean filled faces, a solid lower accent edge, tighter ordinary corners and full-depth press feedback, retaining Nova's colors and Title Case labels.
+- Keep neutral controls readable with a subtle border and lighter lower edge; preserve compact controls, keyboard focus and the logo/module squircle geometry.
+
 ## [1.8.3] — 2026-09-19
 
 - Give the Home logo a red accent shadow and the same tactile press feedback as the other action buttons, preserving the borderless artwork and 60 × 60 tile.

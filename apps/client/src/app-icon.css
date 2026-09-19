@@ -1,6 +1,7 @@
 /* Square, opaque artwork fills the tile; the interface owns its rounded corners. */
 :root img.nova-app-mark { display:block; object-fit:cover; border-radius:var(--app-tile-radius,24%); corner-shape:var(--app-tile-corner,round); background:transparent; flex:none; }
 :root .primary-rail > .brand {
+  --button-depth:4px;
   --button-edge:color-mix(in srgb,var(--brand-red) 76%,black);
   --button-fill:transparent;
   align-self:center; flex:0 0 var(--app-tile-size);

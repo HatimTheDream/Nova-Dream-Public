@@ -1,37 +1,52 @@
-/* Shared action-button language, modeled on the main navigation rail.
+/* Shared action-button language: a clean face with depth only underneath.
    Content rows, calendar surfaces, checkboxes and drag handles keep their
    specialized geometry. Their nested action controls use this same system. */
-:root { --button-radius:16px; --button-depth:4px; --button-transition:background .12s,border-color .12s,box-shadow .12s,translate .12s; }
+:root { --button-radius:12px; --button-depth:2px; --button-transition:background .12s,border-color .12s,box-shadow .12s,translate .12s; }
 :root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim),
 .home-page .home-link-list a {
+  --button-depth:var(--button-compact-depth,2px);
   --button-edge:var(--line);
   --button-fill:var(--surface);
-  border:2px solid var(--button-edge);
+  --button-border:var(--line);
+  --button-border-hover:color-mix(in srgb,var(--line) 75%,var(--control));
+  border:2px solid var(--button-border);
   border-radius:var(--button-radius);
   background:var(--button-fill);
   color:var(--text);
-  box-shadow:0 var(--button-depth) 0 var(--button-edge);
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
   font-weight:650;
   transition:var(--button-transition);
 }
 :root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim) { text-transform:capitalize; }
+:root button:is(.primary,.bg-aegis-primary,.nav-item.active) { --button-fill:var(--action); --button-edge:var(--action-edge); color:var(--action-ink); }
+:root button:is([aria-pressed=true],[aria-selected=true]):not(.check-button,.nav-item.active) { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); color:var(--text); }
+:root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
+/* Reserve the same border space without drawing an accent around filled faces.
+   Compact controls set their own depth token, independent of selection. */
+:root button:is(.primary,.bg-aegis-primary,.nav-item.active,[aria-pressed=true],[aria-selected=true],.danger,.danger-text,.dc-mail-delivery-confirm):not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim) {
+  --button-depth:var(--button-compact-depth,4px);
+  --button-border:transparent;
+  --button-border-hover:transparent;
+  border:2px solid var(--button-border);
+  border-radius:var(--button-radius);
+  background:var(--button-fill);
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
+}
+/* Imported action utilities share the press motion without changing placement. */
+:root .dreamclaw-module button.bg-aegis-primary { --tw-translate-y:0px; }
 :root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim):hover:not(:disabled),
 .home-page .home-link-list a:hover {
   background:color-mix(in srgb,var(--button-fill) 85%,var(--soft-gold));
-  border-color:color-mix(in srgb,var(--button-edge) 75%,var(--control));
-  box-shadow:0 var(--button-depth) 0 var(--button-edge);
+  border-color:var(--button-border-hover);
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
 }
 :root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim):active:not(:disabled),
 .home-page .home-link-list a:active {
-  translate:0 min(2px,var(--button-depth));
-  box-shadow:0 max(0px,calc(var(--button-depth) - 2px)) 0 var(--button-edge);
+  --button-shadow-depth:0px;
+  translate:0 var(--button-depth);
+  box-shadow:none;
 }
-:root button:is(.primary,.bg-aegis-primary,.nav-item.active) { --button-fill:var(--action); --button-edge:var(--action-edge); color:var(--action-ink); }
-/* Imported action utilities share the press motion without changing placement. */
-:root .dreamclaw-module button.bg-aegis-primary { --tw-translate-y:0px; }
-:root button:is([aria-pressed=true],[aria-selected=true]):not(.check-button,.nav-item.active) { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); color:var(--text); }
-:root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
-:root button:disabled:not(:where(.dc-assistant-rail-scrim,.dc-inbox-rail-scrim)) { translate:none; box-shadow:0 min(2px,var(--button-depth)) 0 var(--button-edge,var(--line)); }
+:root button:disabled:not(:where(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim)) { --button-shadow-depth:min(2px,var(--button-depth)); translate:none; box-shadow:0 var(--button-shadow-depth) 0 var(--button-edge,var(--line)); }
 :root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 .home-page .home-link-list a:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 /* The logo and module tiles share one square geometry at every viewport. */
@@ -58,6 +73,7 @@
 @media(prefers-reduced-motion:reduce) { :root { --button-transition:none; } }
 
 .home-widget-preview .home-preview-action {
+  --button-depth:2px;
   border:2px solid var(--line); border-radius:var(--button-radius); background:var(--surface);
   box-shadow:0 var(--button-depth) 0 var(--line); color:var(--text); font-weight:650;
 }

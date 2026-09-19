@@ -23,4 +23,4 @@
 .home-page .widget-options .check-label { padding:5px 0 10px; font-size:11px; }
 .home-page .widget-options > button:not(.widget-customize) { min-height:36px; padding:6px 8px; font-size:12px; }
 
-.home-page .widget-header-controls button,.home-page .widget-options button { --button-depth:2px; --button-radius:10px; }
+.home-page .widget-header-controls button,.home-page .widget-options button { --button-compact-depth:2px; }
