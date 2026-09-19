@@ -10,21 +10,28 @@ import type { ConversationHistory } from '../../../packages/domain/assistant';
 import type { AssistantController } from './useAssistant';
 import { request } from './api';
 import { Archive, Download, PanelLeft, RotateCcw } from './icons';
+import { browseTargetIdentity, retainedBrowseHistory, type BrowsedHistory } from './conversation-reader-state';
 
 const ContinueSavedConversation = lazy(() => import('./ContinueSavedConversation').then(module => ({ default: module.ContinueSavedConversation })));
 export function ConversationReader({ target, snapshot, controller, close, change, sidebarControls, navigationCovered, refreshWorkspace }: { target: BrowseTarget; snapshot: Snapshot; controller: AssistantController; close: () => void; change: (target: BrowseTarget) => void; sidebarControls: ReactNode; navigationCovered: boolean; refreshWorkspace: () => Promise<void> }) {
   const conversation = controller.conversations.find(c => c.id === target.conversationId);
-  const [history, setHistory] = useState<ConversationHistory>(), [error, setError] = useState(''), [busy, setBusy] = useState(false), [revision, setRevision] = useState(0);
+  const [savedHistory, setSavedHistory] = useState<BrowsedHistory>(), [error, setError] = useState(''), [busy, setBusy] = useState(false), [revision, setRevision] = useState(0);
+  const targetIdentity = browseTargetIdentity(target);
+  const history = retainedBrowseHistory(savedHistory, target, snapshot.epoch);
   const [continueSaved, setContinueSaved] = useState(false);
   const anchor = useRef<HTMLElement | null>(null);
   const currentTarget = useRef<BrowseTarget | null>(target); currentTarget.current = target;
   useEffect(() => { currentTarget.current = target; return () => { currentTarget.current = null; }; }, []);
   useEffect(() => {
-    const abort = new AbortController(); let alive = true; setHistory(undefined); setError(''); setBusy(true);
+    const abort = new AbortController(); let alive = true; setError(''); setBusy(true);
     if (target.epoch !== snapshot.epoch) { setError('The workspace changed. Open this source from a current search.'); setBusy(false); return; }
-    void request<ConversationHistory>('assistant/browse', target, abort.signal).then(value => { if (alive) setHistory(value); }).catch(reason => { if (alive && !abort.signal.aborted) setError(reason instanceof Error ? reason.message : 'This source is unavailable.'); }).finally(() => { if (alive) setBusy(false); });
+    void request<ConversationHistory>('assistant/browse', target, abort.signal).then(value => {
+      if (!alive) return;
+      if (value.conversationId !== target.conversationId || value.nativeId !== target.nativeId) throw Error('The returned history belongs to a different source. Open it from a current search.');
+      setSavedHistory({ target, history: value });
+    }).catch(reason => { if (alive && !abort.signal.aborted) setError(reason instanceof Error ? reason.message : 'This source is unavailable.'); }).finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; abort.abort(); };
-  }, [target, snapshot.epoch, controller.connection.generation, revision]);
+  }, [targetIdentity, snapshot.epoch, controller.connection.generation, revision]);
   useEffect(() => { if (history && target.messageId) { anchor.current?.scrollIntoView({ block: 'center' }); anchor.current?.focus({ preventScroll: true }); } }, [history, target.messageId]);
   const restore = async () => { if (!conversation || busy) return; setBusy(true); setError(''); try { await controller.edit(conversation, conversation.deleted ? { deleted: false } : { archived: false }); } catch (reason) { if (currentTarget.current === target) setError(reason instanceof Error ? reason.message : 'The restore is not confirmed.'); } finally { if (currentTarget.current === target) setBusy(false); } };
   return <section className="conversation conversation-reader" aria-label="Read-only conversation" inert={navigationCovered}><div className="conversation-header">{sidebarControls}<div className="conversation-title"><span className="conversation-agent" aria-label="Chatting with Nova">Nova</span><strong>{conversation?.title ?? 'Saved conversation'}</strong><span>{snapshot.projects.find(p => p.id === conversation?.projectId)?.value.name ?? 'Unfiled'} · {conversation?.archived ? 'Archive · ' : ''}Read only</span></div><button onClick={close}>Back to writing</button></div>

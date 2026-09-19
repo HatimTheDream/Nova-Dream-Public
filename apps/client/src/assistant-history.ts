@@ -1,5 +1,12 @@
 import type { ConversationHistory } from '../../../packages/domain/assistant';
 
+/** A failed pagination read must not replace an already loaded transcript with
+ * its smaller offline cache. Only fall back when this identity has no view. */
+export function historyAfterReadFailure(current: ConversationHistory | undefined, cached: ConversationHistory | undefined, conversationId: string, nativeId: string | null | undefined): ConversationHistory | undefined {
+  const matches = (value: ConversationHistory | undefined) => value?.conversationId === conversationId && value.nativeId === nativeId && Array.isArray(value.messages);
+  return matches(current) ? current : matches(cached) ? cached : undefined;
+}
+
 /** Merge only adjoining windows. A refresh must not hide a gap in a long chat. */
 export function mergeHistoryPage(current: ConversationHistory | undefined, page: ConversationHistory, direction: boolean | 'newer'): ConversationHistory {
   if (!current || current.conversationId !== page.conversationId || current.nativeId !== page.nativeId) return page;

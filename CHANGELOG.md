@@ -1,3 +1,10 @@
+## [1.8.5] — 2026-09-19
+
+- Keep Assistant history steady while background updates arrive: finish requested pages, preserve loaded messages after failed reads, and retain the same archived reading view during refresh.
+- Wait for selected files and recovered attachments to finish preparing before sending, queuing, steering, starting voice or switching spaces.
+- Reconcile the original Team Work start after a lost response or browser-storage failure; keep pending receipts visible until they clear.
+- Recheck question deadlines and conversation access immediately before answering or cancelling, preventing stale requests after expiry, archiving or deletion.
+
 ## [1.8.4] — 2026-09-19
 
 - Adopt the approved Nova × Duo button treatment: clean filled faces, a solid lower accent edge, tighter ordinary corners and full-depth press feedback, retaining Nova's colors and Title Case labels.

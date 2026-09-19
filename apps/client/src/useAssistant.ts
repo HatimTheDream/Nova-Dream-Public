@@ -7,7 +7,8 @@ import type { Snapshot } from '../../../packages/domain/contracts';
 import { canonical } from '../../../packages/domain/contracts';
 import { ApiError, mayPoll, readLocal, request, saveLocal } from './api';
 import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } from './transcript-position';
-import { mergeHistoryPage } from './assistant-history';
+import { historyAfterReadFailure, mergeHistoryPage } from './assistant-history';
+import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
@@ -30,6 +31,7 @@ export function useAssistant(snapshot: Snapshot) {
   const selectedRef = useRef(selectedId); selectedRef.current = selectedId;
   const generation = useRef(0);
   const historyRequest = useRef(0), mounted = useRef(false);
+  const historyReader = useRef<AssistantHistoryReader>(undefined);
   const context = useRef({ snapshot, state, history }); context.current = { snapshot, state, history };
   const modelsReady = useRef(false);
   const [modelReader] = useState(() => new RefreshReader({
@@ -55,7 +57,7 @@ export function useAssistant(snapshot: Snapshot) {
     generation.current++; historyRequest.current++;
     const poll = () => { for (const reader of readers) void reader.poll(); };
     void refresh(); const timer = setInterval(poll, 1500);
-    return () => { mounted.current = false; clearInterval(timer); readers.forEach(reader => reader.cancel()); };
+    return () => { mounted.current = false; clearInterval(timer); readers.forEach(reader => reader.cancel()); historyReader.current?.cancel(); };
   }, [readers, refresh, snapshot.epoch, snapshot.deviceId]);
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
@@ -63,7 +65,7 @@ export function useAssistant(snapshot: Snapshot) {
     if (nextSpace !== spaceRef.current) { setSpace(nextSpace); spaceRef.current = nextSpace; saveLocal(spaceKey, nextSpace); }
     saveLocal(selectionKey(nextSpace), id);
     if (id === selectedRef.current) return;
-    generation.current++; historyRequest.current++; setSelectedId(id); selectedRef.current = id; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); setError('');
+    historyReader.current?.cancel(); generation.current++; historyRequest.current++; setSelectedId(id); selectedRef.current = id; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); setError('');
   };
   const switchSpace = (next: AssistantSpace) => {
     if (next === spaceRef.current) return;
@@ -75,13 +77,13 @@ export function useAssistant(snapshot: Snapshot) {
     const selected = state.conversations.find(c => c.id === selectedRef.current);
     if (selected && assistantSpace(selected) !== spaceRef.current) select(selected.id, assistantSpace(selected));
   }, [state.conversations]);
-  const loadHistory = useCallback(async (id = selectedRef.current, options?: { offset?: number; messageId?: string; newer?: boolean; latest?: boolean }) => {
-    if (!id) return;
+  const readHistory = useCallback(async (id: string, options: HistoryReadOptions | undefined, signal: AbortSignal) => {
+    if (!mounted.current || signal.aborted || selectedRef.current !== id) return;
     const currentGeneration = generation.current, ticket = ++historyRequest.current;
     const epoch = context.current.snapshot.epoch;
     const nativeId = context.current.state.conversations.find(c => c.id === id)?.nativeId;
     const host = context.current.state.connection.generation;
-    const isCurrent = () => selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket && context.current.snapshot.epoch === epoch && context.current.state.connection.generation === host && context.current.state.conversations.find(c => c.id === id)?.nativeId === nativeId;
+    const isCurrent = () => mounted.current && !signal.aborted && selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket && context.current.snapshot.epoch === epoch && context.current.state.connection.generation === host && context.current.state.conversations.find(c => c.id === id)?.nativeId === nativeId;
     const cacheKey = `e3:history:${epoch}:${id}:${nativeId}`;
     const matches = (value: ConversationHistory | undefined): value is ConversationHistory => !!value && value.conversationId === id && value.nativeId === nativeId && Array.isArray(value.messages);
     setLoading(true);
@@ -91,7 +93,7 @@ export function useAssistant(snapshot: Snapshot) {
       const restore = kept && !kept.following ? kept.anchor : undefined;
       const messageId = options?.messageId ?? restore?.id;
       const query = new URLSearchParams(); if (options?.offset !== undefined) query.set('offset', String(options.offset)); if (messageId) query.set('messageId', messageId); if (restore) query.set('resume', '1');
-      const result = await request<ConversationHistory>(`assistant/history/${id}${query.size ? `?${query}` : ''}`);
+      const result = await request<ConversationHistory>(`assistant/history/${id}${query.size ? `?${query}` : ''}`, undefined, signal);
       if (!isCurrent()) return;
       if (!matches(result)) throw new Error('The returned history belongs to a different conversation. Refresh this conversation to check its current identity.');
       if (restore && !result.messages.some(m => m.id === restore.id && m.role === restore.role)) throw new Error('Your saved reading position is no longer available. Open Latest to continue.');
@@ -102,15 +104,22 @@ export function useAssistant(snapshot: Snapshot) {
       // Earlier versions keyed a cache only by conversation. Its native identity
       // must still match; a restored or replaced session cannot inherit it.
       const cached = readLocal<ConversationHistory>(cacheKey) ?? readLocal<ConversationHistory>(`e3:history:${id}`);
-      if (matches(cached)) { setHistory(cached); setHistorySource('saved'); }
-    } finally { if (selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket) setLoading(false); }
+      setHistory(current => historyAfterReadFailure(current, cached, id, nativeId));
+      setHistorySource('saved');
+    } finally { if (mounted.current && !signal.aborted && selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket) setLoading(false); }
   }, []);
-  useEffect(() => { if (selectedId) void loadHistory(selectedId); }, [selectedId, state.connection.state, state.connection.generation, state.historyVersions?.[selectedId ?? ''], state.conversations.find(c => c.id === selectedId)?.nativeId, loadHistory]);
+  if (!historyReader.current) historyReader.current = new AssistantHistoryReader({
+    identity: id => canonical([context.current.snapshot.epoch, context.current.snapshot.deviceId, generation.current, selectedRef.current, context.current.state.connection.generation, context.current.state.conversations.find(c => c.id === id)?.nativeId]),
+    read: readHistory,
+  });
+  const loadHistory = useCallback((id = selectedRef.current, options?: HistoryReadOptions) => id ? historyReader.current!.load(id, options) : Promise.resolve(), []);
+  const pollHistory = useCallback((id: string) => historyReader.current!.poll(id), []);
+  useEffect(() => { if (selectedId) void pollHistory(selectedId); }, [selectedId, state.connection.state, state.connection.generation, state.historyVersions?.[selectedId ?? ''], state.conversations.find(c => c.id === selectedId)?.nativeId, pollHistory]);
   const previousOperations = useRef('');
   useEffect(() => {
     const stamp = state.operations.filter(op => op.conversationId === selectedId).map(op => `${op.id}:${op.state}`).join(',');
-    if (stamp !== previousOperations.current) { previousOperations.current = stamp; if (selectedId) void loadHistory(selectedId); }
-  }, [state.operations, selectedId, loadHistory]);
+    if (stamp !== previousOperations.current) { previousOperations.current = stamp; if (selectedId) void pollHistory(selectedId); }
+  }, [state.operations, selectedId, pollHistory]);
   useEffect(() => {
     let alive = true, timer: ReturnType<typeof setTimeout>;
     modelsReady.current = false; setModels([]); setModelStatus(state.connection.state === 'ready' ? 'loading' : 'offline');

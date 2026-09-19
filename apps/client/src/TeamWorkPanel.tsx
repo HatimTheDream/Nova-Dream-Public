@@ -1,15 +1,14 @@
 import { useEffect,useReducer,useRef,useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
-import { teamRoles,type TeamWork } from '../../../packages/domain/team-work';
+import type { TeamWork } from '../../../packages/domain/team-work';
 import { readLocal,request,saveLocal } from './api';
 import './work-tools.css';
-import { workRequestRejected } from './work-request';
 import { RefreshReader } from './refresh-reader';
 import { suggestedTeamMembers,teamWorkStatus } from './team-work-state';
 import { TeamWorkflowDetails,type TeamAction } from './TeamWorkflowDetails';
-import { runRetainedTeamAction,type PendingTeamAction } from './team-work-action';
+import { runRetainedTeamAction,runRetainedTeamStart,type PendingTeamAction,type PendingTeamStart,type TeamWorkForm } from './team-work-action';
 import './team-workflow-details.css';
-type Form={projectId:string;title:string;brief:string;maxMinutes:number;steps:{agentId:string;role:typeof teamRoles[number]}[]};
+type Form=TeamWorkForm;
 type Props={snapshot:Snapshot;projectId?:string|null;openConversation:(id:string)=>void;active?:boolean};
 export function TeamWorkPanel(props:Props){
   return <TeamWorkSession key={`${props.snapshot.epoch}:${props.snapshot.deviceId}`} {...props}/>;
@@ -17,9 +16,10 @@ export function TeamWorkPanel(props:Props){
 function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props){
   const key=`e3:team-work:${snapshot.epoch}:${snapshot.deviceId}`;
   const projects=snapshot.projects.filter(p=>p.value.space==='work'&&p.value.workspace?.environment==='local'&&p.value.workspace.folder),agents=(snapshot.records?.agent??[]).filter(a=>!a.value.archived);
-  const [form,setForm]=useState<Form>(()=>readLocal(key)??{projectId:projectId??projects[0]?.id??'',title:'',brief:'',maxMinutes:10,steps:suggestedTeamMembers(agents)});
+  const [draft,setForm]=useState<Form>(()=>readLocal(key)??{projectId:projectId??projects[0]?.id??'',title:'',brief:'',maxMinutes:10,steps:suggestedTeamMembers(agents)});
   const [{runs,readError,actionError},dispatch]=useReducer(teamWorkStatus,{runs:[],readError:'',actionError:''});
-  const [selected,setSelected]=useState<string>(),[editing,setEditing]=useState(false),[pending,setPending]=useState<(Form&{requestId:string;epoch:string})|undefined>(()=>readLocal(key+':pending')),[busy,setBusy]=useState(false);
+  const [selected,setSelected]=useState<string>(),[editing,setEditing]=useState(false),[pending,setPending]=useState<PendingTeamStart|undefined>(()=>readLocal(key+':pending')),[busy,setBusy]=useState(false);
+  const form=pending??draft;
   // Keep the original storage key so retries saved by older clients still reconcile.
   const [pendingAction,setPendingAction]=useState<PendingTeamAction|undefined>(()=>readLocal(key+':retry'));
   const mounted=useRef(false),flight=useRef(false),reader=useRef<RefreshReader<{runs:TeamWork[]}>>(undefined);
@@ -40,24 +40,19 @@ function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props
   },[key,active]);
   const change=(value:Form)=>{if(!saveLocal(key,value)){setError('Free browser storage before changing this team brief.');return;}setForm(value);};
   const start=async()=>{
-    if(flight.current||!pending&&(pendingAction||readLocal(key+':retry')))return;
-    const cmd=pending??{...form,requestId:crypto.randomUUID(),epoch:snapshot.epoch};
-    if(!saveLocal(key+':pending',cmd)){setError('Free browser storage before starting.');return;}
-    setPending(cmd);setBusy(true);flight.current=true;setError('');
-    const clearPending=()=>{if(readLocal<{requestId:string}>(key+':pending')?.requestId===cmd.requestId)saveLocal(key+':pending',null);};
+    const retained=readLocal<PendingTeamStart>(key+':pending')??pending;
+    if(flight.current||!retained&&(pendingAction||readLocal(key+':retry')))return;
+    const cmd=retained??{...form,requestId:crypto.randomUUID(),epoch:snapshot.epoch};
+    setBusy(true);flight.current=true;setError('');
     try{
-      const result=await request<TeamWork>('work/team/start',cmd);
-      clearPending();
-      if(mounted.current){setSelected(result.id);setEditing(false);setPending(undefined);await reader.current?.refresh();}
-    }catch(e){
-      if(workRequestRejected(e)){clearPending();if(mounted.current)setPending(undefined);}
-      if(mounted.current)setError(e instanceof Error?e.message:'Start was not confirmed. Reconcile the same request.');
-    }finally{flight.current=false;if(mounted.current)setBusy(false);}
+      const result=await runRetainedTeamStart({read:()=>readLocal<PendingTeamStart>(key+':pending'),write:value=>saveLocal(key+':pending',value),retained:value=>{if(mounted.current)setPending(value);},send:value=>request<TeamWork>('work/team/start',value)},cmd);
+      if(mounted.current){setPending(result.pending);setError(result.error);if(result.confirmed&&result.response){setSelected(result.response.id);setEditing(false);}}
+    }finally{if(mounted.current)await reader.current?.refresh();flight.current=false;if(mounted.current)setBusy(false);}
   };
   const current=runs.find(r=>r.id===selected)??runs[0];
   const durableAction=async(action?:PendingTeamAction['action'])=>{
     const retained=pendingAction??readLocal<PendingTeamAction>(key+':retry');
-    if(flight.current||pending&&!retained)return;
+    if(flight.current||(pending||readLocal(key+':pending'))&&!retained)return;
     const cmd:PendingTeamAction|undefined=retained??(current&&action?{requestId:crypto.randomUUID(),epoch:snapshot.epoch,id:current.id,revision:current.revision,action}:undefined);
     if(!cmd)return;
     setBusy(true);flight.current=true;setError('');
@@ -68,7 +63,7 @@ function TeamWorkSession({snapshot,projectId,openConversation,active=true}:Props
   };
   const control=async(action:TeamAction)=>{
     if(action==='retry'||action==='apply_findings'){await durableAction(action);return;}
-    if(!current||flight.current||pending||pendingAction||readLocal(key+':retry'))return;
+    if(!current||flight.current||pending||readLocal(key+':pending')||pendingAction||readLocal(key+':retry'))return;
     setBusy(true);flight.current=true;setError('');
     try{await request('work/team/control',{requestId:crypto.randomUUID(),epoch:snapshot.epoch,id:current.id,revision:current.revision,action});}
     catch(e){if(mounted.current)setError(e instanceof Error?e.message:'This workflow action was not confirmed.');}

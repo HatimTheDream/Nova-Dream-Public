@@ -116,6 +116,23 @@ test('a retained retry blocks a separate start on reload and keeps the exact com
   assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:retry')!), retry);
 });
 
+test('reconciling a pending start displays its captured brief and stages without replacing the newer draft', () => {
+  const roster = [member('Researcher'), member('Maker'), member('Reviewer')];
+  const draft = { projectId: 'project', title: 'Newer draft', brief: 'Keep this unsent writing.', maxMinutes: 10, steps: [
+    { role: 'research', agentId: 'Researcher' }, { role: 'build', agentId: 'Maker' }, { role: 'review', agentId: 'Reviewer' },
+  ] };
+  const pending = { ...draft, requestId: 'original-start', epoch: 'epoch', title: 'Original team brief', brief: 'Reconcile this exact work.', maxMinutes: 20,
+    steps: [{ role: 'research', agentId: 'Reviewer' }, { role: 'build', agentId: 'Maker' }, { role: 'review', agentId: 'Researcher' }],
+  };
+  const form = renderForm(roster, draft, pending);
+  assert.match(form.markup, /Original team brief/); assert.match(form.markup, /Reconcile this exact work\./);
+  assert.doesNotMatch(form.markup, /Newer draft|Keep this unsent writing/);
+  assert.deepEqual(form.selects.map(select => select.value), ['project', 'Reviewer', 'Maker', 'Researcher', '20']);
+  assert.equal(form.fieldsetDisabled, true); assert.equal(form.disabled, false);
+  assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device')!), draft);
+  assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:pending')!), pending);
+});
+
 test('an unconfirmed Apply findings request survives reopening and blocks new work until reconciled', () => {
   const pending = { requestId: 'original-findings', epoch: 'epoch', id: 'reviewed-team', revision: 14, action: 'apply_findings' };
   const form = renderForm([member('Researcher'), member('Maker'), member('Reviewer')], undefined, undefined, pending);

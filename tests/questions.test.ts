@@ -110,3 +110,72 @@ test('missing preflight is never left confirming and a missing uncertain outcome
 test('expired native requests retain the actual outcome without dispatch', () => fixture(async f => {
   f.native.status = 'expired'; const result = await f.service.resolve(f.device, f.input()); assert.equal(result.snapshot.status, 'expired'); assert.equal(result.action.message, 'Question expired.'); assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
 }));
+
+test('elapsed questions cannot send answers or cancellations from a stale screen', t => fixture(async f => {
+  t.mock.method(Date, 'now', () => f.native.expiresAtMs);
+  const before = f.item(), { answers, ...cancel } = f.input();
+  for (const input of [f.input(), { ...cancel, cancel: true }]) await assert.rejects(f.service.resolve(f.device, input), { code: 'question_expired' });
+  assert.deepEqual(f.item(), before);
+  assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
+}));
+
+for (const cancel of [false, true]) test(`expiry during the final native read prevents ${cancel ? 'cancellation' : 'answer'} dispatch and replay`, t => fixture(async f => {
+  const before = Date.now(), request = f.control.request;
+  const clock = t.mock.method(Date, 'now', () => before);
+  f.control.request = async (method: string, params: unknown) => {
+    const result = await request(method, params);
+    if (method === 'question.get') clock.mock.mockImplementation(() => f.native.expiresAtMs);
+    return result;
+  };
+  const { answers, ...base } = f.input(), input = { ...base, ...(cancel ? { cancel: true } : { answers }) };
+  const result = await f.service.resolve(f.device, input);
+  assert.equal(result.snapshot.status, 'pending'); // A local deadline cannot establish the native outcome.
+  assert.equal(result.action.state, 'unknown');
+  assert.match(result.action.message, /no answer or cancellation was sent/);
+  assert.equal((await f.service.resolve(f.device, input)).action.requestId, input.requestId);
+  assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
+  f.native.status = 'expired';
+  assert.equal((await f.check()).snapshot.status, 'expired');
+  assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
+}));
+
+for (const inactive of ['archived', 'deleted']) test(`a conversation ${inactive} during the final native read receives no answer or cancellation`, async () => {
+  for (const cancel of [false, true]) await fixture(async f => {
+    const request = f.control.request;
+    f.control.request = async (method: string, params: unknown) => {
+      const result = await request(method, params);
+      if (method === 'question.get') f.conversation[inactive] = true;
+      return result;
+    };
+    const { answers, ...base } = f.input(), input = { ...base, ...(cancel ? { cancel: true } : { answers }) };
+    const result = await f.service.resolve(f.device, input);
+    assert.equal(result.snapshot.status, 'pending');
+    assert.equal(result.action.state, 'unknown');
+    await f.service.resolve(f.device, input);
+    assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
+    f.control.request = request; f.conversation[inactive] = false;
+    await f.check(); // Restoring the conversation still requires an explicit fresh native check.
+    assert.equal(f.item().action, undefined);
+    await f.service.resolve(f.device, f.input());
+    assert.equal(f.item().snapshot.status, 'answered');
+    assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 1);
+  });
+});
+
+for (const changed of ['host', 'nativeId', 'nativeKey']) test(`a ${changed} replacement during the final native read cannot receive the old answer`, () => fixture(async f => {
+  const request = f.control.request;
+  f.control.request = async (method: string, params: unknown) => {
+    const result = await request(method, params);
+    if (method === 'question.get') {
+      if (changed === 'host') f.generation = 'replacement-host';
+      else f.conversation[changed] = randomUUID();
+    }
+    return result;
+  };
+  const input = f.input(), result = await f.service.resolve(f.device, input);
+  assert.equal(result.snapshot.status, 'pending');
+  assert.equal(result.action.state, 'unknown');
+  assert.equal(f.service.state().items.length, 0);
+  await f.service.resolve(f.device, input);
+  assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 0);
+}));

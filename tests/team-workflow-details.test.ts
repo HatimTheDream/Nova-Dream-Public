@@ -58,6 +58,17 @@ test('pending requests disable mutations while reads remain available, and progr
   assert.deepEqual(teamActions(complete), []);
 });
 
+test('a failed or cancelled stage without its execution identity cannot offer a skip the host will reject', () => {
+  for (const state of ['failed', 'cancelled'] as const) {
+    const detail = render(run({ state, operationId: undefined }));
+    assert.ok(!detail.labels.includes('Skip this stage'));
+    assert.ok(!detail.labels.includes('Retry failed stage'));
+    assert.ok(detail.labels.includes('Open conversation'));
+    assert.ok(detail.labels.includes('Check status'));
+    assert.ok(render(run({ state })).labels.includes('Skip this stage'));
+  }
+});
+
 const review: TeamReviewReport = { verdict: 'needs_changes', summary: 'The retry path loses the original request.', findings: [{ id: 'retry', priority: 'high', title: 'Keep the original request', detail: 'Reload after a lost response must reconcile the saved command.', location: 'src/panel.tsx:30' }], checks: [{ name: 'Recovery check', outcome: 'failed', detail: 'A reload currently creates another request.' }], operationId: 'review-operation', stage: 2, attempt: 1, createdAt: 8, digest: 'review-digest' };
 function reviewed(report: TeamReviewReport = review): TeamWork {
   const value = run({}, 'complete'); value.next = 3; value.steps = value.steps.map(step => ({ ...step, state: 'complete' }));

@@ -16,7 +16,7 @@ export function teamActions(run: TeamWork): TeamAction[] {
     ...(run.state === 'running' ? ['pause' as const] : []),
     ...(recoverable && step && !['failed', 'cancelled', 'unknown'].includes(step.state) ? ['resume' as const] : []),
     ...(recoverable && step?.state === 'failed' && !!step.operationId ? ['retry' as const] : []),
-    ...(recoverable && step && ['failed', 'cancelled'].includes(step.state) ? ['skip' as const] : []),
+    ...(recoverable && step?.operationId && ['failed', 'cancelled'].includes(step.state) ? ['skip' as const] : []),
     ...(!['complete', 'cancelled', 'stopping'].includes(run.state) ? ['stop' as const] : []),
   ];
 }

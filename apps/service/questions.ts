@@ -38,9 +38,10 @@ export class AssistantQuestions {
     const conversations = this.conversations();
     return { state: this.error ? 'error' : ready ? 'ready' : this.control ? 'connecting' : 'unavailable', ...(this.error ? { message: this.error } : {}), items: this.all().filter(item => item.epoch === this.store.epoch && item.connectionGeneration === base.generation && conversations.some(c => c.id === item.conversationId && c.nativeId === item.nativeId && c.nativeKey === item.nativeKey)).sort((a, b) => b.snapshot.createdAtMs - a.snapshot.createdAtMs) };
   }
-  private target(item: AssistantQuestion) {
+  private target(item: AssistantQuestion, forResolution = false) {
     const base = this.ordinary.status(), control = this.control?.status(), conversation = this.conversations().find(c => c.id === item.conversationId);
     if (this.closed || item.epoch !== this.store.epoch || !conversation || conversation.nativeId !== item.nativeId || conversation.nativeKey !== item.nativeKey || conversation.connectionGeneration !== item.connectionGeneration || base.state !== 'ready' || base.generation !== item.connectionGeneration || control?.state !== 'ready' || control.generation !== base.generation || control.url !== base.url || !control.grantedScopes.includes('operator.questions')) throw new Fault(409, 'question_host_changed', 'Reconnect to this question’s original conversation before answering.');
+    if (forResolution && (conversation.archived || conversation.deleted)) throw new Fault(409, 'question_read_only', 'Restore this conversation before answering.');
     return conversation;
   }
   private accept(raw: unknown) {
@@ -163,9 +164,9 @@ export class AssistantQuestions {
     }
     const intent = { type: 'assistant.question-answer', requestId: input.requestId, epoch: input.epoch, id: input.id, expectedRevision: input.expectedRevision, cancel: input.cancel, requestHash };
     const admitted = this.store.admit(device, input, intent, () => {
-      const item = this.get(input.id), conversation = this.target(item);
-      if (conversation.archived || conversation.deleted) throw new Fault(409, 'question_read_only', 'Restore this conversation before answering.');
+      const item = this.get(input.id); this.target(item, true);
       if (item.revision !== input.expectedRevision || item.fingerprint !== source.fingerprint || item.snapshot.status !== 'pending' || item.availability !== 'live' || item.action) throw new Fault(409, 'question_changed', 'This question changed. Check its current status before answering.');
+      if (Date.now() >= item.snapshot.expiresAtMs) throw new Fault(409, 'question_expired', 'The answer window has elapsed. Check its final status.');
       return this.save({ ...item, action: { requestId: input.requestId, kind: input.cancel ? 'cancel' : 'answer', state: 'sending', ...(answers ? { answerHash: hash(secret ? { [item.snapshot.questions[0].questionId]: ['stored'] } : answers) } : {}) } });
     });
     if (!admitted.fresh) return this.get(input.id);
@@ -174,6 +175,8 @@ export class AssistantQuestions {
       await this.verifyConversation(original.conversationId); this.target(original);
       const checked = await this.read(original);
       if (checked.snapshot.status !== 'pending' || checked.availability !== 'live') return checked;
+      this.target(original, true);
+      if (Date.now() >= checked.snapshot.expiresAtMs) return this.save({ ...checked, action: { ...original.action!, state: 'unknown', message: 'The answer window elapsed before this request was sent. Check the final status; no answer or cancellation was sent by this request.' } });
       const result = await this.control!.request<Record<string, any>>('question.resolve', { id: original.snapshot.id, ...(input.cancel ? { cancel: true } : { answers: { answers }, resolutionId: input.requestId }) }); this.target(original);
       if (result.status !== (input.cancel ? 'cancelled' : 'answered')) throw Error('Question response unconfirmed');
       const record = safeQuestionSnapshot(nativeQuestionSchema.parse({ ...original.snapshot, status: result.status, ...(result.status === 'answered' ? { answers: result.answers } : { answers: undefined }) }));
