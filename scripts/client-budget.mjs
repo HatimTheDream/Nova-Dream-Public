@@ -108,7 +108,10 @@ import assert from 'node:assert/strict';
 // Shared field predicates avoid bundling whole server schemas. Measured total
 // 610,339 gzip bytes (+765 / 0.13% over 1.8.5); bound at 611 KB.
 // Startup and individual deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 611000, deferredChunk: 80000 };
+// 1.8.10 adds microphone/playback RMS metering, lifecycle cleanup and voice cues.
+// Measured total 611,878 gzip bytes (+1,523 / 0.25% over 1.8.9); bound at612 KB.
+// Startup and individual deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 612000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

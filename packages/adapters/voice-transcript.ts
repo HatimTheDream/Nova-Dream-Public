@@ -10,6 +10,15 @@ export function reconcileTranscript(current: TranscriptTurn | undefined, event: 
 }
 export function editTranscript(turn: TranscriptTurn, text: string): TranscriptTurn { return { ...turn, text, edited: true }; }
 
+// Input captions use separate ASR from the model that hears and answers the call.
+// More audio context improves the accuracy tradeoff without changing response VAD.
+export const liveTranscription = { model: 'gpt-live-transcribe', delay: 'medium' } as const;
+export function confirmsLiveTranscription(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const transcription = value as Record<string, unknown>;
+  return transcription.model === liveTranscription.model && transcription.delay === liveTranscription.delay;
+}
+
 /** Only maps exact documented/observed event families. No automatic alternate runner. */
 export function mapRealtimeTranscript(attemptId: string, sequence: number, input: Record<string, unknown>): TranscriptEvent | null {
   const type = input.type;

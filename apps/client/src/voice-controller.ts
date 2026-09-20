@@ -1,8 +1,9 @@
 import { apiFailure, clientHeaders } from './api';
 import type { Conversation } from '../../../packages/domain/assistant';
 import type { VoiceAttempt, VoiceFinal } from '../../../packages/domain/voice';
-import { mapRealtimeTranscript, reconcileTranscript, type TranscriptTurn } from '../../../packages/adapters/voice-transcript';
+import { confirmsLiveTranscription, liveTranscription, mapRealtimeTranscript, reconcileTranscript, type TranscriptTurn } from '../../../packages/adapters/voice-transcript';
 import { readLocal, request, saveLocal } from './api';
+import { VoiceAudioMeter, silentVoiceLevels, type VoiceLevels } from './voice-audio-meter';
 
 export type VoiceView = {
   phase: 'idle' | 'permission' | 'preparing' | 'connecting' | 'connected' | 'ending' | 'ended' | 'error';
@@ -10,15 +11,16 @@ export type VoiceView = {
   message: string; attempt?: VoiceAttempt; turns: TranscriptTurn[]; unsaved: number;
 };
 type Journal = { start: { requestId: string; epoch: string; conversationId: string; conversationRevision: number; projectRevision: number }; attempt?: VoiceAttempt; entries: VoiceFinal[]; turns: TranscriptTurn[] };
-type Resources = { stream?: MediaStream; peer?: RTCPeerConnection; channel?: RTCDataChannel; audio?: HTMLAudioElement; context?: AudioContext; meter?: number; timer?: ReturnType<typeof setInterval> };
+type Resources = { stream?: MediaStream; peer?: RTCPeerConnection; channel?: RTCDataChannel; audio?: HTMLAudioElement; playback?: number; context?: AudioContext; meter?: VoiceAudioMeter; timer?: ReturnType<typeof setInterval> };
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const active = (view: VoiceView) => ['permission', 'preparing', 'connecting', 'connected', 'ending'].includes(view.phase);
-const liveTranscription = { model: 'gpt-live-transcribe', delay: 'low' } as const;
 
 /** Workspace-owned media lifetime. Routing and draft editors never own the call. */
 export class VoiceController {
   private view: VoiceView = { phase: 'idle', muted: readLocal<boolean>('e3:voice-muted') ?? false, speaking: false, listening: false, processing: false, soundBlocked: false, message: '', turns: [], unsaved: 0 };
   private listeners = new Set<() => void>();
+  private levels: VoiceLevels = silentVoiceLevels;
+  private levelListeners = new Set<() => void>();
   private resources: Resources = {};
   private generation = 0;
   private sequence = 0;
@@ -42,6 +44,12 @@ export class VoiceController {
   }
   getSnapshot = () => this.view;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  getLevelsSnapshot = () => this.levels;
+  subscribeLevels = (listener: () => void) => { this.levelListeners.add(listener); return () => { this.levelListeners.delete(listener); }; };
+  private updateLevels(levels: VoiceLevels) {
+    if (levels.input === this.levels.input && levels.output === this.levels.output) return;
+    this.levels = levels; this.levelListeners.forEach(fn => fn());
+  }
   private update(value: Partial<VoiceView>) { this.view = { ...this.view, ...value }; this.listeners.forEach(fn => fn()); }
   private keep() {
     if (!this.journal) return;
@@ -64,12 +72,21 @@ export class VoiceController {
     this.update({ phase: 'permission', message: 'Allow the microphone to start your call.', turns: [], speaking: false, listening: false, processing: false, soundBlocked: false, attempt: undefined });
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') throw new Error('This browser needs a secure microphone connection before voice can start.');
-      resources.context = new AudioContext(); void resources.context.resume();
+      resources.context = new AudioContext(); void resources.context.resume().catch(() => undefined);
       // No provider session is spent while a person considers the microphone prompt.
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       stream.getTracks().forEach(track => { track.enabled = false; });
       if (generation !== this.generation) { stream.getTracks().forEach(track => track.stop()); return; }
       resources.stream = stream;
+      resources.meter = new VoiceAudioMeter(resources.context, () => ({
+        input: generation === this.generation && this.view.phase === 'connected' && !this.view.muted && stream.getAudioTracks().some(track => track.enabled && track.readyState === 'live'),
+        output: generation === this.generation && this.view.phase === 'connected' && !this.view.soundBlocked && !!resources.audio && !resources.audio.muted && !resources.audio.paused,
+      }), (levels, speaking) => {
+        if (generation !== this.generation) return;
+        this.updateLevels(levels);
+        if (speaking !== this.view.speaking) this.update({ speaking });
+      });
+      resources.meter.setInput(stream);
       stream.getAudioTracks().forEach(track => { track.onended = () => { if (generation === this.generation) void this.fail('The microphone disconnected. Audio is stopped; your conversation is kept.'); }; });
       this.journal = { start: { requestId: crypto.randomUUID(), epoch, conversationId: conversation.id, conversationRevision: conversation.revision, projectRevision }, entries: [], turns: [] };
       this.keep(); this.update({ phase: 'preparing', message: 'Preparing voice for this conversation…' });
@@ -85,22 +102,21 @@ export class VoiceController {
       this.journal.attempt = attempt; this.keep(); this.update({ attempt, phase: 'connecting', message: 'Connecting audio and Project context…' });
       const peer = new RTCPeerConnection(); resources.peer = peer;
       const audio = new Audio(); audio.autoplay = true; audio.muted = true; resources.audio = audio;
-      audio.onpause = () => { if (generation === this.generation) this.update({ speaking: false }); };
+      audio.onpause = () => { if (generation === this.generation) { resources.meter?.refresh(); this.update({ speaking: false }); } };
       peer.ontrack = event => {
         if (generation !== this.generation) { event.track.stop(); return; }
         const remote = event.streams[0] ?? new MediaStream([event.track]); audio.srcObject = remote;
-        void audio.play().catch(() => { if (generation === this.generation) this.update({ soundBlocked: true, message: 'Tap Enable sound to hear the Assistant.' }); });
-        const analyser = resources.context!.createAnalyser(); analyser.fftSize = 512;
-        resources.context!.createMediaStreamSource(remote).connect(analyser);
-        const samples = new Float32Array(analyser.fftSize); let lastSound = 0;
-        const meter = () => {
-          if (generation !== this.generation) return;
-          analyser.getFloatTimeDomainData(samples);
-          if (!audio.muted && !audio.paused && samples.some(value => Math.abs(value) > 0.002)) lastSound = performance.now();
-          const speaking = !audio.muted && !audio.paused && performance.now() - lastSound < 160 && lastSound > 0;
-          if (speaking !== this.view.speaking) this.update({ speaking });
-          resources.meter = requestAnimationFrame(meter);
-        }; meter();
+        resources.meter?.setOutput(remote);
+        const playback = resources.playback = (resources.playback ?? 0) + 1;
+        const current = () => generation === this.generation && playback === resources.playback && audio.srcObject === remote;
+        void audio.play().then(() => {
+          if (!current()) return;
+          if (this.view.soundBlocked) this.update({ soundBlocked: false, message: 'Sound enabled' });
+          resources.meter?.refresh();
+        }, () => {
+          if (!current()) return;
+          this.update({ soundBlocked: true, message: 'Tap Enable sound to hear the Assistant.' }); resources.meter?.refresh();
+        });
       };
       peer.onconnectionstatechange = () => { if (generation === this.generation && ['failed', 'disconnected', 'closed'].includes(peer.connectionState)) void this.fail('The audio connection was interrupted. Your microphone is off; saved captions stay with this conversation.'); };
       for (const track of stream.getAudioTracks()) peer.addTrack(track, stream);
@@ -132,7 +148,7 @@ export class VoiceController {
     }
     if (event.type === 'session.updated' && this.view.phase === 'connecting') {
       if (!this.contextInstructions || event.session?.instructions !== this.contextInstructions) return;
-      if (event.session?.audio?.input?.transcription?.model !== liveTranscription.model) return;
+      if (!confirmsLiveTranscription(event.session?.audio?.input?.transcription)) return;
       const attempt = await request<VoiceAttempt>('assistant/voice/pulse', { ...this.action(), contextDigest: this.journal!.attempt!.contextDigest });
       if (generation !== this.generation) return;
       this.journal!.attempt = attempt; this.keep();
@@ -243,34 +259,74 @@ export class VoiceController {
   mute = () => {
     const muted = !this.view.muted;
     this.resources.stream?.getAudioTracks().forEach(track => { track.enabled = !muted && this.view.phase === 'connected'; });
+    if (muted) { this.resources.meter?.refresh(); this.updateLevels({ ...this.levels, input: 0 }); }
     if (muted) { this.awaitingInputId = undefined; this.send({ type: 'input_audio_buffer.clear' }); }
     saveLocal('e3:voice-muted', muted);
     this.update({ muted, listening: false, message: muted ? 'Microphone muted' : 'Microphone on' });
   };
   interrupt = () => {
     if (this.resources.audio) this.resources.audio.muted = true;
+    this.resources.meter?.refresh(); this.updateLevels({ ...this.levels, output: 0 });
     if (this.responseId) this.cancelledResponses.add(this.responseId);
     this.awaitingInputId = undefined;
     this.interrupted = true; this.update({ speaking: false });
     this.send({ type: 'response.cancel' }); this.send({ type: 'output_audio_buffer.clear' });
   };
-  enableSound = async () => { try { await this.resources.context?.resume(); await this.resources.audio?.play(); this.update({ soundBlocked: false, message: 'Sound enabled' }); } catch { this.update({ soundBlocked: true }); } };
+  enableSound = async () => {
+    const generation = this.generation, resources = this.resources, playback = resources.playback = (resources.playback ?? 0) + 1;
+    const current = () => generation === this.generation && playback === resources.playback;
+    try {
+      await resources.context?.resume(); if (!current()) return;
+      await resources.audio?.play(); if (!current()) return;
+      this.update({ soundBlocked: false, message: 'Sound enabled' }); resources.meter?.refresh();
+    } catch { if (current()) { this.update({ soundBlocked: true }); resources.meter?.refresh(); } }
+  };
   private release() {
     ++this.generation;
     const resources = this.resources; this.resources = {};
+    resources.meter?.dispose(); this.updateLevels(silentVoiceLevels);
     resources.stream?.getTracks().forEach(track => { track.enabled = false; track.onended = null; track.stop(); });
     if (resources.audio) { resources.audio.pause(); resources.audio.srcObject = null; }
-    if (resources.meter !== undefined) cancelAnimationFrame(resources.meter);
     clearInterval(resources.timer); resources.channel?.close(); resources.peer?.close(); void resources.context?.close().catch(() => undefined);
     this.update({ listening: false, speaking: false, processing: false });
   }
   private async fail(message: string) { this.release(); this.update({ phase: 'error', message }); await this.finishRemote(); }
-  end = async () => { this.release(); this.update({ phase: 'ending', message: 'Audio stopped. Keeping your captions…' }); await this.finishRemote(); if (this.view.phase === 'ending') this.update({ phase: 'ended', message: this.journal?.attempt?.message ?? 'Call ended. Audio is off.' }); };
+  private hasUnconfirmedTurns() {
+    return this.pendingFinals.size > 0 || this.view.turns.some(turn => turn.text.trim()
+      && (!turn.final || !this.journal?.entries.some(entry => entry.entryId === turn.turnId && entry.saved)));
+  }
+  private dismissSavedCall(automatic = false) {
+    const journal = this.journal, attempt = journal?.attempt;
+    if (!journal || !attempt || !(automatic ? attempt.state === 'ended' : ['ended', 'failed'].includes(attempt.state))
+      || journal.entries.some(entry => !entry.saved) || attempt.entries.some(entry => !entry.saved)
+      || automatic && this.hasUnconfirmedTurns()) return false;
+    localStorage.removeItem(this.journalKey); this.journal = undefined;
+    this.update({ phase: 'idle', message: 'Call saved. You can start another when ready.', unsaved: 0 });
+    return true;
+  }
+  end = async () => {
+    this.release(); this.update({ phase: 'ending', message: 'Audio stopped. Keeping your captions…' });
+    const confirmed = await this.finishRemote();
+    if (this.view.phase !== 'ending') return;
+    if (!this.journal) { this.update({ phase: 'idle', message: 'Audio is off.' }); return; }
+    try { if (confirmed && this.dismissSavedCall(true)) return; }
+    catch { this.update({ phase: 'ended', message: 'Audio is off. Your saved call could not be cleared from this browser yet.' }); return; }
+    this.update({ phase: 'ended', message: this.hasUnconfirmedTurns()
+      ? 'Audio is off. Some captions are still unconfirmed. They are kept here for review.'
+      : confirmed ? this.journal.attempt?.message ?? 'Call ended. Audio is off.'
+      : this.journal.attempt ? this.view.message : 'Audio is off. The original call still needs confirmation.' });
+  };
   private async finishRemote() {
-    if (!this.journal?.attempt) return;
+    const journal = this.journal;
+    if (!journal?.attempt) return false;
+    const action = this.action();
     try { this.keep(); await this.flush(); } catch { /* The local journal keeps the exact unsaved finals. */ }
-    try { const result = await request<VoiceAttempt>('assistant/voice/end', this.action()); this.acceptAttempt(result); }
-    catch { this.update({ message: 'Audio is off. Close and save still need confirmation; the original call is kept.' }); }
+    if (this.journal !== journal) return false;
+    try {
+      const result = await request<VoiceAttempt>('assistant/voice/end', action);
+      if (this.journal !== journal) return false;
+      this.acceptAttempt(result); return result.id === action.attemptId;
+    } catch { if (this.journal === journal) this.update({ message: 'Audio is off. Close and save still need confirmation; the original call is kept.' }); return false; }
   }
   recover = async () => {
     if (active(this.view)) return;
@@ -278,7 +334,7 @@ export class VoiceController {
       if (!this.journal) { this.update({ phase: 'idle', message: 'Audio is off. You can start a call when ready.' }); return; }
       if (this.journal && !this.journal.attempt) { const result = await request<{ attempt: VoiceAttempt | null }>(`assistant/voice/recover/${this.journal.start.requestId}`); if (result.attempt) this.journal.attempt = result.attempt; else { this.journal = undefined; localStorage.removeItem(this.journalKey); this.update({ phase: 'idle', message: 'No admitted voice call was found. Audio is off.' }); return; } }
       await this.finishRemote();
-      if (this.journal?.attempt && ['ended', 'failed'].includes(this.journal.attempt.state) && !this.journal.entries.some(e => !e.saved)) { this.journal = undefined; localStorage.removeItem(this.journalKey); this.update({ phase: 'idle', message: 'Call saved. You can start another when ready.', unsaved: 0 }); }
+      this.dismissSavedCall();
     } catch (error) { this.update({ message: error instanceof Error ? error.message : 'The original call could not be checked. Audio is off.' }); }
   };
   dispose = () => { this.release(); void this.finishRemote(); };

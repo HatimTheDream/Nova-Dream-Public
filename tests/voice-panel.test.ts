@@ -28,9 +28,9 @@ const { VoicePanel } = await import('../apps/client/src/VoicePanel');
 hooks.deregister();
 
 type Element = { name: string; attributes: Record<string, string>; text: string; children: Element[] };
-function renderPanel(appIcon: AppIconChoice, patch: Partial<VoiceView>, floating = false) {
+function renderPanel(appIcon: AppIconChoice, patch: Partial<VoiceView>, floating = false, levels = { input: 0, output: 0 }) {
   const voice: VoiceView = { phase: 'connected', muted: false, speaking: false, listening: false, processing: false, soundBlocked: false, message: '', turns: [], unsaved: 0, ...patch };
-  const controller = { subscribe: () => () => {}, getSnapshot: () => voice } as unknown as VoiceController;
+  const controller = { subscribe: () => () => {}, getSnapshot: () => voice, subscribeLevels: () => () => {}, getLevelsSnapshot: () => levels } as unknown as VoiceController;
   const markup = renderToStaticMarkup(createElement(VoicePanel, { appIcon, controller, floating, openConversation() {} }));
   const elements: Element[] = [], stack: Element[] = [];
   new Parser({
@@ -44,7 +44,7 @@ function renderPanel(appIcon: AppIconChoice, patch: Partial<VoiceView>, floating
   const withClass = (className: string) => elements.find(element => element.attributes.class?.split(' ').includes(className));
   return {
     elements, images: elements.filter(element => element.name === 'img'),
-    summary: withClass('voice-summary'), pulse: withClass('voice-connection-pulse'),
+    summary: withClass('voice-summary'), pulse: withClass('voice-connection-pulse'), listeningCue: withClass('voice-listening-cue'),
     status: elements.find(element => element.attributes.role === 'status'),
     button: (label: string) => elements.find(element => element.name === 'button' && element.attributes['aria-label'] === label),
   };
@@ -56,12 +56,30 @@ test('inline and floating voice use the selected artwork while the ready microph
     for (const listening of [false, true]) {
       const panel = renderPanel(choice, { listening }, floating);
       assert.equal(panel.images[0].attributes.src, expressionSource(choice, 'listening'));
-      assert.equal(panel.images[0].attributes.width, '60');
-      assert.equal(panel.images[0].attributes.height, '60');
+      assert.equal(panel.images[0].attributes.width, '104');
+      assert.equal(panel.images[0].attributes.height, '104');
+      assert.ok(panel.listeningCue, 'a ready microphone has a distinct listening cue even before detected speech');
       assert.equal(panel.status?.text, 'Listening');
       assert.equal(panel.pulse, undefined);
     }
   }
+});
+
+test('artwork reacts to the audible side of the call and rests outside listening or playback', () => {
+  const levels = { input: .72, output: .31 };
+  const listening = renderPanel('red', {}, false, levels);
+  assert.equal(listening.summary?.attributes.style, '--voice-level:0.72');
+  assert.equal(listening.summary?.attributes['data-expression'], 'listening');
+  const speaking = renderPanel('cream', { speaking: true, muted: true }, false, levels);
+  assert.equal(speaking.summary?.attributes.style, '--voice-level:0.31');
+  assert.equal(speaking.summary?.attributes['data-expression'], 'speaking');
+  assert.equal(speaking.listeningCue, undefined);
+  for (const patch of [{ muted: true }, { processing: true }, { phase: 'ended' as const }, { phase: 'connecting' as const }]) {
+    const resting = renderPanel('red', patch, true, levels);
+    assert.equal(resting.summary?.attributes.style, '--voice-level:0');
+    assert.equal(resting.listeningCue, undefined);
+  }
+  assert.equal(renderPanel('red', {}, false).summary?.attributes.style, '--voice-level:0', 'silence does not invent a pulse');
 });
 
 test('processing and mute show rest, actual playback takes priority, and readiness restores listening', () => {

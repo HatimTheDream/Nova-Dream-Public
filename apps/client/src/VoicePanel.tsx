@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { MessageSquare, Mic, MicOff, PhoneOff, Square, VolumeUp, X } from './icons';
 import type { VoiceController } from './voice-controller';
 import { voiceSourceLabels } from '../../../packages/domain/voice';
 import type { AppIconChoice } from '../../../packages/domain/contracts';
-import { NovaAssistantMark } from './NovaAssistantMark';
+import { NovaAssistantMark, type AssistantExpression } from './NovaAssistantMark';
 
 /** Presentation only: the workspace controller keeps audio alive across navigation. */
 export function VoicePanel({ controller, openConversation, appIcon, floating = false, conversationId }: { controller: VoiceController; openConversation: (id: string) => void; appIcon: AppIconChoice; floating?: boolean; conversationId?: string | null }) {
@@ -27,9 +27,7 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
   const otherChat = voice.attempt && voice.attempt.target.conversation.id !== conversationId;
   return <section ref={panel} className={`voice-panel voice-bubble ${floating ? 'voice-floating' : ''}`} aria-label="Voice call">
     <span className="sr-only" role="status">{title}{otherChat ? ` · ${voice.attempt!.target.conversation.title}` : ''}</span>
-    <button className={`voice-summary${connecting ? ' is-connecting' : ''}`} aria-label="Voice call details" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={`${title} · ${voice.message}`}>
-      {connecting ? <span className="voice-connection-pulse" aria-hidden="true"/> : <NovaAssistantMark choice={appIcon} expression={expression} className="voice-assistant-mark" width="60" height="60"/>}
-    </button>
+    <VoiceActivityMark controller={controller} appIcon={appIcon} expression={expression} connecting={connecting} expanded={expanded} title={`${title} · ${voice.message}`} toggle={() => setExpanded(value => !value)}/>
     <div className="voice-controls">
       {!finished && <><button className={`voice-mute ${voice.muted ? 'is-muted' : ''}`} aria-label={voice.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={voice.muted} title={voice.muted ? 'Unmute microphone' : 'Mute microphone'} onClick={controller.mute}>{voice.muted ? <MicOff size={20}/> : <Mic size={20}/>}</button>{voice.soundBlocked ? <button aria-label="Enable sound" title="Enable sound" onClick={() => void controller.enableSound()}><VolumeUp size={20}/></button> : <button aria-label="Interrupt speech" title="Interrupt speech" disabled={!voice.speaking && !voice.processing} onClick={controller.interrupt}><Square size={18}/></button>}<button className="voice-end" aria-label="End voice call" title="End call" onClick={() => void controller.end()}><PhoneOff size={20}/></button></>}
       {finished && <button aria-label={voice.unsaved ? 'Retry saving voice captions' : 'Close voice call'} title={voice.unsaved ? 'Retry saving captions' : 'Close voice call'} onClick={() => void controller.recover()}>{voice.unsaved ? <RotateSave/> : <X size={20}/>}</button>}
@@ -40,5 +38,19 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
       {!!voice.attempt?.sources?.length && <details className="voice-sources"><summary>Sources · {voice.attempt.sources.length}</summary>{voice.attempt.sources.map(source => <p className="metadata" key={source.file.id}><a href={`/api/attachments/${source.file.id}`}>{source.file.name}</a> · {source.origin === 'refinement' ? 'Original output · ' : ''}{voiceSourceLabels[source.state]}</p>)}</details>}
     </div>}
   </section>;
+}
+/** Only the artwork subscribes to audio levels; transcript and call controls do not rerender per sample. */
+function VoiceActivityMark({ controller, appIcon, expression, connecting, expanded, title, toggle }: { controller: VoiceController; appIcon: AppIconChoice; expression: AssistantExpression; connecting: boolean; expanded: boolean; title: string; toggle: () => void }) {
+  const levels = useSyncExternalStore(controller.subscribeLevels, controller.getLevelsSnapshot);
+  const level = connecting ? 0 : expression === 'speaking' ? levels.output : expression === 'listening' ? levels.input : 0;
+  return <button className={`voice-summary${connecting ? ' is-connecting' : ''}`} data-expression={connecting ? 'connecting' : expression} style={{ '--voice-level': level } as CSSProperties} aria-label="Voice call details" aria-expanded={expanded} onClick={toggle} title={title}>
+    {connecting ? <span className="voice-connection-pulse" aria-hidden="true"/> : <span className="voice-expression" aria-hidden="true">
+      <NovaAssistantMark choice={appIcon} expression={expression} className="voice-assistant-mark" width="104" height="104"/>
+      {expression === 'listening' && <svg className="voice-listening-cue" viewBox="-18 -6 136 112" fill="none" focusable="false" aria-hidden="true">
+        <path className="voice-ear-wave" d="M-1 16Q-9 28-1 40M101 16Q109 28 101 40"/>
+        <path className="voice-ear-wave voice-ear-wave-outer" d="M-8 9Q-20 28-8 47M108 9Q120 28 108 47"/>
+      </svg>}
+    </span>}
+  </button>;
 }
 function RotateSave() { return <span className="voice-retry-label">Retry save</span>; }

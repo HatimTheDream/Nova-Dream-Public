@@ -1,3 +1,11 @@
+## [1.8.10] — 2026-09-20
+
+- Keep Latest below the voice controls and above the message box, with enough transcript clearance for the full dock and last message.
+- Automatically dismiss a normally ended call once its captions are confirmed saved; keep uncertain or unsaved captions available for recovery.
+- Enlarge the voice mascot to 104 pixels while keeping compact call controls and the shared squircle shape.
+- Give listening a distinct ear-wave cue and react to measured microphone or playback sound; silence, mute, interruption and ended calls settle the motion, with a static reduced-motion alternative.
+- Favor balanced speech-caption accuracy over the earliest partial words, and verify the transcription configuration before admitting microphone audio. Preserve final captions and their original turn identities.
+
 ## [1.8.9] — 2026-09-20
 
 - Show the Listening expression whenever a connected microphone is ready, including the silence before speech.
