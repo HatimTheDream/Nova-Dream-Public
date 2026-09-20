@@ -11,7 +11,7 @@
       "sha256": "4e77a44610ea2a9082104c0a27d7afad8427011591529be610996d4ae4978a1a"
     }
   ],
-  "conversion": "node scripts/web-icons.mjs; approved borderless source pixels retained, proportional resizing, no padding or recoloring",
+  "conversion": "node scripts/web-icons.mjs; approved source pixels retained, proportional resizing; desktop and v5 launchers use the in-app squircle alpha mask; no border, padding or recoloring",
   "files": [
     {
       "file": "icons/nova-dream-red-brand-192-v4.png",
@@ -25,7 +25,7 @@
       "sha256": "f73bcfd65b4d2bf0fc3f7c9c6675c3f8d1ec582f33c82e2aa5fde587e8438922",
       "variant": "red",
       "size": 180,
-      "purpose": "launcher"
+      "purpose": "apple-touch"
     },
     {
       "file": "apple-touch-icon.png",
@@ -39,21 +39,45 @@
       "sha256": "b31d5fb5a26a5330bd6bdb56f98aed967065553e7a8ddabfa2ad4e8ef4177544",
       "variant": "red",
       "size": 192,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
     },
     {
       "file": "icons/nova-dream-red-512-v4.png",
       "sha256": "24d8e10e95125e51d44d439ebe1cef5a8c9032558ad548faa42d3085c4da7aad",
       "variant": "red",
       "size": 512,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
     },
     {
       "file": "icons/nova-dream-red-1024-v4.png",
       "sha256": "4b3ce966a67f858a827fee22127b2e60f1b9c5761b9cb320532f43fb9e4d316e",
       "variant": "red",
       "size": 1024,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
+    },
+    {
+      "file": "icons/nova-dream-red-192-v5.png",
+      "sha256": "8b85c841afaddc08a210efe1ccfa6fe0f2adee775565f2df620b9a4c26ec591c",
+      "variant": "red",
+      "size": 192,
+      "purpose": "launcher",
+      "shape": {
+        "borderRadius": "50%",
+        "cornerShape": "squircle",
+        "exponent": 4
+      }
+    },
+    {
+      "file": "icons/nova-dream-red-512-v5.png",
+      "sha256": "7d08602111fd9a17ca947ddefa3a8f7bb8325d6429dfc4485bf9ea0f8240487d",
+      "variant": "red",
+      "size": 512,
+      "purpose": "launcher",
+      "shape": {
+        "borderRadius": "50%",
+        "cornerShape": "squircle",
+        "exponent": 4
+      }
     },
     {
       "file": "icons/nova-dream-cream-brand-192-v4.png",
@@ -67,28 +91,52 @@
       "sha256": "8eb469f9c3657269829d00d76b35dc8cd8acc951b3376bca58433ff849aaf2e3",
       "variant": "cream",
       "size": 180,
-      "purpose": "launcher"
+      "purpose": "apple-touch"
     },
     {
       "file": "icons/nova-dream-cream-192-v4.png",
       "sha256": "d9f00f6f97dd4334b417e6fc2d9df42e48d53758229a522bfe41a5b663283ecc",
       "variant": "cream",
       "size": 192,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
     },
     {
       "file": "icons/nova-dream-cream-512-v4.png",
       "sha256": "d7ae6088bfbe6ef509db999eaa0ee84b186cda7e941b40974f9de1d1348f47c9",
       "variant": "cream",
       "size": 512,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
     },
     {
       "file": "icons/nova-dream-cream-1024-v4.png",
       "sha256": "aa82c732426dcc81d3a03047960190a3cba6d1b1dfd235be88127731081a3886",
       "variant": "cream",
       "size": 1024,
-      "purpose": "launcher"
+      "purpose": "legacy-launcher"
+    },
+    {
+      "file": "icons/nova-dream-cream-192-v5.png",
+      "sha256": "8c98a4086b00261cfa499ec7339b8dcd75faf6d71465499b0c94585c99430d50",
+      "variant": "cream",
+      "size": 192,
+      "purpose": "launcher",
+      "shape": {
+        "borderRadius": "50%",
+        "cornerShape": "squircle",
+        "exponent": 4
+      }
+    },
+    {
+      "file": "icons/nova-dream-cream-512-v5.png",
+      "sha256": "422eafe6f3b3fdce99577c922f8376c34abfb8428c741faeb844074f4a112a26",
+      "variant": "cream",
+      "size": 512,
+      "purpose": "launcher",
+      "shape": {
+        "borderRadius": "50%",
+        "cornerShape": "squircle",
+        "exponent": 4
+      }
     }
   ]
 }

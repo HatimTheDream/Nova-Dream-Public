@@ -28,7 +28,24 @@ async function assertOpaqueSquare(bytes: Buffer, label: string, size?: number) {
   for (let index = 3; index < data.length; index += 4) assert.equal(data[index], 255, label + ' must have no baked transparent corners or internal holes');
 }
 
-test('Approved icon sources and exports match their provenance and remain opaque edge-to-edge squares', async () => {
+async function assertRoundedLauncher(bytes: Buffer, source: Buffer, label: string, size: number) {
+  const metadata = await sharp(bytes).metadata();
+  assert.equal(metadata.format, 'png', label);
+  assert.deepEqual([metadata.width, metadata.height, metadata.hasAlpha], [size, size, true], label);
+  const { data } = await sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const alpha = (x: number, y: number) => data[(y * size + x) * 4 + 3];
+  for (const x of [0, size - 1]) for (const y of [0, size - 1]) assert.equal(alpha(x, y), 0, label + ' corners must be transparent');
+  assert.equal(alpha(size / 2, size / 2), 255, label + ' center must stay opaque');
+  for (const edge of [0, size - 1]) {
+    assert.equal(alpha(size / 2, edge), 255, label + ' must reach the tile edge without padding');
+    assert.equal(alpha(edge, size / 2), 255, label + ' must reach the tile edge without padding');
+  }
+  assert.ok(data.some((value, index) => index % 4 === 3 && value > 0 && value < 255), label + ' must have smooth antialiased edges');
+  assert.deepEqual(await sharp(bytes).removeAlpha().raw().toBuffer(),
+    await sharp(source).resize(size, size).removeAlpha().raw().toBuffer(), label + ' must preserve every resized source RGB pixel');
+}
+
+test('Approved sources and opaque platform exports stay intact while launcher exports carry rounded alpha', async () => {
   assert.deepEqual(provenance.sources.map(source => source.id).sort(), ['cream', 'red']);
   for (const source of provenance.sources) {
     const bytes = read(source.source);
@@ -39,7 +56,10 @@ test('Approved icon sources and exports match their provenance and remain opaque
   for (const file of provenance.files) {
     const bytes = read(publicRoot + file.file);
     assert.equal(hash(bytes), file.sha256, file.file);
-    await assertOpaqueSquare(bytes, file.file, file.size);
+    if (file.purpose === 'launcher') {
+      const source = provenance.sources.find(source => source.id === file.variant)!;
+      await assertRoundedLauncher(bytes, read(source.source), file.file, file.size);
+    } else await assertOpaqueSquare(bytes, file.file, file.size);
   }
 });
 
@@ -56,7 +76,7 @@ test('Both selectable manifests retain one installed-app identity and point to c
       assert.equal(icon.type, 'image/png');
       const { width, height, hasAlpha } = await sharp(read(publicRoot + icon.src.slice(1))).metadata();
       assert.equal(icon.sizes, `${width}x${height}`);
-      assert.equal(hasAlpha, false);
+      assert.equal(hasAlpha, true);
     }
     for (const [url, size] of [[assets.brand, 192], [assets.touch, 180]] as const) {
       const metadata = await sharp(read(publicRoot + url.slice(1))).metadata();
@@ -72,7 +92,7 @@ test('Desktop defaults use the approved Red source and a complete six-resolution
   assert.equal(desktop.source, red.source);
   assert.equal(desktop.sourceSha256, red.sha256);
   assert.equal(hash(read(desktop.output)), desktop.outputSha256);
-  await assertOpaqueSquare(read(desktop.output), desktop.output, 512);
+  await assertRoundedLauncher(read(desktop.output), read(red.source), desktop.output, 512);
   const ico = read(desktop.windowsIcon.file);
   assert.equal(hash(ico), desktop.windowsIcon.sha256);
   assert.deepEqual(desktop.windowsIcon.sizes, [16, 32, 48, 64, 128, 256]);
@@ -87,7 +107,7 @@ test('Desktop defaults use the approved Red source and a complete six-resolution
     assert.equal(ico.readUInt16LE(entry + 6), 32);
     assert.equal(offset, nextOffset, 'ICO image entries must not overlap or leave unmapped bytes');
     assert.ok(length > 0 && offset + length <= ico.length);
-    await assertOpaqueSquare(ico.subarray(offset, offset + length), `${desktop.windowsIcon.file}: ${size}px`, size);
+    await assertRoundedLauncher(ico.subarray(offset, offset + length), read(red.source), `${desktop.windowsIcon.file}: ${size}px`, size);
     nextOffset = offset + length;
   }
   assert.equal(nextOffset, ico.length);

@@ -1,3 +1,8 @@
+## [1.8.7] — 2026-09-19
+
+- Match desktop and web-app launcher icons to the app's borderless squircle shape, with transparent corners in both Red and Cream exports.
+- Preserve the approved face, colors and suit; keep Apple touch icons opaque for the platform's own masking.
+
 ## [1.8.6] — 2026-09-19
 
 - Preserve uncertain Assistant work requests across sign-in, app-update, access and workspace interruptions. Reconciliation reuses the original request after reconnecting instead of allowing duplicate team work or other work actions.

@@ -2,8 +2,13 @@
   "source": "assets/brand/nova-dream-red-source-v4.png",
   "sourceSha256": "8f596a1cdbf2fc99df918df646981b497f6b3a580c1ea9fc66993cbbdba515f4",
   "output": "apps/desktop/lynx-mark.png",
-  "outputSha256": "24d8e10e95125e51d44d439ebe1cef5a8c9032558ad548faa42d3085c4da7aad",
-  "conversion": "Proportional resize of approved Red artwork; no redraw",
+  "outputSha256": "7d08602111fd9a17ca947ddefa3a8f7bb8325d6429dfc4485bf9ea0f8240487d",
+  "conversion": "Proportional resize of approved Red artwork with the in-app squircle alpha mask; no redraw, border, padding or recoloring",
+  "shape": {
+    "borderRadius": "50%",
+    "cornerShape": "squircle",
+    "exponent": 4
+  },
   "windowsIcon": {
     "file": "apps/desktop/nova-dream.ico",
     "sizes": [
@@ -14,7 +19,7 @@
       128,
       256
     ],
-    "sha256": "48a38a9f174914fa412b7c90b6e3276ffb0d1355435ddddefb36b54cb56f4210",
+    "sha256": "00c01101bf0e4df36b410b32b65247e4dee2807e5837590631ffbfd7f0e1db54",
     "conversion": "PNG sizes in a standard ICO container"
   }
 }

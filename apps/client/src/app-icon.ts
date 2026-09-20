@@ -6,8 +6,8 @@ export function appIconAssets(value: unknown) {
   const icon = resolveAppIcon(value);
   return {
     brand: `/icons/nova-dream-${icon}-brand-192-v4.png`,
-    launcher: `/icons/nova-dream-${icon}-192-v4.png`,
-    launcherLarge: `/icons/nova-dream-${icon}-512-v4.png`,
+    launcher: `/icons/nova-dream-${icon}-192-v5.png`,
+    launcherLarge: `/icons/nova-dream-${icon}-512-v5.png`,
     touch: `/icons/apple-touch-icon-${icon}-v4.png`,
     manifest: `/nova-dream-${icon}.webmanifest`,
   };
