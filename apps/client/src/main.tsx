@@ -15,6 +15,7 @@ import './home-widget-colors.css';
 import './buttons.css';
 import './home-widget-controls.css';
 import './app-icon.css';
+import './voice-panel.css';
 
 applyDocumentAppIcon(readCachedAppIcon());
 createRoot(document.getElementById('root')!).render(<App/>);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronDown, MessageSquare, Mic, MicOff, PhoneOff, Square, VolumeUp, X } from './icons';
+import { MessageSquare, Mic, MicOff, PhoneOff, Square, VolumeUp, X } from './icons';
 import type { VoiceController } from './voice-controller';
 import { voiceSourceLabels } from '../../../packages/domain/voice';
 import type { AppIconChoice } from '../../../packages/domain/contracts';
@@ -19,12 +19,16 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
   }, [expanded]);
   if (voice.phase === 'idle') return null;
   const finished = ['ended', 'error'].includes(voice.phase);
-  const expression = voice.phase === 'connected' ? voice.speaking ? 'speaking' : voice.listening && !voice.muted ? 'listening' : 'idle' : 'idle';
-  const title = finished || voice.phase === 'ending' ? 'Audio is off' : voice.speaking ? 'Speaking' : voice.muted ? 'Muted' : voice.listening ? 'Listening' : voice.processing ? 'Thinking' : voice.phase === 'connected' ? 'Voice connected' : 'Connecting';
+  const connecting = ['permission', 'preparing', 'connecting'].includes(voice.phase);
+  // The controller's listening flag means detected speech. An open, ready mic
+  // should also look attentive during the silence before the next turn.
+  const expression = voice.phase === 'connected' ? voice.speaking ? 'speaking' : !voice.muted && !voice.processing ? 'listening' : 'idle' : 'idle';
+  const title = finished || voice.phase === 'ending' ? 'Audio is off' : connecting ? 'Connecting' : voice.speaking ? 'Speaking' : voice.muted ? 'Muted' : voice.processing ? 'Thinking' : 'Listening';
   const otherChat = voice.attempt && voice.attempt.target.conversation.id !== conversationId;
   return <section ref={panel} className={`voice-panel voice-bubble ${floating ? 'voice-floating' : ''}`} aria-label="Voice call">
-    <button className="voice-summary" aria-label="Voice call details" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={voice.message}>
-      <NovaAssistantMark choice={appIcon} expression={expression} className="voice-assistant-mark" width="44" height="44"/><span><strong role="status">{title}</strong>{otherChat ? <small>{voice.attempt!.target.conversation.title}</small> : null}</span><ChevronDown size={14}/>
+    <span className="sr-only" role="status">{title}{otherChat ? ` · ${voice.attempt!.target.conversation.title}` : ''}</span>
+    <button className={`voice-summary${connecting ? ' is-connecting' : ''}`} aria-label="Voice call details" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={`${title} · ${voice.message}`}>
+      {connecting ? <span className="voice-connection-pulse" aria-hidden="true"/> : <NovaAssistantMark choice={appIcon} expression={expression} className="voice-assistant-mark" width="60" height="60"/>}
     </button>
     <div className="voice-controls">
       {!finished && <><button className={`voice-mute ${voice.muted ? 'is-muted' : ''}`} aria-label={voice.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={voice.muted} title={voice.muted ? 'Unmute microphone' : 'Mute microphone'} onClick={controller.mute}>{voice.muted ? <MicOff size={20}/> : <Mic size={20}/>}</button>{voice.soundBlocked ? <button aria-label="Enable sound" title="Enable sound" onClick={() => void controller.enableSound()}><VolumeUp size={20}/></button> : <button aria-label="Interrupt speech" title="Interrupt speech" disabled={!voice.speaking && !voice.processing} onClick={controller.interrupt}><Square size={18}/></button>}<button className="voice-end" aria-label="End voice call" title="End call" onClick={() => void controller.end()}><PhoneOff size={20}/></button></>}

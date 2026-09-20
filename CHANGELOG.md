@@ -1,3 +1,10 @@
+## [1.8.9] — 2026-09-20
+
+- Show the Listening expression whenever a connected microphone is ready, including the silence before speech.
+- Fill a logo-sized voice tile with the selected lynx artwork and remove visible status subtitles and the disclosure arrow.
+- Float compact voice controls over the conversation, keeping chat visible beside them and the last message reachable.
+- Use a pulsing brand-red rounded square during voice setup, with a static reduced-motion alternative; keep accessible status and call recovery controls.
+
 ## [1.8.8] — 2026-09-19
 
 - Remove the redundant Chat / Work / Team Work row above Assistant conversations. Keep space switching in the sidebar and Team Work in the side-panel launcher.

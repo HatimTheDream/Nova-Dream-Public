@@ -1,0 +1,39 @@
+/* The call floats over the transcript without consuming a full-width row. */
+.assistant-workspace .composer-region { position:relative; }
+.assistant-workspace .composer-region > .voice-bubble {
+  position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
+  margin:0 0 10px; width:max-content; max-width:100%;
+}
+/* Scroll clearance lets the last message move above the compact overlay. */
+.assistant-workspace .conversation:has(.composer-region > .voice-bubble) .conversation-reading {
+  padding-bottom:140px; scroll-padding-bottom:140px;
+}
+:root .voice-bubble > button.voice-summary {
+  --button-depth:4px;
+  --button-edge:color-mix(in srgb,var(--brand-red) 76%,black);
+  --button-fill:transparent;
+  width:var(--app-tile-size); min-width:var(--app-tile-size); max-width:var(--app-tile-size);
+  height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
+  padding:0; border:0; border-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner);
+  display:flex; align-items:center; justify-content:center; flex:none; background:transparent;
+}
+:root .voice-bubble > button.voice-summary:focus-visible { outline-offset:4px; }
+:root .voice-assistant-mark { width:100%; height:100%; border-radius:inherit; }
+:root .voice-bubble > button.voice-summary.is-connecting {
+  --button-depth:0px; --button-edge:transparent; --button-border-hover:transparent;
+  background:transparent; box-shadow:none;
+}
+.voice-connection-pulse {
+  display:block; width:100%; height:100%; background:var(--brand-red);
+  border-radius:inherit; corner-shape:inherit;
+  animation:voice-connect-pulse 1.4s ease-in-out infinite;
+}
+@keyframes voice-connect-pulse {
+  0%,100% { transform:scale(.82); opacity:.55; }
+  50% { transform:scale(1); opacity:1; }
+}
+.voice-details { max-width:calc(100vw - 112px); }
+.voice-floating .voice-details { left:auto; right:0; transform:none; }
+@media(prefers-reduced-motion:reduce) {
+  .voice-connection-pulse { animation:none; }
+}
