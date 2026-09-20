@@ -1,0 +1,25 @@
+.chatgpt-account { padding-block: 16px; border-top: 1px solid var(--line); }
+.chatgpt-account-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.chatgpt-account-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.chatgpt-account-heading .metadata { display: block; margin-top: 4px; }
+.chatgpt-account-heading .status-pill { flex: none; }
+.chatgpt-order-controls { display: inline-flex; gap: 8px; }
+.chatgpt-account .setup-actions { flex-wrap: wrap; gap: 10px; }
+.chatgpt-account .icon-button { width: 40px; min-height: 40px; padding: 8px; }
+.chatgpt-accounts-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.chatgpt-accounts-title h3 { margin: 0; }
+.chatgpt-signin-method { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+.chatgpt-signin-method select { width: auto; max-width: 100%; }
+/* Authentication remains a real link with the same neutral face and press depth. */
+.device-signin a.button-link { border: 2px solid var(--line); border-radius: var(--button-radius); box-shadow: 0 2px 0 var(--line); background: var(--surface); font: inherit; font-weight: 650; transition: var(--button-transition); }
+.device-signin a.button-link:hover { background: color-mix(in srgb,var(--surface) 85%,var(--soft-gold)); }
+.device-signin a.button-link:active { translate: 0 2px; box-shadow: none; }
+.device-signin a.button-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.usage-provider .section-heading h3 { overflow-wrap: anywhere; min-width: 0; }
+.conversation-account-control { min-width: 0; max-width: 100%; }
+.conversation-account { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.conversation-account select { width: auto; max-width: min(240px,100%); min-height: 40px; padding: 7px 28px 7px 10px; text-overflow: ellipsis; }
+.conversation-account .metadata { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
+.conversation-account-control > .field-error { margin-block: 6px 0; }
+.composer > .conversation-account-control { margin-top: 6px; }
+@media (max-width: 520px) { .chatgpt-account-heading { flex-wrap: wrap; } .chatgpt-account .setup-actions > button { flex: 1 1 auto; } }

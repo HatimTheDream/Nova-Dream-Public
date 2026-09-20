@@ -22,6 +22,7 @@ function readText(store: Store, file: Attachment): string {
 
 export function captureVoiceSources(store: Store, target: VoiceTarget, nativeTransfer = false): VoiceSource[] {
   const candidates: Pick<VoiceSource, 'file' | 'origin'>[] = [
+    ...(target.conversation.resumeContext ? [target.conversation.resumeContext.transcript, ...target.conversation.resumeContext.files].map(file => ({ file, origin: 'conversation' as const })) : []),
     ...(target.refineFile ? [{ file: target.refineFile, origin: 'refinement' as const }] : []),
     ...(target.project?.attachments ?? []).map(file => ({ file, origin: 'project' as const })),
   ];

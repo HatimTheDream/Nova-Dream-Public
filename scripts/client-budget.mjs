@@ -114,7 +114,10 @@ import assert from 'node:assert/strict';
 // 1.8.12 retains uncertain speech and ordered captions across asynchronous saves.
 // Measured total 612,631 gzip bytes (+684 / 0.11% over 1.8.11); cap at613 KB.
 // Startup and individual deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 613000, deferredChunk: 80000 };
+// 1.9 adds per-account usage/routing controls and same-chat archive recovery.
+// Measured 616,466 total (+3,850 / 0.63% over 1.8.13); cap at 618 KB.
+// Startup and individual deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 618000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

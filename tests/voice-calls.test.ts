@@ -220,6 +220,27 @@ test('voice discovery overlaps history verification but audio creation waits for
   await tick(); assert.equal(f.voice.read(f.device, attempt.id).state, 'ready');
 }));
 
+test('resumed chat voice refuses a historical reference that cannot be supplied in full', () => fixture(async f => {
+  const conversation = f.assistant.conversations()[0];
+  const transcript = f.store.upload(f.device, randomUUID(), f.store.epoch, 'Saved history.txt', Buffer.from('Historical context. '.repeat(10000)).toString('base64'));
+  f.store.internalWrite(`assistant:conversation:${conversation.id}`, { ...conversation, resumeContext: { transcript, files: [], digest: 'a'.repeat(64), sourceNativeId: randomUUID(), complete: true } });
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  assert.equal(f.voice.read(f.device, attempt.id).state, 'failed');
+  assert.match(f.voice.read(f.device, attempt.id).message, /saved history or files/);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.create').length, 0);
+  assert.equal(f.store.download(transcript.id).metadata.sha256, transcript.sha256);
+}));
+
+test('voice captions enter the permanent Nova timeline even when native acknowledgement fails', () => fixture(async f => {
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  f.gateway.failTranscript = true;
+  const entry = { entryId: 'caption_kept', role: 'user' as const, text: 'My original spoken words', ordinal: 0, timestamp: Date.now() };
+  await assert.rejects(f.voice.finals(f.device, { ...f.action(attempt.id), entries: [entry] }), /Lost transcript receipt/); await tick();
+  const history = await f.assistant.historyForReading(f.start.conversationId);
+  const captions = history.messages.filter(m => m.id === `voice:${attempt.id}:caption_kept`);
+  assert.equal(captions.length, 1); assert.equal(captions[0].text, entry.text); assert.equal(captions[0].delivery, 'unknown');
+}));
+
 test('repeated context admission preserves captions and consultations saved during its preflight', () => fixture(async f => {
   const attempt = f.voice.start(f.device, f.start); await tick();
   await f.voice.offer(f.device, { ...f.action(attempt.id), sdp: 'v=0\r\nfixture' });

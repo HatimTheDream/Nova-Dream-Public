@@ -20,6 +20,7 @@ function fixture(t: import('node:test').TestContext) {
   t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }); });
   return { root, store, conversation, messages, page, saved: new SavedHistory(store) };
 }
+const authoredRecords = (messages: ConversationMessage[]) => messages.map(({ novaId: _id, aliases: _aliases, source: _source, delivery: _delivery, ...message }) => message);
 test('a verified reading copy preserves exact paginated messages after backup and independent restore', async t => {
   const f = fixture(t), offsets: number[] = [];
   await f.saved.capture([f.conversation], async (_, offset) => { offsets.push(offset); return f.page(offset); });
@@ -30,10 +31,10 @@ test('a verified reading copy preserves exact paginated messages after backup an
     const saved = new SavedHistory(restored);
     const head = saved.read(f.conversation)!; assert(head.retained?.complete); assert.equal(head.totalMessages, 250); assert.equal(head.activeRunIds, null);
     const middle = saved.read(f.conversation, { offset: head.nextOffset })!, tail = saved.read(f.conversation, { offset: middle.nextOffset })!;
-    assert.deepEqual([...tail.messages, ...middle.messages, ...head.messages], f.messages); assert.equal(tail.hasMore, false);
+    assert.deepEqual(authoredRecords([...tail.messages, ...middle.messages, ...head.messages]), f.messages); assert.equal(tail.hasMore, false);
     assert(saved.read(f.conversation, { messageId: 'message-17' })!.messages.some(m => m.id === 'message-17'));
     assert.throws(() => saved.read(f.conversation, { messageId: 'missing' }), /not in the saved/);
-    assert.equal(saved.read({ ...f.conversation, nativeId: randomUUID() }), undefined);
+    assert.equal(saved.read({ ...f.conversation, nativeId: randomUUID() })!.totalMessages, 250, 'changing inference binding does not hide saved history');
     assert.equal(saved.read({ ...f.conversation, deleted: true }), undefined);
   } finally { restored.close(); }
 });
@@ -65,8 +66,9 @@ test('older backup pages remain readable but do not invent missing history or a 
   f.store.internalWrite('assistant:history:' + f.conversation.id, { ...f.page(0), inFlightRun: { runId: 'past-run', text: 'partial reply' } });
   const reading = f.saved.read(f.conversation)!;
   assert.equal(reading.retained?.complete, false); assert.equal(reading.hasMore, false); assert.equal(reading.inFlightRun, undefined);
-  assert.deepEqual(reading.messages, f.messages.slice(150));
-  assert.throws(() => f.saved.read(f.conversation, { offset: 100 }), /only the saved part/);
+  assert.deepEqual(authoredRecords(reading.messages), f.messages.slice(150));
+  assert.equal(f.saved.read(f.conversation, { offset: 100 })!.messages.length, 0);
+  assert.equal(f.saved.read(f.conversation, { offset: 100 })!.retained!.complete, false);
 });
 
 test('a complete transcript export preserves authored dialogue across pages without replaying tool instructions', async t => {

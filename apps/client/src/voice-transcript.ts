@@ -14,7 +14,7 @@ export type TranscriptMessage = ConversationMessage & { voiceParts?: TranscriptM
 const callIdentity = (message: ConversationMessage) => /^voice:([a-f0-9-]{36}):[A-Za-z0-9_-]+$/.exec(message.id)?.[1];
 export const transcriptParts = (message: TranscriptMessage) => message.voiceParts ?? [message];
 export const transcriptText = (message: TranscriptMessage) => transcriptParts(message).map(part => part.authoredText ?? part.text).join(' ');
-export const transcriptContains = (message: TranscriptMessage, id: string, role: string) => transcriptParts(message).some(part => part.id === id && part.role === role);
+export const transcriptContains = (message: TranscriptMessage, id: string, role: string) => transcriptParts(message).some(part => part.role === role && (part.id === id || part.novaId === id || part.aliases?.includes(id)));
 
 /** One speaking turn can contain several provider items. Group only adjacent
  * user captions from the same call; keep every source identity and native hash. */

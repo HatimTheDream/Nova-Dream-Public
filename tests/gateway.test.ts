@@ -8,6 +8,27 @@ import type { HelloOk } from '@openclaw/gateway-protocol/frame-guards';
 import { Gateway } from '../apps/service/gateway.js';
 import { Store } from '../apps/service/store.js';
 
+test('account ordering has separate finite authority while usage stays read-only', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'nova-account-control-')), store = new Store(directory);
+  const clients: GatewayClientOptions[] = [], calls: string[] = [];
+  const factory = (options: GatewayClientOptions) => { clients.push(options); return { start() {}, async stopAndWait() {}, async request<T>(method: string) { calls.push(method); return (method === 'models.list' ? { models: [] } : { ok: true }) as T; } }; };
+  const ordinary = new Gateway(store, 'fixture', factory), control = new Gateway(store, 'fixture', factory, 'account-control');
+  const hello = { protocol: 4, features: { methods: ['models.list', 'e3.accounts.snapshot', 'models.authOrderSet', 'chat.send'], events: [] }, policy: {} } as unknown as HelloOk;
+  try {
+    await ordinary.configure('ws://127.0.0.1:59999', 'fixture'); clients[0].onHelloOk?.({ ...hello, auth: { scopes: ['operator.read', 'operator.write'] } } as HelloOk);
+    control.start(); clients[1].onHelloOk?.({ ...hello, auth: { scopes: ['operator.read', 'operator.admin'] } } as HelloOk);
+    assert.deepEqual(clients[0].scopes, ['operator.read', 'operator.write']); assert.notEqual(clients[0].deviceIdentity?.deviceId, clients[1].deviceIdentity?.deviceId);
+    await ordinary.request('e3.accounts.snapshot', { epoch: store.epoch });
+    await assert.rejects(ordinary.request('models.authOrderSet', { provider: 'openai', agentId: 'main', profileIds: ['openai:a'] }), /not exposed/);
+    await assert.rejects(control.request('chat.send', {}), /not exposed/);
+    await assert.rejects(control.request('models.authOrderSet', { provider: 'other', agentId: 'main', profileIds: ['openai:a'] }), /only the complete/);
+    await assert.rejects(control.request('models.authOrderSet', { provider: 'openai', agentId: 'other', profileIds: ['openai:a'] }), /only the complete/);
+    await assert.rejects(control.request('models.authOrderSet', { provider: 'openai', agentId: 'main', profileIds: ['openai:a', 'openai:a'] }), /only the complete/);
+    await control.request('models.authOrderSet', { provider: 'openai', agentId: 'main', profileIds: ['openai:b', 'openai:a'] });
+    assert.equal(calls.filter(method => method === 'models.authOrderSet').length, 1);
+  } finally { await control.stop(); await ordinary.stop(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('replacing a client on the same Gateway fences old events, credentials, and pending results', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'edition3-gateway-'));
   const store = new Store(directory);

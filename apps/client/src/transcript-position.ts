@@ -3,7 +3,11 @@ import { readLocal, saveLocal } from './api';
 
 export type TranscriptPosition = { version: 1; following: boolean; anchor?: { id: string; role: string; offset: number }; savedAt: number };
 export function transcriptPositionKey(epoch: string, device: string, conversation?: Conversation) {
-  return conversation?.nativeId ? `e3:transcript-position:${epoch}:${device}:${conversation.connectionGeneration}:${conversation.id}:${conversation.nativeId}` : undefined;
+  if (!conversation) return;
+  const key = `e3:transcript-position:${epoch}:${device}:${conversation.id}:nova`;
+  const oldKey = `e3:transcript-position:${epoch}:${device}:${conversation.connectionGeneration}:${conversation.id}:${conversation.nativeId}`;
+  if (!readLocal(key)) { const previous = readTranscriptPosition(oldKey); if (previous) saveLocal(key, previous); }
+  return key;
 }
 export function parseTranscriptPosition(value: unknown): TranscriptPosition | undefined {
   if (!value || typeof value !== 'object') return;
@@ -15,11 +19,11 @@ export function parseTranscriptPosition(value: unknown): TranscriptPosition | un
 export const readTranscriptPosition = (key?: string) => key ? parseTranscriptPosition(readLocal(key)) : undefined;
 export const saveTranscriptPosition = (key: string | undefined, value: TranscriptPosition) => { if (key) saveLocal(key, value); };
 
-export const transcriptCacheKey = (epoch: string, conversation: Conversation) => `e3:history:${epoch}:${conversation.id}:${conversation.nativeId}`;
+export const transcriptCacheKey = (epoch: string, conversation: Conversation) => `e3:history:${epoch}:${conversation.id}:nova`;
 /** Keep the visible neighborhood offline, not an ever-growing browser copy of the chat. */
 export function cacheTranscriptWindow(history: ConversationHistory, position?: TranscriptPosition): ConversationHistory {
   const anchor = position?.following === false ? position.anchor : undefined;
-  const index = anchor ? history.messages.findIndex(m => m.id === anchor.id && m.role === anchor.role) : -1;
+  const index = anchor ? history.messages.findIndex(m => (m.id === anchor.id || m.novaId === anchor.id || m.aliases?.includes(anchor.id)) && m.role === anchor.role) : -1;
   const start = index < 0 ? Math.max(0, history.messages.length - 100) : Math.max(0, index - 35);
   const window = history.messages.slice(start, start + 100), costs = window.map(message => JSON.stringify(message).length);
   const target = index < 0 ? window.length - 1 : index - start;

@@ -46,25 +46,25 @@ test('only the supported OpenAI code note is exposed; arbitrary URLs and token-l
 });
 
 test('split code output stays ephemeral, exact retry starts one process, and an old receipt cannot select a newer code', () => fixture(async f => {
-  const input = request(f.store), first = f.service.start(f.device, input);
+  const input = request(f.store), first = await f.service.start(f.device, input);
   f.terminals[0].emit(note.slice(0,22)); f.terminals[0].emit(note.slice(22));
   f.terminals[0].emit('access_token=FIXTURE_SECRET_VALUE\n');
   assert.equal(f.service.status().userCode, 'TEST-CODE');
-  assert.equal(f.service.start(f.device, input).id, first.id); assert.equal(f.terminals.length, 1);
-  assert.throws(() => f.service.start(f.device, request(f.store)), /already waiting/);
+  assert.equal((await f.service.start(f.device, input)).id, first.id); assert.equal(f.terminals.length, 1);
+  await assert.rejects(() => f.service.start(f.device, request(f.store)), /already waiting/);
   const persisted = JSON.stringify(f.store.internalList('signin:chatgpt:'));
   assert(!persisted.includes('TEST-CODE')); assert(!persisted.includes('FIXTURE_SECRET_VALUE'));
   assert(!JSON.stringify(f.service.status()).includes('FIXTURE_SECRET_VALUE'));
   f.terminals[0].exit(); assert.equal(f.service.status().state, 'completed'); assert.equal(f.service.status().userCode, undefined);
-  const second = f.service.start(f.device, request(f.store)); f.terminals[1].emit(note.replace('TEST-CODE','NEXT-CODE'));
-  const retry = f.service.start(f.device, input);
+  const second = await f.service.start(f.device, request(f.store)); f.terminals[1].emit(note.replace('TEST-CODE','NEXT-CODE'));
+  const retry = await f.service.start(f.device, input);
   assert.equal(retry.id, first.id); assert.equal(retry.state, 'completed'); assert.equal(retry.userCode, undefined);
   f.terminals[0].exit(1); f.terminals[0].emit(note);
   assert.equal(f.service.status().id, second.id); assert.equal(f.service.status().userCode, 'NEXT-CODE');
 }));
 
 test('cancellation targets the exact owned sign-in and retains uncertainty about account completion', () => fixture(async f => {
-  const first = f.service.start(f.device, request(f.store)); f.terminals[0].emit(note);
+  const first = await f.service.start(f.device, request(f.store)); f.terminals[0].emit(note);
   await assert.rejects(f.service.cancel(f.device, { ...request(f.store), attemptId: randomUUID() }), /different sign-in/);
   assert.equal(f.terminals[0].kills.length, 0);
   const input = { ...request(f.store), attemptId: first.id };
@@ -75,7 +75,7 @@ test('cancellation targets the exact owned sign-in and retains uncertainty about
 }));
 
 test('restart does not replay sign-in or allow another attempt while the previous process is still present', () => fixture(async f => {
-  const input = request(f.store); f.service.start(f.device, input);
+  const input = request(f.store); await f.service.start(f.device, input);
   const id = f.service.status().id!;
   const record = f.store.internalRead<any>(`signin:chatgpt:${id}`);
   f.store.internalWrite(`signin:chatgpt:${id}`, { ...record, pid: process.pid });
@@ -83,8 +83,8 @@ test('restart does not replay sign-in or allow another attempt while the previou
   const restored = new ChatGptSignIn(f.store, { signInCommand: () => f.command }, () => { spawned++; return new Terminal(); });
   try {
     assert.equal(restored.status().state, 'interrupted');
-    assert.equal(restored.start(f.device, input).id, id);
-    assert.throws(() => restored.start(f.device, request(f.store)), /still present/);
+    assert.equal((await restored.start(f.device, input)).id, id);
+    await assert.rejects(() => restored.start(f.device, request(f.store)), /still present/);
     assert.equal(spawned, 0);
   } finally { await restored.close(); }
 }));
@@ -128,7 +128,7 @@ test('headless OAuth output uses the same complete-URL guard and stays ephemeral
   assert.equal(browserSignInNote(headlessBrowserNote.replace('\n\n','\nProvider error:\n')),undefined);
   assert.equal(browserSignInNote(headlessBrowserNote.replace('response_type=code','response_type=token')),undefined);
   assert.equal(browserSignInNote(headlessBrowserNote.replace('Open this URL in your LOCAL browser:','An arbitrary link:')),undefined);
-  const first=f.service.start(f.device,{...request(f.store),method:'browser'});
+  const first=await f.service.start(f.device,{...request(f.store),method:'browser'});
   f.terminals[0].emit(headlessBrowserNote.slice(0,-1));assert.equal(f.service.status().state,'starting');
   f.terminals[0].emit('\n');assert.equal(f.service.status().state,'waiting');assert.equal(f.service.status().authorizationUrl,authorization.href);
   const saved=JSON.stringify(f.store.internalList('signin:chatgpt:'));assert(!saved.includes(authorization.href));assert(!saved.includes('b'.repeat(32)));
@@ -136,29 +136,57 @@ test('headless OAuth output uses the same complete-URL guard and stays ephemeral
 }));
 
 test('browser attempts pin the method, keep URL/state ephemeral and ignore late cancelled callbacks',()=>fixture(async f=>{
-  const input={...request(f.store),method:'browser'},first=f.service.start(f.device,input);
+  const input={...request(f.store),method:'browser'},first=await f.service.start(f.device,input);
   assert.equal(first.method,'browser');f.terminals[0].emit(note);assert.equal(f.service.status().state,'starting');
   f.terminals[0].emit(browserNote.slice(0,40));assert.equal(f.service.status().authorizationUrl,undefined);
   f.terminals[0].emit(browserNote.slice(40));assert.equal(f.service.status().authorizationUrl,authorization.href);
-  assert.equal(f.service.start(f.device,input).id,first.id);assert.equal(f.terminals.length,1);
-  assert.throws(()=>f.service.start(f.device,{...input,method:'device-code'}),/different|reused|identity|payload/i);
+  assert.equal((await f.service.start(f.device,input)).id,first.id);assert.equal(f.terminals.length,1);
+  await assert.rejects(()=>f.service.start(f.device,{...input,method:'device-code'}),/different|reused|identity|payload/i);
   const saved=JSON.stringify(f.store.internalList('signin:chatgpt:'));assert(!saved.includes(authorization.href));assert(!saved.includes('b'.repeat(32)));
   await f.service.cancel(f.device,{...request(f.store),attemptId:first.id});assert.equal(f.service.status().authorizationUrl,undefined);
-  const second=f.service.start(f.device,{...request(f.store),method:'browser'});f.terminals[1].emit(browserNote);
+  const second=await f.service.start(f.device,{...request(f.store),method:'browser'});f.terminals[1].emit(browserNote);
   f.terminals[0].exit(0);assert.equal(f.service.status().id,second.id);assert.equal(f.service.status().state,'waiting');
   f.terminals[1].exit(0);assert.equal(f.service.status().state,'completed');assert.equal(f.service.status().authorizationUrl,undefined);
-  assert.equal(f.service.start(f.device,input).id,first.id);assert.equal(f.service.start(f.device,input).authorizationUrl,undefined);assert.equal(f.terminals.length,2);
+  assert.equal((await f.service.start(f.device,input)).id,first.id);assert.equal((await f.service.start(f.device,input)).authorizationUrl,undefined);assert.equal(f.terminals.length,2);
 }));
 
 test('browser restart retains an interrupted attempt without restoring its link or spawning again',()=>fixture(async f=>{
-  const input={...request(f.store),method:'browser'},first=f.service.start(f.device,input);f.terminals[0].emit(browserNote);
+  const input={...request(f.store),method:'browser'},first=await f.service.start(f.device,input);f.terminals[0].emit(browserNote);
   const restored=new ChatGptSignIn(f.store,{signInCommand:()=>f.command},()=>{throw Error('Must not spawn');});
-  try{assert.equal(restored.status().state,'interrupted');assert.equal(restored.status().method,'browser');assert.equal(restored.status().authorizationUrl,undefined);assert.equal(restored.start(f.device,input).id,first.id);}finally{await restored.close();}
+  try{assert.equal(restored.status().state,'interrupted');assert.equal(restored.status().method,'browser');assert.equal(restored.status().authorizationUrl,undefined);assert.equal((await restored.start(f.device,input)).id,first.id);}finally{await restored.close();}
 }));
 
 test('completed sign-in receipts remain readable when the original local runtime is unavailable',()=>fixture(async f=>{
-  const input={...request(f.store),method:'browser'},first=f.service.start(f.device,input);f.terminals[0].exit(0);
+  const input={...request(f.store),method:'browser'},first=await f.service.start(f.device,input);f.terminals[0].exit(0);
   await f.service.close();
   const unavailable=new ChatGptSignIn(f.store,{signInCommand:()=>{throw Error('Runtime unavailable');}},()=>{throw Error('Unexpected child');});
-  try{assert.equal(unavailable.start(f.device,input).id,first.id);assert.equal(unavailable.start(f.device,input).state,'completed');assert.throws(()=>unavailable.start(f.device,{...request(f.store),method:'browser'}),/Runtime unavailable/);assert.equal(f.store.internalList('signin:chatgpt:').length,2);}finally{await unavailable.close();}
+  try{assert.equal((await unavailable.start(f.device,input)).id,first.id);assert.equal((await unavailable.start(f.device,input)).state,'completed');await assert.rejects(()=>unavailable.start(f.device,{...request(f.store),method:'browser'}),/Runtime unavailable/);assert.equal(f.store.internalList('signin:chatgpt:').length,2);}finally{await unavailable.close();}
+}));
+
+test('Add creates separate slots while Reconnect validates and targets only the requested saved profile', () => fixture(async f => {
+  await f.service.close();
+  const targets: string[] = [], terminals: Terminal[] = [], checked: string[] = [];
+  const service = new ChatGptSignIn(f.store, { signInCommand: (_method, profileId) => { targets.push(profileId!); return f.command; } }, () => { const terminal = new Terminal(); terminals.push(terminal); return terminal; }, { async validateReconnect(id) { checked.push(id); if (id !== 'openai:edition3-voice') throw Error('Missing'); }, invalidate() {} });
+  try {
+    const addRequest = { ...request(f.store), intent: 'add' }, first = await service.start(f.device, addRequest);
+    assert.match(first.profileId!, /^openai:nova-/); terminals[0].exit();
+    const second = await service.start(f.device, { ...request(f.store), intent: 'add' });
+    assert.notEqual(first.profileId, second.profileId); terminals[1].exit();
+    const reconnect = await service.start(f.device, { ...request(f.store), intent: 'reconnect', profileId: 'openai:edition3-voice' });
+    assert.equal(reconnect.profileId, 'openai:edition3-voice'); assert.deepEqual(checked, ['openai:edition3-voice']);
+    assert.equal(targets.at(-1), 'openai:edition3-voice'); terminals[2].exit();
+    assert.equal((await service.start(f.device, addRequest)).profileId, first.profileId); assert.equal(terminals.length, 3);
+    await assert.rejects(service.start(f.device, { ...request(f.store), intent: 'add', profileId: 'openai:edition3-voice' }));
+    await assert.rejects(service.start(f.device, { ...request(f.store), intent: 'reconnect' }));
+  } finally { await service.close(); }
+}));
+
+test('cancel during reconnect validation never starts a late sign-in process', () => fixture(async f => {
+  await f.service.close(); let release!: () => void, spawned = 0;
+  const service = new ChatGptSignIn(f.store, { signInCommand: () => f.command }, () => { spawned++; return new Terminal(); }, { validateReconnect: () => new Promise<void>(resolve => { release = resolve; }), invalidate() {} });
+  try {
+    const pending = service.start(f.device, { ...request(f.store), intent: 'reconnect', profileId: 'openai:edition3-voice' });
+    await service.cancel(f.device, { ...request(f.store), attemptId: service.status().id }); release();
+    assert.equal((await pending).state, 'interrupted'); assert.equal(spawned, 0);
+  } finally { await service.close(); }
 }));

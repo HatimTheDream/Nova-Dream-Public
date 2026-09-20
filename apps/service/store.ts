@@ -762,7 +762,7 @@ export class Store {
     const drafts = this.list('draft').filter(draft => draft.value.conversationId === conversationId);
     for (const draft of drafts) this.removeDraftData(draft);
     const ownedReceipts = new Set<string>();
-    const prefixes = ['assistant:operation:', 'assistant:queue:', 'assistant:message-pin:', 'assistant:approval:', 'assistant:question:', 'assistant:edit:'];
+    const prefixes = ['assistant:operation:', 'assistant:queue:', 'assistant:message-pin:', 'assistant:approval:', 'assistant:question:', 'assistant:edit:', 'assistant:continuation:'];
     for (const prefix of prefixes) {
       let after = '';
       for (;;) {
@@ -779,6 +779,12 @@ export class Store {
     this.advanceCursor();
     this.internalDelete(`assistant:history:${conversationId}`);
     this.internalDelete(`assistant:retained-history:${conversationId}`);
+    for (;;) {
+      const page = this.internalPage(`assistant:transcript:${conversationId}:`, '', 100);
+      for (const row of page) this.internalDelete(row.id);
+      if (page.length < 100) break;
+    }
+    this.internalDelete(`assistant:transcript-state:${conversationId}`);
     this.internalDelete(`assistant:conversation:${conversationId}`);
   }
   internalDelete(id: string) { this.db.prepare('DELETE FROM service_records WHERE id=?').run(id); }
@@ -792,6 +798,12 @@ export class Store {
   /** One provider page and its resume position must survive together. */
   internalBatch(entries: { id: string; value: unknown }[], remove: string[] = []) {
     this.transaction(() => { for (const entry of entries) this.internalWrite(entry.id, entry.value); for (const id of remove) this.internalDelete(id); });
+  }
+  /** Transcript observations share an enclosing admission's commit or rollback. */
+  internalBatchJoined(entries: { id: string; value: unknown }[], remove: string[] = []) {
+    if (!this.db.isTransaction) return this.internalBatch(entries, remove);
+    for (const entry of entries) this.internalWrite(entry.id, entry.value);
+    for (const id of remove) this.internalDelete(id);
   }
   /** Atomic service-owned state transitions; callers must not nest this inside admission. */
   internalAtomic<T>(work: () => T): T { return this.transaction(work); }
@@ -836,6 +848,11 @@ export class Store {
     return row ? this.open(`history:${id}:${revision}`, row.payload) as Entity<Values[K]> : undefined;
   }
   /** Capture one immutable effect intent and its receipt atomically, before any external await. */
+  replayAdmission<T>(device: string, input: { requestId: string; epoch: string }, intent: unknown): T | undefined {
+    if (!/^[0-9a-f-]{36}$/i.test(input.requestId)) throw new Fault(400, 'invalid_request', 'Invalid request identity.');
+    if (input.epoch !== this.epoch) throw new Fault(409, 'epoch_changed', 'The workspace changed. Review the original work before continuing.');
+    return this.replay(input.requestId, hash(canonical(intent)), device) as T | undefined;
+  }
   admit<T>(device: string, input: { requestId: string; epoch: string }, intent: unknown, prepare: () => T): { value: T; fresh: boolean } {
     if (!/^[0-9a-f-]{36}$/i.test(input.requestId)) throw new Fault(400, 'invalid_request', 'Invalid request identity.');
     const digest = hash(canonical(intent));

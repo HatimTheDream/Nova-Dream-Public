@@ -33,7 +33,7 @@ export class VoiceCalls {
     this.timer.unref();
   }
   private all() { return this.store.internalList<VoiceAttempt>('voice:attempt:'); }
-  private save(value: VoiceAttempt) { if (this.closed || this.assistant.removals.removed(value.target.conversation.id)) return value; return this.store.internalWrite(key(value.id), value); }
+  private save(value: VoiceAttempt) { if (this.closed || this.assistant.removals.removed(value.target.conversation.id)) return value; const saved = this.store.internalWrite(key(value.id), value); this.assistant.observeVoice(saved); return saved; }
   private get(id: string) { const value = this.store.internalRead<VoiceAttempt>(key(id)); if (!value) throw new Fault(404, 'voice_missing', 'This voice call is unavailable.'); return value; }
   read(device: string, id: string) { const value = this.get(id); if (value.deviceId !== device) throw new Fault(403, 'voice_owner', 'This voice call belongs to another device.'); return value; }
   recover(device: string, requestId: string) { return { attempt: this.all().find(a => a.deviceId === device && a.requestId === requestId) ?? null }; }
@@ -48,6 +48,9 @@ export class VoiceCalls {
     const current = this.assistant.captureVoiceTarget(c.id, c.revision, original.project?.revision ?? 0);
     // Saved memory is captured at call start; edits apply to the next call.
     const { memory: currentMemory, ...currentScope } = current, { memory: originalMemory, ...originalScope } = original;
+    // Account attribution is metadata, not a change to the call's captured authority.
+    currentScope.conversation = { ...currentScope.conversation, accountSelection: undefined };
+    originalScope.conversation = { ...originalScope.conversation, accountSelection: undefined };
     if (canonical(currentScope) !== canonical(originalScope)) throw new Fault(409, 'voice_context_changed', 'The conversation or Project changed. End this call and review its context.');
   }
   private async preflight(attempt: VoiceAttempt, idle = true) {
@@ -56,6 +59,7 @@ export class VoiceCalls {
     const history = await this.assistant.history(attempt.target.conversation.id);
     this.currentTarget(attempt);
     if (history.nativeId !== attempt.target.conversation.nativeId || history.nativeSettings?.archived === true || (attempt.target.conversation.model && history.nativeSettings?.model !== attempt.target.conversation.model) || (idle && (history.activeRunIds === null || history.activeRunIds.length > 0))) throw new Fault(409, 'voice_session_changed', 'The original conversation is busy or changed. Check its history before starting voice.');
+    return history;
   }
   start(device: string, raw: unknown) {
     const input = voiceStartSchema.parse(raw);
@@ -76,7 +80,8 @@ export class VoiceCalls {
   }
   private async prepare(attempt: VoiceAttempt, state: Live, chosenModel?: string, chosenVoice?: string) {
     try {
-      const [, catalog] = await Promise.all([this.preflight(attempt), this.setup.read()]);
+      const [history, catalog] = await Promise.all([this.preflight(attempt), this.setup.read()]);
+      await this.assistant.prepareAccount(attempt.target.conversation.id, history);
       const provider = catalog.providers.find(p => p.id === 'openai' && p.configured && p.browserSupported);
       const model = chosenModel ?? provider?.models.find(m => m === 'gpt-realtime-2.1');
       if (catalog.state !== 'available' || !provider || !model || !/^gpt-realtime-2(?:\.1(?:-mini)?)?$/.test(model) || !provider.models.includes(model)) throw new Fault(409, 'voice_model', 'Connect a supported OpenAI realtime voice model in Settings.');
@@ -92,6 +97,7 @@ export class VoiceCalls {
       this.currentTarget(attempt);
       if (this.get(attempt.id).state !== 'preparing') return;
       const context = voiceCallContext(attempt.target, prepared.sources);
+      if (attempt.target.conversation.resumeContext && prepared.sources.some(source => source.origin === 'conversation' && !['included', 'native'].includes(source.state))) throw new Fault(409, 'voice_history_unavailable', 'This chat’s saved history or files could not be prepared for voice. Continue in text while these sources are unavailable.');
       attempt = this.save({ ...this.get(attempt.id), sources: prepared.sources, context, contextDigest: hash(context) });
       state.dispatched = true;
       const result = browserSession.parse(await this.gateway.request('talk.client.create', { sessionKey: attempt.target.conversation.nativeKey, voiceSessionId: attempt.id, provider: 'openai', model, voice, mode: 'realtime', transport: 'webrtc', brain: 'agent-consult', capabilities: ['voice-transcript'], silenceDurationMs: 450, prefixPaddingMs: 300 }));

@@ -82,10 +82,9 @@ export function useAssistant(snapshot: Snapshot) {
     const currentGeneration = generation.current, ticket = ++historyRequest.current;
     const epoch = context.current.snapshot.epoch;
     const nativeId = context.current.state.conversations.find(c => c.id === id)?.nativeId;
-    const host = context.current.state.connection.generation;
-    const isCurrent = () => mounted.current && !signal.aborted && selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket && context.current.snapshot.epoch === epoch && context.current.state.connection.generation === host && context.current.state.conversations.find(c => c.id === id)?.nativeId === nativeId;
-    const cacheKey = `e3:history:${epoch}:${id}:${nativeId}`;
-    const matches = (value: ConversationHistory | undefined): value is ConversationHistory => !!value && value.conversationId === id && value.nativeId === nativeId && Array.isArray(value.messages);
+    const isCurrent = () => mounted.current && !signal.aborted && selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket && context.current.snapshot.epoch === epoch;
+    const cacheKey = `e3:history:${epoch}:${id}:nova`;
+    const matches = (value: ConversationHistory | undefined): value is ConversationHistory => !!value && value.conversationId === id && (!!value.transcript || value.nativeId === nativeId) && Array.isArray(value.messages);
     setLoading(true);
     try {
       const conversation = context.current.state.conversations.find(c => c.id === id);
@@ -96,20 +95,20 @@ export function useAssistant(snapshot: Snapshot) {
       const result = await request<ConversationHistory>(`assistant/history/${id}${query.size ? `?${query}` : ''}`, undefined, signal);
       if (!isCurrent()) return;
       if (!matches(result)) throw new Error('The returned history belongs to a different conversation. Refresh this conversation to check its current identity.');
-      if (restore && !result.messages.some(m => m.id === restore.id && m.role === restore.role)) throw new Error('Your saved reading position is no longer available. Open Latest to continue.');
-      setHistory(current => { const next = messageId || options?.latest || !!current?.retained !== !!result.retained ? result : mergeHistoryPage(current, result, options?.newer ? 'newer' : options?.offset !== undefined); saveLocal(cacheKey, cacheTranscriptWindow(next, readTranscriptPosition(transcriptPositionKey(epoch, context.current.snapshot.deviceId, conversation)))); return next; }); setHistorySource(result.retained ? 'saved' : 'live'); setHistoryError(result.retained ? 'Showing saved messages. Reconnect the original Assistant to check for updates.' : '');
+      if (restore && !result.messages.some(m => (m.id === restore.id || m.novaId === restore.id || m.aliases?.includes(restore.id)) && m.role === restore.role)) throw new Error('Your saved reading position is no longer available. Open Latest to continue.');
+      setHistory(current => { const next = messageId || options?.latest || !!current?.retained !== !!result.retained ? result : mergeHistoryPage(current, result, options?.newer ? 'newer' : options?.offset !== undefined); saveLocal(cacheKey, cacheTranscriptWindow(next, readTranscriptPosition(transcriptPositionKey(epoch, context.current.snapshot.deviceId, conversation)))); return next; }); setHistorySource(result.retained ? 'saved' : 'live'); setHistoryError(result.retained && !result.transcript ? 'Showing saved messages.' : '');
     } catch (reason) {
       if (!isCurrent()) return;
       setHistoryError(reason instanceof Error ? reason.message : 'Conversation history is unavailable.');
       // Earlier versions keyed a cache only by conversation. Its native identity
       // must still match; a restored or replaced session cannot inherit it.
-      const cached = readLocal<ConversationHistory>(cacheKey) ?? readLocal<ConversationHistory>(`e3:history:${id}`);
+      const cached = readLocal<ConversationHistory>(cacheKey) ?? readLocal<ConversationHistory>(`e3:history:${epoch}:${id}:${nativeId}`) ?? readLocal<ConversationHistory>(`e3:history:${id}`);
       setHistory(current => historyAfterReadFailure(current, cached, id, nativeId));
       setHistorySource('saved');
     } finally { if (mounted.current && !signal.aborted && selectedRef.current === id && generation.current === currentGeneration && historyRequest.current === ticket) setLoading(false); }
   }, []);
   if (!historyReader.current) historyReader.current = new AssistantHistoryReader({
-    identity: id => canonical([context.current.snapshot.epoch, context.current.snapshot.deviceId, generation.current, selectedRef.current, context.current.state.connection.generation, context.current.state.conversations.find(c => c.id === id)?.nativeId]),
+    identity: id => canonical([context.current.snapshot.epoch, context.current.snapshot.deviceId, generation.current, selectedRef.current, id]),
     read: readHistory,
   });
   const loadHistory = useCallback((id = selectedRef.current, options?: HistoryReadOptions) => id ? historyReader.current!.load(id, options) : Promise.resolve(), []);
@@ -185,12 +184,21 @@ export function useAssistant(snapshot: Snapshot) {
     } finally { await refresh(); if (selectedRef.current === conversation.id) await loadHistory(conversation.id); }
   };
   const checkStatus = async (id = selectedRef.current) => { if (!id) return false; try { await request(`assistant/reconcile/${id}`); await refresh(); if (id === selectedRef.current) await loadHistory(); return true; } catch (e) { setError(e instanceof Error ? e.message : 'Status unavailable.'); return false; } };
-  const pinMessage = async (conversation: Conversation, message: Pick<ConversationMessage, 'id' | 'role' | 'textHash'>, pinned: boolean) => {
-    const previous = context.current.state.pins?.find(p => p.conversationId === conversation.id && p.nativeId === conversation.nativeId && p.messageId === message.id && p.role === message.role);
-    const key = `e3:message-pin:${snapshot.epoch}:${conversation.nativeId}:${message.role}:${message.id}`;
+  const selectAccount = async (conversation: Conversation, profileId: string | null) => {
+    const key = `e3:conversation-account:${snapshot.epoch}:${snapshot.deviceId}:${conversation.id}`;
+    const input = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, expectedRevision: conversation.revision, profileId };
+    if (!saveLocal(key, input)) throw new Error('Free browser storage before changing this account.');
+    try { const result = await request<Conversation>('assistant/conversation/account', input); localStorage.removeItem(key); return result; }
+    catch (error) { if (error instanceof ApiError && ['conversation_busy', 'account_missing', 'account_duplicate', 'account_unavailable', 'epoch_changed'].includes(error.code)) localStorage.removeItem(key); throw error; }
+    finally { await refresh(); }
+  };
+  const pinMessage = async (conversation: Conversation, message: Pick<ConversationMessage, 'id' | 'role' | 'textHash'> & { source?: Pick<NonNullable<ConversationMessage['source']>, 'nativeId'> }, pinned: boolean) => {
+    const nativeId = message.source?.nativeId ?? conversation.nativeId;
+    const previous = context.current.state.pins?.find(p => p.conversationId === conversation.id && p.nativeId === nativeId && p.messageId === message.id && p.role === message.role);
+    const key = `e3:message-pin:${snapshot.epoch}:${nativeId}:${message.role}:${message.id}`;
     const kept = readLocal<{ expectedRevision: number; pinned: boolean }>(key);
     if (kept && (previous?.revision ?? 0) > kept.expectedRevision) localStorage.removeItem(key);
-    const input = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId: conversation.nativeId, messageId: message.id, messageHash: message.textHash, role: message.role, pinned, expectedRevision: previous?.revision ?? 0 };
+    const input = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId, messageId: message.id, messageHash: message.textHash, role: message.role, pinned, expectedRevision: previous?.revision ?? 0 };
     if (!saveLocal(key, input)) throw new Error('Free browser storage before changing this pin.');
     try {
       // Exact source read does not replace the writer's reading window.
@@ -201,16 +209,16 @@ export function useAssistant(snapshot: Snapshot) {
   };
   const saveOutput = async (conversation: Conversation, message: ConversationMessage, name: string) => {
     const key = `e3:output:${conversation.id}:${message.id}:${message.textHash}`;
-    const intent = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId: conversation.nativeId, messageId: message.id, messageHash: message.textHash, name };
+    const intent = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId: message.source?.nativeId ?? conversation.nativeId, messageId: message.id, messageHash: message.textHash, name };
     if (!saveLocal(key, intent)) throw new Error('Free browser storage before saving this output.');
     const output = await request<AssistantOutput>('assistant/outputs', intent); localStorage.removeItem(key); await refresh(); return output;
   };
   const saveArtifact = async (conversation: Conversation, message: ConversationMessage, attachment: MessageAttachment) => {
-    const key = `e3:artifact:${conversation.nativeId}:${message.id}:${attachment.artifactId}:${message.textHash}`;
-    const intent = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId: conversation.nativeId, messageId: message.id, messageHash: message.textHash, artifactId: attachment.artifactId, name: attachment.name.trim() || 'Generated output' };
+    const key = `e3:artifact:${message.source?.nativeId ?? conversation.nativeId}:${message.id}:${attachment.artifactId}:${message.textHash}`;
+    const intent = readLocal<object>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, nativeId: message.source?.nativeId ?? conversation.nativeId, messageId: message.id, messageHash: message.textHash, artifactId: attachment.artifactId, name: attachment.name.trim() || 'Generated output' };
     if (!saveLocal(key, intent)) throw new Error('Free browser storage before saving this output.');
     const output = await request<AssistantOutput>('assistant/artifact/save', intent); localStorage.removeItem(key); await refresh(); return output;
   };
-  return { ...state, space, switchSpace, statusRead, selectedId, conversation: state.conversations.find(c => c.id === selectedId), history, historyError, historySource, models, modelStatus, retryModels, outputs, remove, pinMessage, saveOutput, saveArtifact, error, setError, loading, select, create, edit, recoverSettings, refresh, loadHistory, checkStatus };
+  return { ...state, space, switchSpace, statusRead, selectedId, conversation: state.conversations.find(c => c.id === selectedId), history, historyError, historySource, models, modelStatus, retryModels, outputs, remove, pinMessage, saveOutput, saveArtifact, error, setError, loading, select, selectAccount, create, edit, recoverSettings, refresh, loadHistory, checkStatus };
 }
 export type AssistantController = ReturnType<typeof useAssistant>;

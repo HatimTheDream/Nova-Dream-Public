@@ -8,10 +8,10 @@ test('saved reading anchors reject invalid or unbounded projections', () => {
   for (const value of [null, { ...valid, version: 2 }, { ...valid, anchor: undefined }, { ...valid, anchor: { ...valid.anchor, offset: Infinity } }, { ...valid, anchor: { ...valid.anchor, role: 'unknown' } }, { ...valid, anchor: { ...valid.anchor, offset: 200000 } }]) assert.equal(parseTranscriptPosition(value), undefined);
   assert.ok(parseTranscriptPosition({ version: 1, following: true, savedAt: 200 }));
 });
-test('reading identity separates workspace epochs, devices, hosts and native session replacements', () => {
+test('reading identity separates owners and workspaces while surviving account and native session replacements', () => {
   const conversation = { id: 'one', nativeId: 'native-one', connectionGeneration: 'host-one' } as Conversation;
   const keys = [transcriptPositionKey('epoch-one', 'device-one', conversation), transcriptPositionKey('epoch-two', 'device-one', conversation), transcriptPositionKey('epoch-one', 'device-two', conversation), transcriptPositionKey('epoch-one', 'device-one', { ...conversation, nativeId: 'replacement' }), transcriptPositionKey('epoch-one', 'device-one', { ...conversation, connectionGeneration: 'host-two' })];
-  assert.equal(new Set(keys).size, keys.length); assert.equal(transcriptPositionKey('epoch', 'device', undefined), undefined);
+  assert.equal(new Set(keys.slice(0, 3)).size, 3); assert.equal(keys[0], keys[3]); assert.equal(keys[0], keys[4]); assert.equal(transcriptPositionKey('epoch', 'device', undefined), undefined);
 });
 
 test('offline cache keeps a bounded neighborhood around the actual message and drops invalid sliced cursors', async () => {

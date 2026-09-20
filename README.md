@@ -1,8 +1,10 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.8.13-blue)
+![Version](https://img.shields.io/badge/Version-1.9.0-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
+
+[Accounts and chat history](docs/ACCOUNTS-AND-CHAT-HISTORY.md) explains multiple ChatGPT connections, usage, safe account switching and saved conversation recovery.
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 

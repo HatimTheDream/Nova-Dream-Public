@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Connections } from '../apps/client/src/Connections.js';
 import type { Snapshot } from '../packages/domain/contracts.js';
+
+const styles = registerHooks({ load(url, context, next) {
+  return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context);
+} });
+const { Connections } = await import('../apps/client/src/Connections.js');
+styles.deregister();
 
 test('initial Assistant setup is unknown and cannot start the host before status arrives', () => {
   // Server rendering observes the real component before any status read resolves.

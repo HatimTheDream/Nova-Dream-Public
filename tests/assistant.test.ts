@@ -57,6 +57,27 @@ async function fixture(run: (f: { store: Store; service: AssistantService; gatew
   finally { service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 }
 const tick = () => new Promise(r => setTimeout(r, 15));
+test('a fresh service reads, pins and saves archived source text after its runtime binding changes', () => fixture(async f => {
+  f.gateway.messages = [{ id: 'stable-message', role: 'assistant', content: 'The retained original answer' }];
+  const message = (await f.service.history(f.conversation.id)).messages[0];
+  f.service.close(); f.gateway.generation = randomUUID();
+  const replacement = { ...f.conversation, nativeId: randomUUID(), nativeKey: 'agent:main:new-binding', connectionGeneration: f.gateway.generation };
+  f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, replacement);
+  const fresh = new AssistantService(f.store, f.gateway);
+  const originalCalls = f.gateway.calls.length;
+  try {
+    const history = await fresh.historyForReading(f.conversation.id);
+    assert.equal(history.messages[0].text, message.text);
+    assert.equal(history.messages[0].source?.nativeId, f.conversation.nativeId);
+    const source = { epoch: f.store.epoch, conversationId: f.conversation.id, nativeId: f.conversation.nativeId, messageId: message.id, messageHash: message.textHash };
+    const pin = fresh.pins.change(f.device, { ...source, requestId: randomUUID(), role: 'assistant', pinned: true, expectedRevision: 0 });
+    assert.equal(pin.nativeId, f.conversation.nativeId);
+    const output = fresh.saveOutput(f.device, { ...source, requestId: randomUUID(), name: 'Original answer' });
+    assert.equal(f.store.download(output.file!.id).bytes.toString(), message.text);
+    assert.equal(f.gateway.calls.slice(originalCalls).some(c => ['chat.send', 'sessions.patch', 'sessions.create'].includes(c.method)), false);
+    assert.equal(f.store.snapshot(f.device).drafts[0].value.text, 'Use the selected context.');
+  } finally { fresh.close(); }
+}));
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void, reject!: (reason: unknown) => void;
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
@@ -346,6 +367,9 @@ for (const version of [1, 2]) for (const legacy of [false, true]) test(`native-t
   assert(history.messages.slice(1).every(m => m.authoredText === undefined));
   // Simulate a pre-fix backup with no authored display field, then read offline.
   const older = { ...history, messages: history.messages.map(({ authoredText: _display, ...m }) => m) };
+  // A pre-migration workspace has only these original caches, not a newer Nova archive.
+  for (const row of f.store.internalPage(`assistant:transcript:${f.conversation.id}:`, '', 500)) f.store.internalDelete(row.id);
+  f.store.internalDelete(`assistant:transcript-state:${f.conversation.id}`);
   f.store.internalWrite(`assistant:history:${f.conversation.id}`, older);
   const retained = { history: older, complete: true, capturedAt: '2026-09-16T12:00:00.000Z' };
   f.store.internalWrite(`assistant:retained-history:${f.conversation.id}`, retained);
@@ -476,7 +500,8 @@ test('read-only archive and exact anchors preserve active cache, drafts, model a
   const read = await f.service.browse({epoch:f.store.epoch,conversationId:conversation.id,nativeId:oldId,messageId:'old-entry',role:'user'});
   assert.equal(read.nativeId,oldId); assert.equal(read.messages[0].id,'old-entry');
   assert.deepEqual(f.gateway.calls.at(-1),{method:'chat.history',params:{sessionKey:conversation.nativeKey,sessionId:oldId,limit:100,maxChars:300000,messageId:'old-entry'}});
-  assert.deepEqual(f.service.cachedHistory(conversation.id),JSON.parse(JSON.stringify(latest)));
+  assert.deepEqual(f.store.internalRead(`assistant:history:${conversation.id}`),JSON.parse(JSON.stringify(latest)));
+  assert.equal(f.service.cachedHistory(conversation.id)?.messages[0].text, 'Latest live answer');
   assert.deepEqual(f.store.snapshot(f.device),before);assert.deepEqual(f.service.conversations()[0],conversation);
   assert.equal(f.gateway.calls.filter(c=>['chat.send','sessions.patch'].includes(c.method)).length,0);
 }));
@@ -487,18 +512,20 @@ test('missing anchored messages and returned native-ID mismatches never substitu
   await assert.rejects(f.service.browse(input),/exact message is no longer available/);
   f.gateway.replaceSession=true;await assert.rejects(f.service.browse(input),/native conversation was replaced/);
   await assert.rejects(f.service.browse({...input,offset:1}),/cannot be combined/);
-  assert.equal(f.service.cachedHistory(f.conversation.id),undefined);
+  assert.equal(f.store.internalRead(`assistant:history:${f.conversation.id}`),undefined);
+  assert.equal(f.service.cachedHistory(f.conversation.id)?.messages.some(m => m.id === 'missing-entry'), false);
 }));
 
 
-test('Content source browsing requires the saved message hash and leaves active writing unchanged', () => fixture(async f => {
+test('Content source browsing retains the saved version and rejects a mismatched source hash without changing drafts', () => fixture(async f => {
   f.gateway.messages = [{ id: 'content-source', role: 'assistant', content: [{ type: 'text', text: 'Exact saved source' }] }];
   const history = await f.service.history(f.conversation.id), message = history.messages[0];
   const input = { epoch: f.store.epoch, conversationId: f.conversation.id, nativeId: f.conversation.nativeId, messageId: message.id, messageHash: message.textHash, role: 'assistant' };
   const before = f.store.snapshot(f.device).drafts;
   assert.equal((await f.service.browse(input)).messages[0].text, 'Exact saved source');
   f.gateway.messages = [{ id: 'content-source', role: 'assistant', content: [{ type: 'text', text: 'Revised source under the same ID' }] }];
-  await assert.rejects(f.service.browse(input), /source message has changed/);
+  assert.equal((await f.service.browse(input)).messages[0].text, 'Exact saved source');
+  await assert.rejects(f.service.browse({ ...input, messageHash: '0'.repeat(64) }), /source message has changed/);
   await assert.rejects(f.service.browse({ ...input, messageId: undefined }), /message anchor/);
   assert.deepEqual(f.store.snapshot(f.device).drafts, before);
 }));

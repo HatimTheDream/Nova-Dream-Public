@@ -1,3 +1,12 @@
+## [1.9.0] — 2026-09-20
+
+- Keep conversations, saved replies, voice captions, pins and verified files in Nova independently of a ChatGPT account. Migrate saved history incrementally and show incomplete coverage honestly.
+- Connect multiple ChatGPT accounts with separate Add Account and Reconnect actions, independent usage/reset readings, duplicate identity detection, and a preferred/backup order.
+- Select an account per chat or use the default order. Choose a ready backup before a new reply while preserving the same chat and context; never replay an uncertain request.
+- Resume saved Chat conversations on a replacement Assistant connection without creating a second visible chat. Carry reviewed dialogue and verified files into the next message; keep drafts, Projects and memory. Work checkouts and missing sources retain explicit recovery requirements.
+- Preserve reading positions and historical source links across account changes. Save voice captions locally even when the native transcript acknowledgement is delayed.
+- Fix Windows sign-in process cleanup so closing or replacing a sign-in stops its owned terminal process.
+
 ## [1.8.13] — 2026-09-20
 
 - Keep the latest-message arrow centered without voice and beside the voice controls during a call, without adding a row or lifting the mascot. Reserve horizontal space on narrow layouts so the controls stay in place as the arrow appears.

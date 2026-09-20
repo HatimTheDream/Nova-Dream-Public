@@ -10,6 +10,8 @@ import { BrowserNetwork } from './browser-network.js';
 import { withWorkerPlugin } from './worker-runtime-config.js';
 import { withModulePlugin } from './module-runtime-config.js';
 import { withSourcePlugin } from './source-runtime-config.js';
+import { withAccountPlugin } from './account-runtime-config.js';
+import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
 import type { RuntimeStatus } from '../../packages/domain/runtime.js';
 import type { ChatGptSignInMethod } from '../../packages/domain/sign-in.js';
 export type { RuntimeStatus } from '../../packages/domain/runtime.js';
@@ -53,15 +55,20 @@ export class ManagedRuntime {
     const owned = !!config && !!this.child?.pid && !this.child.killed && this.child.exitCode === null && this.child.signalCode === null && connection.url === `ws://127.0.0.1:${config.port}`;
     return { ...this.current, ...(this.current.startedAt ? { elapsedSeconds: Math.max(0, Math.floor(((this.current.readyAt ?? Date.now()) - this.current.startedAt) / 1000)) } : {}), canSignIn: owned && !this.stopping };
   }
-  signInCommand(method: ChatGptSignInMethod = 'device-code'): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
+  signInCommand(method: ChatGptSignInMethod = 'device-code', profileId = 'openai:edition3-voice'): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
+    chatGptProfileIdSchema.parse(profileId);
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
     if (this.stopping || !config || !this.child?.pid || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.gateway.status().url !== `ws://127.0.0.1:${config.port}`) throw new Fault(409, 'local_runtime_required', 'Start the Assistant on this host before signing in here.');
     const { root, config: configPath } = this.paths();
-    return { file: process.execPath, args: [this.entry(), '--profile', 'edition3', 'models', 'auth', 'login', '--agent', 'main', '--provider', 'openai', ...(method === 'browser' ? ['--method', 'oauth'] : ['--device-code']), '--profile-id', 'openai:edition3-voice'], cwd: root, env: this.environment(config, root, configPath) };
+    return { file: process.execPath, args: [this.entry(), '--profile', 'edition3', 'models', 'auth', 'login', '--agent', 'main', '--provider', 'openai', ...(method === 'browser' ? ['--method', 'oauth'] : ['--device-code']), '--profile-id', profileId], cwd: root, env: this.environment(config, root, configPath) };
   }
   accountCommand() {
     const command = this.signInCommand(); // Same live, owned-host check; no sign-in is executed.
     return { ...command, args: [...command.args.slice(0, 3), 'models', 'auth', 'list', '--agent', 'main', '--provider', 'openai', '--json'] };
+  }
+  accountOrderCommand() {
+    const command = this.accountCommand();
+    return { ...command, args: [...command.args.slice(0, 3), 'models', 'auth', 'order', 'get', '--agent', 'main', '--provider', 'openai', '--json'] };
   }
   backupCommand(args: string[]): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } | undefined {
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration') ?? (['restore', 'verify'].includes(args[0]) ? { port: 1, token: randomBytes(32).toString('hex'), entry: this.entry() } : undefined);
@@ -147,7 +154,7 @@ export class ManagedRuntime {
       parsedConfig.tools={...parsedConfig.tools,deny:[...new Set([...(parsedConfig.tools?.deny??[]),'browser'])]};
       parsedConfig.gateway={...parsedConfig.gateway,nodes:{...parsedConfig.gateway?.nodes,browser:{mode:'off'}}};
       parsedConfig.plugins = { ...parsedConfig.plugins, allow:[...new Set([...(parsedConfig.plugins?.allow??[]),'browser'])], entries:{...parsedConfig.plugins?.entries,browser:{...parsedConfig.plugins?.entries?.browser,enabled:true}} };
-      const stagedConfig = withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache'));
+      const stagedConfig = withAccountPlugin(withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache')), this.store.epoch, join(dirname(bundlePath), 'account-plugin'), entry);
       const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),this.moduleBridge()) : stagedConfig,null,2);
       if (JSON.stringify(JSON.parse(originalConfig)) !== JSON.stringify(JSON.parse(updatedConfig))) {
         // The old path and replacement are recorded in the same atomic config

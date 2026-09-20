@@ -34,7 +34,7 @@ const service = new ChatGptSignIn(store, { signInCommand: () => ({
   env: { PATH: process.env.PATH, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) },
 }) });
 try {
-  service.start(store.session().deviceId, { requestId: randomUUID(), epoch: store.epoch });
+  await service.start(store.session().deviceId, { requestId: randomUUID(), epoch: store.epoch });
   const deadline = Date.now() + 4000;
   while (service.status().state === 'starting' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
   const { state, userCode } = service.status();

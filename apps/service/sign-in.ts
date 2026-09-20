@@ -6,6 +6,7 @@ import { assistantRequestSchema } from '../../packages/domain/assistant.js';
 import type { ChatGptSignInStatus } from '../../packages/domain/sign-in.js';
 import { Fault, Store } from './store.js';
 import type { ManagedRuntime } from './runtime.js';
+import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
 
 const key = 'signin:chatgpt:current';
 const loginUrl = 'https://auth.openai.com/codex/device';
@@ -13,7 +14,7 @@ const active = (state: ChatGptSignInStatus['state']) => state === 'starting' || 
 type Attempt = Omit<ChatGptSignInStatus, 'userCode' | 'verificationUrl' | 'authorizationUrl'> & { id: string; startedAt: number; pid?: number };
 type Terminal = Pick<IPty, 'pid' | 'onData' | 'onExit' | 'kill'>;
 type TerminalFactory = (command: ReturnType<ManagedRuntime['signInCommand']>) => Terminal;
-const startSchema = assistantRequestSchema.extend({ method: z.enum(['browser', 'device-code']).optional() }).strict();
+const startSchema = assistantRequestSchema.extend({ method: z.enum(['browser', 'device-code']).optional(), intent: z.enum(['add', 'reconnect']).optional(), profileId: chatGptProfileIdSchema.optional() }).strict().refine(input => input.intent === 'reconnect' ? !!input.profileId : !input.profileId, 'Reconnect needs its exact account; Add creates a new connection.');
 
 /** Only complete pinned CLI authorization output. OAuth state/PKCE remain native-owned. */
 export function browserSignInNote(output: string): { authorizationUrl: string } | undefined {
@@ -64,7 +65,7 @@ export class ChatGptSignIn {
   private closed = false;
   private stopping = false;
   private stopMessage?: string;
-  constructor(private store: Store, private runtime: Pick<ManagedRuntime, 'signInCommand'>, private createTerminal: TerminalFactory = command => spawn(command.file, command.args, { cwd: command.cwd, env: { ...command.env, TERM: 'xterm', NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>, name: 'xterm', cols: 120, rows: 32 })) {
+  constructor(private store: Store, private runtime: Pick<ManagedRuntime, 'signInCommand'>, private createTerminal: TerminalFactory = command => spawn(command.file, command.args, { cwd: command.cwd, env: { ...command.env, TERM: 'xterm', NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>, name: 'xterm', cols: 120, rows: 32 }), private accounts?: { validateReconnect(profileId: string): Promise<void>; invalidate(): void }) {
     const old = this.current();
     if (old && active(old.state)) this.save({ ...old, state: 'interrupted', message: 'The service restarted before sign-in was confirmed. Check the account connection.' });
   }
@@ -76,7 +77,7 @@ export class ChatGptSignIn {
     const { pid, startedAt, ...status } = current;
     return { ...status, ...(current.id === this.current()?.id && current.state === 'waiting' && current.expiresAt! > Date.now() ? this.code : {}) };
   }
-  start(device: string, raw: unknown) {
+  async start(device: string, raw: unknown) {
     const input = startSchema.parse(raw);
     if (this.closed) throw new Fault(503, 'signin_closed', 'Sign-in is unavailable while the host is closing.');
     let command: ReturnType<ManagedRuntime['signInCommand']> | undefined;
@@ -87,12 +88,19 @@ export class ChatGptSignIn {
         try { process.kill(previous.pid, 0); throw new Fault(409, 'signin_process_present', 'The earlier sign-in process is still present. Finish or close that OpenClaw sign-in before starting another.'); }
         catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error; }
       }
-      command = this.runtime.signInCommand(input.method ?? 'device-code');
-      return this.save({ id: randomUUID(), ...(input.method ? { method: input.method } : {}), state: 'starting', startedAt: Date.now(), message: input.method === 'browser' ? 'Opening secure ChatGPT sign-in…' : 'Requesting a ChatGPT sign-in code…' });
+      const intent = input.intent ?? 'add', profileId = intent === 'reconnect' ? input.profileId! : `openai:nova-${randomUUID()}`;
+      command = this.runtime.signInCommand(input.method ?? 'device-code', profileId);
+      return this.save({ id: randomUUID(), intent, profileId, ...(input.method ? { method: input.method } : {}), state: 'starting', startedAt: Date.now(), message: input.method === 'browser' ? 'Opening secure ChatGPT sign-in…' : 'Requesting a ChatGPT sign-in code…' });
     });
     if (!admitted.fresh) return this.status(admitted.value.id);
     const attempt = admitted.value;
     try {
+      if (attempt.intent === 'reconnect') {
+        if (!this.accounts) throw new Fault(503, 'signin_accounts_unavailable', 'Check the saved account on the host before reconnecting.');
+        await this.accounts.validateReconnect(attempt.profileId!);
+      }
+      if (this.closed || this.current()?.id !== attempt.id || !active(this.current()!.state)) return this.status(attempt.id);
+      if (JSON.stringify(command) !== JSON.stringify(this.runtime.signInCommand(input.method ?? 'device-code', attempt.profileId))) throw Error('The account host changed.');
       const terminal = this.createTerminal(command!);
       this.terminal = terminal; this.stopping = false; this.stopMessage = undefined; this.output = ''; this.code = undefined;
       this.save({ ...attempt, pid: terminal.pid });
@@ -103,6 +111,7 @@ export class ChatGptSignIn {
           clearTimeout(this.timer); this.output = ''; this.code = undefined;
           if (!this.closed && this.current()?.id === attempt.id) this.save({ ...this.current()!, state: this.stopping ? 'interrupted' : result.exitCode === 0 ? 'completed' : 'failed', message: this.stopping ? this.stopMessage ?? 'Sign-in stopped. Check the connection in case account setup already completed.' : result.exitCode === 0 ? 'OpenClaw confirmed ChatGPT sign-in. Check account and model access.' : progress?.includes('could not') || progress?.includes('unavailable') ? progress : 'OpenClaw did not confirm sign-in. You can try again or review its account setup.' });
           if (this.terminal === terminal) this.terminal = undefined;
+          this.accounts?.invalidate();
           resolve();
         });
       });
@@ -120,8 +129,8 @@ export class ChatGptSignIn {
         }
       });
       this.timer = setTimeout(() => { if (!this.closed && this.current()?.id === attempt.id) void this.stopAttempt('OpenClaw did not provide a usable sign-in link or code in time. Check its account setup before starting another sign-in.'); }, 90000);
-    } catch {
-      this.save({ ...attempt, state: 'failed', message: 'The host could not start OpenClaw sign-in. Review the local runtime setup.' });
+    } catch (error) {
+      if (this.current()?.id === attempt.id && active(this.current()!.state)) this.save({ ...attempt, state: 'failed', message: error instanceof Fault && ['signin_accounts_unavailable', 'signin_profile_missing'].includes(error.code) ? error.message : 'The host could not start OpenClaw sign-in. Review the local runtime setup.' });
     }
     return this.status();
   }
@@ -136,16 +145,18 @@ export class ChatGptSignIn {
   }
   private async stopAttempt(message?: string) {
     const terminal = this.terminal;
-    if (!terminal) return;
+    if (!terminal) { const current = this.current(); if (current && active(current.state)) this.save({ ...current, state: 'interrupted', message: 'Sign-in stopped before account setup started.' }); return; }
     this.stopping = true; this.stopMessage = message; this.code = undefined; clearTimeout(this.timer);
     const current = this.current();
     if (current && active(current.state)) this.save({ ...current, state: 'interrupted', message: 'Stopping sign-in. Check the connection in case account setup already completed.' });
-    try { terminal.kill('SIGTERM'); } catch { /* Exit may have won the race. */ }
+    // ConPTY rejects named Unix signals. Passing one leaves its owned pipe
+    // worker alive even after the child exits, blocking service shutdown.
+    try { terminal.kill(process.platform === 'win32' ? undefined : 'SIGTERM'); } catch { /* Exit may have won the race. */ }
     let timeout: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.exited, new Promise<void>(resolve => { timeout = setTimeout(resolve, 2500); })]);
     clearTimeout(timeout);
     if (this.terminal === terminal) {
-      try { terminal.kill('SIGKILL'); } catch { /* Exact owned child only. */ }
+      try { terminal.kill(process.platform === 'win32' ? undefined : 'SIGKILL'); } catch { /* Exact owned child only. */ }
       await Promise.race([this.exited, new Promise<void>(resolve => { timeout = setTimeout(resolve, 2500); })]);
       clearTimeout(timeout);
     }

@@ -61,6 +61,7 @@ import { z } from 'zod';
 import { ManagedRuntime } from './runtime.js';
 import { ChatGptSignIn } from './sign-in.js';
 import { ChatGptAccount } from './chatgpt-account.js';
+import { ChatGptAccountControl } from './account-control.js';
 import { AssistantUsage } from './usage.js';
 import { VoiceSetup } from './voice.js';
 import { VoiceCalls } from './voice-calls.js';
@@ -170,9 +171,14 @@ export async function startServer(options: { directory: string; port: number; pr
   const recovery = new WorkspaceRecovery(store);
   const recoveryServices = new Map<string, { origin: string; close: () => Promise<void> }>();
   const recoveryOpening = new Map<string, Promise<{ origin: string; close: () => Promise<void> }>>();
-  const signIn = runtime ? new ChatGptSignIn(store, runtime) : undefined;
+  const accountControl = new ChatGptAccountControl(gateway, gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'account-control') : undefined);
+  const chatGptAccount = runtime ? new ChatGptAccount(runtime, undefined, Date.now, { store, gateway, control: accountControl, busy: () => assistant.operations().some(op => !['completed', 'failed', 'cancelled'].includes(op.state)) || store.internalList<{state:string}>('voice:attempt:').some(a => ['preparing','ready','connecting','active','ending','interrupted'].includes(a.state)) }) : undefined;
+  if (chatGptAccount) assistant.setAccountRouter(async conversation => {
+    const selected = await chatGptAccount.route({ preferredProfileId: conversation.preferredAccountId ?? undefined, model: conversation.model ?? undefined });
+    return selected ? { profileId: selected.profileId, label: selected.label, reason: selected.reason, selectedAt: new Date(selected.checkedAt).toISOString() } : undefined;
+  }, profileId => chatGptAccount.validatePreference(profileId));
+  const signIn = runtime ? new ChatGptSignIn(store, runtime, undefined, chatGptAccount) : undefined;
   const assistantUsage = new AssistantUsage(gateway);
-  const chatGptAccount = runtime ? new ChatGptAccount(runtime) : undefined;
   const voice = new VoiceSetup(gateway);
   const dictation = new DictationService(store, gateway);
   const calls = new VoiceCalls(store, gateway, assistant, voice);
@@ -594,7 +600,7 @@ export async function startServer(options: { directory: string; port: number; pr
           if (!signIn) throw new Fault(503, 'signin_unavailable', 'This host cannot start OpenClaw sign-in.');
           const input = await commandBody(request);
           if (web && input && typeof input === 'object' && 'method' in input && input.method === 'browser') throw new Fault(409, 'server_device_signin', 'Use a sign-in code on this server. Browser callback sign-in needs a separately prepared host connection.');
-          return json(202, signIn.start(device, input));
+          return json(202, await signIn.start(device, input));
         }
         if (url.pathname === '/api/assistant/sign-in/cancel' && request.method === 'POST') {
           if (!signIn) throw new Fault(503, 'signin_unavailable', 'This host cannot manage OpenClaw sign-in.');
@@ -651,6 +657,13 @@ export async function startServer(options: { directory: string; port: number; pr
         }
         if (url.pathname === '/api/assistant/conversation/recover-settings' && request.method === 'POST') return json(200, await assistant.recoverSettings(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversation/fork' && request.method === 'POST') return json(200, await assistant.fork(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/account/order' && request.method === 'POST') {
+          if (!chatGptAccount) throw new Fault(503, 'account_unavailable', 'Account selection is unavailable on this host.');
+          return json(200, await chatGptAccount.configureOrder(device, await commandBody(request)));
+        }
+        if (url.pathname === '/api/assistant/conversation/account' && request.method === 'POST') return json(200, await assistant.selectAccount(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/conversation/resume' && request.method === 'POST') return json(200, await assistant.continuations.resume(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/conversation/resume/check' && request.method === 'POST') return json(200, await assistant.continuations.recover(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversations' && request.method === 'POST') return json(200, await assistant.create(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/submit' && request.method === 'POST') {
           if (gateway.status().state === 'unconfigured') throw new Fault(503, 'assistant_unverified', 'Assistant execution is not configured. The draft remains saved; nothing was dispatched.');
@@ -732,7 +745,7 @@ export async function startServer(options: { directory: string; port: number; pr
       try {
         await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
         await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
-        await signIn?.close(); await chatGptAccount?.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
+        await signIn?.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
       } finally {
         try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }
         finally { clearTimeout(drainTimer); await transfers.close(); store.close(); }

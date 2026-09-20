@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { retainedBrowseHistory } from '../apps/client/src/conversation-reader-state';
+import { matchesBrowseSource, retainedBrowseHistory } from '../apps/client/src/conversation-reader-state';
 import type { BrowseTarget } from '../packages/domain/search';
 import type { ConversationHistory } from '../packages/domain/assistant';
 
@@ -30,4 +30,15 @@ test('source navigation never reuses a prior conversation, message version, role
 test('an invalid response identity is never displayed under a matching requested source', () => {
   assert.equal(retainedBrowseHistory({ target, history: { ...history, nativeId: 'wrong' } }, target, 'workspace'), undefined);
   assert.equal(retainedBrowseHistory({ target, history: { ...history, conversationId: 'wrong' } }, target, 'workspace'), undefined);
+});
+
+test('an exact historical source remains readable in a Nova transcript with a newer current binding', () => {
+  const source = { bindingId: 'old-binding', nativeId: target.nativeId, nativeKey: 'old-key', connectionGeneration: 'old-generation', nativeMessageId: 'message', kind: 'native' as const, observedAt: '2026-09-20T00:00:00Z' };
+  const combined: ConversationHistory = { ...history, nativeId: 'new-native', messages: [{ ...history.messages[0], id: 'new-alias', novaId: 'nova-message', aliases: ['message'], source }], transcript: { revision: 1, savedMessages: 1, complete: true, conflicts: 0, unavailableAttachments: 0, bindings: [{ id: 'old-binding', nativeId: 'native', complete: true, status: 'complete', observedAt: source.observedAt }] } };
+  assert.equal(matchesBrowseSource(combined, target), true);
+  assert.equal(retainedBrowseHistory({ target, history: combined }, target, 'workspace'), combined);
+  assert.equal(matchesBrowseSource(combined, { ...target, messageHash: 'different-version' }), false);
+  assert.equal(matchesBrowseSource(combined, { ...target, role: 'user' }), false);
+  assert.equal(matchesBrowseSource({ ...combined, messages: [{ ...combined.messages[0], source: { ...source, nativeId: 'unrelated-native' } }] }, target), false);
+  assert.equal(matchesBrowseSource({ ...combined, transcript: undefined }, target), false);
 });

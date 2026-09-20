@@ -72,7 +72,7 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
       <ProviderAccounts snapshot={snapshot} online={online && !recoveryPaused} recoveryPaused={recoveryPaused}/>{!recoveryPaused && <GitHubConnection epoch={snapshot.epoch}/>}
     </section></SettingsPanel>}
     {!phone && <SettingsPanel id="assistant" active={current.id === 'assistant'}><Connections recoveryPaused={recoveryPaused} remoteHost={access?.surface === 'web'} snapshot={snapshot} online={online} openAssistant={openAssistant}/></SettingsPanel>}
-    {!phone && <SettingsPanel id="usage" active={current.id === 'usage'}><UsageSettings active={current.id === 'usage'} online={online && !recoveryPaused}/></SettingsPanel>}
+    {!phone && <SettingsPanel id="usage" active={current.id === 'usage'}><UsageSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} active={current.id === 'usage'} online={online && !recoveryPaused}/></SettingsPanel>}
     <SettingsPanel id="phone" active={current.id === 'phone'}><InstallSettings appIcon={appIcon} epoch={snapshot.epoch} access={access}/>{access?.surface === 'web' ? <details className="settings-disclosure"><summary>Optional Tailscale device pairing</summary><div className="settings-disclosure-body"><PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/></div></details> : <PhoneSettings epoch={snapshot.epoch} deviceId={snapshot.deviceId} access={access}/>}</SettingsPanel>
     {!phone && <SettingsPanel id="data" active={current.id === 'data'}><StorageSettings remoteHost={access?.surface === 'web'} epoch={snapshot.epoch} deviceId={snapshot.deviceId}/></SettingsPanel>}
     </div></div>

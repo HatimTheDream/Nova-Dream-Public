@@ -36,6 +36,9 @@ export const conversationEditSchema = assistantRequestSchema.extend({
   permissionMode: permissionModeSchema.optional(),
 }).strict();
 export const recoverSettingsSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), pendingRequestId: z.string().uuid(), action: z.enum(['retry', 'use-current']) }).strict();
+export const conversationAccountSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), profileId: z.string().min(1).max(200).nullable() }).strict();
+export const resumeConversationSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/), allowPartial: z.boolean().optional() }).strict();
+export const recoverContinuationSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), pendingRequestId: z.string().uuid() }).strict();
 export const saveOutputSchema = assistantRequestSchema.extend({
   conversationId: z.string().uuid(), nativeId: z.string().uuid(), messageId: z.string().max(1000),
   messageHash: z.string().regex(/^[a-f0-9]{64}$/), name: z.string().trim().min(1).max(150),
@@ -53,6 +56,10 @@ export type AssistantConnection = {
   pairingRequestId?: string; grantedScopes: string[]; modelAuthReady: boolean;
 };
 export type Conversation = {
+  preferredAccountId?: string | null;
+  accountSelection?: { profileId: string; label?: string; reason?: 'preferred' | 'backup'; selectedAt: string };
+  pendingResume?: { requestId: string };
+  resumeContext?: { transcript: Attachment; files: Attachment[]; digest: string; sourceNativeId: string; complete: boolean };
   space?: AssistantSpace;
   workspace?: { folder: string; environment: 'local' | 'worktree'; path?: string; branch?: string };
   id: string; revision: number; title: string; autoTitle?: boolean; autoTitleSeeded?: boolean; projectId: string | null; archived: boolean;
@@ -68,6 +75,7 @@ export type Conversation = {
 };
 export type ConversationChanges = Partial<Pick<Conversation, 'title' | 'archived' | 'deleted' | 'pinned' | 'unread' | 'projectId' | 'model' | 'thinking' | 'fastMode' | 'permissionMode'>>;
 export type ContextManifest = {
+  resumeDigest?: string;
   space?: AssistantSpace;
   memory?: import('./memory.js').MemorySnapshot;
   workMode?: WorkMode; messageVersion?: 2; brandVersion?: 1; planning?: true; goalReporting?: true;
@@ -78,6 +86,7 @@ export type ContextManifest = {
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;
 };
 export type AssistantOperation = {
+  accountSelection?: Conversation['accountSelection'];
   plan?: import('./run-plan.js').RunStep[]; planSequence?: number;
   id: string; requestId: string; deviceId: string; epoch: string; conversationId: string;
   conversationRevision: number; connectionGeneration: string; nativeKey: string; nativeId: string;
@@ -98,13 +107,17 @@ export type QueuedMessage = {
   automatic?: boolean; autoRequestId?: string; autoError?: string;
   state: 'paused' | 'submitted' | 'removed'; operationId?: string; createdAt: string; updatedAt: string;
 };
-export type MessageAttachment = { artifactId?: string; name: string; mimeType?: string; type?: string; size?: number };
+export type MessageAttachment = { artifactId?: string; name: string; mimeType?: string; type?: string; size?: number; localFile?: Attachment; availability?: 'local' | 'native-reference' | 'unavailable' };
 export type ConversationMessage = {
   id: string; sequence?: number; role: 'user' | 'assistant' | 'system' | 'tool'; text: string;
   createdAt?: string; runId?: string; attachments: MessageAttachment[];
   textHash: string;
   toolInfo?: ReturnType<typeof import('./tool-activity.js').historyToolInfo>;
   authoredText?: string;
+  /** Nova identity survives provider/runtime changes; native IDs remain compatible with old links. */
+  novaId?: string; aliases?: string[]; operationId?: string;
+  source?: { bindingId: string; nativeId: string; nativeKey: string; connectionGeneration: string; nativeMessageId?: string; kind: 'native' | 'operation' | 'voice' | 'legacy'; observedAt: string };
+  delivery?: AssistantOperation['state'];
 };
 export type AssistantOutput = {
   id: string; version: number; parentOutputId?: string; conversationId: string; projectId: string | null; createdAt: string;
@@ -115,6 +128,7 @@ export type AssistantOutput = {
 export type ConversationHistory = {
   conversationId: string; nativeId: string; messages: ConversationMessage[]; hasMore: boolean;
   retained?: { capturedAt?: string; complete: boolean };
+  transcript?: { revision: number; savedMessages: number; complete: boolean; conflicts: number; unavailableAttachments: number; synchronizedAt?: string; bindingUnavailable?: boolean; bindings: { id: string; nativeId: string; complete: boolean; nextOffset?: number; status: 'partial' | 'capturing' | 'complete' | 'conflict'; observedAt: string }[] };
   offset?: number; totalMessages?: number; hasNewer?: boolean; nextOffset?: number; activeRunIds: string[] | null; inFlightRun?: { runId: string; text: string };
   routingContract?: string; leafEntryId?: string | null;
   nativeSettings?: { permissionModePending?: boolean; title?: string; archived?: boolean; pinned?: boolean; unread?: boolean; model?: string; thinking?: string; fastMode?: boolean | 'auto' | null; permissionMode?: 'read-only' | 'guarded' | 'workspace' | 'full' | null; lifecycleRevision?: number };

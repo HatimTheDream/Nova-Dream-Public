@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../apps/service/store.js';
 import { ConversationSearch } from '../apps/service/conversation-search.js';
+import { SavedHistory } from '../apps/service/saved-history.js';
 import type { AssistantTransport } from '../apps/service/gateway.js';
 import type { AssistantConnection, Conversation } from '../packages/domain/assistant.js';
 
@@ -44,11 +45,26 @@ test('host changes fence late search replies and changed archive scope drops sta
   f.status.generation=c.connectionGeneration;f.reply.value=async()=>{c.archived=true;return{results:[hit(c)],indexing:false};};
   const result=await f.service.search({epoch:f.store.epoch,query:'phrase',scope:'active'});assert.equal(result.results.length,0);assert.equal(result.changedDuringSearch,true);
 }));
-test('unsupported search, invalid epoch and oversized provider output fail clearly', () => fixture(async f => {
+test('unsupported native search reports missing coverage; invalid epochs and oversized output still fail clearly', () => fixture(async f => {
   f.rows.push(conversation(f.status.generation!));f.status.methods=[];
-  await assert.rejects(f.service.search({epoch:f.store.epoch,query:'phrase',scope:'all'}),/does not offer/);
+  const local = await f.service.search({epoch:f.store.epoch,query:'phrase',scope:'all'}); assert.equal(local.indexing, null); assert.equal(local.excludedConversations, 1);
   assert.equal(f.calls.length,0);f.status.methods=['sessions.search'];
   await assert.rejects(f.service.search({epoch:randomUUID(),query:'phrase',scope:'all'}),/workspace changed/);
   f.reply.value=async()=>({results:Array.from({length:26},()=>hit(f.rows[0]))});
   await assert.rejects(f.service.search({epoch:f.store.epoch,query:'phrase',scope:'all'}),/unsupported search response/);
+}));
+test('saved messages search without any account or native search capability and preserve old source identity', () => fixture(async f => {
+  const c = conversation('old-host'), excluded = conversation('old-host', { archived: true }); f.rows.push(c, excluded);
+  const saved = new SavedHistory(f.store);
+  for (const row of f.rows) saved.observe(row, { conversationId: row.id, nativeId: row.nativeId!, messages: [{ id: 'local-message', role: 'user', text: 'Native envelope hidden', authoredText: 'A saved exact phrase', textHash: 'a'.repeat(64), attachments: [] }], hasMore: false, activeRunIds: [] }, { complete: true });
+  f.status.state = 'unconfigured'; f.status.methods = []; f.status.grantedScopes = [];
+  const result = await f.service.search({ epoch: f.store.epoch, query: '"exact phrase"', scope: 'active' });
+  assert.equal(f.calls.length, 0); assert.equal(result.results.length, 1); assert.equal(result.results[0].nativeId, c.nativeId); assert.equal(result.results[0].snippet, 'A saved exact phrase'); assert.equal(result.indexing, false);
+}));
+test('a failed runtime search retains local results with unknown wider coverage', () => fixture(async f => {
+  const c = conversation(f.status.generation!); f.rows.push(c);
+  new SavedHistory(f.store).observe(c, { conversationId: c.id, nativeId: c.nativeId!, messages: [{ id: 'local-message', role: 'assistant', text: 'Saved phrase', textHash: 'a'.repeat(64), attachments: [] }], hasMore: true, activeRunIds: [] });
+  f.reply.value = async () => { throw Error('Disconnected'); };
+  const result = await f.service.search({ epoch: f.store.epoch, query: 'phrase', scope: 'all' });
+  assert.equal(result.results.length, 1); assert.equal(result.indexing, null); assert.equal(result.searchedConversations, 1);
 }));

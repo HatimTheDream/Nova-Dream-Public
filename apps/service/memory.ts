@@ -1,6 +1,7 @@
 import { memoryChangeSchema, type MemoryEntry, type MemorySnapshot, type MemoryState } from '../../packages/domain/memory.js';
 import type { Conversation, ConversationHistory } from '../../packages/domain/assistant.js';
 import { Store, Fault } from './store.js';
+import { matchesMessageSource } from '../../packages/domain/conversation-source.js';
 
 /** Owner-selected memories share the workspace authority; no native memory files are rewritten. */
 export class AssistantMemory {
@@ -28,8 +29,8 @@ export class AssistantMemory {
       if (input.source) {
         if (previous) throw new Fault(409, 'memory_source_changed', 'A saved memory keeps its original source. Create a new memory to use another source.');
         const conversation = this.conversation(input.source.conversationId), history = this.history(conversation.id);
-        const message = history?.nativeId === input.source.nativeId ? history.messages.find(message => message.id === input.source!.messageId && message.role === input.source!.role && message.textHash === input.source!.messageHash) : undefined;
-        if (conversation.nativeId !== input.source.nativeId || conversation.deleted || !message) throw new Fault(409, 'memory_source_changed', 'Reopen the exact original message before saving it to memory.');
+        const message = history?.messages.find(message => matchesMessageSource(message, input.source!, history.nativeId));
+        if (conversation.deleted || !message) throw new Fault(409, 'memory_source_changed', 'Reopen the exact original message before saving it to memory.');
         source = { ...input.source, title: conversation.title, excerpt: (message.authoredText ?? message.text).slice(0, 240) };
       }
       const at = new Date().toISOString();
