@@ -1,3 +1,9 @@
+## [1.8.11] — 2026-09-20
+
+- Restore voice startup when the provider omits or normalizes its optional caption-delay setting, while still requiring the correct transcription model and captured conversation context before audio is admitted.
+- Automatically show connection errors so a failed call no longer appears as just the mascot and a close button.
+- Replace Latest with a compact down-arrow button below the voice controls, keeping its accessible label and scroll behavior.
+
 ## [1.8.10] — 2026-09-20
 
 - Keep Latest below the voice controls and above the message box, with enough transcript clearance for the full dock and last message.

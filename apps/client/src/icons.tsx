@@ -5,6 +5,7 @@ export const AlertCircle = /* @__PURE__ */ novaIcon(<><circle cx="12" cy="12" r=
 export const Archive = /* @__PURE__ */ novaIcon(<><rect x="3" y="3" width="18" height="5" rx="1.5" fill="currentColor" fillOpacity=".14"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4" /></>, 'archive', 'Archive');
 export const ArrowRight = /* @__PURE__ */ novaIcon(<><path d="M4 12h16m-7-7 7 7-7 7" /></>, 'arrow-right', 'ArrowRight');
 export const ArrowUp = /* @__PURE__ */ novaIcon(<><path d="M12 20V4m-7 7 7-7 7 7" /></>, 'arrow-up', 'ArrowUp');
+export const ArrowDown = /* @__PURE__ */ novaIcon(<><path d="M12 4v16m-7-7 7 7 7-7" /></>, 'arrow-down', 'ArrowDown');
 export const AudioLines = /* @__PURE__ */ novaIcon(<><path d="M3 10v4M7.5 6v12M12 3v18m4.5-15v12M21 10v4" /></>, 'voice', 'AudioLines');
 export const Bell = /* @__PURE__ */ novaIcon(<><path d="M5 10a7 7 0 0 1 14 0v5l2 3H3l2-3v-5M10 21h4" fill="currentColor" fillOpacity=".14"/></>, 'bell', 'Bell');
 export const Bot = /* @__PURE__ */ novaIcon(<><circle cx="12" cy="6" r="2.8" fill="currentColor" stroke="none"/><circle cx="4.5" cy="8" r="1.8" fill="currentColor" stroke="none"/><circle cx="19.5" cy="8" r="1.8" fill="currentColor" stroke="none"/><path d="M7 20v-3a5 5 0 0 1 10 0v3Z" fill="currentColor" stroke="none"/><path d="M5 12a4 4 0 0 0-4 4v3h4m14-7a4 4 0 0 1 4 4v3h-4" fill="currentColor" stroke="none"/></>, 'agents', 'Bot');

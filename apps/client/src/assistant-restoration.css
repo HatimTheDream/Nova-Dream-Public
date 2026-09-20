@@ -82,7 +82,7 @@
 .assistant-workspace .message-actions:has([role=status]) { opacity: 1; }
 .assistant-workspace .branch-origin { display: flex; align-items: center; gap: 10px; max-width: 840px; margin: 0 auto 12px; color: var(--muted); font-size: 12px; }
 .assistant-workspace .transcript-item { display: flow-root; padding-bottom: 24px; }
-.assistant-workspace .jump-to-latest { z-index: 3; align-self: center; min-height: 36px; margin-top: -44px; margin-bottom: 8px; border-radius: 20px; box-shadow: 0 3px 12px #0002; }
+.assistant-workspace .jump-to-latest { z-index: 3; align-self: center; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; }
 .assistant-workspace .steering-status { display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 12px; padding: 4px; }
 .assistant-workspace .inspector-sections { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
 .assistant-workspace .inspector-sections button { flex: 1; min-width: 0; min-height: 44px; padding: 8px 4px; border: 0; border-radius: 0; box-shadow: none; background: transparent; font-size: 12px; }
@@ -177,7 +177,7 @@
 .assistant-workspace .conversation-scroll-region { position:relative; flex:1; min-height:0; }
 .assistant-workspace .conversation-scroll-region>.conversation-reading { height:100%; overscroll-behavior:contain; }
 .assistant-workspace .chat-transcript { flex:none; }
-.assistant-workspace .jump-to-latest { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); margin:0; height:36px; }
+.assistant-workspace .jump-to-latest { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); margin:0; }
 .assistant-workspace .voice-bubble { flex:none; }
 
 .assistant-workspace .composer-popover>.work-mode-option { justify-content:space-between; }

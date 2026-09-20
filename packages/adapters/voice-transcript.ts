@@ -16,7 +16,9 @@ export const liveTranscription = { model: 'gpt-live-transcribe', delay: 'medium'
 export function confirmsLiveTranscription(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const transcription = value as Record<string, unknown>;
-  return transcription.model === liveTranscription.model && transcription.delay === liveTranscription.delay;
+  // Delay is a quality hint the provider may omit or normalize. Only the
+  // caption model is an admission requirement; the controller also binds context.
+  return transcription.model === liveTranscription.model;
 }
 
 /** Only maps exact documented/observed event families. No automatic alternate runner. */

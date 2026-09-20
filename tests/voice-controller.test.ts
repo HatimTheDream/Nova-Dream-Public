@@ -135,7 +135,12 @@ test('Project acknowledgement alone cannot enable audio without the streaming tr
   assert.equal(voice.getSnapshot().phase, 'connecting');
 });
 
-test('microphone admission requires the acknowledged transcription model and delay together', async t => {
+for (const [label, transcription] of [
+  ['omitted delay', { model: 'gpt-live-transcribe' }],
+  ['null delay', { model: 'gpt-live-transcribe', delay: null }],
+  ['normalized delay', { model: 'gpt-live-transcribe', delay: 'low' }],
+  ['confirmed delay', { model: 'gpt-live-transcribe', delay: 'medium' }],
+] as const) test(`microphone admission accepts ${label} only with its exact model and captured context`, async t => {
   memoryStorage(t);
   const previous = globalThis.fetch;
   let admitted = 0;
@@ -146,11 +151,15 @@ test('microphone admission requires the acknowledged transcription model and del
   internal.contextInstructions = 'Confirmed Project instructions';
   internal.journal = { start: { epoch: 'fixture' }, attempt: { id: 'fixture', contextDigest: 'digest' }, entries: [], turns: [] };
   internal.resources = { stream: { getAudioTracks: () => [track] } };
-  const ack = (transcription: unknown) => internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions: internal.contextInstructions, audio: { input: { transcription } } } }), 0);
-  for (const transcription of [undefined, null, { model: 'gpt-live-transcribe' }, { model: 'gpt-live-transcribe', delay: 'low' }, { model: 'gpt-4o-mini-transcribe', delay: 'medium' }]) {
-    await ack(transcription); assert.equal(track.enabled, false); assert.equal(admitted, 0);
+  // SessionUpdatedEvent returns AudioTranscription whose delay is optional and
+  // nullable. Only identity/context, not an optional readback, admits this mic.
+  const ack = (value: unknown, instructions = internal.contextInstructions) => internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions, audio: { input: { transcription: value } } } }), 0);
+  for (const invalid of [undefined, null, {}, [], { model: 'gpt-4o-mini-transcribe', delay: 'medium' }]) {
+    await ack(invalid); assert.equal(track.enabled, false); assert.equal(admitted, 0);
   }
-  await ack({ model: 'gpt-live-transcribe', delay: 'medium' });
+  await ack(transcription, 'Different Project instructions');
+  assert.equal(track.enabled, false); assert.equal(admitted, 0); assert.equal(voice.getSnapshot().phase, 'connecting');
+  await ack(transcription);
   assert.equal(admitted, 1); assert.equal(track.enabled, true); assert.equal(voice.getSnapshot().phase, 'connected');
 });
 

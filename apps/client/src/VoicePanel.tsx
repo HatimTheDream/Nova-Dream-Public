@@ -11,6 +11,10 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
   const [expanded, setExpanded] = useState(false);
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
+    if (voice.phase === 'error') setExpanded(true);
+    else if (voice.phase === 'idle') setExpanded(false);
+  }, [voice.phase]);
+  useEffect(() => {
     if (!expanded) return;
     const outside = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node)) setExpanded(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setExpanded(false); panel.current?.querySelector<HTMLButtonElement>('.voice-summary')?.focus(); } };
