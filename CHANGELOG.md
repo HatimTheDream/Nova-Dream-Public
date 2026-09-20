@@ -1,3 +1,7 @@
+## [1.8.13] — 2026-09-20
+
+- Keep the latest-message arrow centered without voice and beside the voice controls during a call, without adding a row or lifting the mascot. Reserve horizontal space on narrow layouts so the controls stay in place as the arrow appears.
+
 ## [1.8.12] — 2026-09-20
 
 - Shorten warm voice setup by avoiding unrelated conversation review waits and overlapping independent preparation checks; reconnects keep their own provider catalog requests.

@@ -1,18 +1,22 @@
 /* The call floats over the transcript without consuming a full-width row. */
 :root { --voice-mascot-size:104px; --voice-dock-clearance:calc(var(--voice-mascot-size) + 68px); }
 .voice-bubble { gap:12px; }
+.assistant-workspace .conversation {
+  /* Keep space beside the call on narrow layouts, even while Latest is hidden. */
+  --voice-dock-center:min(50%,calc(100% - 132px));
+}
 .assistant-workspace .composer-region { position:relative; }
 .assistant-workspace .composer-region > .voice-bubble {
-  position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
-  margin:0 0 calc(10px + var(--voice-latest-space,0px)); width:max-content; max-width:100%;
+  position:absolute; bottom:100%; left:var(--voice-dock-center); transform:translateX(-50%);
+  margin:0 0 10px; width:max-content; max-width:100%;
 }
-/* Latest stays below the call controls, above the composer, in its own row. */
-.assistant-workspace .conversation:has(> .conversation-scroll-region > .jump-to-latest):has(> .composer-region > .voice-bubble) {
-  --voice-latest-space:54px;
+/* Without voice Latest stays centered; during a call it shares the controls' row. */
+.assistant-workspace .conversation:has(> .composer-region > .voice-bubble) > .conversation-scroll-region > .jump-to-latest {
+  left:calc(var(--voice-dock-center) + 105px); bottom:10px;
 }
 .assistant-workspace .conversation:has(> .composer-region > .voice-bubble) > .conversation-scroll-region > .conversation-reading {
-  padding-bottom:calc(var(--voice-dock-clearance) + var(--voice-latest-space,0px) + 12px);
-  scroll-padding-bottom:calc(var(--voice-dock-clearance) + var(--voice-latest-space,0px) + 12px);
+  padding-bottom:calc(var(--voice-dock-clearance) + 12px);
+  scroll-padding-bottom:calc(var(--voice-dock-clearance) + 12px);
 }
 :root .voice-bubble > button.voice-summary {
   --button-depth:4px;
