@@ -136,7 +136,7 @@ for (const playbackRecovery of [false, true]) test(playbackRecovery
       this.ontrack?.({ streams: [remote], track: { stop() {} } });
       timing.step(); assert.deepEqual(voice.getLevelsSnapshot(), { input: 0, output: 0 }, 'audio is gated before context admission');
       await internal.providerEvent(JSON.stringify({ type: 'session.created', session: { instructions: 'Provider instructions' } }), internal.generation);
-      await internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions: internal.contextInstructions, audio: { input: { transcription: { model: 'gpt-live-transcribe', delay: 'medium' } } } } }), internal.generation);
+      await internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions: internal.contextInstructions, audio: { input: { transcription: { model: 'gpt-live-transcribe', delay: 'medium' }, turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true } } } } }), internal.generation);
     }
     close() { peerClosed = true; }
   });
