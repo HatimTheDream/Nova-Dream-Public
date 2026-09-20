@@ -11,10 +11,3 @@ export function AssistantSpaceSwitch({ value, change, disabled, id = 'assistant-
     }}>{space === 'chat' ? 'Chat' : 'Work'}</button>)}
   </div>;
 }
-
-export function AssistantNavigation({ space, change, disabled, teamOpen, openTeam }: { space: AssistantSpace; change: (space: AssistantSpace) => void; disabled: boolean; teamOpen: boolean; openTeam: () => void }) {
-  return <nav className="assistant-navigation" aria-label="Assistant navigation">
-    <AssistantSpaceSwitch id="assistant-navigation-space-switch" value={space} change={change} disabled={disabled}/>
-    <button type="button" className="assistant-team-button" aria-expanded={teamOpen} onClick={openTeam}>Team work</button>
-  </nav>;
-}

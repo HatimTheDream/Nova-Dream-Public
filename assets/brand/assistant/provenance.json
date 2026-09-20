@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "date": "2026-09-19",
+  "method": "Built-in image_gen editing",
+  "purpose": "Nova Dream Assistant listening and speaking expressions; idle reuses the approved app brand icon.",
+  "export": "node scripts/export-assistant-art.mjs",
+  "entries": [
+    {
+      "variant": "red",
+      "expression": "listening",
+      "editTarget": "../nova-dream-red-source-v4.png",
+      "source": "nova-assistant-red-listening-source-v1.png",
+      "output": "../../../apps/client/public/icons/nova-assistant-red-listening-256-v1.webp",
+      "prompt": "Use case: precise-object-edit. Asset type: Nova Dream voice status icon, single full-bleed square raster asset for a real app. The supplied image is the EDIT TARGET, not an inspiration for a redesign. Preserve this exact executive lynx character, facial scale and positions, golden eyes, black eyebrows and eyeliner, ears, stripes, cream muzzle, charcoal business suit, ivory shirt and red tie. Preserve the flat clean graphic style, source palette, straight-on symmetrical framing. Preserve the entire image except the tiny expression edit specified below. No perspective, no 3D, no texture, no props, no lettering, no border, no shadow, no rounding, no transparent margins. Full-bleed opaque square matching the input. Do not crop or move the character, ears or suit.\nExpression edit: LISTENING attentively. Keep mouth gently closed and gold eyes exactly forward. Lift the black eyebrows very slightly for a composed attentive expression; retain their recognizable thick arched design. Keep everything else as close to the input as possible. Professional and calm, not surprised or goofy.",
+      "sourceSha256": "1ce9c7862ee55b20d23a80c812ed50c27c94798dac81ccce3fcf09d23a25cdb4",
+      "editTargetSha256": "8f596a1cdbf2fc99df918df646981b497f6b3a580c1ea9fc66993cbbdba515f4",
+      "outputSha256": "aba5602211ca0d1adb694b7ca56cf9636f7643d473ec9db1983405e7f8bc3524",
+      "outputBytes": 53852
+    },
+    {
+      "variant": "red",
+      "expression": "speaking",
+      "editTarget": "../nova-dream-red-source-v4.png",
+      "source": "nova-assistant-red-speaking-source-v1.png",
+      "output": "../../../apps/client/public/icons/nova-assistant-red-speaking-256-v1.webp",
+      "prompt": "Use case: precise-object-edit. Asset type: Nova Dream voice status icon, single full-bleed square raster asset for a real app. The supplied image is the EDIT TARGET, not an inspiration for a redesign. Preserve this exact executive lynx character, facial scale and positions, golden eyes, black eyebrows and eyeliner, ears, stripes, cream muzzle, charcoal business suit, ivory shirt and red tie. Preserve the flat clean graphic style, source palette, straight-on symmetrical framing. Preserve the entire image except the tiny expression edit specified below. No perspective, no 3D, no texture, no props, no lettering, no border, no shadow, no rounding, no transparent margins. Full-bleed opaque square matching the input. Do not crop or move the character, ears or suit.\nExpression edit: SPEAKING calmly. Keep both gold eyes and black eyebrows unchanged, looking forward. Change only the closed mouth into a small, neatly open dark mouth as if quietly saying a word. Restrained friendly executive expression; no teeth, no fangs, no tongue, no exaggerated grin or shout. Preserve nose, muzzle silhouette and all other artwork.",
+      "sourceSha256": "6f88c706f1f65a44ccaefc835f35d0b2be8b2bf359de421c9097763fff5e8cbe",
+      "editTargetSha256": "8f596a1cdbf2fc99df918df646981b497f6b3a580c1ea9fc66993cbbdba515f4",
+      "outputSha256": "da254313e35ffc2253d48acd5d867fe1c7008449e48e7f63e42f435158c4718d",
+      "outputBytes": 52444
+    },
+    {
+      "variant": "cream",
+      "expression": "listening",
+      "editTarget": "../nova-dream-cream-source-v4.png",
+      "source": "nova-assistant-cream-listening-source-v1.png",
+      "output": "../../../apps/client/public/icons/nova-assistant-cream-listening-256-v1.webp",
+      "prompt": "Use case: precise-object-edit. Asset type: Nova Dream voice status icon, single full-bleed square raster asset for a real app. The supplied image is the EDIT TARGET, not an inspiration for a redesign. Preserve this exact executive lynx character, facial scale and positions, golden eyes, black eyebrows and eyeliner, ears, stripes, cream muzzle, charcoal business suit, ivory shirt and red tie. Preserve the flat clean graphic style, source palette, straight-on symmetrical framing. Preserve the entire image except the tiny expression edit specified below. No perspective, no 3D, no texture, no props, no lettering, no border, no shadow, no rounding, no transparent margins. Full-bleed opaque square matching the input. Do not crop or move the character, ears or suit.\nExpression edit: LISTENING attentively. Keep mouth gently closed and gold eyes exactly forward. Lift the black eyebrows very slightly for a composed attentive expression; retain their recognizable thick arched design. Keep everything else as close to the input as possible. Professional and calm, not surprised or goofy.",
+      "sourceSha256": "bc049582844777ba8c4317da611618ff57b811014b0ec5a1d186e35cf038d9f1",
+      "editTargetSha256": "4e77a44610ea2a9082104c0a27d7afad8427011591529be610996d4ae4978a1a",
+      "outputSha256": "b5a8aa4767756fd9e2305cc4e8debf00835b89ad077bd176ee46c655bce3cd4e",
+      "outputBytes": 54776
+    },
+    {
+      "variant": "cream",
+      "expression": "speaking",
+      "editTarget": "../nova-dream-cream-source-v4.png",
+      "source": "nova-assistant-cream-speaking-source-v1.png",
+      "output": "../../../apps/client/public/icons/nova-assistant-cream-speaking-256-v1.webp",
+      "prompt": "Use case: precise-object-edit. Asset type: Nova Dream voice status icon, single full-bleed square raster asset for a real app. The supplied image is the EDIT TARGET, not an inspiration for a redesign. Preserve this exact executive lynx character, facial scale and positions, golden eyes, black eyebrows and eyeliner, ears, stripes, cream muzzle, charcoal business suit, ivory shirt and red tie. Preserve the flat clean graphic style, source palette, straight-on symmetrical framing. Preserve the entire image except the tiny expression edit specified below. No perspective, no 3D, no texture, no props, no lettering, no border, no shadow, no rounding, no transparent margins. Full-bleed opaque square matching the input. Do not crop or move the character, ears or suit.\nExpression edit: SPEAKING calmly. Keep both gold eyes and black eyebrows unchanged, looking forward. Change only the closed mouth into a small, neatly open dark mouth as if quietly saying a word. Restrained friendly executive expression; no teeth, no fangs, no tongue, no exaggerated grin or shout. Preserve nose, muzzle silhouette and all other artwork.",
+      "sourceSha256": "d95fcfea77265de006b3eb8de159dd5a8dfe08dd52495435bb9094555a5fff8a",
+      "editTargetSha256": "4e77a44610ea2a9082104c0a27d7afad8427011591529be610996d4ae4978a1a",
+      "outputSha256": "c544f0b9250b8d12e9dbcb5a04b5179cb5fd7cae807d4f272c3a53ca01cb6d63",
+      "outputBytes": 54886
+    }
+  ]
+}

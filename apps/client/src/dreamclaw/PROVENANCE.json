@@ -402,7 +402,7 @@
         "Connects the existing compose/reply forms to E3 immutable delivery reviews and retained operation status; keeps writing after replies and removes duplicate actions while a review exists.",
         "Reopens the same saved provider draft inside the original compose/reply form, with linked immutable reviews, remote version comparison and parent restoration on cancelled edits."
       ],
-      "currentSha256": "9a5bbd0eb7e1da79d994feca79b7d6048b59920ae9e70f57599cc25881560202"
+      "currentSha256": "ecf9c73ee1d5026bd0ee9e6844a3dd6692659dfb8172b6213dfc223c7ef0b153"
     },
     {
       "source": "src/components/Chat/MailActionCard.tsx",
@@ -478,15 +478,6 @@
       "currentSha256": "3ebe92153b964eb69af0b09077f57c45c8449b2305a0a80ef7852a26a29284a7"
     },
     {
-      "source": "src/assets/brand/mascot/lynx-inbox.webp",
-      "destination": "apps/client/src/dreamclaw/assets/brand/mascot/lynx-inbox.webp",
-      "sourceSha256": "727fc0d8b5198605d6eb652392802e20b512d0efb146538e3d4b763174ca979f",
-      "initialChanges": [
-        "Exact original accepted Inbox mascot bytes; no image edits."
-      ],
-      "currentSha256": "727fc0d8b5198605d6eb652392802e20b512d0efb146538e3d4b763174ca979f"
-    },
-    {
       "source": "src/styles/index.css",
       "destination": "apps/client/src/dreamclaw/inbox.css",
       "sourceSha256": "04686f1a775ea3504a74ee2487e3fc2bab55906fe9345a806a5fe3d67de603ba",
@@ -494,7 +485,7 @@
         "Extract Inbox responsive master-detail styles; scope selectors to dreamclaw-module and map to Edition 3 theme.",
         "Targeted collapse visibility/focus, 44px controls, readable light-theme notices and phone header/pagination adaptations."
       ],
-      "currentSha256": "4852983c2d864bdfc5c3f89bae0ff6a8b2cf0f92931bc8279e7646eb4387bf95"
+      "currentSha256": "99e2c106cb9f6bf7f11dc180653ea1e2df0873342f802ab077a487a8b8c53b8f"
     },
     {
       "source": "src/locales/en.json",

@@ -72,7 +72,6 @@ import { MailActionCard } from '@dreamclaw/components/Chat/MailActionCard';
 import { GlassCard } from '@dreamclaw/components/shared/GlassCard';
 import { PageTransition } from '@dreamclaw/components/shared/PageTransition';
 import { getInboxMailApi } from '../../inbox-transport';
-import lynxInbox from '@dreamclaw/assets/brand/mascot/lynx-inbox.webp';
 import {
   buildNativeGmailReplyHtml,
   buildNativeGmailReplyPlainText,
@@ -3880,12 +3879,6 @@ export function InboxPage() {
                 {mailBusy ? <Loader2 size={15} className="animate-spin motion-reduce:animate-none" /> : <RefreshCw size={15} />}
                 <span className="hidden sm:inline">Refresh</span>
               </button>
-              <img
-                src={lynxInbox}
-                alt=""
-                aria-hidden="true"
-                className="dc-inbox-header-mascot"
-              />
             </div>
           </div>
 

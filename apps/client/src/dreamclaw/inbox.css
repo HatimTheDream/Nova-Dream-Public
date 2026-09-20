@@ -136,16 +136,6 @@
 .dreamclaw-module .dc-inbox-rail-resizer:focus-visible {
   outline: none;
 }
-.dreamclaw-module .dc-inbox-header-mascot {
-  width: 54px;
-  height: 58px;
-  flex: 0 0 auto;
-  align-self: center;
-  object-fit: contain;
-  pointer-events: none;
-  user-select: none;
-  filter: drop-shadow(0 8px 12px rgb(0 0 0 / 0.14));
-}
 .dreamclaw-module .dc-inbox-filter-panel {
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -204,10 +194,6 @@
   .dreamclaw-module .dc-inbox-header-compose {
     display: inline-flex;
   }
-  .dreamclaw-module .dc-inbox-header-mascot {
-    width: 44px;
-    height: 48px;
-  }
   .dreamclaw-module .dc-inbox-workspace[data-rail-open="true"] .dc-inbox-rail-scrim {
     position: absolute;
     inset: 0;
@@ -226,7 +212,6 @@
 }
 
 @media (max-width: 900px) {
-  .dreamclaw-module .dc-inbox-header-mascot { display: none; }
   .dreamclaw-module .dc-inbox-split {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -401,7 +386,6 @@
 .dreamclaw-module .dc-inbox-page-header { flex-direction: row; align-items: center; gap: 12px; }
 .dreamclaw-module .dc-inbox-page-heading h1 { font-size: 19px; line-height: 1.35; }
 .dreamclaw-module .dc-inbox-page-status { font-size: 11px; line-height: 1.5; }
-.dreamclaw-module .dc-inbox-header-mascot { display: none; }
 .dreamclaw-module .dc-inbox-split { grid-template-columns: minmax(280px, var(--dc-inbox-list-width,420px)) 8px minmax(0,1fr); border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .dreamclaw-module .dc-inbox-split[data-list-collapsed="true"] { grid-template-columns: 0 0 minmax(0,1fr); }
 .dreamclaw-module .dc-inbox-list-pane > *, .dreamclaw-module .dc-inbox-reader-pane > * { border: 0; border-radius: 0; background: transparent; box-shadow: none; }

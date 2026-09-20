@@ -1,3 +1,9 @@
+## [1.8.8] — 2026-09-19
+
+- Remove the redundant Chat / Work / Team Work row above Assistant conversations. Keep space switching in the sidebar and Team Work in the side-panel launcher.
+- Replace the old Assistant and voice mascot graphics with the selected Red or Cream executive lynx, including Idle, Listening and Speaking expressions.
+- Keep voice artwork aligned with the current call state, and remove unused legacy mascot assets.
+
 ## [1.8.7] — 2026-09-19
 
 - Match desktop and web-app launcher icons to the app's borderless squircle shape, with transparent corners in both Red and Cream exports.

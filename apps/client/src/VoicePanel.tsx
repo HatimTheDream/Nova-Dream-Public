@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronDown, MessageSquare, Mic, MicOff, PhoneOff, Square, VolumeUp, X } from './icons';
 import type { VoiceController } from './voice-controller';
 import { voiceSourceLabels } from '../../../packages/domain/voice';
+import type { AppIconChoice } from '../../../packages/domain/contracts';
+import { NovaAssistantMark } from './NovaAssistantMark';
 
 /** Presentation only: the workspace controller keeps audio alive across navigation. */
-export function VoicePanel({ controller, openConversation, floating = false, conversationId }: { controller: VoiceController; openConversation: (id: string) => void; floating?: boolean; conversationId?: string | null }) {
+export function VoicePanel({ controller, openConversation, appIcon, floating = false, conversationId }: { controller: VoiceController; openConversation: (id: string) => void; appIcon: AppIconChoice; floating?: boolean; conversationId?: string | null }) {
   const voice = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [expanded, setExpanded] = useState(false);
   const panel = useRef<HTMLElement>(null);
@@ -17,12 +19,12 @@ export function VoicePanel({ controller, openConversation, floating = false, con
   }, [expanded]);
   if (voice.phase === 'idle') return null;
   const finished = ['ended', 'error'].includes(voice.phase);
-  const image = voice.speaking ? 'talking' : voice.listening && !voice.muted ? 'listening' : 'focus';
+  const expression = voice.phase === 'connected' ? voice.speaking ? 'speaking' : voice.listening && !voice.muted ? 'listening' : 'idle' : 'idle';
   const title = finished || voice.phase === 'ending' ? 'Audio is off' : voice.speaking ? 'Speaking' : voice.muted ? 'Muted' : voice.listening ? 'Listening' : voice.processing ? 'Thinking' : voice.phase === 'connected' ? 'Voice connected' : 'Connecting';
   const otherChat = voice.attempt && voice.attempt.target.conversation.id !== conversationId;
   return <section ref={panel} className={`voice-panel voice-bubble ${floating ? 'voice-floating' : ''}`} aria-label="Voice call">
     <button className="voice-summary" aria-label="Voice call details" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={voice.message}>
-      <img className="voice-mascot" src={`/mascot/lynx-${image}.webp`} alt=""/><span><strong role="status">{title}</strong>{otherChat ? <small>{voice.attempt!.target.conversation.title}</small> : null}</span><ChevronDown size={14}/>
+      <NovaAssistantMark choice={appIcon} expression={expression} className="voice-assistant-mark" width="44" height="44"/><span><strong role="status">{title}</strong>{otherChat ? <small>{voice.attempt!.target.conversation.title}</small> : null}</span><ChevronDown size={14}/>
     </button>
     <div className="voice-controls">
       {!finished && <><button className={`voice-mute ${voice.muted ? 'is-muted' : ''}`} aria-label={voice.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={voice.muted} title={voice.muted ? 'Unmute microphone' : 'Mute microphone'} onClick={controller.mute}>{voice.muted ? <MicOff size={20}/> : <Mic size={20}/>}</button>{voice.soundBlocked ? <button aria-label="Enable sound" title="Enable sound" onClick={() => void controller.enableSound()}><VolumeUp size={20}/></button> : <button aria-label="Interrupt speech" title="Interrupt speech" disabled={!voice.speaking && !voice.processing} onClick={controller.interrupt}><Square size={18}/></button>}<button className="voice-end" aria-label="End voice call" title="End call" onClick={() => void controller.end()}><PhoneOff size={20}/></button></>}

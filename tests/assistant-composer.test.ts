@@ -44,6 +44,7 @@ function renderComposer(files: FileState, existing = false, active = false, text
     const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
     const draft = { ...emptyDraft, text, ...(existing ? { conversationId: 'conversation' } : {}) };
     const props = {
+      appIcon: 'red',
       snapshot: { epoch: 'epoch', deviceId: 'device', projects: [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
       legacyJournal: { value: draft, revision: 1, dirty: false, saving: false, change() {}, flush: async () => {} },
       controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeRunId: 'run', state: 'running', createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
@@ -72,7 +73,7 @@ test('new and existing composers block sending and voice while files are prepare
       assert.equal(view.button('Send message').disabled, true);
       assert.equal(view.button('Start voice call').disabled, true);
       const switches = view.buttons.filter(button => ['Chat', 'Work'].includes(button.label));
-      assert.equal(switches.length, 4);
+      assert.equal(switches.length, 2);
       assert.ok(switches.every(button => button.disabled));
       if (files === 'preparing') assert.match(view.markup, /role="status">Preparing Files/);
     }
