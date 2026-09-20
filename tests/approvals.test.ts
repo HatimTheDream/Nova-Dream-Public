@@ -34,6 +34,33 @@ async function fixture(run: (f: any) => Promise<void>, nativeKey = 'agent:main:e
   try { await f.service.sync(); await run(f); }
   finally { await f.service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 }
+test('a subscribed approval target does not wait for unrelated synchronization', () => fixture(async f => {
+  let release!: () => void, prepared = false;
+  f.service.syncing = new Promise<void>(resolve => { release = resolve; });
+  const waiting = f.service.prepare(f.conversation.id).then(() => { prepared = true; });
+  try { await Promise.resolve(); await Promise.resolve(); assert.equal(prepared, true); }
+  finally { release(); await waiting; }
+}));
+
+test('approval preparation requires a fresh replay when its exact subscription or authority changes', t => fixture(async f => {
+  const original = { ...f.conversation }, status = f.control.status;
+  t.mock.method(f.service, 'sync', async () => { throw Error('Fresh replay required'); });
+  const changes = [
+    () => { f.control.status = () => ({ ...status(), generation: 'another-host' }); f.conversation.connectionGeneration = 'another-host'; },
+    () => { f.control.status = () => ({ ...status(), url: 'ws://127.0.0.1:50001' }); },
+    () => { f.control.status = () => ({ ...status(), grantedScopes: ['operator.read'] }); },
+    () => { f.conversation.nativeId = randomUUID(); },
+    () => { f.conversation.nativeKey = 'agent:main:another'; },
+    () => { f.conversation.state = 'creating'; },
+    () => { f.service.error = 'Replay is uncertain'; },
+    () => { f.service.subscribedIds.clear(); },
+  ];
+  for (const change of changes) {
+    Object.assign(f.conversation, original); f.control.status = status; f.service.error = undefined; change();
+    await assert.rejects(f.service.prepare(f.conversation.id), /Fresh replay required/);
+  }
+}));
+
 test('approval replay is scoped, safe, retained and resolves once to native truth', () => fixture(async f => {
   assert.equal(f.service.state().state, 'ready'); assert.equal(f.service.state().items.length, 1);
   assert.equal(JSON.stringify(f.service.state()).includes('must-not-be-retained'), false);

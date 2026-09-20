@@ -34,3 +34,18 @@ test('voice discovery shares concurrent reads and cannot apply another host’s 
   connection = { ...connection, state: 'disconnected' };
   assert.equal((await service.read()).state, 'disconnected'); assert.equal(reads, 2);
 });
+
+for (const oldFirst of [true, false]) test(`a new host discovers voice independently when the old read finishes ${oldFirst ? 'first' : 'last'}`, async () => {
+  let connection: AssistantConnection = { state: 'ready', generation: 'host-a', message: '', methods: ['talk.catalog'], grantedScopes: ['operator.read'], modelAuthReady: true };
+  const resolve: ((value: unknown) => void)[] = [];
+  const gateway: AssistantTransport = { status: () => connection, request: <T>() => new Promise<T>(accept => { resolve.push(value => accept(value as T)); }), subscribe: () => () => {}, models: async () => [], attachmentPolicy: () => ({}) };
+  const setup = new VoiceSetup(gateway), old = setup.read();
+  connection = { ...connection, generation: 'host-b' };
+  const current = setup.read(); assert.equal(resolve.length, 2);
+  if (oldFirst) { resolve[0](catalog); assert.equal((await old).state, 'disconnected'); }
+  const shared = setup.read(); assert.equal(resolve.length, 2);
+  resolve[1](catalog);
+  assert.equal((await current).state, 'available'); assert.equal((await shared).state, 'available');
+  if (!oldFirst) { resolve[0](catalog); assert.equal((await old).state, 'disconnected'); }
+  assert.equal((await setup.read()).state, 'available'); assert.equal(resolve.length, 2);
+});

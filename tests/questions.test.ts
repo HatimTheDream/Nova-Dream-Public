@@ -51,6 +51,33 @@ test('questions preserve canonical choices, multi-select and custom answers; mal
   assert.equal(nativeQuestionSchema.safeParse({ ...base, status: 'pending', answers: { answers: answer } }).success, false);
   assert.equal(nativeQuestionSchema.safeParse({ ...base, status: 'pending', questions: [{ ...prompts[0], options: [{ label: ' One ' }, { label: 'one' }] }] }).success, false);
 });
+test('a subscribed question target does not wait for unrelated synchronization', () => fixture(async f => {
+  let release!: () => void, prepared = false;
+  f.service.syncing = new Promise<void>(resolve => { release = resolve; });
+  const waiting = f.service.prepare(f.conversation.id).then(() => { prepared = true; });
+  try { await Promise.resolve(); await Promise.resolve(); assert.equal(prepared, true); }
+  finally { release(); await waiting; }
+}));
+
+test('question preparation requires a fresh replay when its exact subscription or authority changes', t => fixture(async f => {
+  const original = { ...f.conversation }, status = f.control.status;
+  t.mock.method(f.service, 'sync', async () => { throw Error('Fresh replay required'); });
+  const changes = [
+    () => { f.control.status = () => ({ ...status(), generation: 'another-host' }); f.conversation.connectionGeneration = 'another-host'; },
+    () => { f.control.status = () => ({ ...status(), url: 'ws://127.0.0.1:50001' }); },
+    () => { f.control.status = () => ({ ...status(), grantedScopes: ['operator.read'] }); },
+    () => { f.conversation.nativeId = randomUUID(); },
+    () => { f.conversation.nativeKey = 'agent:main:another'; },
+    () => { f.conversation.state = 'creating'; },
+    () => { f.service.error = 'Replay is uncertain'; },
+    () => { f.service.subscribed.clear(); },
+  ];
+  for (const change of changes) {
+    Object.assign(f.conversation, original); f.control.status = status; f.service.error = undefined; change();
+    await assert.rejects(f.service.prepare(f.conversation.id), /Fresh replay required/);
+  }
+}));
+
 test('native questions subscribe before execution, submit once and retain exact terminal answers through restart', () => fixture(async f => {
   await f.service.prepare(f.conversation.id); assert.equal(f.service.state().state, 'ready');
   f.event({ ...f.native, sessionKey: 'unregistered' }); assert.equal(f.service.state().items.length, 1);

@@ -55,3 +55,58 @@ test('a live continuation stays in the same bubble as its saved half through ack
   history.messages = [first]; history.hasNewer = true;
   assert.equal(voiceHistoryMessages(voice, chat, history).length, 1, 'older pages never append current speech');
 });
+
+function callView(messages: TranscriptMessage[]) {
+  const chat: any = { id: 'chat', nativeId: 'native' };
+  const turns = messages.map(item => ({ turnId: item.id.split(':').at(-1), role: item.role, text: item.text, final: true }));
+  const voice: any = { attempt: { id: call, target: { conversation: chat }, entries: turns.map((turn, ordinal) => ({ entryId: turn.turnId, role: turn.role, ordinal, saved: true })) }, turns };
+  const history: any = { nativeId: 'native', messages, hasMore: false, hasNewer: false };
+  return { chat, voice, history };
+}
+
+test('a pending user caption keeps its place between saved assistant replies', () => {
+  const messages = [message('u1', 'Just talking'), message('a1', 'Reply one', 'assistant'), message('u2', 'Intervening question'), message('a2', 'Reply two', 'assistant')];
+  const { chat, voice, history } = callView(messages);
+  history.messages = [messages[0], messages[1], messages[3]];
+  const before = structuredClone({ voice, history });
+  const rows = groupVoiceMessages(voiceHistoryMessages(voice, chat, history));
+  assert.deepEqual(rows.map(row => row.id), messages.map(row => row.id));
+  assert.equal(rows[2].text, 'Intervening question');
+  assert.equal(rows[2].pendingVoice, true);
+  assert.equal(rows[1], messages[1]); assert.equal(rows[3], messages[3]);
+  assert.deepEqual({ voice, history }, before, 'display merging never mutates saved or live turns');
+});
+
+test('latest pagination excludes acknowledged older captions but retains an acknowledged unseen tail', () => {
+  const messages = [message('u1', 'Earlier question'), message('a1', 'Earlier reply', 'assistant'), message('u2', 'Visible question'), message('a2', 'Visible reply', 'assistant'), message('u3', 'New tail')];
+  const { chat, voice, history } = callView(messages);
+  history.messages = messages.slice(2, 4); history.hasMore = true;
+  const rows = voiceHistoryMessages(voice, chat, history);
+  assert.deepEqual(rows.map(row => row.id), messages.slice(2).map(row => row.id));
+  assert.equal(rows[2].pendingVoice, true, 'receipt alone does not hide a tail history has not observed');
+  assert.equal(rows[2].streaming, false, 'a final awaiting history is not still transcribing');
+  voice.attempt.entries[0].saved = false;
+  assert.equal(voiceHistoryMessages(voice, chat, history)[0].id, messages[0].id, 'unacknowledged earlier speech remains reviewable');
+  voice.attempt.entries[0].saved = true; voice.turns[0].unconfirmed = true;
+  assert.equal(voiceHistoryMessages(voice, chat, history)[0].unconfirmed, true, 'unconfirmed words remain reviewable even with a save receipt');
+});
+
+test('a first acknowledged call caption survives a latest page with no call anchor', () => {
+  const caption = message('new', 'New call words'), typed = { ...message('typed', 'Existing conversation'), id: 'typed-message' };
+  const { chat, voice, history } = callView([caption]);
+  history.messages = [typed]; history.hasMore = true;
+  const rows = voiceHistoryMessages(voice, chat, history);
+  assert.deepEqual(rows.map(row => row.text), [typed.text, caption.text]);
+  assert.equal(rows[1].pendingVoice, true);
+});
+
+test('an unconfirmed final keeps its words and review flag without pretending to stream', () => {
+  const saved = message('saved', 'First segment'), unconfirmed = message('unconfirmed', 'Provisional words');
+  const { chat, voice, history } = callView([saved, unconfirmed]);
+  history.messages = [saved]; voice.turns[1].unconfirmed = true;
+  const row = groupVoiceMessages(voiceHistoryMessages(voice, chat, history))[0];
+  assert.equal(transcriptText(row), 'First segment Provisional words');
+  assert.equal(row.unconfirmed, true);
+  assert.equal(row.streaming, false);
+  assert.equal(row.voiceParts![1].unconfirmed, true);
+});

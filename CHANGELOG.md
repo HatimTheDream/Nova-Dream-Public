@@ -1,3 +1,10 @@
+## [1.8.12] — 2026-09-20
+
+- Shorten warm voice setup by avoiding unrelated conversation review waits and overlapping independent preparation checks; reconnects keep their own provider catalog requests.
+- Use semantic speech boundaries to allow natural pauses within a thought.
+- Keep live captions in conversation order across history refreshes and pagination. Preserve visible words when a provider final is blank, marked as unconfirmed.
+- Protect captions from concurrent admission updates, settle silent interrupted replies, and finish queued caption saves before closing a call. Late callbacks from an ended call cannot stop a new call.
+
 ## [1.8.11] — 2026-09-20
 
 - Restore voice startup when the provider omits or normalizes its optional caption-delay setting, while still requiring the correct transcription model and captured conversation context before audio is admitted.

@@ -2,6 +2,7 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { VoiceController } from '../apps/client/src/voice-controller.js';
 import type { Conversation } from '../packages/domain/assistant.js';
+import { liveTurnDetection } from '../packages/adapters/voice-transcript.js';
 
 function memoryStorage(t: TestContext) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -122,6 +123,7 @@ test('voice setup requests streaming captions alongside the complete Project ins
   assert.equal(sent.length, 1);
   assert.equal(sent[0].session.instructions, 'Original provider instructions\n\nProject purpose: copper moon seven');
   assert.deepEqual(sent[0].session.audio.input.transcription, { model: 'gpt-live-transcribe', delay: 'medium' });
+  assert.deepEqual(sent[0].session.audio.input.turn_detection, liveTurnDetection);
 });
 
 test('Project acknowledgement alone cannot enable audio without the streaming transcription model', async () => {
@@ -153,7 +155,7 @@ for (const [label, transcription] of [
   internal.resources = { stream: { getAudioTracks: () => [track] } };
   // SessionUpdatedEvent returns AudioTranscription whose delay is optional and
   // nullable. Only identity/context, not an optional readback, admits this mic.
-  const ack = (value: unknown, instructions = internal.contextInstructions) => internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions, audio: { input: { transcription: value } } } }), 0);
+  const ack = (value: unknown, instructions = internal.contextInstructions) => internal.providerEvent(JSON.stringify({ type: 'session.updated', session: { instructions, audio: { input: { transcription: value, turn_detection: liveTurnDetection } } } }), 0);
   for (const invalid of [undefined, null, {}, [], { model: 'gpt-4o-mini-transcribe', delay: 'medium' }]) {
     await ack(invalid); assert.equal(track.enabled, false); assert.equal(admitted, 0);
   }
@@ -263,4 +265,118 @@ for (const options of [{ partial: true }, { pendingFinal: true }]) test(`hangup 
 test('an error remains visible even when its remote cleanup succeeds', async t => {
   const f = hangupFixture(t); await f.internal.fail('Microphone disconnected.');
   assert.equal(f.voice.getSnapshot().phase, 'error'); assert.ok(f.internal.journal); assert.ok(f.stored());
+});
+
+test('duplicate context acknowledgements share admission and terminal or foreign acknowledgements never enable the mic', async t => {
+  memoryStorage(t);
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  for (const result of [{ id: 'fixture', state: 'active' }, { id: 'fixture', state: 'ended' }, { id: 'other', state: 'active' }]) {
+    let answer!: (response: Response) => void, calls = 0;
+    globalThis.fetch = async () => { calls++; return new Promise<Response>(resolve => { answer = resolve; }); };
+    const voice = new VoiceController('admission-' + result.state + result.id), internal = voice as any, track = { enabled: false };
+    internal.view = { ...voice.getSnapshot(), phase: 'connecting', muted: false };
+    internal.contextInstructions = 'Captured context';
+    internal.journal = { start: { epoch: 'epoch' }, attempt: { id: 'fixture', contextDigest: 'digest' }, entries: [], turns: [] };
+    internal.resources = { stream: { getAudioTracks: () => [track] } };
+    const ack = JSON.stringify({ type: 'session.updated', session: { instructions: 'Captured context', audio: { input: { transcription: { model: 'gpt-live-transcribe' }, turn_detection: liveTurnDetection } } } });
+    const admitting = internal.providerEvent(ack, 0);
+    await internal.providerEvent(ack, 0);
+    assert.equal(calls, 1); assert.equal(track.enabled, false);
+    answer(Response.json({ ...result, entries: [], consults: [] }));
+    if (result.id === 'fixture' && result.state === 'active') { await admitting; assert.equal(track.enabled, true); }
+    else { await assert.rejects(admitting, /microphone stayed off/); assert.equal(track.enabled, false); }
+  }
+});
+
+test('continuous speech survives interleaved replies, out-of-order finals, a blank final and a silent cancelled item', async t => {
+  memoryStorage(t);
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  const voice = new VoiceController('continuous-fixture'), internal = voice as any;
+  const remote: any = { id: 'fixture', state: 'active', entries: [], consults: [] };
+  const native: string[] = [];
+  globalThis.fetch = async (input, options) => {
+    const body = JSON.parse(String(options?.body));
+    if (String(input).endsWith('/finals')) {
+      for (const entry of body.entries) if (!remote.entries.some((e: any) => e.entryId === entry.entryId)) remote.entries.push({ ...entry, saved: false });
+      remote.entries.sort((a: any, b: any) => a.ordinal - b.ordinal);
+      let ordinal = 0;
+      for (const entry of remote.entries) {
+        if (entry.ordinal !== ordinal++) break;
+        if (!entry.saved && entry.text.trim()) native.push(entry.text);
+        entry.saved = true;
+      }
+    }
+    if (String(input).endsWith('/end')) remote.state = 'ended';
+    return Response.json(remote);
+  };
+  internal.view = { ...voice.getSnapshot(), phase: 'connected', muted: false };
+  internal.journal = { start: { epoch: 'epoch' }, attempt: structuredClone(remote), entries: [], turns: [] };
+  const event = (value: object) => internal.providerEvent(JSON.stringify(value), 0);
+  const commit = (id: string) => event({ type: 'input_audio_buffer.committed', item_id: id });
+  const caption = (id: string, text: string, final = false) => event({ type: `conversation.item.input_audio_transcription.${final ? 'completed' : 'delta'}`, item_id: id, event_id: `${id}-${final}`, ...(final ? { transcript: text } : { delta: text }) });
+  const reply = async (id: string, text: string) => {
+    await event({ type: 'response.output_item.added', item: { id, role: 'assistant', type: 'message' } });
+    await event({ type: 'response.output_audio_transcript.done', item_id: id, event_id: id, transcript: text });
+  };
+  await commit('u1'); await caption('u1', 'First thought'); await reply('a1', 'First reply');
+  await commit('u2'); await caption('u2', 'Still talking'); await caption('u2', '', true);
+  await event({ type: 'response.output_item.added', item: { id: 'silent', role: 'assistant', type: 'message' } });
+  await event({ type: 'response.output_item.done', event_id: 'silent-done', item: { id: 'silent', role: 'assistant', type: 'message', status: 'incomplete', content: [] } });
+  await commit('u3'); await caption('u3', 'Third thought'); await caption('u3', 'Third thought.', true); await reply('a3', 'Third reply');
+  await caption('u1', 'First thought.', true);
+  await internal.flush();
+  assert.deepEqual(voice.getSnapshot().turns.filter(turn => turn.text).map(turn => turn.text), ['First thought.', 'First reply', 'Still talking', 'Third thought.', 'Third reply']);
+  assert.equal(voice.getSnapshot().turns.find(turn => turn.turnId === 'u2')?.unconfirmed, true);
+  assert.deepEqual(native, ['First thought.', 'First reply', 'Third thought.', 'Third reply']);
+  assert.ok(remote.entries.every((entry: any) => entry.saved));
+  assert.equal(remote.entries.length, 6);
+  await voice.end();
+  assert.equal(voice.getSnapshot().phase, 'ended');
+  assert.match(voice.getSnapshot().message, /unconfirmed/);
+  assert.match(localStorage.getItem('e3:voice-call:continuous-fixture')!, /Still talking/);
+});
+
+test('finals arriving during an in-flight save are flushed before hangup closes the original call', async t => {
+  const f = hangupFixture(t, { caption: true });
+  let finish!: (value: Response) => void;
+  const paths: string[] = [], remote: any[] = [];
+  globalThis.fetch = async (input, options) => {
+    paths.push(String(input));
+    const entries = JSON.parse(String(options?.body)).entries ?? [];
+    remote.push(...entries.map((entry: any) => ({ ...entry, saved: true })));
+    const response = () => Response.json({ id: 'attempt', state: String(input).endsWith('/end') ? 'ended' : 'active', entries: remote, consults: [] });
+    if (paths.length === 1) return new Promise<Response>(resolve => { finish = () => resolve(response()); });
+    return response();
+  };
+  const saving = f.internal.flush();
+  f.internal.journal.entries.push({ entryId: 'next', ordinal: 1, role: 'user', text: 'One more thought', timestamp: 2, saved: false });
+  const ending = f.voice.end();
+  finish(new Response());
+  await Promise.all([saving, ending]);
+  assert.deepEqual(paths, ['/api/assistant/voice/finals', '/api/assistant/voice/finals', '/api/assistant/voice/end']);
+  assert.equal(f.voice.getSnapshot().phase, 'idle');
+  assert.deepEqual(remote.map(entry => entry.text), ['Keep these spoken words', 'One more thought']);
+});
+
+test('a rejected callback from an ended call cannot stop a replacement call', async t => {
+  memoryStorage(t);
+  const previous = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previous; });
+  let reject!: (error: Error) => void, failed = 0;
+  globalThis.fetch = () => new Promise<Response>((_, no) => { reject = no; });
+  const voice = new VoiceController('late-admission'), internal = voice as any;
+  internal.view = { ...voice.getSnapshot(), phase: 'connecting' };
+  internal.contextInstructions = 'Context';
+  internal.journal = { start: { epoch: 'epoch' }, attempt: { id: 'old', contextDigest: 'digest' }, entries: [], turns: [] };
+  internal.fail = () => { failed++; };
+  internal.receive(JSON.stringify({ type: 'session.updated', session: { instructions: 'Context', audio: { input: { transcription: { model: 'gpt-live-transcribe' }, turn_detection: liveTurnDetection } } } }), 0);
+  internal.generation++;
+  internal.journal = { attempt: { id: 'new' } };
+  internal.view = { ...voice.getSnapshot(), phase: 'connected' };
+  reject(new Error('Late network rejection'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(failed, 0); assert.equal(voice.getSnapshot().phase, 'connected');
+  assert.equal(internal.journal.attempt.id, 'new');
 });

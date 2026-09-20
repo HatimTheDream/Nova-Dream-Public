@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { approvalSnapshotSchema, checkApprovalSchema, resolveApprovalSchema, type ApprovalSnapshot, type ApprovalState, type ReviewApproval } from '../../packages/domain/approvals.js';
 import { canonical } from '../../packages/domain/contracts.js';
-import type { Conversation } from '../../packages/domain/assistant.js';
+import type { AssistantConnection, Conversation } from '../../packages/domain/assistant.js';
 import type { AssistantTransport } from './gateway.js';
 import type { AccessTransport } from './full-access.js';
 import { Store, Fault } from './store.js';
@@ -10,6 +10,7 @@ const hash = (value: unknown) => createHash('sha256').update(canonical(value)).d
 export type ApprovalTarget = Pick<Conversation, 'id' | 'nativeId' | 'nativeKey' | 'connectionGeneration' | 'state' | 'archived' | 'deleted'> & { readOnly?: boolean };
 const prefix = 'assistant:approval:';
 const object = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+const subscriptionIdentity = (c: ApprovalTarget, url: string | undefined) => canonical([c.connectionGeneration, url, c.id, c.nativeId, c.nativeKey]);
 
 /** A finite reviewer connection. Ordinary chat cannot resolve approvals. */
 export class AssistantApprovals {
@@ -61,7 +62,7 @@ export class AssistantApprovals {
     const current = this.conversations().find(c => c.id === target.id && c.nativeId === target.nativeId && c.nativeKey === target.nativeKey);
     if (!current) return true;
     try { this.accept(current, data.approval, data.updatedAtMs, typeof data.sourceSessionKey === 'string' ? data.sourceSessionKey : undefined); }
-    catch { this.subscribedIds.delete(`${current.id}:${current.nativeId}`); this.error = 'An approval could not be read completely. Check this request in OpenClaw before deciding.'; }
+    catch { this.subscribedIds.delete(subscriptionIdentity(current, this.ordinary.status().url)); this.error = 'An approval could not be read completely. Check this request in OpenClaw before deciding.'; }
     return true;
   }
   sync() {
@@ -88,7 +89,7 @@ export class AssistantApprovals {
     if (!status.grantedScopes.includes('operator.approvals')) { this.error = 'This device needs OpenClaw approval-review permission.'; return; }
     this.error = undefined;
     for (const conversation of this.conversations().filter(c => c.state === 'ready' && c.nativeId && c.connectionGeneration === base.generation)) {
-      const identity = `${conversation.id}:${conversation.nativeId}`;
+      const identity = subscriptionIdentity(conversation, base.url);
       if (this.subscribedIds.has(identity)) continue;
       const result = await control.request<Record<string, any>>('sessions.messages.subscribe', { key: conversation.nativeKey, includeApprovals: true });
       if (this.closed || this.control !== control || this.ordinary.status().generation !== base.generation) return;
@@ -104,13 +105,19 @@ export class AssistantApprovals {
       for (const item of this.state().items.filter(r => r.snapshot.status === 'pending' && r.action?.state !== 'sending')) { try { await this.read(item); } catch { this.error = 'Some approval outcomes could not be checked. Your decisions are retained.'; } }
     }
   }
+  private readyFor(conversationId: string, base: AssistantConnection) {
+    const current = this.ordinary.status(), conversation = this.conversations().find(c => c.id === conversationId);
+    return !this.closed && current.generation === base.generation && current.url === base.url
+      && conversation?.state === 'ready' && !!conversation.nativeId && conversation.connectionGeneration === base.generation
+      && this.state().state === 'ready' && this.subscribedIds.has(subscriptionIdentity(conversation, base.url));
+  }
   async prepare(conversationId: string) {
     if (!this.factory || !this.ordinary.status().methods.includes('approval.resolve')) return;
     const base = this.ordinary.status(), deadline = Date.now() + 12000;
+    if (this.readyFor(conversationId, base)) return;
     while (!this.closed && Date.now() < deadline) {
       await this.sync();
-      const conversation = this.conversations().find(c => c.id === conversationId);
-      if (this.state().state === 'ready' && conversation && this.subscribedIds.has(`${conversation.id}:${conversation.nativeId}`)) return;
+      if (this.readyFor(conversationId, base)) return;
       if (this.ordinary.status().generation !== base.generation || this.state().state === 'error') break;
       await new Promise(resolve => setTimeout(resolve, 80));
     }

@@ -1,7 +1,7 @@
 import { apiFailure, clientHeaders } from './api';
 import type { Conversation } from '../../../packages/domain/assistant';
 import type { VoiceAttempt, VoiceFinal } from '../../../packages/domain/voice';
-import { confirmsLiveTranscription, liveTranscription, mapRealtimeTranscript, reconcileTranscript, type TranscriptTurn } from '../../../packages/adapters/voice-transcript';
+import { confirmsLiveTranscription, confirmsLiveTurnDetection, liveTranscription, liveTurnDetection, mapRealtimeAssistantItem, mapRealtimeTranscript, reconcileTranscript, type TranscriptTurn } from '../../../packages/adapters/voice-transcript';
 import { readLocal, request, saveLocal } from './api';
 import { VoiceAudioMeter, silentVoiceLevels, type VoiceLevels } from './voice-audio-meter';
 
@@ -32,6 +32,7 @@ export class VoiceController {
   private deliveredTools = new Set<string>();
   private flushing?: Promise<void>;
   private polling = false;
+  private admitting = false;
   private contextInstructions?: string;
   private interrupted = false;
   private responseId?: string;
@@ -68,7 +69,7 @@ export class VoiceController {
     const generation = ++this.generation;
     const resources: Resources = {}; this.resources = resources;
     this.order = []; this.pendingFinals.clear(); this.seenTools.clear(); this.deliveredTools.clear(); this.sequence = 0; this.contextInstructions = undefined; this.interrupted = false;
-    this.responseId = undefined; this.awaitingInputId = undefined; this.cancelledResponses.clear();
+    this.responseId = undefined; this.awaitingInputId = undefined; this.cancelledResponses.clear(); this.admitting = false;
     this.update({ phase: 'permission', message: 'Allow the microphone to start your call.', turns: [], speaking: false, listening: false, processing: false, soundBlocked: false, attempt: undefined });
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') throw new Error('This browser needs a secure microphone connection before voice can start.');
@@ -121,7 +122,7 @@ export class VoiceController {
       peer.onconnectionstatechange = () => { if (generation === this.generation && ['failed', 'disconnected', 'closed'].includes(peer.connectionState)) void this.fail('The audio connection was interrupted. Your microphone is off; saved captions stay with this conversation.'); };
       for (const track of stream.getAudioTracks()) peer.addTrack(track, stream);
       const channel = peer.createDataChannel('oai-events'); resources.channel = channel;
-      channel.onmessage = event => { if (generation === this.generation) void this.providerEvent(event.data, generation).catch(error => this.fail(error instanceof Error ? error.message : 'Voice could not continue.')); };
+      channel.onmessage = event => this.receive(event.data, generation);
       channel.onclose = () => { if (generation === this.generation) void this.fail('The voice controls disconnected. Audio is stopped.'); };
       const offer = await peer.createOffer(); await peer.setLocalDescription(offer);
       if (generation !== this.generation) return;
@@ -136,6 +137,12 @@ export class VoiceController {
       if (generation === this.generation && this.view.phase === 'connecting') throw new Error('Voice did not confirm Project context and live captions. Audio stayed muted.');
     } catch (error) { if (generation === this.generation) await this.fail(error instanceof Error ? error.message : 'Voice could not start. Your conversation is kept.'); }
   }
+  private receive(raw: unknown, generation: number) {
+    if (generation !== this.generation) return;
+    void this.providerEvent(raw, generation).catch(error => {
+      if (generation === this.generation) return this.fail(error instanceof Error ? error.message : 'Voice could not continue.');
+    });
+  }
   private async providerEvent(raw: unknown, generation: number) {
     if (typeof raw !== 'string' || raw.length > 300000) throw new Error('The voice provider returned an unsupported event.');
     const event = JSON.parse(raw);
@@ -143,17 +150,22 @@ export class VoiceController {
     if (event.type === 'session.created' && !this.contextInstructions) {
       if (typeof event.session?.instructions !== 'string') throw new Error('Voice did not supply its conversation instructions. Audio stayed muted.');
       this.contextInstructions = `${event.session.instructions}\n\n${this.journal!.attempt!.context}`;
-      this.send({ type: 'session.update', session: { type: 'realtime', instructions: this.contextInstructions, audio: { input: { transcription: liveTranscription } } } });
+      this.send({ type: 'session.update', session: { type: 'realtime', instructions: this.contextInstructions, audio: { input: { transcription: liveTranscription, turn_detection: liveTurnDetection } } } });
       return;
     }
     if (event.type === 'session.updated' && this.view.phase === 'connecting') {
       if (!this.contextInstructions || event.session?.instructions !== this.contextInstructions) return;
-      if (!confirmsLiveTranscription(event.session?.audio?.input?.transcription)) return;
-      const attempt = await request<VoiceAttempt>('assistant/voice/pulse', { ...this.action(), contextDigest: this.journal!.attempt!.contextDigest });
-      if (generation !== this.generation) return;
-      this.journal!.attempt = attempt; this.keep();
-      this.update({ attempt, phase: 'connected', message: this.view.muted ? 'Microphone muted' : 'Voice connected. Speak when you’re ready.' });
-      this.resources.stream?.getAudioTracks().forEach(track => { track.enabled = !this.view.muted; });
+      if (!confirmsLiveTranscription(event.session?.audio?.input?.transcription) || !confirmsLiveTurnDetection(event.session?.audio?.input?.turn_detection) || this.admitting) return;
+      const journal = this.journal!;
+      this.admitting = true;
+      try {
+        const attempt = await request<VoiceAttempt>('assistant/voice/pulse', { ...this.action(), contextDigest: journal.attempt!.contextDigest });
+        if (generation !== this.generation || this.journal !== journal || this.view.phase !== 'connecting') return;
+        if (attempt.id !== journal.attempt!.id || attempt.state !== 'active') throw new Error('The call ended before audio was ready. Your microphone stayed off.');
+        this.acceptAttempt(attempt);
+        this.update({ phase: 'connected', message: this.view.muted ? 'Microphone muted' : 'Voice connected. Speak when you’re ready.' });
+        this.resources.stream?.getAudioTracks().forEach(track => { track.enabled = !this.view.muted; });
+      } finally { if (generation === this.generation) this.admitting = false; }
       return;
     }
     if (event.type === 'error') {
@@ -185,7 +197,8 @@ export class VoiceController {
     // New committed input and response items define call order. Replayed initial
     // history items must never reserve a caption ordinal in this new call.
     if (event.type === 'response.output_item.added' && event.item?.role === 'assistant' && event.item?.type === 'message') this.rememberItem(event.item.id);
-    const mapped = mapRealtimeTranscript(this.journal!.attempt!.id, ++this.sequence, event);
+    const mapped = mapRealtimeTranscript(this.journal!.attempt!.id, ++this.sequence, event)
+      ?? mapRealtimeAssistantItem(this.journal!.attempt!.id, this.sequence, event);
     if (mapped) {
       const current = this.view.turns.find(t => t.turnId === mapped.turnId);
       const next = reconcileTranscript(current, mapped);
@@ -223,7 +236,7 @@ export class VoiceController {
   private acceptAttempt(attempt: VoiceAttempt) {
     if (!this.journal || attempt.id !== this.journal.attempt?.id) return;
     this.journal.attempt = attempt;
-    this.journal.entries = this.journal.entries.map(e => ({ ...e, saved: attempt.entries.some(saved => saved.entryId === e.entryId && saved.saved) }));
+    this.journal.entries = this.journal.entries.map(e => ({ ...e, saved: e.saved || attempt.entries.some(saved => saved.entryId === e.entryId && saved.saved) }));
     this.keep(); this.update({ attempt });
     if (this.view.phase !== 'connected') return;
     for (const consult of attempt.consults) if (['completed', 'failed', 'unknown'].includes(consult.state) && !this.deliveredTools.has(consult.callId)) {
@@ -237,10 +250,14 @@ export class VoiceController {
     if (!this.journal?.attempt) return;
     const journal = this.journal;
     const work = (async () => {
-      const entries = journal.entries.filter(e => !e.saved).slice(0, 100).map(({ saved, ...entry }) => entry);
-      if (!entries.length) return;
-      const result = await request<VoiceAttempt>('assistant/voice/finals', { ...this.action(), entries });
-      if (this.journal === journal) this.acceptAttempt(result);
+      const submitted = new Set<string>();
+      while (this.journal === journal) {
+        const entries = journal.entries.filter(e => !e.saved && !submitted.has(e.entryId)).slice(0, 100).map(({ saved, ...entry }) => entry);
+        if (!entries.length) return;
+        entries.forEach(entry => submitted.add(entry.entryId));
+        const result = await request<VoiceAttempt>('assistant/voice/finals', { ...this.action(), entries });
+        if (this.journal === journal) this.acceptAttempt(result);
+      }
     })();
     this.flushing = work;
     try { await work; } finally { this.flushing = undefined; }
@@ -293,7 +310,7 @@ export class VoiceController {
   private async fail(message: string) { this.release(); this.update({ phase: 'error', message }); await this.finishRemote(); }
   private hasUnconfirmedTurns() {
     return this.pendingFinals.size > 0 || this.view.turns.some(turn => turn.text.trim()
-      && (!turn.final || !this.journal?.entries.some(entry => entry.entryId === turn.turnId && entry.saved)));
+      && (!turn.final || turn.unconfirmed || !this.journal?.entries.some(entry => entry.entryId === turn.turnId && entry.saved)));
   }
   private dismissSavedCall(automatic = false) {
     const journal = this.journal, attempt = journal?.attempt;

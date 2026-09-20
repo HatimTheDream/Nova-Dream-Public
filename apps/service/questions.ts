@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { GatewayClientRequestError } from '@openclaw/gateway-client';
 import { canonicalQuestionAnswers, nativeQuestionSchema, safeQuestionSnapshot, resolveQuestionSchema, checkQuestionSchema, dismissQuestionSchema, type NativeQuestion, type AssistantQuestion, type QuestionState, type QuestionAnswers } from '../../packages/domain/questions.js';
 import { canonical } from '../../packages/domain/contracts.js';
-import type { Conversation } from '../../packages/domain/assistant.js';
+import type { AssistantConnection, Conversation } from '../../packages/domain/assistant.js';
 import type { AssistantTransport } from './gateway.js';
 import type { AccessTransport } from './full-access.js';
 import { Fault, Store } from './store.js';
@@ -12,6 +12,7 @@ const hash = (value: unknown) => createHash('sha256').update(canonical(value ?? 
 const fingerprint = (q: NativeQuestion) => hash([q.id, q.createdAtMs, q.expiresAtMs, q.sessionKey, q.agentId, q.runId, q.questions]);
 const object = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 const isMissing = (error: unknown) => error instanceof GatewayClientRequestError && object(error.details).reason === 'QUESTION_NOT_FOUND';
+const subscriptionIdentity = (c: Conversation, url: string | undefined) => canonical([c.connectionGeneration, url, c.id, c.nativeId, c.nativeKey]);
 
 /** Retains app-side question history; the native question manager is transient. */
 export class AssistantQuestions {
@@ -85,7 +86,7 @@ export class AssistantQuestions {
     if (!status.grantedScopes.includes('operator.questions')) { this.error = 'This device needs OpenClaw question-review permission.'; return; }
     this.error = undefined;
     for (const c of this.conversations().filter(c => c.nativeId && c.state === 'ready' && c.connectionGeneration === base.generation)) {
-      const identity = `${c.id}:${c.nativeId}`;
+      const identity = subscriptionIdentity(c, base.url);
       if (this.subscribed.has(identity)) continue;
       if (status.methods.includes('sessions.messages.subscribe')) {
         const result = await control.request<{ key: string; subscribed: boolean }>('sessions.messages.subscribe', { key: c.nativeKey });
@@ -101,12 +102,19 @@ export class AssistantQuestions {
     for (const raw of result.questions) { const source = object(raw); if (!this.conversations().some(c => c.nativeKey === source.sessionKey && c.connectionGeneration === base.generation)) continue; const item = this.accept(raw); if (item) present.add(item.id); }
     for (const item of this.state().items.filter(q => q.snapshot.status === 'pending' && q.availability !== 'missing' && !present.has(q.id))) { try { await this.read(item); } catch { this.error = 'Some question outcomes could not be checked. Reconnect to review them.'; } }
   }
+  private readyFor(conversationId: string, base: AssistantConnection) {
+    const current = this.ordinary.status(), c = this.conversations().find(value => value.id === conversationId);
+    return !this.closed && current.generation === base.generation && current.url === base.url
+      && c?.state === 'ready' && !!c.nativeId && c.connectionGeneration === base.generation
+      && this.state().state === 'ready' && this.subscribed.has(subscriptionIdentity(c, base.url));
+  }
   async prepare(conversationId: string) {
     if (!this.factory || !this.ordinary.status().methods.includes('question.resolve')) return;
     const base = this.ordinary.status(), end = Date.now() + 12000;
+    if (this.readyFor(conversationId, base)) return;
     while (!this.closed && Date.now() < end) {
-      await this.sync(); const c = this.conversations().find(c => c.id === conversationId);
-      if (c && this.state().state === 'ready' && this.subscribed.has(`${c.id}:${c.nativeId}`)) return;
+      await this.sync();
+      if (this.readyFor(conversationId, base)) return;
       if (this.ordinary.status().generation !== base.generation || this.state().state === 'error') break;
       await new Promise(resolve => setTimeout(resolve, 80));
     }

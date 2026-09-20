@@ -76,8 +76,7 @@ export class VoiceCalls {
   }
   private async prepare(attempt: VoiceAttempt, state: Live, chosenModel?: string, chosenVoice?: string) {
     try {
-      await this.preflight(attempt);
-      const catalog = await this.setup.read();
+      const [, catalog] = await Promise.all([this.preflight(attempt), this.setup.read()]);
       const provider = catalog.providers.find(p => p.id === 'openai' && p.configured && p.browserSupported);
       const model = chosenModel ?? provider?.models.find(m => m === 'gpt-realtime-2.1');
       if (catalog.state !== 'available' || !provider || !model || !/^gpt-realtime-2(?:\.1(?:-mini)?)?$/.test(model) || !provider.models.includes(model)) throw new Fault(409, 'voice_model', 'Connect a supported OpenAI realtime voice model in Settings.');
@@ -162,8 +161,10 @@ export class VoiceCalls {
         if (this.get(attempt.id).state !== 'active') throw new Error('Call ended during its status check');
       }
       if (input.contextDigest !== undefined) {
-        if (input.contextDigest !== attempt.contextDigest || !['connecting', 'active'].includes(attempt.state)) throw new Error('Voice context was not confirmed');
-        return this.save({ ...attempt, state: 'active', message: 'Voice connected to this conversation.' });
+        const current = this.get(attempt.id);
+        this.currentTarget(current);
+        if (input.contextDigest !== current.contextDigest || !['connecting', 'active'].includes(current.state)) throw new Error('Voice context was not confirmed');
+        return this.save({ ...current, state: 'active', message: 'Voice connected to this conversation.' });
       }
       return this.get(attempt.id);
     } catch { void this.endOwned(attempt.id).catch(() => undefined); throw new Fault(409, 'voice_context_changed', 'Voice lost its original conversation context. Audio has been stopped.'); }

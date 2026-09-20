@@ -208,6 +208,52 @@ test('a native file receipt for another conversation prevents audio creation', (
   assert.equal(f.voice.read(f.device, attempt.id).state, 'failed'); assert.equal(f.gateway.calls.filter(call => call.method === 'talk.client.create').length, 0);
 }));
 
+test('voice discovery overlaps history verification but audio creation waits for the captured target', () => fixture(async f => {
+  let release!: () => void; f.gateway.holdHistory = new Promise<void>(resolve => { release = resolve; });
+  const attempt = f.voice.start(f.device, f.start);
+  try {
+    await tick();
+    assert.equal(f.gateway.calls.filter(c => c.method === 'talk.catalog').length, 1);
+    assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.create').length, 0);
+    assert.equal(f.voice.read(f.device, attempt.id).state, 'preparing');
+  } finally { release(); }
+  await tick(); assert.equal(f.voice.read(f.device, attempt.id).state, 'ready');
+}));
+
+test('repeated context admission preserves captions and consultations saved during its preflight', () => fixture(async f => {
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  await f.voice.offer(f.device, { ...f.action(attempt.id), sdp: 'v=0\r\nfixture' });
+  await f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }); f.assistant.setApprovalReview(() => held);
+  const repeated = f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest });
+  let consulting: Promise<unknown> | undefined;
+  try {
+    await f.voice.finals(f.device, { ...f.action(attempt.id), entries: [{ entryId: 'during_admission', ordinal: 0, role: 'user', text: 'Synthetic caption', timestamp: 1234 }] });
+    consulting = f.voice.consult(f.device, { ...f.action(attempt.id), callId: 'during_admission', name: 'openclaw_agent_consult', args: { question: 'Synthetic request' } });
+    await tick();
+    assert.equal(f.voice.read(f.device, attempt.id).entries[0].saved, true);
+    assert.equal(f.voice.read(f.device, attempt.id).consults.length, 1);
+  } finally { release(); }
+  await repeated; await consulting;
+  const current = f.voice.read(f.device, attempt.id);
+  assert.equal(current.state, 'active');
+  assert.equal(current.entries[0]?.entryId, 'during_admission'); assert.equal(current.entries[0]?.saved, true);
+  assert.equal(current.consults[0]?.callId, 'during_admission'); assert.equal(current.consults[0]?.state, 'completed');
+}));
+
+test('context admission cannot reactivate a call ended during its preflight', () => fixture(async f => {
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  await f.voice.offer(f.device, { ...f.action(attempt.id), sdp: 'v=0\r\nfixture' });
+  await f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }); f.assistant.setApprovalReview(() => held);
+  const admission = assert.rejects(f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest }), { code: 'voice_context_changed' });
+  try { assert.equal((await f.voice.end(f.device, f.action(attempt.id))).state, 'ended'); }
+  finally { release(); }
+  await admission; assert.equal(f.voice.read(f.device, attempt.id).state, 'ended');
+}));
+
 test('a Project change during preflight prevents voice admission to the provider', () => fixture(async f => {
   let release!: () => void; f.gateway.holdHistory = new Promise<void>(resolve => { release = resolve; });
   const attempt = f.voice.start(f.device, f.start), project = attempt.target.project!;

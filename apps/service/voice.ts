@@ -20,7 +20,7 @@ export function projectVoiceCatalog(raw: unknown): VoiceCatalog {
 
 export class VoiceSetup {
   private cached?: { generation: string | undefined; expiresAt: number; value: VoiceCatalog };
-  private pending?: Promise<VoiceCatalog>;
+  private pending?: { generation: string | undefined; promise: Promise<VoiceCatalog> };
   constructor(private gateway: AssistantTransport) {}
   async read(): Promise<VoiceCatalog> {
     const connection = this.gateway.status();
@@ -29,8 +29,8 @@ export class VoiceSetup {
       return { state: 'disconnected', message: 'Connect the Assistant before checking voice access.', providers: [] };
     }
     if (this.cached && this.cached.generation === connection.generation && this.cached.expiresAt > Date.now()) return this.cached.value;
-    if (this.pending) return this.pending;
-    this.pending = (async () => {
+    if (this.pending && this.pending.generation === connection.generation) return this.pending.promise;
+    const pending = (async () => {
       try {
         const raw = await this.gateway.request('talk.catalog', {});
         const current = this.gateway.status();
@@ -41,7 +41,8 @@ export class VoiceSetup {
       } catch {
         return { state: 'unverified' as const, message: 'OpenClaw could not confirm voice access. Your ChatGPT sign-in is kept.', providers: [] };
       }
-    })().finally(() => { this.pending = undefined; });
-    return this.pending;
+    })().finally(() => { if (this.pending?.promise === pending) this.pending = undefined; });
+    this.pending = { generation: connection.generation, promise: pending };
+    return pending;
   }
 }
