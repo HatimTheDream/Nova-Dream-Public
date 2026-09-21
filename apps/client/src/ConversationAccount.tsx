@@ -4,7 +4,7 @@ import type { Snapshot } from '../../../packages/domain/contracts';
 import type { ChatGptAccountStatus } from '../../../packages/domain/sign-in';
 import { request } from './api';
 import { RefreshReader } from './refresh-reader';
-import { accountHealth, accountOrder } from './chatgpt-account-controls';
+import { accountHealth, accountOrder, allowanceLabel, remainingAllowance } from './chatgpt-account-controls';
 import './chatgpt-accounts.css';
 
 export function ConversationAccountSelect({ status, conversation, blocked, stale = false, onChange }: { status?: ChatGptAccountStatus; conversation?: Conversation; blocked: boolean; stale?: boolean; onChange: (profileId: string | null) => void }) {
@@ -22,13 +22,14 @@ export function ConversationAccountSelect({ status, conversation, blocked, stale
   </div>;
 }
 
-export function ConversationAccount({ snapshot, conversation, blocked, onChange }: { snapshot: Snapshot; conversation?: Conversation; blocked: boolean; onChange: (profileId: string | null) => Promise<void> }) {
+export function useConversationAccount({ snapshot, conversation, blocked, onChange }: { snapshot: Snapshot; conversation?: Conversation; blocked: boolean; onChange: (profileId: string | null) => Promise<void> }) {
   const identity = `${snapshot.epoch}:${snapshot.deviceId}:${conversation?.id ?? ''}`;
   const context = useRef(identity); context.current = identity;
   const [status, setStatus] = useState<ChatGptAccountStatus>(), [stale, setStale] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [reader] = useState(() => new RefreshReader({ identity: () => context.current, read: signal => request<ChatGptAccountStatus>('assistant/account', undefined, signal), accept: value => { setStatus(value); setStale(false); }, fail: () => setStale(true) }));
   useEffect(() => {
     setStatus(undefined); setStale(false); setBusy(false); setError('');
+    if (!conversation) return;
     void reader.refresh(); const timer = setInterval(() => void reader.poll(), 30000);
     return () => { clearInterval(timer); reader.cancel(); };
   }, [identity, reader]);
@@ -38,5 +39,22 @@ export function ConversationAccount({ snapshot, conversation, blocked, onChange 
     catch (reason) { if (context.current === identity) setError(reason instanceof Error ? reason.message : 'Account selection could not be confirmed.'); }
     finally { if (context.current === identity) setBusy(false); }
   };
-  return <div className="conversation-account-control"><ConversationAccountSelect status={status} conversation={conversation} blocked={blocked || busy} stale={stale} onChange={profileId => void change(profileId)}/>{error && <p className="field-error" role="alert">{error}</p>}</div>;
+  return { status, conversation, blocked: blocked || busy, stale, error, onChange: (profileId: string | null) => void change(profileId) };
+}
+
+export function ConversationAccountPanel(props: ReturnType<typeof useConversationAccount>) {
+  return <div className="conversation-account-panel">
+    <span className="menu-heading">ChatGPT Account</span>
+    <ConversationAccountSelect {...props}/>
+    <div className="conversation-account-usage">{accountOrder(props.status).map(id => {
+      const account = props.status!.accounts!.find(value => value.profileId === id)!;
+      if (account.duplicateOf) return null;
+      const usage = account.usage;
+      return <div key={id}><strong>{account.label}</strong><span>{account.health !== 'ready' ? `${accountHealth(account.health)} · ` : ''}{props.stale || usage.state === 'stale' ? 'Last Known · ' : ''}{usage.state === 'unavailable' || !usage.windows.length ? 'Allowance Unavailable' : usage.windows.map(window => {
+        const left = remainingAllowance(window.usedPercent);
+        return `${allowanceLabel(window.label)}: ${left === null ? 'Unavailable' : `${Math.round(left)}% Left`}`;
+      }).join(' · ')}</span></div>;
+    })}</div>
+    {props.error && <p className="field-error" role="alert">{props.error}</p>}
+  </div>;
 }

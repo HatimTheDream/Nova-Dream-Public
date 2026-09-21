@@ -16,10 +16,20 @@
 .device-signin a.button-link:active { translate: 0 2px; box-shadow: none; }
 .device-signin a.button-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .usage-provider .section-heading h3 { overflow-wrap: anywhere; min-width: 0; }
-.conversation-account-control { min-width: 0; max-width: 100%; }
-.conversation-account { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.conversation-account select { width: auto; max-width: min(240px,100%); min-height: 40px; padding: 7px 28px 7px 10px; text-overflow: ellipsis; }
+.conversation-account-panel { min-width: 0; padding: 6px; }
+.conversation-account-panel .menu-heading { padding: 0 0 8px; }
+.conversation-account { display: grid; gap: 8px; }
+.conversation-account select { width: 100%; min-width: 0; min-height: 44px; padding: 7px 28px 7px 10px; text-overflow: ellipsis; font-size: 13px; }
 .conversation-account .metadata { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
-.conversation-account-control > .field-error { margin-block: 6px 0; }
-.composer > .conversation-account-control { margin-top: 6px; }
+.conversation-account-panel > .field-error { margin-block: 8px 0; }
+.conversation-account-usage > div { display: grid; gap: 4px; padding-top: 12px; overflow-wrap: anywhere; }
+.conversation-account-usage strong { font-size: 13px; font-weight: 600; }
+.conversation-account-usage span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.response-picker + .conversation-account-panel { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+@container assistant-conversation (max-width: 380px) {
+  .assistant-workspace .composer .composer-actions,.assistant-workspace .composer .composer-actions > .button-row,.assistant-workspace .composer .composer-tools-right { gap: 1px; }
+}
+@container assistant-conversation (max-width: 300px) {
+  .assistant-workspace .composer .composer-actions,.assistant-workspace .composer .composer-actions > .button-row,.assistant-workspace .composer .composer-tools-right { gap: 0; }
+}
 @media (max-width: 520px) { .chatgpt-account-heading { flex-wrap: wrap; } .chatgpt-account .setup-actions > button { flex: 1 1 auto; } }

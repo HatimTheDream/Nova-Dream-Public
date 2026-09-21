@@ -1,3 +1,7 @@
+## [1.9.3] — 2026-09-20
+
+- Keep account selection in a compact composer button beside the model control. On narrow layouts, find it inside Response Settings; account names, usage and selection feedback stay in the menu without adding a permanent toolbar row.
+
 ## [1.9.2] — 2026-09-20
 
 - Keep a known exhausted ChatGPT account out of the next-request selection until its reported reset, even when usage becomes stale. Unknown reset times use the last successful reading's bounded freshness; failed refreshes cannot extend it indefinitely.

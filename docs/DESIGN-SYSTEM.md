@@ -133,6 +133,8 @@ Voice artwork motion must follow measured sound: input amplitude while listening
 
 ## Assistant States And Reliability
 
+Keep the composer to its writing area and one compact action row. Account selection belongs in an icon-only button beside the model control, using the shared button face, lower edge and focus treatment. Account names, usage, routing details and selection errors appear inside its disclosure. When the conversation is too narrow for another 44 px target, include account selection in the response menu instead of adding a permanent row or shrinking the controls. Check the rendered composer with both wide and narrow conversation columns before delivery.
+
 Readiness, execution and result presentation must reflect actual state. Distinguish connecting, ready, working, waiting for approval, interrupted, unavailable, failed and complete where those distinctions affect the next action. Show progress only when supported by real progress; use an honest indeterminate state otherwise. Do not present a staged draft as a sent message or a prepared artifact as a published result.
 
 Preserve unsent writing, attachments and context through navigation and recoverable errors. Keep actionable recovery near the affected work, with technical diagnostics available in details. Long Assistant conversations may scroll normally; Home's no-internal-scroll rule must not damage the reading experience. Team and agent activity should help users understand who is working, what needs attention and what can be resumed, without decorative motion implying activity that is not occurring.
