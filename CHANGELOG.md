@@ -1,3 +1,11 @@
+## [1.9.5] — 2026-09-21
+
+- Keep Stop Reply available while writing or attaching a follow-up, alongside queue and steering controls, without clearing the draft.
+- Put Edit, Try Another Response and Read Aloud directly beside messages. Provide New Chat/New Work with history closed, announce selected history rows and describe current response/access settings for assistive technology and tooltips.
+- Navigate complete verified conversation branch families, including nested revisions, and move branches into the first level of the conversation menu. Keep unrelated or replaced histories separate and label missing ancestors honestly.
+- Check supported Assistant attachment formats before staging or admitting a new message, including saved Project sources. Preserve unsupported files, drafts and pending request reconciliation; keep general workspace file storage unrestricted by this send contract.
+- Make Assistant Chat parity the primary Nova Dream 2.0 acceptance checklist, with remaining file previews, research evidence, search, capability discovery and connected workflow verification recorded explicitly.
+
 ## [1.9.4] — 2026-09-20
 
 - Keep the current chat or task editor open when device storage cannot retain its newest writing. Check the current draft before navigation, preserve pending save receipts, and allow navigation again once retention or host saving succeeds.

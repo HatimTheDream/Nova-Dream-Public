@@ -1,6 +1,7 @@
 import { workProjectDiffSchema } from '../../packages/domain/work-project.js';
 import { assistantSpace, spaceDraftId, spaceInstructions } from '../../packages/domain/assistant-space.js';
 import { initialConversationTitle } from '../../packages/domain/conversation-title.js';
+import { assistantAttachmentIssue, assistantAttachmentsIssue, assistantAttachmentMime } from '../../packages/domain/assistant-attachments.js';
 import { planningGuidance, readRunPlan } from '../../packages/domain/run-plan.js';
 import { chatGoalSchema, chatGoalActionSchema } from '../../packages/domain/chat-goal.js';
 import { ConversationRemovals } from './conversation-removal.js';
@@ -650,6 +651,8 @@ export class AssistantService {
     const resume = includeProjectFiles && conversation.resumeContext && !this.operations().some(op => op.conversationId === conversation.id && op.nativeId === conversation.nativeId && op.context.resumeDigest === conversation.resumeContext!.digest && !!op.nativeRunId) ? conversation.resumeContext : undefined;
     const files = [...new Map([...(resume ? [resume.transcript, ...resume.files] : []), ...(includeProjectFiles ? project?.value.attachments ?? [] : []), ...draft.value.attachments].map(file => [file.id, file])).values()];
     if (files.length > 10) throw new Fault(409, 'attachment_limit', 'A message can include up to 10 files, including Project sources. Remove a draft attachment or update Project sources before sending. Your draft is kept.');
+    const attachmentIssue = assistantAttachmentsIssue(files);
+    if (attachmentIssue) throw new Fault(400, 'unsupported_attachment', attachmentIssue);
     const memory = this.memory.capture(conversation.projectId);
     const manifest = { brandVersion: 1 as const, computerControlGuidance, space: assistantSpace(conversation), planning: true as const, ...(draft.value.workMode === 'goal' ? { goalReporting: true as const } : {}), ...(conversation.autoTitle ? { messageVersion: 2 as const } : {}), ...(memory ? { memory } : {}), ...(draft.value.workMode && draft.value.workMode !== 'chat' ? { workMode: draft.value.workMode } : {}), ...(draft.value.refineSource ? { refineSource: draft.value.refineSource } : {}), project: project ? { id: project.id, revision: project.revision, name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}), ...(project.value.workspace ? { workspace: conversation.workspace ?? project.value.workspace } : {}), ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null, attachments: files, draftId: draft.id, draftRevision };
     for (const attachment of manifest.attachments) if (canonical(this.store.blobMetadata(attachment.id)) !== canonical(attachment)) throw new Fault(409, 'attachment_changed', 'A required attachment changed or is missing.');
@@ -760,6 +763,8 @@ export class AssistantService {
       const project = item.context.project;
       if (conversation.projectId !== (project?.id ?? null) || (project && this.store.readEntity('project', project.id)?.revision !== project.revision)) throw new Fault(409, 'project_changed', 'The queued Project context changed. Copy the message to your draft to review it.');
       for (const file of item.context.attachments) if (canonical(this.store.blobMetadata(file.id)) !== canonical(file)) throw new Fault(409, 'attachment_changed', 'A queued attachment is unavailable. The original message is kept.');
+      const attachmentIssue = assistantAttachmentsIssue(item.context.attachments);
+      if (attachmentIssue) throw new Fault(400, 'unsupported_attachment', attachmentIssue);
       const operation: AssistantOperation = { id: randomUUID(), requestId: input.requestId, deviceId: device, epoch: input.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: item.nativeId, nativeRunId: null, state: 'prepared', input: item.input, context: item.context, model: item.model, thinking: item.thinking, fastMode: item.fastMode ?? null, createdAt: now(), updatedAt: now(), text: '', lastSequence: 0 };
       this.saveOperation(operation);
       this.store.internalWrite(`assistant:queue:${item.id}`, { ...item, revision: item.revision + 1, state: 'submitted', operationId: operation.id, updatedAt: now() });
@@ -769,14 +774,14 @@ export class AssistantService {
     return this.operation(admitted.value.id);
   }
   private attachment(attachment: Attachment) {
+    const issue = assistantAttachmentIssue(attachment);
+    if (issue) throw new Fault(400, 'unsupported_attachment', issue);
     const file = this.store.download(attachment.id);
-    const ext = attachment.name.split('.').pop()?.toLowerCase();
-    const mime: Record<string, string> = { txt: 'text/plain', md: 'text/markdown', json: 'application/json', pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', csv: 'text/csv' };
-    if (!ext || !mime[ext]) throw new Fault(400, 'attachment_type', 'This file type cannot yet be supplied to OpenClaw. The saved original is kept.');
-    const policy = this.gateway.attachmentPolicy(), isImage = mime[ext].startsWith('image/');
+    const mimeType = assistantAttachmentMime(attachment.name)!;
+    const policy = this.gateway.attachmentPolicy(), isImage = mimeType.startsWith('image/');
     const limit = isImage ? policy.maxImageBytes : policy.maxBytes;
     if (limit && file.bytes.length > limit) throw new Fault(413, 'gateway_attachment_limit', 'An attachment exceeds this Gateway’s current limit.');
-    return { type: isImage ? 'image' : 'file', fileName: attachment.name, mimeType: mime[ext], sizeBytes: file.bytes.length, content: file.bytes.toString('base64') };
+    return { type: isImage ? 'image' : 'file', fileName: attachment.name, mimeType, sizeBytes: file.bytes.length, content: file.bytes.toString('base64') };
   }
   private async dispatch(id: string) {
     let operation = this.operation(id);

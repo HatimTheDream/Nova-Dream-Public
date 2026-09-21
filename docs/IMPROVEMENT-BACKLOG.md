@@ -1,5 +1,7 @@
 # Proposed improvement backlog
 
+Current 2.0 priority (20 September 2026): [Assistant Chat parity and acceptance](ASSISTANT-PARITY.md). Its complete conversation journeys take precedence over unrelated Home/startup polish. Historical items below keep their original evidence and status.
+
 Status: correctness slice implemented in 1.5.13; complete handoffs, explicit failed-stage retry and focused team recovery clarity implemented in 1.6.0; structured reviews, explicit fix/re-review rounds and persistent Assistant navigation implemented in 1.7.0. Remaining slices are proposals. Audit baseline: Nova Dream 1.5.12 / build 1.0.169 / schema 54. Priority: stronger Assistant and agent workflows. This document contains generic product/source findings only; installation-specific operations belong in private records.
 
 P1 = next product/reliability tranche; P2 = following work. S/M/L are relative effort, not delivery promises. Source paths below are relative to the application root. Preserve existing retained writing, exact run identity, receipt deduplication, permission intersections and unknown-outcome reconciliation.

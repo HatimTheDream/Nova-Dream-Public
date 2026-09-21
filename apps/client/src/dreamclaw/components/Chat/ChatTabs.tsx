@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
-import { PanelLeftOpen } from '../../../icons';
+import { PanelLeftOpen, Plus } from '../../../icons';
 
 // Original reopen control and Ctrl/Cmd+Shift+O shortcut; E3 supplies draft creation.
-export function ChatTabs({ organizationOpen, onToggleOrganization, onCreateConversation, shortcutOwner = true }: { organizationOpen: boolean; onToggleOrganization: () => void; onCreateConversation: () => void; shortcutOwner?: boolean }) {
+export function ChatTabs({ organizationOpen, onToggleOrganization, onCreateConversation, newDraftLabel = 'New chat', shortcutOwner = true }: { organizationOpen: boolean; onToggleOrganization: () => void; onCreateConversation: () => void; newDraftLabel?: string; shortcutOwner?: boolean }) {
   useEffect(() => {
     if (!shortcutOwner) return;
     const handler = (event: KeyboardEvent) => {
@@ -20,7 +20,7 @@ export function ChatTabs({ organizationOpen, onToggleOrganization, onCreateConve
   }, [onCreateConversation, onToggleOrganization, shortcutOwner]);
 
   if (organizationOpen) return null;
-  return (
+  return <>
     <button
       type="button"
       data-assistant-sidebar-toggle
@@ -33,5 +33,6 @@ export function ChatTabs({ organizationOpen, onToggleOrganization, onCreateConve
     >
       <PanelLeftOpen size={18} />
     </button>
-  );
+    <button type="button" className="dc-assistant-sidebar-reopen" aria-label={newDraftLabel} title={`${newDraftLabel} (Ctrl/Cmd+N)`} onClick={onCreateConversation}><Plus size={18}/></button>
+  </>;
 }

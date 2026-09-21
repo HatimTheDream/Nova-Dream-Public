@@ -32,7 +32,7 @@ const { Assistant } = await import('../apps/client/src/Assistant');
 hooks.deregister();
 
 type FileState = 'ready' | 'preparing' | 'uploading' | 'failed';
-function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft') {
+function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean } = {}) {
   const globals = [attachmentFixture, 'localStorage', 'matchMedia'] as const;
   const previous = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const pending = files === 'uploading' || files === 'failed' ? [{ id: 'file', name: 'Fixture.txt' }] : [];
@@ -42,12 +42,12 @@ function renderComposer(files: FileState, existing = false, active = false, text
   try {
     const time = '2026-09-19T12:00:00Z';
     const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
-    const draft = { ...emptyDraft, text, ...(existing ? { conversationId: 'conversation' } : {}) };
+    const draft = { ...emptyDraft, text, attachments: options.attachment ? [{ id: 'kept-file', name: 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
     const props = {
       appIcon: 'red',
       snapshot: { epoch: 'epoch', deviceId: 'device', projects: [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
       legacyJournal: { value: draft, revision: 1, dirty: false, saving: false, change() {}, flush: async () => {} },
-      controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: 'run', state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
+      controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
       voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) },
       contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {},
     } as unknown as ComponentProps<typeof Assistant>;
@@ -92,4 +92,23 @@ test('preparing files blocks queue and steer while retaining Stop Reply for an e
   assert.equal(ready.button('Steer current reply').disabled, false);
   const stop = renderComposer('preparing', true, true, '');
   assert.equal(stop.button('Stop reply').disabled, false);
+});
+
+
+test('an active reply remains stoppable while text, files or pending uploads are kept in the composer', () => {
+  for (const files of ['ready', 'preparing', 'uploading', 'failed'] as const) {
+    const view = renderComposer(files, true, true);
+    assert.equal(view.button('Stop reply').disabled, false);
+    assert.match(view.markup, /Keep this draft/);
+    assert.ok(view.button('Queue message'));
+  }
+  const attached = renderComposer('ready', true, true, '', { attachment: true });
+  assert.equal(attached.button('Stop reply').disabled, false);
+  assert.equal(attached.button('Queue message').disabled, false);
+  assert.match(attached.markup, /notes.txt/);
+  const stopping = renderComposer('ready', true, true, 'Keep this draft', { cancelRequested: true });
+  assert.equal(stopping.button('Stopping…').disabled, true);
+  assert.match(stopping.markup, /Keep this draft/);
+  const waiting = renderComposer('ready', true, true, 'Keep this draft', { noRunId: true });
+  assert.equal(waiting.button('Stop reply').disabled, true);
 });

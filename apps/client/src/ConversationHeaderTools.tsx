@@ -17,13 +17,13 @@ function ConversationMenuContent({ close, ...props }: Props & { close: () => voi
   const menu = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { menu.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true }); }, [page]);
   const action = (run: () => void) => { close(); run(); };
+  const branches = conversation && relatedConversations(conversation, conversations).length > 1 && <button onClick={() => setPage('branches')}><History size={17}/>Conversation branches<ArrowRight className="menu-row-arrow" size={15}/></button>;
   const utilities = <>
     {sources && <button onClick={() => action(sources)}><File size={17}/>Message context</button>}
     <button onClick={() => action(memory)}><UserRound size={17}/>Saved memories</button>
     <button onClick={() => action(exportDraft)}><Download size={17}/>Export draft</button>
     {queue && <button onClick={() => action(queue)}><Queue size={17}/>Message queue</button>}
     {runs && <button onClick={() => action(runs)}><History size={17}/>Run history</button>}
-    {conversation && relatedConversations(conversation, conversations).length > 1 && <button onClick={() => setPage('branches')}><History size={17}/>Conversation branches<ArrowRight className="menu-row-arrow" size={15}/></button>}
     {!!pins.length && <button onClick={() => setPage('pins')}><Pin size={17}/>Pinned messages<ArrowRight className="menu-row-arrow" size={15}/></button>}
     {technical && <button onClick={() => action(technical)}><Settings2 size={17}/>Technical details</button>}
   </>;
@@ -33,7 +33,7 @@ function ConversationMenuContent({ close, ...props }: Props & { close: () => voi
     const index = buttons.indexOf(event.target); if (index < 0) return;
     event.preventDefault(); buttons[(index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length]?.focus();
   }}>
-    {page === 'actions' ? conversation ? <ConversationQuickActions conversation={conversation} blocked={props.blocked} edit={props.edit} copyMessages={props.copyMessages} projects={props.projects} close={close}><hr/><button onClick={() => setPage('settings')}><Settings2 size={17}/>Settings<ArrowRight className="menu-row-arrow" size={15}/></button></ConversationQuickActions> : utilities : <><button onClick={() => setPage(page === 'settings' ? 'actions' : 'settings')}><ArrowLeft size={17}/>Back</button><hr/>{page === 'settings' ? <><button onClick={() => action(settings)}><Settings2 size={17}/>Conversation settings</button>{utilities}</> : page === 'branches' && conversation ? <VersionList conversation={conversation} conversations={conversations} open={item => action(() => openVersion(item))}/> : <PinnedMessageList pins={pins} open={pin => action(() => openPin(pin))} remove={removePin}/>}</>}
+    {page === 'actions' ? conversation ? <ConversationQuickActions conversation={conversation} blocked={props.blocked} edit={props.edit} copyMessages={props.copyMessages} projects={props.projects} close={close}>{branches}<hr/><button onClick={() => setPage('settings')}><Settings2 size={17}/>Settings<ArrowRight className="menu-row-arrow" size={15}/></button></ConversationQuickActions> : utilities : <><button onClick={() => setPage(page === 'settings' || page === 'branches' ? 'actions' : 'settings')}><ArrowLeft size={17}/>Back</button><hr/>{page === 'settings' ? <><button onClick={() => action(settings)}><Settings2 size={17}/>Conversation settings</button>{utilities}</> : page === 'branches' && conversation ? <VersionList conversation={conversation} conversations={conversations} open={item => action(() => openVersion(item))}/> : <PinnedMessageList pins={pins} open={pin => action(() => openPin(pin))} remove={removePin}/>}</>}
   </div>;
 }
 export function ConversationHeaderTools(props: Props) {

@@ -8,6 +8,8 @@ This document separates **accepted principles**, **observed implementation** and
 
 Nova is a warm, capable executive workspace: immediately readable, personal and comfortable for sustained work with an Assistant. Its character comes from deliberate color, rounded forms and tactile controls, rather than decoration competing with the task.
 
+The primary 2.0 target is [Assistant Chat UI and feature parity](ASSISTANT-PARITY.md): familiar ChatGPT/Codex conversation journeys expressed in Nova's visual language. Validate complete behavior and recovery alongside appearance; keep capability gaps explicit until verified.
+
 - Make actions recognizable before hover. Use one coherent button family, clear selection and visible focus.
 - Remove redundant navigation arrows and ornamental icons from cards. An icon should identify an action, state or meaningful category.
 - Use Title Case for authored UI headings and short labels. Preserve normal sentence case in explanatory prose and preserve user-entered titles, messages and imported data exactly. Do not add subtitles that merely repeat a heading.

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment, Snapshot } from '../../../packages/domain/contracts';
+import { assistantAttachmentIssue, assistantAttachmentsIssue } from '../../../packages/domain/assistant-attachments';
 import { request, stagedFile, type PendingFile } from './api';
 
-export function useAttachments<T extends { attachments: Attachment[] }>(snapshot: Snapshot, draft: T, change: (updater: (value: T) => T) => boolean, draftId = `draft:${snapshot.deviceId}`, label = 'draft', options: { endpoint?: string; single?: boolean } = {}) {
+export function useAttachments<T extends { attachments: Attachment[] }>(snapshot: Snapshot, draft: T, change: (updater: (value: T) => T) => boolean, draftId = `draft:${snapshot.deviceId}`, label = 'draft', options: { endpoint?: string; single?: boolean; assistant?: boolean } = {}) {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
@@ -20,6 +21,8 @@ export function useAttachments<T extends { attachments: Attachment[] }>(snapshot
       if ((file.draftId ?? `draft:${file.deviceId}`) !== latest.current.draftId) throw new Error(`This staged attachment belongs to another ${label}. Return there to finish uploading.`);
       if (file.epoch !== latest.current.snapshot.epoch) throw new Error('The host changed. Remove and choose this file again after reviewing the recovered workspace.');
       checkRemoval(file);
+      const issue = options.assistant ? assistantAttachmentIssue(file) : undefined;
+      if (issue) throw new Error(issue);
       const metadata = await request<Attachment>(options.endpoint ?? 'attachments', { requestId: file.id, epoch: file.epoch, name: file.name, base64: file.base64 });
       if (!mounted.current || (file.draftId ?? `draft:${file.deviceId}`) !== latest.current.draftId || file.deviceId !== latest.current.snapshot.deviceId || file.epoch !== latest.current.snapshot.epoch) throw new Error(`The upload is kept. Reopen this ${label} to finish linking it.`);
       checkRemoval(file);
@@ -32,6 +35,8 @@ export function useAttachments<T extends { attachments: Attachment[] }>(snapshot
   const add = async (files: FileList | null) => {
     if (!files || reading.current) return;
     setNotice('');
+    const issue = options.assistant ? assistantAttachmentsIssue(Array.from(files)) : undefined;
+    if (issue) { setNotice(issue); return; }
     if ((options.single ? 0 : draft.attachments.length) + pending.length + files.length > (options.single ? 1 : 10)) { setNotice(options.single ? 'Finish or remove the pending photo first.' : `This ${label} can keep up to 10 attachments.`); return; }
     const draftRemovalRevision = removalRevision;
     reading.current = true; setStaging(true);

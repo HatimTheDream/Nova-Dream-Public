@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from 'react-dom';
 
 /** Anchored disclosure outside the transcript's scrolling and virtualized items. */
-export function ComposerMenu({ label, icon, text, className = '', align = 'left', placement = 'above', kind = 'dialog', pinned = false, panelLabel, openRequest = 0, onOpenChange, children }: { label: string; icon: ReactNode; text?: ReactNode; className?: string; align?: 'left' | 'right'; placement?: 'above' | 'below'; kind?: 'dialog' | 'menu'; pinned?: boolean; panelLabel?: string; openRequest?: number; onOpenChange?: (open: boolean) => void; children: (close: () => void) => ReactNode }) {
+export function ComposerMenu({ label, description, icon, text, className = '', align = 'left', placement = 'above', kind = 'dialog', pinned = false, panelLabel, openRequest = 0, onOpenChange, children }: { label: string; description?: string; icon: ReactNode; text?: ReactNode; className?: string; align?: 'left' | 'right'; placement?: 'above' | 'below'; kind?: 'dialog' | 'menu'; pinned?: boolean; panelLabel?: string; openRequest?: number; onOpenChange?: (open: boolean) => void; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
@@ -46,7 +46,8 @@ export function ComposerMenu({ label, icon, text, className = '', align = 'left'
       items[next].focus({ preventScroll: true });
     }
   }}>
-    <button ref={trigger} type="button" className={`composer-control-button ${text ? 'composer-labeled-button' : ''}`} aria-label={label} title={label} aria-haspopup={pinned ? undefined : kind} aria-pressed={pinned ? open : undefined} aria-controls={open ? panelId : undefined} aria-expanded={open} onClick={() => setOpen(value => !value)}>{icon}{text && <span className="composer-control-label">{text}</span>}</button>
+    <button ref={trigger} type="button" className={`composer-control-button ${text ? 'composer-labeled-button' : ''}`} aria-label={label} aria-describedby={description ? `${panelId}-description` : undefined} title={description ? `${label}: ${description}` : label} aria-haspopup={pinned ? undefined : kind} aria-pressed={pinned ? open : undefined} aria-controls={open ? panelId : undefined} aria-expanded={open} onClick={() => setOpen(value => !value)}>{icon}{text && <span className="composer-control-label">{text}</span>}</button>
+    {description && <span className="sr-only" id={`${panelId}-description`}>{description}</span>}
     {open && createPortal(<div ref={panel} id={panelId} className={`composer-popover ${pinned ? 'pinned-summary' : ''}`} role={pinned ? 'region' : kind} aria-label={panelLabel ?? label}>{children(close)}</div>, trigger.current?.closest('.assistant-workspace') ?? document.body)}
   </div>;
 }

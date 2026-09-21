@@ -15,7 +15,7 @@ export function SidebarRow({ title, icon, pinned, selected, secondary, unread, o
       timer.current = setTimeout(() => { suppressClickUntil.current = Date.now() + 900; showMenu(); }, 500);
     }} onPointerMove={event => { if (Math.hypot(event.clientX - origin.current.x, event.clientY - origin.current.y) > 12) cancelHold(); }} onPointerUp={cancelHold} onPointerCancel={cancelHold}
     onClickCapture={event => { if (Date.now() < suppressClickUntil.current && event.currentTarget.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); suppressClickUntil.current = 0; } }}>
-    <button title={title} aria-expanded={expanded} aria-controls={controls} className={`saved-draft ${selected ? 'selected-conversation' : ''}`} onClick={open}>{icon}<span>{pinned && <Pin size={12} className="sidebar-pin" aria-label="Pinned"/>}{title}{unread && <span className="unread-dot" aria-label="Unread"/>}{secondary != null && <small>{secondary}</small>}</span></button>
+    <button title={title} aria-current={selected ? 'page' : undefined} aria-expanded={expanded} aria-controls={controls} className={`saved-draft ${selected ? 'selected-conversation' : ''}`} onClick={open}>{icon}<span>{pinned && <Pin size={12} className="sidebar-pin" aria-label="Pinned"/>}{title}{unread && <span className="unread-dot" aria-label="Unread"/>}{secondary != null && <small>{secondary}</small>}</span></button>
     <ComposerMenu label={`Options for ${title}`} icon={<MoreHorizontal size={16}/>} align="right" placement="below" kind={kind} openRequest={openRequest} onOpenChange={isOpen => { if (!isOpen) onClose?.(); }}>{children}</ComposerMenu>
   </div>;
 }
