@@ -1,3 +1,7 @@
+## [1.9.1] — 2026-09-20
+
+- Show Account Status Unavailable when account status cannot be read, instead of incorrectly saying no account is connected; preserve known account labels and counts.
+
 ## [1.9.0] — 2026-09-20
 
 - Keep conversations, saved replies, voice captions, pins and verified files in Nova independently of a ChatGPT account. Migrate saved history incrementally and show incomplete coverage honestly.

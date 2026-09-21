@@ -8,7 +8,7 @@ import type { RuntimeStatus } from '../../../packages/domain/runtime';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { RefreshReader } from './refresh-reader';
 import { ChatGptAccountList } from './ChatGptAccounts';
-import { accountIntentWasNotAdmitted, accountTime, keepSignInIntent, type AccountOrderIntent, type AccountSignInIntent } from './chatgpt-account-controls';
+import { accountIntentWasNotAdmitted, accountSummary, accountTime, keepSignInIntent, type AccountOrderIntent, type AccountSignInIntent } from './chatgpt-account-controls';
 
 export function Connections({ snapshot, online, openAssistant, remoteHost = false, recoveryPaused = false }: { snapshot: Snapshot; online: boolean; openAssistant: () => void; remoteHost?: boolean; recoveryPaused?: boolean }) {
   const canConnect = online && !recoveryPaused;
@@ -93,7 +93,7 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
       {error && <p className="field-error" role="alert">{error}</p>}
     </div>
     <div className="assistant-setup voice-signin"><div className="chatgpt-accounts-title"><h3>ChatGPT Accounts</h3><button disabled={busy || waitingForSignIn || !canConnect || !runtime?.canSignIn || !!pendingSignIn || !!pendingOrder} onClick={() => void perform(() => startSignIn('add'))}><Plus size={16}/>Add Account</button></div>
-      {!account ? <p>Checking saved account…</p> : account.accounts?.length ? <ChatGptAccountList status={account} disabled={busy || waitingForSignIn || !canConnect || !runtime?.canSignIn || !!pendingSignIn || !!pendingOrder} reconnect={id => void perform(() => startSignIn('reconnect', id))} reorder={ids => void perform(() => reorder(ids))}/> : <p>{account.emails.length ? account.emails.join(', ') : account.profileCount ? `${account.profileCount} Saved Accounts` : 'No Account Connected'}</p>}
+      {!account ? <p>Checking saved account…</p> : account.accounts?.length ? <ChatGptAccountList status={account} disabled={busy || waitingForSignIn || !canConnect || !runtime?.canSignIn || !!pendingSignIn || !!pendingOrder} reconnect={id => void perform(() => startSignIn('reconnect', id))} reorder={ids => void perform(() => reorder(ids))}/> : <p>{accountSummary(account)}</p>}
       {accountStale && <p className="metadata" role="status">Account Status Could Not Be Refreshed</p>}
       {account && account.state !== 'available' && <p className="metadata">{account.message}</p>}
       {!!signIn?.id && signIn.state !== 'completed' && <p className="metadata" role="status">{waitingForSignIn ? '' : 'Last sign-in: '}{signIn.message}</p>}

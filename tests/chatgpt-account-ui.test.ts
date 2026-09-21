@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Parser } from 'htmlparser2';
 import type { ChatGptAccount, ChatGptAccountStatus } from '../packages/domain/sign-in.js';
 import type { Conversation } from '../packages/domain/assistant.js';
-import { accountIntentWasNotAdmitted, accountOrder, keepSignInIntent, moveAccount, remainingAllowance } from '../apps/client/src/chatgpt-account-controls.js';
+import { accountIntentWasNotAdmitted, accountOrder, accountSummary, keepSignInIntent, moveAccount, remainingAllowance } from '../apps/client/src/chatgpt-account-controls.js';
 
 const styles = registerHooks({ load(url, context, next) {
   return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context);
@@ -38,6 +38,15 @@ test('uncertain Add and Reconnect retain the exact operation without silently re
 test('only proven pre-admission rejections permit clearing a retained account request', () => {
   for (const code of ['signin_active', 'signin_closed', 'signin_process_present', 'validation', 'account_order_unavailable', 'account_order_busy', 'account_order_membership']) assert.equal(accountIntentWasNotAdmitted(code), true);
   for (const code of ['account_host_changed', 'account_order_unknown', 'request_failed', 'host_unavailable', 'epoch_mismatch', 'request_conflict']) assert.equal(accountIntentWasNotAdmitted(code), false);
+});
+
+test('an unavailable account read cannot claim there are no connected accounts', () => {
+  const unavailable = status([], { state: 'unavailable' });
+  assert.equal(accountSummary(unavailable), 'Account Status Unavailable');
+  assert.equal(accountSummary(status([], { state: 'empty' })), 'No Account Connected');
+  assert.equal(accountSummary(status([])), 'No Account Connected');
+  assert.equal(accountSummary({ ...unavailable, profileCount: 2 }), '2 Saved Accounts');
+  assert.equal(accountSummary({ ...unavailable, profileCount: 1, emails: ['saved@example.com'] }), 'saved@example.com');
 });
 
 test('changing preferred and backup order preserves every current account exactly once', () => {

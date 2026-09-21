@@ -21,6 +21,9 @@ export function moveAccount(order: string[], profileId: string, destination: num
 export function remainingAllowance(used: number | null | undefined): number | null {
   return typeof used === 'number' && Number.isFinite(used) ? Math.max(0, Math.min(100, 100 - used)) : null;
 }
+export function accountSummary(status: ChatGptAccountStatus): string {
+  return status.emails.length ? status.emails.join(', ') : status.profileCount ? `${status.profileCount} Saved Accounts` : status.state === 'unavailable' ? 'Account Status Unavailable' : 'No Account Connected';
+}
 export const allowanceLabel = (label: string) => label === '5h' ? '5-Hour Allowance' : ['7d', '168h', 'Week'].includes(label) ? 'Weekly Allowance' : label === '24h' ? 'Daily Allowance' : label;
 const healthLabels: Record<string, string> = { ready: 'Connected', cooldown: 'Temporarily Unavailable', reconnect: 'Reconnect Needed', unknown: 'Not Confirmed' };
 export const accountHealth = (health: string) => healthLabels[health] ?? 'Not Confirmed';

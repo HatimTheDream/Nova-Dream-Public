@@ -4,7 +4,7 @@ import type { ChatGptAccountStatus } from '../../../packages/domain/sign-in';
 import { request } from './api';
 import { RefreshCw } from './icons';
 import { AllowanceWindows, ChatGptAccountAllowances } from './ChatGptAccounts';
-import { accountTime } from './chatgpt-account-controls';
+import { accountSummary, accountTime } from './chatgpt-account-controls';
 
 const count = (value: number | null | undefined) => value == null ? 'Unavailable' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 function ProviderAllowances({ usage, stale }: { usage?: UsageState; stale: boolean }) {
@@ -57,7 +57,7 @@ export function UsageSettings({ identity, active, online }: { identity: string; 
       {individual ? <ChatGptAccountAllowances status={account!} stale={accountError || !online}/> : <ProviderAllowances usage={usage} stale={usageError || !online}/>}
       {individual && <details className="settings-details"><summary>Provider Totals</summary><p className="metadata">Reported by the runtime. These figures are not attributed to an individual saved account and may include activity outside Nova.</p><ProviderAllowances usage={usage} stale={usageError || !online}/></details>}
       {usageError && <p className="metadata" role="status">Provider totals could not be refreshed.</p>}
-      {!individual && account && <p className="settings-footnote">{account.emails.length ? account.emails.join(', ') : account.profileCount ? account.profileCount + ' Saved Accounts' : 'No Account Connected'} · Provider totals are not attributed to individual accounts.</p>}
+      {!individual && account && <p className="settings-footnote">{accountSummary(account)} · Provider totals are not attributed to individual accounts.</p>}
     </section>
     <section className="card settings-card"><h2>Recent Activity</h2><p>Recorded by your Assistant host · last 7 days, UTC.</p>
       {(usageError || !online) && usage && <p className="metadata">Last Known Activity</p>}
