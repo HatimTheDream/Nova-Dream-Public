@@ -14,7 +14,7 @@ export function TaskFamily({ task, value, snapshot, change, openTask, newTask }:
         <option value="">No parent</option>
         {tasks.filter(item => !excluded.has(item.id) && (!item.value.trashed || item.id === value.parentTaskId)).map(item => <option key={item.id} value={item.id}>{item.value.title}{item.value.trashed ? ' · In Trash' : ''}</option>)}
       </select></label>
-      {task.revision > 0 && parent && openTask && <button type="button" onClick={() => openTask(parent)}>Open parent · {parent.value.title}</button>}
+      {task.revision > 0 && parent && openTask && <button type="button" onClick={() => openTask(parent)}>Open parent · <span className="preserve-case">{parent.value.title}</span></button>}
       {children.length > 0 && <ul className="task-family-list" aria-label="Child tasks">{children.map(child => <li key={child.id}><button type="button" disabled={!openTask} onClick={() => openTask?.(child)}><span>{child.value.title}</span><small>{child.value.trashed ? 'In Trash' : statusNames[child.value.status]}{child.value.planned ? ` · ${child.value.planned}` : ''}</small></button></li>)}</ul>}
       {newTask && task.revision > 0 && <button type="button" onClick={() => newTask({ parentTaskId: task.id, projectId: task.value.projectId, timezone: task.value.timezone ?? snapshot.layout.value.timezone })}>Add child task</button>}
       <p className="metadata">Each child keeps its own notes, dates and completion. Your edits stay here when you open another task.</p>

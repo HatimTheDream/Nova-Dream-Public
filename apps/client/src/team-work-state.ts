@@ -1,4 +1,5 @@
 import { teamRoles, type TeamWork } from '../../../packages/domain/team-work';
+import type { TeamWorkForm } from './team-work-action';
 
 type TeamRole = typeof teamRoles[number];
 type Member = { id: string; value: { position: string; archived?: boolean } };
@@ -23,6 +24,21 @@ export function suggestedTeamMembers(agents: readonly Member[]): { role: TeamRol
   // with competing/multiple role matches stay reserved, never becoming fallback.
   if (gaps.length === 1 && generalists.length === 1) gaps[0].agentId = generalists[0].id;
   return choices.map(({ role, agentId }) => ({ role, agentId }));
+}
+
+/** Explain fresh-start prerequisites without changing a retained request. */
+export function teamWorkReadiness(form: TeamWorkForm, projects: readonly { id: string }[], agents: readonly Member[]): string {
+  if (!projects.length) return 'Create a Work Project from GitHub or a host folder before starting.';
+  if (!form.projectId) return 'Choose a Work Project for this workflow.';
+  if (!projects.some(project => project.id === form.projectId)) return 'Your saved project is unavailable for team work. Choose another Work Project; your brief is kept.';
+  const active = agents.filter(agent => !agent.value.archived);
+  if (active.length < 2) return 'Create or restore at least two agents before starting team work.';
+  if (form.steps.some(step => !step.agentId)) return 'Choose an agent for each stage.';
+  if (form.steps.some(step => !active.some(agent => agent.id === step.agentId))) return 'A saved team member is unavailable. Choose an active agent for each stage; your brief is kept.';
+  if (new Set(form.steps.map(step => step.agentId)).size < 2) return 'Choose at least two different team members.';
+  if (!form.title.trim()) return 'Add a title for this workflow.';
+  if (!form.brief.trim()) return 'Describe the outcome you want the team to deliver.';
+  return '';
 }
 
 export type TeamWorkStatus = { runs: TeamWork[]; readError: string; actionError: string };

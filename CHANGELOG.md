@@ -1,3 +1,10 @@
+## [1.9.4] — 2026-09-20
+
+- Keep the current chat or task editor open when device storage cannot retain its newest writing. Check the current draft before navigation, preserve pending save receipts, and allow navigation again once retention or host saving succeeds.
+- Explain Team Work prerequisites beside Start, identify unavailable saved projects or team members, and keep uncertain starts tied to their original request.
+- Preserve original capitalization in conversation titles, contacts, filenames, models and other saved content while keeping action labels in Title Case.
+- Make navigation options keyboard accessible with Escape dismissal, predictable focus return, outside dismissal and clear reorder limits.
+
 ## [1.9.3] — 2026-09-20
 
 - Keep account selection in a compact composer button beside the model control. On narrow layouts, find it inside Response Settings; account names, usage and selection feedback stay in the menu without adding a permanent toolbar row.

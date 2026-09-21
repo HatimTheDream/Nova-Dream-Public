@@ -15,7 +15,7 @@ import { ReplyText } from './ReplyText';
 import { ConversationSearch } from './ConversationSearch';
 import { ConversationReader } from './ConversationReader';
 import type { BrowseTarget } from '../../../packages/domain/search';
-import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { lazy } from './preload-lazy';
 import { Archive, ArrowDown, ArrowUp, Check, Download, File, Folder, MessageSquare, Mic, Paperclip, PanelLeft, Device, PanelRight, Plus, RotateCcw, Save, Settings2, Square, X, Shield, AudioLines, Trash2, MoreHorizontal, ChevronDown, Search, Research, Queue, Image, Target, List } from './icons';
 import { canonical, emptyDraft, type Attachment, type Command, type Draft, type Entity, type Snapshot } from '../../../packages/domain/contracts';
@@ -23,6 +23,7 @@ import type { AssistantOperation, AssistantOutput, Conversation, ConversationMes
 import { Conflict, Dialog, Empty, formatSaved } from './ui';
 import { useRetained } from './useWorkspace';
 import { useAttachments } from './useAttachments';
+import { registerAssistantDraftNavigation } from './assistant-draft-navigation';
 import type { AssistantController } from './useAssistant';
 import type { VoiceController } from './voice-controller';
 import { ApiError, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
@@ -151,7 +152,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const organizationOpen = rail.open && (!(sidePanel || activityOpen) || rail.wide);
   const showOrganization = () => { setSidePanel(null); rail.setOpen(true); };
   const toggleOrganization = () => { if (organizationOpen) rail.setOpen(false); else showOrganization(); };
-  const openNewDraft = () => { setFolder('active'); setReading(null); setPreview(null); controller.select(null); rail.closeMobile(); };
+  const openNewDraft = () => { if (!controller.select(null)) return; setFolder('active'); setReading(null); setPreview(null); rail.closeMobile(); };
   const [dialog, setDialog] = useState<'settings' | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -169,6 +170,15 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const attachments = useAttachments(snapshot, journal.value, journal.change, draftId);
   const filesPending = attachments.staging || attachments.pending.length > 0;
   const fileInput = useRef<HTMLInputElement>(null), textarea = useRef<HTMLTextAreaElement>(null);
+  const retainBeforeLeaving = useRef<() => boolean>(() => true);
+  retainBeforeLeaving.current = () => {
+    if (journal.retainForNavigation()) return true;
+    setReading(null); rail.closeMobile();
+    setNotice('Your latest draft is only in this window. Free browser storage, then choose Retry save before leaving. You can also export the draft from the conversation menu.');
+    requestAnimationFrame(() => textarea.current?.focus());
+    return false;
+  };
+  useLayoutEffect(() => registerAssistantDraftNavigation(() => retainBeforeLeaving.current()), []);
   const draft = journal.value, conversation = controller.conversation;
   const response = conversation ? { model: conversation.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null } : preferences;
   const responseName = responseModel(controller.models, response.model)?.name ?? response.model ?? 'Default model';
@@ -215,7 +225,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     if (row.kind === 'draft') return <SavedDraftRow key={`draft:${row.item.id}`} item={row.item} snapshot={snapshot} refresh={refreshWorkspace} open={() => { setReading(null); setPreview(row.item); rail.closeMobile(); }}/>;
     const item = row.item;
     const hasDraft = snapshot.drafts.some(d => d.deviceId === snapshot.deviceId && d.id === `draft:${snapshot.deviceId}:${item.id}` && (d.value.text || d.value.attachments.length));
-    return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); setSidePanel(null); } else { setReading(null); controller.select(item.id); } rail.closeMobile(); }}/>;
+    return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); setSidePanel(null); } else { if (!controller.select(item.id)) return; setReading(null); } rail.closeMobile(); }}/>;
   };
   const ready = controller.statusRead === 'ready' && controller.connection.state === 'ready' && controller.connection.grantedScopes.includes('operator.write');
   const keepError = (e: unknown) => setNotice(e instanceof Error ? e.message : 'This action could not be confirmed. Your work is kept.');
@@ -392,7 +402,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     } catch (e) { keepError(e); }
     finally { setBusy(false); }
   };
-  const openVersion = (item: Conversation) => { setPreview(null); rail.closeMobile(); if (item.archived && item.nativeId) setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); else { setReading(null); controller.select(item.id); } };
+  const openVersion = (item: Conversation) => { if (item.archived && item.nativeId) setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); else { if (!controller.select(item.id)) return; setReading(null); } setPreview(null); rail.closeMobile(); };
   const pins = (controller.pins ?? []).filter(p => p.pinned && p.conversationId === conversation?.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const conversationFiles = controller.outputs.filter(output => output.conversationId === conversation?.id && output.state === 'ready' && output.file);
   const sourceFiles: ConversationSource[] = [...new Map([
@@ -403,7 +413,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const openFiles = () => { setSidePanel({ kind: 'files' }); rail.closeMobile(); };
   const openChanges = controller.space === 'work' && conversation?.workspace ? () => { setSidePanel({ kind: 'changes' }); rail.closeMobile(); } : undefined;
   const openTeam = () => { setSidePanel({ kind: 'team' }); rail.closeMobile(); };
-  const spaceSwitchDisabled = busy || !!journal.storageError || filesPending || dictation.phase !== 'idle' || !!dictation.preview;
+  const spaceSwitchDisabled = busy || filesPending || dictation.phase !== 'idle' || !!dictation.preview;
   const switchSpace = (next: AssistantSpace) => { if (next !== controller.space) { void journal.flush(); controller.switchSpace(next); } };
   const addFiles = !conversation?.archived && !conversation?.deleted ? () => fileInput.current?.click() : undefined;
   const renderMessage = (message: ConversationMessage) => {

@@ -90,7 +90,7 @@ export function MonthView({ onDateClick, onEventClick }: MonthViewProps) {
               <div className="mt-1 min-h-0 space-y-0.5 overflow-hidden">
                 {dayEvents.slice(0, 3).map((calendarEvent) => (
                   <button key={calendarEvent.id} type="button" onClick={() => onEventClick(calendarEvent)} title={`${calendarEvent.startTime || 'All day'} · ${calendarEvent.title}`}
-                    className="block w-full truncate rounded-md px-1 py-0.5 text-start text-[9px] font-medium text-aegis-text transition-[filter] hover:brightness-125 sm:text-[10px]"
+                    className="preserve-case block w-full truncate rounded-md px-1 py-0.5 text-start text-[9px] font-medium text-aegis-text transition-[filter] hover:brightness-125 sm:text-[10px]"
                     style={{ background: `color-mix(in srgb, ${getEventColor(calendarEvent)} 16%, transparent)`, borderInlineStart: `2px solid ${getEventColor(calendarEvent)}` }}>
                     <span className="hidden lg:inline">{calendarEvent.startTime ? `${calendarEvent.startTime} ` : ''}</span>{calendarEvent.title}
                   </button>

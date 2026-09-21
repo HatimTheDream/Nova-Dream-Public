@@ -108,6 +108,51 @@ test('rendered saved choices, writing and pending request identity survive new s
   assert.deepEqual(JSON.parse(reconcile.storage.get('e3:team-work:epoch:device:pending')!), pending);
 });
 
+test('a disabled fresh start explains missing members and duplicate role selections', () => {
+  const roster = [member('Researcher'), member('Maker'), member('Reviewer')];
+  const draft = { projectId: 'project', title: 'Saved brief', brief: 'Keep this exact writing.', maxMinutes: 10, steps: suggestedTeamMembers(roster) };
+  const missing = renderForm(roster, { ...draft, steps: draft.steps.map((step, index) => index ? step : { ...step, agentId: '' }) });
+  assert.equal(missing.disabled, true);
+  assert.match(missing.markup, /Choose an agent for each stage/);
+  const duplicate = renderForm(roster, { ...draft, steps: draft.steps.map(step => ({ ...step, agentId: 'Maker' })) });
+  assert.equal(duplicate.disabled, true);
+  assert.match(duplicate.markup, /Choose at least two different team members/);
+  const descriptionId = duplicate.markup.match(/class="primary" aria-describedby="([^"]+)"/)?.[1];
+  assert.ok(descriptionId);
+  assert.ok(duplicate.markup.includes(`id="${descriptionId}" class="metadata" role="status"`));
+  assert.equal(renderForm(roster, draft).disabled, false);
+});
+
+test('unavailable saved projects and members stay visible and block fresh work without rewriting the brief', () => {
+  const roster = [member('Researcher'), member('Maker'), member('Reviewer')];
+  const draft = { projectId: 'project', title: 'Saved brief', brief: 'Keep this exact writing.', maxMinutes: 10, steps: suggestedTeamMembers(roster) };
+  const missingProject = { ...draft, projectId: 'removed-project' };
+  const project = renderForm(roster, missingProject);
+  assert.equal(project.disabled, true);
+  assert.equal(project.selects[0].value, 'removed-project');
+  assert.match(project.markup, /Unavailable saved project/);
+  assert.match(project.markup, /Choose another Work Project/);
+  assert.deepEqual(JSON.parse(project.storage.get('e3:team-work:epoch:device')!), missingProject);
+  const archivedRoster = roster.map(agent => agent.id === 'Maker' ? { ...agent, value: { ...agent.value, archived: true } } : agent);
+  const archived = renderForm(archivedRoster, draft);
+  assert.equal(archived.disabled, true);
+  assert.equal(archived.selects[2].value, 'Maker');
+  assert.match(archived.markup, /Unavailable saved agent/);
+  assert.match(archived.markup, /Choose an active agent for each stage/);
+  assert.deepEqual(JSON.parse(archived.storage.get('e3:team-work:epoch:device')!), draft);
+});
+
+test('an original pending start remains reconcilable after its project and agents become unavailable', () => {
+  const pending = { projectId: 'removed-project', title: 'Original brief', brief: 'Original captured writing.', maxMinutes: 10,
+    steps: suggestedTeamMembers([member('Researcher'), member('Maker'), member('Reviewer')]), requestId: 'original-start', epoch: 'epoch' };
+  const form = renderForm([], undefined, pending);
+  assert.equal(form.disabled, false);
+  assert.equal(form.fieldsetDisabled, true);
+  assert.match(form.markup, /Reconcile start/);
+  assert.deepEqual(form.selects.slice(0, 4).map(select => select.value), ['removed-project', 'Researcher', 'Maker', 'Reviewer']);
+  assert.deepEqual(JSON.parse(form.storage.get('e3:team-work:epoch:device:pending')!), pending);
+});
+
 test('a retained retry blocks a separate start on reload and keeps the exact command for reconciliation', () => {
   const retry = { requestId: 'original-retry', epoch: 'epoch', id: 'failed-team', revision: 7, action: 'retry' };
   const form = renderForm([member('Researcher'), member('Maker'), member('Reviewer')], undefined, undefined, retry);

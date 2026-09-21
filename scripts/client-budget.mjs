@@ -117,7 +117,10 @@ import assert from 'node:assert/strict';
 // 1.9 adds per-account usage/routing controls and same-chat archive recovery.
 // Measured 616,466 total (+3,850 / 0.63% over 1.8.13); cap at 618 KB.
 // Startup and individual deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 618000, deferredChunk: 80000 };
+// 1.9.4 adds fresh draft-retention guards, explicit team readiness and keyboard
+// navigation recovery. Measured total 618,499 (+1,117 / 0.18% over 1.9.3).
+// Bound this reliability slice at 619 KB; keep startup and chunk ceilings.
+export const clientLimits = { startup: 180000, total: 619000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

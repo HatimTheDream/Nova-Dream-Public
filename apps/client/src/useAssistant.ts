@@ -10,6 +10,7 @@ import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } 
 import { historyAfterReadFailure, mergeHistoryPage } from './assistant-history';
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
+import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
 export function useAssistant(snapshot: Snapshot) {
@@ -62,16 +63,18 @@ export function useAssistant(snapshot: Snapshot) {
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
     const nextSpace = hint ?? (conversation ? assistantSpace(conversation) : spaceRef.current);
+    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && !mayLeaveAssistantDraft()) return false;
     if (nextSpace !== spaceRef.current) { setSpace(nextSpace); spaceRef.current = nextSpace; saveLocal(spaceKey, nextSpace); }
     saveLocal(selectionKey(nextSpace), id);
-    if (id === selectedRef.current) return;
+    if (id === selectedRef.current) return true;
     historyReader.current?.cancel(); generation.current++; historyRequest.current++; setSelectedId(id); selectedRef.current = id; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); setError('');
+    return true;
   };
   const switchSpace = (next: AssistantSpace) => {
-    if (next === spaceRef.current) return;
+    if (next === spaceRef.current) return true;
     const kept = readLocal<string>(selectionKey(next));
     const target = context.current.state.conversations.find(c => c.id === kept && assistantSpace(c) === next && !c.deleted && !c.archived);
-    select(target?.id ?? null, next);
+    return select(target?.id ?? null, next);
   };
   useEffect(() => {
     const selected = state.conversations.find(c => c.id === selectedRef.current);
@@ -146,6 +149,7 @@ export function useAssistant(snapshot: Snapshot) {
     finally { await refresh(); if (selectedRef.current === conversation.id) await loadHistory(conversation.id); }
   };
   const remove = async (conversation: Conversation) => {
+    if (selectedRef.current === conversation.id && !mayLeaveAssistantDraft()) throw new Error('Keep the current draft before removing this conversation. Free browser storage and retry saving it.');
     const key = `e3:conversation-remove:${snapshot.epoch}:${conversation.id}`;
     const existing = state.removals?.find(item => item.conversationId === conversation.id && ['prepared', 'unknown'].includes(item.state));
     const kept = readLocal<RemoveConversation>(key);

@@ -3573,7 +3573,7 @@ export function InboxPage() {
                       className="min-w-0 flex-1 p-0.5 text-left"
                     >
                       <div className="text-[9px] font-bold uppercase tracking-[0.13em] text-aegis-primary">Next follow-up</div>
-                      <div className="mt-1.5 line-clamp-2 text-[11px] font-semibold leading-4 text-aegis-text">{thread.subject}</div>
+                      <div className="preserve-case mt-1.5 line-clamp-2 text-[11px] font-semibold leading-4 text-aegis-text">{thread.subject}</div>
                       {plan && <div className="mt-1 text-[9.5px] text-aegis-text-dim">Follow up {plan.label}</div>}
                     </button>
                     <button type="button" onClick={() => void scheduleFollowUpReminder(thread)} disabled={!!followupBusy[JSON.stringify([thread.provider==='gmail'?'google':'microsoft',thread.accountId,thread.id])]} aria-label="Schedule this follow-up" title="Schedule follow-up" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-aegis-border/70 text-aegis-text-muted hover:bg-[rgb(var(--aegis-overlay)/0.06)]"><Clock size={13} /></button>
@@ -3788,7 +3788,7 @@ export function InboxPage() {
                                   <span className="inline-flex h-4 w-4 items-center justify-center text-aegis-text-dim">
                                     {fullyApplied ? <Check size={12} /> : partiallyApplied ? <Minus size={12} /> : null}
                                   </span>
-                                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                                  <span className="preserve-case min-w-0 flex-1 truncate">{option.label}</span>
                                 </button>
                               );
                             })

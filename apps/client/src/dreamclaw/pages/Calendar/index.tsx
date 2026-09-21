@@ -194,7 +194,7 @@ export default function CalendarPage() {
               ) : (
                 <div className="mt-2 space-y-1.5">
                   {selectedDayEvents.slice(0, 4).map((event) => (
-                    <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="block w-full rounded-xl border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
+                    <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="preserve-case block w-full rounded-xl border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
                       <span className="block truncate text-[11px] font-semibold text-aegis-text">{event.title}</span>
                       <span className="block text-[10px] text-aegis-text-dim">{event.startTime || 'All day'}</span>
                     </button>

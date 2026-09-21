@@ -18,6 +18,26 @@
   transition:var(--button-transition);
 }
 :root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim) { text-transform:capitalize; }
+/* A clickable record is still content. Keep saved/imported spelling and case,
+   including model names, filenames and message excerpts, independent of its
+   button geometry. Use preserve-case for content inside a mixed action label. */
+:root button:is(.saved-draft,.source-link,.message-match,.contact-row,.content-card-open,.voice-conversation,.home-routine-open,.home-timezone,.hub-team-row,.hub-work-link,.hub-room-title,.pixel-hub-actor,.quest-step-link),
+:root :is(.title-matches,.contact-email-list,.contact-senders,.record-linked-list,.crm-timeline,.crm-organization-links,.repository-list,.hub-search-results,.home-weather-city-results) > button,
+:root :is(.home-attention-list,.task-family-list,.calendar-cancelled,.dc-calendar-kept-drafts,.inbox-action-history-row) button,
+:root :is(.crm-relations,.address-book-links) button.crm-text-button,
+:root .browser-tab-row > button:first-child,
+:root .workspace-tab > button[role=tab],
+:root .conversation-file-list section > button,
+:root .conversation-summary button > span[title],
+:root :is(.response-control,.conversation-project-control) > button,
+:root button.response-model-choice,
+:root .response-model-list > button,
+:root .attachment-list button.text-button,
+:root .reply-output > button.text-button:has(> span),
+:root :is(.period-quest,.profile-history) button.text-button,
+:root button.preserve-case,
+:root button .preserve-case,
+:root button :is(small,p,code,pre) { text-transform:none; }
 :root button:is(.primary,.bg-aegis-primary,.nav-item.active) { --button-fill:var(--action); --button-edge:var(--action-edge); color:var(--action-ink); }
 :root button:is([aria-pressed=true],[aria-selected=true]):not(.check-button,.nav-item.active) { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); color:var(--text); }
 :root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }

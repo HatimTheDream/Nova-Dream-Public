@@ -103,6 +103,12 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     const value = typeof update === 'function' ? (update as (v: T) => T)(ref.current.value) : update;
     return persist({ ...ref.current, value, dirty: true });
   }, [persist]);
+  const retainForNavigation = useCallback(() => {
+    const local = ref.current;
+    // Acknowledged work is already on the host. Unsent changes and immutable
+    // retry envelopes must survive the editor that currently owns them.
+    return !local.dirty && !local.pending || persist(local);
+  }, [persist]);
   useEffect(() => {
     const local = ref.current;
     if (local.epoch !== snapshot.epoch && local.dirty) {
@@ -161,5 +167,5 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     return persist({ value: host?.value ?? initial, revision: host?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false });
   };
   const status = storageError ? 'Kept in this window · browser storage is full' : journal.conflict ? 'Review needed · your changes are kept' : saving ? 'Saving to host…' : journal.dirty ? networkError ? 'On this device · waiting for host' : autoSave ? 'On this device · saving soon' : 'Edits kept on this device · save when ready' : journal.revision ? 'Saved on host' : 'Ready for a draft';
-  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, storageError, networkError };
+  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, storageError, networkError };
 }

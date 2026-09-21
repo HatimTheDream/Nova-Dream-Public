@@ -30,7 +30,8 @@ export function ContinueSavedConversation({ conversationId, snapshot, controller
         if (result.pendingResume) { setError(result.error ?? 'Connection is unconfirmed. Check again.'); return; }
         localStorage.removeItem(checkKey);
         if (result.error) { setError(result.error); return; }
-        prepared?.(); controller.select(result.id); await controller.loadHistory(result.id); close();
+        if (!controller.select(result.id)) return;
+        prepared?.(); await controller.loadHistory(result.id); close();
       } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : 'Connection is unconfirmed. Check again.'); }
       finally { if (alive.current) setBusy(false); }
       return;
@@ -45,7 +46,8 @@ export function ContinueSavedConversation({ conversationId, snapshot, controller
       if (result.pendingResume) { setError(result.error ?? 'Connection is unconfirmed. Check again.'); return; }
       localStorage.removeItem(key); setIntent(undefined);
       if (result.error) { setError(result.error); return; }
-      prepared?.(); controller.select(result.id); await controller.loadHistory(result.id); close();
+      if (!controller.select(result.id)) return;
+      prepared?.(); await controller.loadHistory(result.id); close();
     } catch (e) {
       if (e instanceof ApiError && ['saved_transcript_changed', 'epoch_changed', 'request_reused', 'continuation_partial', 'continuation_file_missing', 'continuation_file_limit', 'continuation_conflict', 'continuation_workspace', 'continuation_changed', 'continuation_unsettled', 'continuation_queued', 'voice_active'].includes(e.code)) {
         localStorage.removeItem(key); setIntent(undefined);
