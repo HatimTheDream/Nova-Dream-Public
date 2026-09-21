@@ -32,20 +32,21 @@ const { Assistant } = await import('../apps/client/src/Assistant');
 hooks.deregister();
 
 type FileState = 'ready' | 'preparing' | 'uploading' | 'failed';
-function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean } = {}) {
+function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean } = {}) {
   const globals = [attachmentFixture, 'localStorage', 'matchMedia'] as const;
   const previous = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const pending = files === 'uploading' || files === 'failed' ? [{ id: 'file', name: 'Fixture.txt' }] : [];
   Object.defineProperty(globalThis, attachmentFixture, { configurable: true, value: { staging: files === 'preparing', pending, errors: files === 'failed' ? { file: 'Upload paused' } : {}, notice: '', add() {}, retry() {}, remove() {} } });
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => options.receipt && /^e3:(submit|queue-capture|start-chat):/.test(key) ? JSON.stringify({ request: { requestId: 'original-request' }, captured: {} }) : null } });
   Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: true }) });
   try {
     const time = '2026-09-19T12:00:00Z';
-    const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
-    const draft = { ...emptyDraft, text, attachments: options.attachment ? [{ id: 'kept-file', name: 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
+    const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: options.projectFile ? 'source-project' : null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
+    const sourceFile = { id: 'project-file', name: 'brief.docx', size: 12, sha256: 'b'.repeat(64), mimeType: 'application/octet-stream' };
+    const draft = { ...emptyDraft, text, projectId: options.projectFile ? 'source-project' : null, attachments: options.attachment ? [{ id: 'kept-file', name: options.invalidFile ? 'brief.docx' : 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
     const props = {
       appIcon: 'red',
-      snapshot: { epoch: 'epoch', deviceId: 'device', projects: [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
+      snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
       legacyJournal: { value: draft, revision: 1, dirty: false, saving: false, change() {}, flush: async () => {} },
       controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
       voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) },
@@ -111,4 +112,21 @@ test('an active reply remains stoppable while text, files or pending uploads are
   assert.match(stopping.markup, /Keep this draft/);
   const waiting = renderComposer('ready', true, true, 'Keep this draft', { noRunId: true });
   assert.equal(waiting.button('Stop reply').disabled, true);
+});
+
+test('invalid draft and Project sources block a new dispatch while keeping writing and original receipt recovery', () => {
+  for (const source of [{ attachment: true, invalidFile: true }, { projectFile: true }]) {
+    for (const existing of [false, true]) {
+      const view = renderComposer('ready', existing, false, 'Keep my original writing', source);
+      assert.equal(view.button('Send message').disabled, true);
+      assert.match(view.markup, /Keep my original writing/);
+      assert.match(view.markup, /brief.docx cannot be sent/);
+      assert.match(view.markup, /aria-describedby="assistant-source-issue"/);
+      const reconcile = renderComposer('ready', existing, false, 'Keep my original writing', { ...source, receipt: true });
+      assert.equal(reconcile.button('Send message').disabled, false, 'Existing request identity remains reconcilable');
+    }
+    const queued = renderComposer('ready', true, true, 'Keep my follow-up', source);
+    assert.equal(queued.button('Queue message').disabled, true);
+    assert.equal(queued.button('Stop reply').disabled, false);
+  }
 });

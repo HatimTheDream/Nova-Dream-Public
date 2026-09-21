@@ -6,6 +6,12 @@ import type { AssistantController } from './useAssistant';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { formatSaved } from './ui';
 
+export function messageQueueSummary(items: QueuedMessage[]) {
+  const waiting = items.filter(item => item.state === 'paused');
+  const queued = waiting.filter(item => item.automatic).length, paused = waiting.length - queued;
+  return [queued && `${queued} queued`, paused && `${paused} paused`].filter(Boolean).join(' · ') || 'Message queue';
+}
+
 export function MessageQueue({ controller, conversationId, epoch, blocked, copy }: { controller: AssistantController; conversationId: string; epoch: string; blocked: boolean; copy: (draft: Draft) => void }) {
   const [busy, setBusy] = useState(''), [error, setError] = useState('');
   const [errorKey, setErrorKey] = useState('');
@@ -59,7 +65,7 @@ export function MessageQueue({ controller, conversationId, epoch, blocked, copy 
       </div>
     </article>;
   };
-  return <section aria-label="Message queue"><h3>Message queue <span className="count">{paused.length}</span></h3><p className="metadata">New messages run after the current reply. You can edit, reorder, or pause them.</p>{paused.map(card)}{!paused.length && <p className="metadata">No messages waiting.</p>}{items.some(item => item.state !== 'paused') && <details><summary>Earlier queue items</summary>{items.filter(item => item.state !== 'paused').map(card)}</details>}{error && <p className="field-error" role="alert">{error}</p>}</section>;
+  return <section aria-label="Message queue"><h3>Message queue <span className="count">{paused.length}</span></h3><p className="metadata">Queued messages run after this reply. Paused messages wait for Run Next.</p>{paused.map(card)}{!paused.length && <p className="metadata">No messages waiting.</p>}{items.some(item => item.state !== 'paused') && <details><summary>Earlier queue items</summary>{items.filter(item => item.state !== 'paused').map(card)}</details>}{error && <p className="field-error" role="alert">{error}</p>}</section>;
 }
 
 function QueueEditor({ item, epoch, refresh, close }: { item: QueuedMessage; epoch: string; refresh: () => Promise<void>; close: () => void }) {

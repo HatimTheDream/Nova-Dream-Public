@@ -482,3 +482,18 @@
 
 .dreamclaw-module .dc-email-preparation { position: absolute; inset: 0; display: grid; place-items: center; background: var(--aegis-card-solid); z-index: 1; }
 .dreamclaw-module [data-inbox-reader-scroll][aria-busy="true"] { overflow: hidden; }
+
+/* Folder rows are quiet navigation. Keep the selected row and Compose distinct. */
+:root .dreamclaw-module .dc-inbox-mail-rail nav > button {
+ --button-fill: transparent; --button-border: transparent; --button-border-hover: transparent;
+ --button-depth: 0px; --button-shadow-depth: 0px;
+ border-color: transparent; box-shadow: none; font-weight: 500; color: var(--muted);
+}
+:root .dreamclaw-module .dc-inbox-mail-rail nav > button:is([aria-current=page],[aria-pressed=true]) {
+ --button-fill: var(--soft-gold); --button-edge: var(--selection-edge); --button-depth: 2px; --button-shadow-depth: 2px;
+ background: var(--soft-gold); color: var(--text); font-weight: 650;
+ box-shadow: 0 var(--button-shadow-depth) 0 var(--button-edge);
+}
+:root .dreamclaw-module .dc-inbox-mail-rail nav > button:active:not(:disabled) { --button-shadow-depth: 0px; }
+:root .dreamclaw-module .dc-inbox-mail-rail nav > button:focus-visible { outline-offset: -3px; }
+.dreamclaw-module .dc-inbox-compose-footer { flex-shrink: 0; }

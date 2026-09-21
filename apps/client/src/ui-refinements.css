@@ -186,3 +186,20 @@
 .phone-pairing label { display: grid; gap: 8px; }
 .phone-pairing input { width: 100%; min-width: 0; }
 .phone-pairing button { min-height: 44px; }
+
+/* A phone starts with the workspace; navigation opens only when requested. */
+.rail-drawer-heading,.nav-drawer-label { display:none; }
+.main-navigation-scrim { position:fixed; inset:0; z-index:29; background:rgb(0 0 0 / .35); }
+:root .search-results .search-result { justify-content:flex-start; align-items:flex-start; text-align:start; }
+:root .search-result > .e3-icon { flex:none; margin-top:2px; }
+:root .search-result > span:not(.e3-icon) { flex:1; min-width:0; overflow-wrap:anywhere; }
+@media(max-width:650px) {
+  :root .app-shell > nav.primary-rail[role=dialog] { position:fixed; inset:0 auto 0 0; width:min(272px,85vw); min-width:0; padding:12px; box-shadow:12px 0 30px #0002; }
+  :root .primary-rail[role=dialog] > .brand { display:none; }
+  .rail-drawer-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-inline:4px; }
+  .rail-drawer-heading strong { font-size:16px; }
+  :root .primary-rail[role=dialog] .nav-item { --button-radius:12px; corner-shape:round; max-width:none; min-width:44px; width:100%; min-height:48px; max-height:none; height:auto; display:flex; flex-direction:row; justify-content:flex-start; padding:8px 12px; gap:14px; }
+  .primary-rail .nav-icon { width:28px; height:28px; }
+  .primary-rail .nav-drawer-label { display:block; font-size:14px; }
+  .primary-rail .nav-item-wrap { margin-bottom:7px; }
+}

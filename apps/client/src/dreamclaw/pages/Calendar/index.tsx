@@ -126,7 +126,7 @@ export default function CalendarPage() {
             <div className="min-w-[170px] flex-1" dir="ltr">
               <h1 className="text-[20px] font-bold leading-tight text-aegis-text sm:text-[22px]">{viewTitle}</h1>
               <p className="mt-0.5 text-[11px] text-aegis-text-dim">
-                {displayEvents.length} {displayEvents.length === 1 ? 'event' : 'events'} this month
+                {displayEvents.length} {displayEvents.length === 1 ? 'item' : 'items'} this month
                 {syncing ? ' · Syncing calendars…' : ''}
                 {lastSyncedAt && syncMode !== 'local-only' ? ` · Updated ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(lastSyncedAt))}` : ''}
               </p>
@@ -185,18 +185,18 @@ export default function CalendarPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 id="selected-day-heading" className="text-[12px] font-bold text-aegis-text">{ENGLISH_DAY.format(selectedDate)}</h2>
-                  <p className="text-[10px] text-aegis-text-dim">{selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'event' : 'events'}</p>
+                  <p className="text-[12px] text-aegis-text-dim">{selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'item' : 'items'}</p>
                 </div>
                 <button type="button" onClick={() => handleAddEvent(selectedDate)} className="text-[11px] font-semibold text-aegis-primary hover:underline">Add</button>
               </div>
               {selectedDayEvents.length === 0 ? (
                 <p className="mt-2 rounded-xl border border-aegis-border bg-aegis-elevated px-3 py-3 text-[11px] text-aegis-text-dim">Nothing scheduled for this day.</p>
               ) : (
-                <div className="mt-2 space-y-1.5">
-                  {selectedDayEvents.slice(0, 4).map((event) => (
+                <div className="dc-calendar-agenda mt-2 space-y-1.5">
+                  {selectedDayEvents.map((event) => (
                     <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="preserve-case block w-full rounded-xl border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
-                      <span className="block truncate text-[11px] font-semibold text-aegis-text">{event.title}</span>
-                      <span className="block text-[10px] text-aegis-text-dim">{event.startTime || 'All day'}</span>
+                      <span className="block text-[13px] font-semibold text-aegis-text">{event.title}</span>
+                      <span className="block text-[12px] text-aegis-text-dim">{event.allDay || !event.startTime ? 'All day' : `${event.startTime}${event.endTime ? `–${event.endTime}` : ''}`} · {event.source === 'local' ? 'Event' : SOURCE_META[event.source].label}</span>
                     </button>
                   ))}
                 </div>

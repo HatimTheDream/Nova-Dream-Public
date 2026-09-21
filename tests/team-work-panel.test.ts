@@ -117,9 +117,18 @@ test('a disabled fresh start explains missing members and duplicate role selecti
   const duplicate = renderForm(roster, { ...draft, steps: draft.steps.map(step => ({ ...step, agentId: 'Maker' })) });
   assert.equal(duplicate.disabled, true);
   assert.match(duplicate.markup, /Choose at least two different team members/);
-  const descriptionId = duplicate.markup.match(/class="primary" aria-describedby="([^"]+)"/)?.[1];
-  assert.ok(descriptionId);
-  assert.ok(duplicate.markup.includes(`id="${descriptionId}" class="metadata" role="status"`));
+  for (const form of [missing, duplicate]) {
+    const elements: { name: string; attributes: Record<string, string> }[] = [];
+    new Parser({ onopentag(name, attributes) { elements.push({ name, attributes }); } }).end(form.markup);
+    const submit = elements.find(element => element.name === 'button' && element.attributes.class?.split(' ').includes('primary'));
+    const descriptionId = submit?.attributes['aria-describedby'];
+    assert.ok(descriptionId, 'The disabled start references its readiness explanation.');
+    const descriptions = elements.filter(element => element.attributes.id === descriptionId);
+    assert.equal(descriptions.length, 1, 'Readiness appears once.');
+    assert.equal(descriptions[0].attributes.role, 'status');
+    const fieldsIndex = elements.findIndex(element => element.name === 'fieldset');
+    assert.ok(fieldsIndex >= 0 && elements.indexOf(descriptions[0]) < fieldsIndex, 'Explain prerequisites before the inputs.');
+  }
   assert.equal(renderForm(roster, draft).disabled, false);
 });
 

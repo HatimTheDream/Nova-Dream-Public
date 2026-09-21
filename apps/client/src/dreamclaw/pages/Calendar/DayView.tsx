@@ -1,16 +1,14 @@
 // ═══════════════════════════════════════════════════════════
-// DayView — Single day detailed timeline + sidebar summary
+// DayView — Single day timeline; the shared sidebar owns the agenda.
 // ═══════════════════════════════════════════════════════════
 
 import { useMemo, useRef, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MapPin } from '@dreamclaw/components/icons';
 import { useCalendarStore } from '@dreamclaw/stores/calendarStore';
 import { EventCard } from './EventCard';
-import { ReminderBadge } from './ReminderBadge';
 import {
   eventsForDate, toDateStr, isSameDay,
-  getTimelineHours, getEventDuration, getEventColor, filterCalendarEvents,
+  getTimelineHours, filterCalendarEvents,
 } from './calendarUtils';
 import type { CalendarEvent } from './calendarTypes';
 import { originalTimelineRows } from '@dreamclaw/calendar-timeline';
@@ -55,12 +53,12 @@ export function DayView({ onEventClick }: DayViewProps) {
   const allDayEvents = dayEvents.filter((e) => e.allDay || !e.startTime);
   const timedEvents = dayEvents.filter((e) => !e.allDay && e.startTime);
 
-  // Summary stats
-  const totalMinutes = timedEvents.reduce((sum, e) => sum + getEventDuration(e), 0);
-  const totalHours = Math.round(totalMinutes / 60 * 10) / 10;
-
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      {allDayEvents.length > 0 && <div className="dc-calendar-all-day">
+        <span>{t('calendar.allDay')}</span>
+        <div>{allDayEvents.map(event => <EventCard key={event.id} event={event} variant="compact" onClick={() => onEventClick(event)}/>)}</div>
+      </div>}
       {/* Timeline */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto relative">
         <div className="relative" style={{ height: hours.length * HOUR_HEIGHT }}>
@@ -93,17 +91,6 @@ export function DayView({ onEventClick }: DayViewProps) {
             );
           })}
 
-          {/* All-day events (pinned at top) */}
-          {allDayEvents.length > 0 && (
-            <div className="sticky top-0 z-20 bg-aegis-elevated rounded-lg px-3 py-2"
-              style={{ marginInlineStart: 80, marginInlineEnd: 16 }}>
-              <div className="text-[11px] font-semibold text-aegis-text-dim mb-1">{t('calendar.allDay')}</div>
-              {allDayEvents.map((ev) => (
-                <EventCard key={ev.id} event={ev} variant="compact" onClick={() => onEventClick(ev)} />
-              ))}
-            </div>
-          )}
-
           {/* Current time indicator */}
           {isToday && nowHour >= settings.timelineStart && nowHour <= settings.timelineEnd && (
             <div className="absolute z-10 pointer-events-none"
@@ -121,49 +108,6 @@ export function DayView({ onEventClick }: DayViewProps) {
         </div>
       </div>
 
-      {/* Right sidebar: day summary */}
-      <div className="w-[220px] p-4 bg-aegis-surface overflow-y-auto"
-        style={{ borderInlineStart: '1px solid var(--aegis-border)' }}>
-        <h3 className="text-[12px] font-semibold text-aegis-text-dim uppercase tracking-wider mb-3">
-          {t('calendar.daySummary')}
-        </h3>
-
-        {/* Stats */}
-        <div className="flex items-center gap-3 mb-4 text-[12px] text-aegis-text-muted">
-          <span>{t('calendar.eventCount', { count: dayEvents.length })}</span>
-          {totalHours > 0 && <span>· {totalHours}h</span>}
-        </div>
-
-        {dayEvents.length === 0 ? (
-          <p className="text-[13px] text-aegis-text-dim">{t('calendar.noEvents')}</p>
-        ) : (
-          <div className="space-y-2">
-            {dayEvents.map((ev) => {
-              const color = getEventColor(ev);
-              return (
-                <div key={ev.id}
-                  onClick={() => onEventClick(ev)}
-                  className="p-2 rounded-lg bg-aegis-card border border-aegis-border cursor-pointer hover:border-aegis-primary/30 transition-colors">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                    <span className="text-[11px] font-mono text-aegis-text-dim">
-                      {ev.startTime || '—'}
-                      {ev.endTime && ` – ${ev.endTime}`}
-                    </span>
-                    <ReminderBadge status={ev.reminderStatus} size="sm" />
-                  </div>
-                  <div className="text-[12px] font-medium text-aegis-text mt-0.5">
-                    {ev.title || t('calendar.untitled')}
-                  </div>
-                  {ev.location && (
-                    <div className="flex items-center gap-1 text-[10px] text-aegis-text-dim"><MapPin size={11} tone="coral" decorative /> {ev.location}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

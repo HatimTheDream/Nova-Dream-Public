@@ -1,3 +1,12 @@
+## [1.9.6] — 2026-09-21
+
+- Simplify Assistant attachments, output actions and narrow conversation headers while preserving the compact effort slider. Clarify paused messages, plan steps, unconfirmed activity, Deleted conversations and voice-caption recovery.
+- Show invalid-input Send/Queue states and pending workspace changes clearly without discarding writing or replacing retained requests. Explain empty saved user entries while preserving their original identity and files.
+- Bring Content writing forward with one title/save header, optional brief details and quieter cards; simplify Inbox folder navigation and explain agent readiness beside its action.
+- Remove Calendar's duplicate day summary, keep one readable agenda, and place optional event details behind a disclosure with reachable save actions.
+- Simplify agent and assignment forms, make setup requirements actionable, and provide ordinary Daily/Weekly routine controls while preserving custom schedules.
+- Give phone-width workspaces an on-demand navigation drawer, simplify widget configuration around one preview, and improve search alignment, task/event labels and settings wording.
+
 ## [1.9.5] — 2026-09-21
 
 - Keep Stop Reply available while writing or attaching a follow-up, alongside queue and steering controls, without clearing the draft.

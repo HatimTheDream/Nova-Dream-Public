@@ -26,7 +26,7 @@ export type TaskEvent = { id: string; taskId: string; at: string; from: Task['st
 export type RoutineEvent = { id: string; routineId: string; at: string; state: Routine['state']; revision: number };
 export type Focus = { taskId: string; revision: number; deviceId: string; clientId: string; running: boolean; elapsedMs: number; lastPulse: number };
 export type TaskState = { occurrences: Occurrence[]; events: TaskEvent[]; routineEvents: RoutineEvent[]; focus: Focus[]; earnedXp: number; orders?: DailyOrder[]; reminders?: Reminder[]; reminderAttempts?: NotificationAttempt[] };
-export const focusSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), taskId: z.string().max(100), expectedRevision: z.number().int().nonnegative(), clientId: z.string().uuid(), action: z.enum(['start', 'pulse', 'pause']) }).strict();
+export const focusSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), taskId: z.string().max(100), expectedRevision: z.number().int().nonnegative(), clientId: z.string().uuid(), action: z.enum(['start', 'pulse', 'pause']) }).strict())();
 export type FocusCommand = z.infer<typeof focusSchema>;
 export const focusLeaseMs = 30_000;
 export function focusElapsed(focus: Focus, now: number): number { return focus.elapsedMs + (focus.running ? Math.max(0, Math.min(focusLeaseMs, now - focus.lastPulse)) : 0); }
@@ -85,11 +85,11 @@ export function nextScheduled(routine: Routine, after: string): string | null {
   return null;
 }
 export type DailyOrder = { date: string; timezone: string; revision: number; taskIds: string[] };
-export const dailyOrderSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), date: localDate, timezone, expectedRevision: z.number().int().nonnegative(), taskIds: z.array(z.string().min(1).max(100)).max(5000).refine(v => new Set(v).size === v.length) }).strict();
+export const dailyOrderSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), date: localDate, timezone, expectedRevision: z.number().int().nonnegative(), taskIds: z.array(z.string().min(1).max(100)).max(5000).refine(v => new Set(v).size === v.length) }).strict())();
 export type DailyOrderCommand = z.infer<typeof dailyOrderSchema>;
 export const taskViews = ['All', 'Capture', 'Today', 'Upcoming', 'Anytime', 'Waiting', 'Review', 'History', 'Trash'] as const;
 export type TaskView = typeof taskViews[number];
-export const taskHistorySchema = z.object({ taskId: z.string().min(1).max(100), beforeRevision: z.number().int().positive().optional() }).strict();
+export const taskHistorySchema = /* @__PURE__ */ (() => z.object({ taskId: z.string().min(1).max(100), beforeRevision: z.number().int().positive().optional() }).strict())();
 export type TaskHistory = { versions: Entity<Task>[]; beforeRevision: number | null };
 export const statusNames: Record<Task['status'], string> = { open: 'Ready', active: 'In progress', waiting: 'Waiting', blocked: 'Blocked', done: 'Completed', skipped: 'Skipped' };
 export function inTaskView(task: Task, view: TaskView, today: string): boolean {

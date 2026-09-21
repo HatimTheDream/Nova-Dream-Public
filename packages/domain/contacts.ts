@@ -38,10 +38,11 @@ export function contactDuplicateReason(a: Contact, b: Contact): string | null {
 }
 export const contactMergeFields = ['name', 'position', 'organization', 'email', 'phone', 'handle', 'timezone', 'category', 'projectId', 'photo', 'pipelineStage', 'keepInTouch'] as const;
 export type ContactMergeField = typeof contactMergeFields[number];
-const ref = z.object({ id: z.string().regex(/^contact:[a-zA-Z0-9:_-]+$/).max(100), revision: z.number().int().positive() }).strict();
-export const contactMergeSchema = z.object({ requestId: z.uuid(), epoch: z.uuid(), keep: ref, other: ref, fields: z.partialRecord(z.enum(contactMergeFields), z.enum(['keep', 'other'])), notes: z.enum(['both', 'keep', 'other']) }).strict().refine(v => v.keep.id !== v.other.id, 'Choose two different contacts.');
+// Pure construction lets clients import display helpers without unused command validators.
+const ref = /* @__PURE__ */ (() => z.object({ id: z.string().regex(/^contact:[a-zA-Z0-9:_-]+$/).max(100), revision: z.number().int().positive() }).strict())();
+export const contactMergeSchema = /* @__PURE__ */ (() => z.object({ requestId: z.uuid(), epoch: z.uuid(), keep: ref, other: ref, fields: z.partialRecord(z.enum(contactMergeFields), z.enum(['keep', 'other'])), notes: z.enum(['both', 'keep', 'other']) }).strict().refine(v => v.keep.id !== v.other.id, 'Choose two different contacts.'))();
 export type ContactMergeCommand = z.infer<typeof contactMergeSchema>;
-export const contactRestoreSchema = z.object({ requestId: z.uuid(), epoch: z.uuid(), contact: ref }).strict();
+export const contactRestoreSchema = /* @__PURE__ */ (() => z.object({ requestId: z.uuid(), epoch: z.uuid(), contact: ref }).strict())();
 export type ContactRestoreCommand = z.infer<typeof contactRestoreSchema>;
 export function mergedContactValue(keep: Contact, other: Contact, command: Pick<ContactMergeCommand, 'fields' | 'notes'>): Contact {
   const value = { ...keep };

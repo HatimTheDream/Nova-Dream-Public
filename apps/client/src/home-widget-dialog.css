@@ -329,3 +329,14 @@
 /* Listing titles keep one reading scale across widget types and sizes. */
 .home-widget-preview :is(.home-preview-task,.home-preview-routine,.home-preview-event > strong,.home-preview-link > strong,.home-preview-attention-item),
 .preview-next-action .home-preview-headline { font-size:12px; font-weight:600; line-height:1.45; letter-spacing:normal; }
+
+.home-widget-config-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(220px,.65fr); gap:22px; align-items:start; }
+.home-widget-config-fields { display:grid; gap:16px; min-width:0; }
+.home-widget-config .home-widget-live-preview { position:sticky; top:0; border:0; padding:0; background:transparent; }
+.home-widget-config .home-widget-live-preview > div:first-child { display:block; }
+.home-widget-config .home-widget-live-preview small { display:block; margin-top:4px; }
+.home-widget-config .home-widget-preview { box-shadow:none; }
+.home-widget-config .dialog-footer { position:sticky; bottom:-26px; background:var(--surface); padding-block:14px 20px; z-index:2; }
+.home-widget-config .home-widget-sizes button { padding:8px 4px; }
+.home-widget-config .home-widget-sizes .metadata { display:none; }
+@media(max-width:650px) { .home-widget-config-layout { grid-template-columns:minmax(0,1fr); }.home-widget-config .home-widget-live-preview { position:static; }.home-widget-config .dialog-footer { bottom:-17px; }.home-widget-config .home-widget-preview { max-width:320px; margin:auto; } }

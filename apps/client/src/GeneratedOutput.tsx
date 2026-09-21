@@ -18,6 +18,7 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
   const nativeId = message.source?.nativeId ?? conversation.nativeId;
   const output = attachment.artifactId ? savedMessageOutput(controller.outputs, conversation, message, attachment.artifactId) : undefined;
   const file = output?.file ?? (attachment.availability !== 'unavailable' ? attachment.localFile : undefined);
+  const image = attachment.type === 'image' || attachment.mimeType?.startsWith('image/');
   useEffect(() => {
     setPreview(''); setLoading(false); setError('');
     return () => { pending.current?.abort(); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; };
@@ -40,9 +41,11 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
   return <section className="generated-output" aria-label={`Generated output: ${attachment.name}`}>
     <div className="generated-output-title"><File size={20}/><strong title={attachment.name}>{attachment.name}</strong>{output && <span className="metadata">v{output.version}</span>}</div>
     <div className="generated-output-actions">
-      {(attachment.type === 'image' || attachment.mimeType?.startsWith('image/')) && <button disabled={loading || !file && attachment.availability === 'unavailable'} onClick={() => void showImage()}>{loading ? 'Loading preview…' : preview ? 'Hide preview' : 'Preview image'}</button>}
-      {file && <>{open && <button onClick={() => open(file, output)}>Open file</button>}<a className="output-download" href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a></>}
-      {output?.file ? <><button disabled={busy || blocked || conversation.archived} onClick={() => void refine(output)}>Refine</button><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/><span className="metadata">Original version kept</span></> : attachment.artifactId && <button disabled={busy || blocked || !file && attachment.availability === 'unavailable'} onClick={() => void save()}><Download size={16}/>{busy ? 'Saving output…' : 'Save output'}</button>}
+      {image ? <button disabled={loading || !file && attachment.availability === 'unavailable'} onClick={() => void showImage()}>{loading ? 'Loading preview…' : preview ? 'Hide preview' : 'Preview image'}</button> : file && open && <button onClick={() => open(file, output)}>Open file</button>}
+      <details className="output-action-disclosure"><summary>More</summary><div className="output-action-menu">
+        {file && <>{image && open && <button onClick={() => open(file, output)}>Open file</button>}<a className="output-download" href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a></>}
+        {output?.file ? <><button disabled={busy || blocked || conversation.archived} onClick={() => void refine(output)}>Refine</button><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/><span className="metadata">Original version kept</span></> : attachment.artifactId && <button disabled={busy || blocked || !file && attachment.availability === 'unavailable'} onClick={() => void save()}><Download size={16}/>{busy ? 'Saving output…' : 'Save output'}</button>}
+      </div></details>
     </div>
     {preview && <img className="generated-output-image" src={preview} alt={attachment.name} onError={() => { setError('The image could not be displayed. Its original remains available to download.'); setPreview(''); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; }}/>}
     {error && <p className="field-error" role="alert">{error}</p>}

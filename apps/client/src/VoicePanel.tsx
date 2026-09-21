@@ -11,9 +11,9 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
   const [expanded, setExpanded] = useState(false);
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (voice.phase === 'error') setExpanded(true);
+    if (voice.phase === 'error' || voice.soundBlocked) setExpanded(true);
     else if (voice.phase === 'idle') setExpanded(false);
-  }, [voice.phase]);
+  }, [voice.phase, voice.soundBlocked]);
   useEffect(() => {
     if (!expanded) return;
     const outside = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node)) setExpanded(false); };
@@ -34,7 +34,7 @@ export function VoicePanel({ controller, openConversation, appIcon, floating = f
     <VoiceActivityMark controller={controller} appIcon={appIcon} expression={expression} connecting={connecting} expanded={expanded} title={`${title} · ${voice.message}`} toggle={() => setExpanded(value => !value)}/>
     <div className="voice-controls">
       {!finished && <><button className={`voice-mute ${voice.muted ? 'is-muted' : ''}`} aria-label={voice.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={voice.muted} title={voice.muted ? 'Unmute microphone' : 'Mute microphone'} onClick={controller.mute}>{voice.muted ? <MicOff size={20}/> : <Mic size={20}/>}</button>{voice.soundBlocked ? <button aria-label="Enable sound" title="Enable sound" onClick={() => void controller.enableSound()}><VolumeUp size={20}/></button> : <button aria-label="Interrupt speech" title="Interrupt speech" disabled={!voice.speaking && !voice.processing} onClick={controller.interrupt}><Square size={18}/></button>}<button className="voice-end" aria-label="End voice call" title="End call" onClick={() => void controller.end()}><PhoneOff size={20}/></button></>}
-      {finished && <button aria-label={voice.unsaved ? 'Retry saving voice captions' : 'Close voice call'} title={voice.unsaved ? 'Retry saving captions' : 'Close voice call'} onClick={() => void controller.recover()}>{voice.unsaved ? <RotateSave/> : <X size={20}/>}</button>}
+      {finished && <button className={voice.unsaved ? 'voice-retry-save' : undefined} aria-label={voice.unsaved ? 'Retry saving voice captions' : 'Close voice call'} title={voice.unsaved ? 'Retry saving captions' : 'Close voice call'} onClick={() => void controller.recover()}>{voice.unsaved ? 'Retry Save' : <X size={20}/>}</button>}
     </div>
     {expanded && <div className="voice-details"><div className="voice-status"><p>{voice.message}</p>{voice.soundBlocked && <button onClick={() => void controller.enableSound()}><VolumeUp size={16}/>Enable sound</button>}{voice.unsaved > 0 && <p className="metadata">{voice.unsaved} caption{voice.unsaved === 1 ? '' : 's'} awaiting history save</p>}</div>
       {voice.attempt && <button className="voice-conversation" onClick={() => { openConversation(voice.attempt!.target.conversation.id); setExpanded(false); }}><MessageSquare size={15}/><span>{voice.attempt.target.conversation.title}</span></button>}
@@ -57,4 +57,3 @@ function VoiceActivityMark({ controller, appIcon, expression, connecting, expand
     </span>}
   </button>;
 }
-function RotateSave() { return <span className="voice-retry-label">Retry save</span>; }

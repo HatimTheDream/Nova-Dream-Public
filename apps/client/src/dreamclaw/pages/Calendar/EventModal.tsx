@@ -413,7 +413,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
                 onChange={(event) => setDestinationId(event.target.value)}
                 className="field-input pl-10"
                 disabled={destinationsLoading || saving}
-                aria-describedby="calendar-destination-help"
+                aria-describedby={destinationsLoading ? 'calendar-destination-help' : undefined}
               >
                 {destinations.map((destination) => (
                   <option key={destination.id} value={destination.id} disabled={!destination.canWrite}>
@@ -429,9 +429,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
                   : <Globe size={15} decorative />}
               </span>
             </div>
-            <p id="calendar-destination-help" className="mt-1.5 text-[10px] text-aegis-text-dim">
-              {destinationsLoading ? 'Finding your connected calendars…' : 'Choose where this event will be saved.'}
-            </p>
+            {destinationsLoading && <p id="calendar-destination-help" className="mt-1.5 text-[12px] text-aegis-text-dim">Finding your connected calendars…</p>}
             {permissionDestinations.map((destination) => (
               <div key={`${destination.id}-permission`} role="status" className="mt-2 flex items-center justify-between gap-3 rounded-[8px] border border-aegis-primary/20 bg-aegis-primary/5 px-3 py-2">
                 <span className="min-w-0 text-[11px] leading-4 text-aegis-text-muted">
@@ -454,18 +452,9 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
             className="field-input" disabled={isReadOnlyEvent} />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t('calendar.field.date')}>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="field-input" disabled={isReadOnlyEvent} />
-          </Field>
-          <Field label={providerEvent ? 'Category in Nova Dream' : t('calendar.field.category')}>
-            <select value={category} onChange={(e) => setCategory(e.target.value as EventCategory)} className="field-input" disabled={isReadOnlyEvent}>
-              {ALL_CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>{t(`calendar.category.${cat}`)}</option>
-              ))}
-            </select>
-          </Field>
-        </div>
+        <Field label={t('calendar.field.date')}>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="field-input" disabled={isReadOnlyEvent} />
+        </Field>
 
         {/* All-day toggle */}
         <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -487,6 +476,9 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
           </div>
         )}
 
+        <details className="dc-calendar-optional">
+          <summary>Location & Notes</summary>
+          <div className="space-y-3.5">
         <Field label={t('calendar.field.location')}>
           <input type="text" value={location} onChange={(e) => setLocation(e.target.value)}
             placeholder={t('calendar.field.locationPlaceholder')} className="field-input" disabled={isReadOnlyEvent} />
@@ -497,8 +489,19 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
             placeholder={t('calendar.field.notesPlaceholder')} rows={2}
             className="field-input resize-none" disabled={isReadOnlyEvent} />
         </Field>
+        <Field label={providerEvent ? 'Category in Nova Dream' : t('calendar.field.category')}>
+          <select value={category} onChange={(e) => setCategory(e.target.value as EventCategory)} className="field-input" disabled={isReadOnlyEvent}>
+            {ALL_CATEGORIES.map(cat => <option key={cat} value={cat}>{t(`calendar.category.${cat}`)}</option>)}
+          </select>
+        </Field>
+        {editor.draft?.provider?.editable?.formattedDescription && <label className="flex min-h-11 items-start gap-2 text-[12px]"><input type="checkbox" checked={!!editor.draft.provider.replaceDescription} onChange={event => editor.replaceProvider('replaceDescription', event.target.checked)}/>Review replacing the formatted description with my plain-text notes.</label>}
+          </div>
+        </details>
 
-        {(!allDay || providerEvent) && <div className="grid grid-cols-2 gap-3">
+        <details className="dc-calendar-optional">
+          <summary>Reminders & Repeat</summary>
+          <div className="space-y-3.5">
+        {(!allDay || providerEvent) && <div className="space-y-3.5">
           <Field label={t('calendar.field.reminder')}>
             <select value={reminder} onChange={(e) => setReminder(Number(e.target.value))} className="field-input" disabled={allDay && !providerEvent || isReadOnlyEvent}>
               {editor.draft?.provider?.editable && <option value={-1}>Keep original provider reminders</option>}
@@ -533,7 +536,6 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
           </div>}
         </div>}
 
-        {editor.draft?.provider?.editable?.formattedDescription && <label className="flex min-h-11 items-start gap-2 text-[12px]"><input type="checkbox" checked={!!editor.draft.provider.replaceDescription} onChange={event => editor.replaceProvider('replaceDescription', event.target.checked)}/>Review replacing the formatted description with my plain-text notes.</label>}
         {editor.draft?.scope !== 'occurrence' && editor.draft?.provider?.editable?.repeating && !editor.draft.provider.editable.recurrenceEditable && <label className="flex min-h-11 items-start gap-2 text-[12px]"><input type="checkbox" checked={!!editor.draft.provider.replaceRecurrence} onChange={event => editor.replaceProvider('replaceRecurrence', event.target.checked)}/>Replace the original provider repeat pattern with the pattern below.</label>}
         {editor.draft?.scope !== 'occurrence' && <Field label={t('calendar.field.recurrence')}>
           <select value={editor.draft?.provider?.editable?.repeating && !editor.draft.provider.editable.recurrenceEditable && !editor.draft.provider.replaceRecurrence ? 'provider' : recurrence} onChange={(e) => setRecurrence(e.target.value as RecurrenceFreq | '')} className="field-input" disabled={isReadOnlyEvent || Boolean(editor.draft?.provider?.editable?.repeating && !editor.draft.provider.editable.recurrenceEditable && !editor.draft.provider.replaceRecurrence)}>
@@ -543,6 +545,8 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
             ))}
           </select>
         </Field>}
+          </div>
+        </details>
         {editor.draft && <CalendarDraftDetails draft={editor.draft} change={editor.changeValue} chooseExceptions={editor.chooseExceptions}/>}
       </fieldset>
 
@@ -555,7 +559,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
       </div>}
 
       {/* Actions */}
-      <div className="flex gap-2 justify-end mt-6">
+      <div className="dc-calendar-actions flex gap-2 justify-end mt-6">
         <button onClick={onClose} className="btn-secondary">{editor.draft ? 'Keep for later' : t('calendar.actions.cancel')}</button>
         {isReadOnlyEvent ? editEvent?.sourceRoute && (
           <button
@@ -609,7 +613,7 @@ function Overlay({ onClose, children }: { onClose: () => void; children: React.R
   return createPortal(
     <div className="dreamclaw-module dc-calendar-overlay"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Calendar event" className="dc-calendar-dialog w-[420px] max-w-[calc(100vw-24px)] max-h-[calc(100dvh-24px)] overflow-y-auto rounded-2xl bg-aegis-menu-bg border border-aegis-border p-6 shadow-2xl"
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Calendar event" className="dc-calendar-dialog w-[560px] max-w-[calc(100vw-24px)] max-h-[calc(100dvh-24px)] overflow-y-auto rounded-2xl bg-aegis-menu-bg border border-aegis-border p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}>
         {children}
       </div>

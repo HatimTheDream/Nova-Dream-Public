@@ -9,7 +9,7 @@ import { keepInTouchSchema, pipelineStages, relationshipSchema } from './crm.js'
 // Original DC People/Content fields, Nova saved records and agent identity,
 // adapted to the single Nova Dream entity/revision authority.
 export const recordKinds = ['contact', 'content', 'agent', 'assignment', 'profile'] as const;
-export const recordKindSchema = z.enum(recordKinds);
+export const recordKindSchema = /* @__PURE__ */ (() => z.enum(recordKinds))();
 export type RecordKind = typeof recordKinds[number];
 const id = z.string().min(1).max(100).regex(/^[a-zA-Z0-9:_-]+$/);
 const projectId = id.nullable();
@@ -47,12 +47,12 @@ export const contentAssignmentSourceSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/), fileId: id, name: z.string().min(1).max(200), importedText: z.boolean(),
 }).strict();
 export type ContentAssignmentSource = z.infer<typeof contentAssignmentSourceSchema>;
-export const contentFromOutputSchema = z.object({
+export const contentFromOutputSchema = /* @__PURE__ */ (() => z.object({
   requestId: z.string().uuid(), epoch: z.string().uuid(), outputId: z.string().uuid(),
   version: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
+}).strict())();
 export type ContentFromOutputCommand = z.infer<typeof contentFromOutputSchema>;
-export const contentFromAssignmentSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), attemptId: z.string().uuid(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const contentFromAssignmentSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), attemptId: z.string().uuid(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict())();
 export type ContentFromAssignmentCommand = z.infer<typeof contentFromAssignmentSchema>;
 export const contentSchema = z.object({
   title, brief: z.string().max(10000), body: z.string().max(100000), format: z.enum(['markdown', 'text']),
@@ -96,9 +96,9 @@ export type RecordValues = { contact: Contact; content: Content; agent: AgentDes
 export type RecordValue = RecordValues[RecordKind];
 export const recordOriginSchema = z.object({ kind: z.enum(['contact', 'content', 'assignment']), id, revision: z.number().int().positive() }).strict();
 export type RecordOrigin = z.infer<typeof recordOriginSchema>;
-export const recordTaskSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), origin: recordOriginSchema, title: z.string().trim().min(1).max(300) }).strict();
+export const recordTaskSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), origin: recordOriginSchema, title: z.string().trim().min(1).max(300) }).strict())();
 export type RecordTaskCommand = z.infer<typeof recordTaskSchema>;
-export const recordHistorySchema = z.object({ kind: recordKindSchema, id, beforeRevision: z.number().int().positive().optional() }).strict();
+export const recordHistorySchema = /* @__PURE__ */ (() => z.object({ kind: recordKindSchema, id, beforeRevision: z.number().int().positive().optional() }).strict())();
 export function isRecordKind(kind: string): kind is RecordKind { return (recordKinds as readonly string[]).includes(kind); }
 export function recordTitle(value: RecordValue): string { return 'name' in value ? value.name : value.title; }
 export function blankRecord(kind: RecordKind, zone: string): RecordValue {

@@ -37,3 +37,13 @@
 .assignment-captured-source dt { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
 .assignment-captured-source dd { margin: 0; }
 @media(max-width:800px) { .assignment-runs .section-heading { flex-wrap: wrap; } }
+
+.record-editor > .section-heading { margin-bottom:16px; }
+.record-editor h2 { margin-top:4px; }
+.record-editor .record-optional > summary { min-height:44px; padding-block:12px; }
+.record-editor .record-optional[open] > :not(summary) { margin-bottom:14px; }
+.record-editor .record-editor-footer { position:sticky; bottom:0; z-index:2; padding-block:14px; background:var(--surface); }
+.dialog .record-editor { border:0; background:transparent; padding:0; box-shadow:none; }
+.dialog .record-editor-footer { bottom:-26px; padding-bottom:22px; }
+.dialog .record-editor > .section-heading .eyebrow { display:none; }
+@media(max-width:650px) { .dialog .record-editor-footer { bottom:-17px; } }

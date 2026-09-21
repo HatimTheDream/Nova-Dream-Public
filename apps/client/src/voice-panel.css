@@ -50,6 +50,7 @@
   50% { transform:scale(1); opacity:1; }
 }
 .voice-details { max-width:calc(100vw - 112px); }
+:root .voice-controls .voice-retry-save { width:auto; min-width:104px; padding-inline:12px; white-space:nowrap; border-radius:12px; }
 .voice-floating .voice-details { left:auto; right:0; transform:none; }
 @media(prefers-reduced-motion:reduce) {
   .voice-connection-pulse { animation:none; }

@@ -30,7 +30,7 @@ export function AssistantActivityPanel({ operation, open, show, close, stop, ava
   }, [operation?.id]);
   if (!open) return null;
   const content = <section className="assistant-activity-panel" aria-label="Live tool view">
-    <p className={working ? 'activity-live' : 'metadata'}>{operation?.cancelRequested ? 'Stopping…' : working ? 'Live' : operation?.state === 'completed' ? 'Finished' : operation?.state === 'cancelled' ? 'Stopped' : 'Latest run'}</p>
+    <p className={working && operation?.state !== 'unknown' ? 'activity-live' : 'metadata'}>{operation?.state === 'unknown' ? 'Last reported · Outcome unconfirmed' : operation?.cancelRequested ? 'Stopping…' : working ? 'Live' : operation?.state === 'completed' ? 'Finished' : operation?.state === 'cancelled' ? 'Stopped' : 'Latest run'}</p>
     <div className="assistant-activity-body">
       {view && <figure><img key={view.id} src={`/api/assistant/observation/${view.operationId}/${view.id}`} width={view.width} height={view.height} alt="Latest view returned by the Assistant’s tool" onError={() => setError('This view was replaced. Waiting for the latest capture…')}/><figcaption>Latest tool view · {new Date(view.capturedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}</figcaption></figure>}
       {!view && <p className="metadata">{error || 'This tool view is no longer available.'}</p>}

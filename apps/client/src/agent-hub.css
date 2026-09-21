@@ -10,3 +10,4 @@
 @media(max-width:440px){.hub-heading .metadata{display:none}.hub-header-actions{flex:1;justify-content:flex-end}.hub-switch button{padding:7px 10px}.hub-toolbar{gap:4px}.hub-heading h1{font-size:20px}.hub-header-actions{gap:5px}.hub-header-actions .primary{padding:9px 8px}.hub-header-actions .primary svg{display:none}.hub-header-actions .composer-control-button{width:36px;min-width:36px}.hub-team-row .hub-person strong{font-size:12px}}
 
 .agent-hub [data-state=failed]{--hub-status:#ac5650}
+.hub-readiness{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 0;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.hub-readiness>span{flex:1 1 220px}.hub-readiness button{font-size:12px}.hub-inspector .hub-readiness{margin-top:12px}
