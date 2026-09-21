@@ -1,3 +1,8 @@
+## [1.9.2] — 2026-09-20
+
+- Keep a known exhausted ChatGPT account out of the next-request selection until its reported reset, even when usage becomes stale. Unknown reset times use the last successful reading's bounded freshness; failed refreshes cannot extend it indefinitely.
+- Retain unconfirmed voice captions in their original chat on the current device after closing, reloading or starting another call. Keep their unconfirmed label and preserve the original call if browser storage cannot save them.
+
 ## [1.9.1] — 2026-09-20
 
 - Show Account Status Unavailable when account status cannot be read, instead of incorrectly saying no account is connected; preserve known account labels and counts.

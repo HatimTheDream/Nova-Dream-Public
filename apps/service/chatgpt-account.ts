@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { z } from 'zod';
 import type { ChatGptAccount as Account, ChatGptAccountStatus } from '../../packages/domain/sign-in.js';
-import { chatGptAccountOrderSchema, chatGptProfileIdSchema, chatGptRuntimeSnapshotSchema, emptyChatGptUsage } from '../../packages/domain/chatgpt-accounts.js';
+import { chatGptAccountOrderSchema, chatGptProfileIdSchema, chatGptRuntimeSnapshotSchema, chatGptUsageFreshMs, emptyChatGptUsage } from '../../packages/domain/chatgpt-accounts.js';
 import type { ManagedRuntime } from './runtime.js';
 import type { AssistantTransport } from './gateway.js';
 import { Fault, type Store } from './store.js';
@@ -178,7 +178,11 @@ export class ChatGptAccount {
       if (!a || a.health !== 'ready' || (a.cooldownUntil ?? 0) > now) return false;
       if (a.identityKey && seen.has(a.identityKey)) return false;
       if (a.identityKey) seen.add(a.identityKey);
-      return !a.usage.windows.some(w => a.usage.state === 'ready' && w.usedPercent !== null && w.usedPercent >= 100 && (w.resetAt === null || w.resetAt > now));
+      // A stale reading does not erase known exhaustion before its reset. Without
+      // a reset, only the last successful report's freshness can defer an account;
+      // failed checks advance checkedAt and must not extend that limit forever.
+      const reportFresh = a.usage.reportedAt !== null && a.usage.reportedAt <= now && a.usage.reportedAt + chatGptUsageFreshMs > now;
+      return !a.usage.windows.some(w => a.usage.state !== 'unavailable' && w.usedPercent !== null && w.usedPercent >= 100 && (w.resetAt === null ? reportFresh : w.resetAt > now));
     });
     if (!selected) {
       if (!input.preferredProfileId && accounts.every(a => a.health === 'unknown')) return undefined;

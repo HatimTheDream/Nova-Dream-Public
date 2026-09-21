@@ -9,8 +9,14 @@ export type VoiceView = {
   phase: 'idle' | 'permission' | 'preparing' | 'connecting' | 'connected' | 'ending' | 'ended' | 'error';
   muted: boolean; speaking: boolean; listening: boolean; processing: boolean; soundBlocked: boolean;
   message: string; attempt?: VoiceAttempt; turns: TranscriptTurn[]; unsaved: number;
+  retainedCaptions?: RetainedVoiceCaptions[];
+};
+export type RetainedVoiceCaptions = {
+  attemptId: string; conversationId: string; nativeId: string; closedAt: number;
+  turns: TranscriptTurn[]; order: Pick<TranscriptTurn, 'turnId' | 'role'>[];
 };
 type Journal = { start: { requestId: string; epoch: string; conversationId: string; conversationRevision: number; projectRevision: number }; attempt?: VoiceAttempt; entries: VoiceFinal[]; turns: TranscriptTurn[] };
+type StoredJournal = Partial<Journal> & { retainedCaptions?: RetainedVoiceCaptions[] };
 type Resources = { stream?: MediaStream; peer?: RTCPeerConnection; channel?: RTCDataChannel; audio?: HTMLAudioElement; playback?: number; context?: AudioContext; meter?: VoiceAudioMeter; timer?: ReturnType<typeof setInterval> };
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const active = (view: VoiceView) => ['permission', 'preparing', 'connecting', 'connected', 'ending'].includes(view.phase);
@@ -40,7 +46,11 @@ export class VoiceController {
   private cancelledResponses = new Set<string>();
   constructor(deviceId: string) {
     this.journalKey = `e3:voice-call:${deviceId}`;
-    this.journal = readLocal<Journal>(this.journalKey);
+    const stored = readLocal<StoredJournal>(this.journalKey);
+    // Existing journals retain their original shape. A closed call can leave
+    // only review captions without preventing another call from starting.
+    this.journal = stored?.start ? stored as Journal : undefined;
+    this.view = { ...this.view, retainedCaptions: stored?.retainedCaptions ?? [] };
     if (this.journal) this.view = { ...this.view, phase: 'ended', attempt: this.journal.attempt, turns: this.journal.turns, unsaved: this.journal.entries.filter(e => !e.saved).length, message: 'The previous call is kept. Audio is off. Check its final saves before starting another.' };
   }
   getSnapshot = () => this.view;
@@ -55,7 +65,7 @@ export class VoiceController {
   private keep() {
     if (!this.journal) return;
     this.journal.turns = this.view.turns;
-    if (!saveLocal(this.journalKey, this.journal)) throw new Error('Browser storage is full. Audio is stopped; keep this page open to retain your captions.');
+    if (!saveLocal(this.journalKey, { ...this.journal, retainedCaptions: this.view.retainedCaptions })) throw new Error('Browser storage is full. Audio is stopped; keep this page open to retain your captions.');
     this.update({ unsaved: this.journal.entries.filter(e => !e.saved).length });
   }
   private send(value: object) {
@@ -317,8 +327,25 @@ export class VoiceController {
     if (!journal || !attempt || !(automatic ? attempt.state === 'ended' : ['ended', 'failed'].includes(attempt.state))
       || journal.entries.some(entry => !entry.saved) || attempt.entries.some(entry => !entry.saved)
       || automatic && this.hasUnconfirmedTurns()) return false;
-    localStorage.removeItem(this.journalKey); this.journal = undefined;
-    this.update({ phase: 'idle', message: 'Call saved. You can start another when ready.', unsaved: 0 });
+    const unresolved = this.view.turns.filter(turn => turn.text.trim()
+      && (!turn.final || turn.unconfirmed || !journal.entries.some(entry => entry.entryId === turn.turnId && entry.saved)));
+    let retainedCaptions = this.view.retainedCaptions ?? [];
+    if (unresolved.length) {
+      const conversation = attempt.target.conversation;
+      retainedCaptions = [...retainedCaptions.filter(call => call.attemptId !== attempt.id), {
+        attemptId: attempt.id, conversationId: conversation.id, nativeId: conversation.nativeId, closedAt: Date.now(),
+        // This is a stopped display copy, never an input to the finals endpoint.
+        turns: unresolved.map(turn => ({ ...turn, unconfirmed: true })),
+        order: this.view.turns.map(({ turnId, role }) => ({ turnId, role })),
+      }];
+    }
+    // Replace the active journal only after the review copy is durable. Storage
+    // failure leaves the original call recoverable and blocks a new call.
+    if (retainedCaptions.length) {
+      if (!saveLocal(this.journalKey, { retainedCaptions })) throw new Error('Your captions are still kept in this call. Free browser storage before closing it.');
+    } else localStorage.removeItem(this.journalKey);
+    this.journal = undefined;
+    this.update({ phase: 'idle', retainedCaptions, message: unresolved.length ? 'Call closed. Unconfirmed captions are kept in this chat on this device.' : 'Call saved. You can start another when ready.', unsaved: 0 });
     return true;
   }
   end = async () => {
@@ -349,7 +376,11 @@ export class VoiceController {
     if (active(this.view)) return;
     try {
       if (!this.journal) { this.update({ phase: 'idle', message: 'Audio is off. You can start a call when ready.' }); return; }
-      if (this.journal && !this.journal.attempt) { const result = await request<{ attempt: VoiceAttempt | null }>(`assistant/voice/recover/${this.journal.start.requestId}`); if (result.attempt) this.journal.attempt = result.attempt; else { this.journal = undefined; localStorage.removeItem(this.journalKey); this.update({ phase: 'idle', message: 'No admitted voice call was found. Audio is off.' }); return; } }
+      if (this.journal && !this.journal.attempt) { const result = await request<{ attempt: VoiceAttempt | null }>(`assistant/voice/recover/${this.journal.start.requestId}`); if (result.attempt) this.journal.attempt = result.attempt; else {
+        if (this.view.retainedCaptions?.length) { if (!saveLocal(this.journalKey, { retainedCaptions: this.view.retainedCaptions })) throw new Error('Free browser storage before closing the original call.'); }
+        else localStorage.removeItem(this.journalKey);
+        this.journal = undefined; this.update({ phase: 'idle', message: 'No admitted voice call was found. Audio is off.' }); return;
+      } }
       await this.finishRemote();
       this.dismissSavedCall();
     } catch (error) { this.update({ message: error instanceof Error ? error.message : 'The original call could not be checked. Audio is off.' }); }

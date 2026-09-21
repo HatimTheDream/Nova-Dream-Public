@@ -10,7 +10,7 @@ export function pendingVoiceTurns(voice: ReturnType<VoiceController['getSnapshot
   return voice.turns.filter(turn => turn.text.trim() && !saved.has(`${turn.role}:voice:${attempt.id}:${turn.turnId}`));
 }
 
-export type TranscriptMessage = ConversationMessage & { voiceParts?: TranscriptMessage[]; pendingVoice?: boolean; streaming?: boolean; unconfirmed?: boolean };
+export type TranscriptMessage = ConversationMessage & { voiceParts?: TranscriptMessage[]; pendingVoice?: boolean; streaming?: boolean; unconfirmed?: boolean; retainedVoice?: boolean };
 const callIdentity = (message: ConversationMessage) => /^voice:([a-f0-9-]{36}):[A-Za-z0-9_-]+$/.exec(message.id)?.[1];
 export const transcriptParts = (message: TranscriptMessage) => message.voiceParts ?? [message];
 export const transcriptText = (message: TranscriptMessage) => transcriptParts(message).map(part => part.authoredText ?? part.text).join(' ');
@@ -24,7 +24,7 @@ export function groupVoiceMessages(messages: TranscriptMessage[]): TranscriptMes
     const previous = rows.at(-1), call = callIdentity(message);
     const joinable = message.role === 'user' && call && message.text.trim() && !message.attachments.length && !message.toolInfo;
     if (joinable && previous?.role === 'user' && callIdentity(previous) === call && previous.text.trim() && !previous.attachments.length && !previous.toolInfo) {
-      rows[rows.length - 1] = { ...previous, voiceParts: [...transcriptParts(previous), ...transcriptParts(message)], streaming: !!previous.streaming || !!message.streaming, unconfirmed: previous.unconfirmed || message.unconfirmed };
+      rows[rows.length - 1] = { ...previous, voiceParts: [...transcriptParts(previous), ...transcriptParts(message)], streaming: !!previous.streaming || !!message.streaming, unconfirmed: previous.unconfirmed || message.unconfirmed, retainedVoice: previous.retainedVoice || message.retainedVoice };
     } else rows.push(message);
   }
   return rows;
@@ -33,6 +33,45 @@ export function groupVoiceMessages(messages: TranscriptMessage[]): TranscriptMes
 /** Include pending captions in the same rows as history so a save acknowledgement
  * never splits a live bubble into one saved half and one pending half. */
 export function voiceHistoryMessages(voice: ReturnType<VoiceController['getSnapshot']>, conversation?: Conversation, history?: ConversationHistory): TranscriptMessage[] {
+  let rows = liveVoiceHistoryMessages(voice, conversation, history);
+  if (!conversation || history?.hasNewer) return rows;
+  for (const call of voice.retainedCaptions ?? []) {
+    // Nova chat identity survives native continuation. Keep the original native
+    // identity for confirmation checks, without moving captions to another chat.
+    if (call.conversationId !== conversation.id) continue;
+    const identity = (role: string, id: string) => `${role}:${id}`;
+    const turnIdentity = (turn: { role: string; turnId: string }) => identity(turn.role, `voice:${call.attemptId}:${turn.turnId}`);
+    const order = new Map(call.order.map((turn, index) => [turnIdentity(turn), index]));
+    const belongs = (message: ConversationMessage) => message.source ? message.source.nativeId === call.nativeId : history?.nativeId === call.nativeId;
+    const confirmed = new Set((history?.messages ?? []).filter(message => belongs(message) && message.text.trim())
+      .flatMap(message => [message.id, ...(message.aliases ?? []), ...(message.source?.nativeMessageId ? [message.source.nativeMessageId] : [])].map(id => identity(message.role, id))));
+    const pending: TranscriptMessage[] = call.turns.filter(turn => turn.text.trim() && !confirmed.has(turnIdentity(turn))).map(turn => ({
+      id: `voice:${call.attemptId}:${turn.turnId}`, role: turn.role, text: turn.text, textHash: '', attachments: [],
+      pendingVoice: true, streaming: false, unconfirmed: true, retainedVoice: true,
+    }));
+    if (!pending.length) continue;
+    const pendingIds = new Set(pending.map(message => identity(message.role, message.id)));
+    const merged: TranscriptMessage[] = [];
+    let next = 0;
+    for (const message of rows) {
+      const keys = [message.id, ...(message.aliases ?? []), ...(message.source?.nativeMessageId ? [message.source.nativeMessageId] : [])].map(id => identity(message.role, id));
+      const anchor = keys.map(key => order.get(key)).find(index => index !== undefined);
+      const laterCall = voice.attempt && voice.attempt.id !== call.attemptId
+        && keys.some(key => key.startsWith(`${message.role}:voice:${voice.attempt!.id}:`));
+      // A known call anchor is stronger than time. With no later call anchor,
+      // the close timestamp or a later admitted call supplies the boundary.
+      // Live captions have no server timestamp yet; call lifetime still proves
+      // they follow earlier closed reviews, even when neither has a saved row.
+      while (next < pending.length && (anchor !== undefined ? order.get(identity(pending[next].role, pending[next].id))! <= anchor
+        : laterCall || !!message.createdAt && Date.parse(message.createdAt) > call.closedAt)) merged.push(pending[next++]);
+      if (!keys.some(key => pendingIds.has(key))) merged.push(message);
+    }
+    rows = [...merged, ...pending.slice(next)];
+  }
+  return rows;
+}
+
+function liveVoiceHistoryMessages(voice: ReturnType<VoiceController['getSnapshot']>, conversation?: Conversation, history?: ConversationHistory): TranscriptMessage[] {
   const messages = history?.messages ?? [];
   const turns = history?.hasNewer ? [] : pendingVoiceTurns(voice, conversation, history);
   if (!turns.length) return [...messages];

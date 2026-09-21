@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { chatGptAccountPluginId, chatGptAccountRuntimeVersion, chatGptAccountSnapshotSchema, chatGptProfileIdSchema, emptyChatGptUsage } from '../../../packages/domain/chatgpt-accounts.js';
+import { chatGptAccountPluginId, chatGptAccountRuntimeVersion, chatGptAccountSnapshotSchema, chatGptProfileIdSchema, chatGptUsageFreshMs, emptyChatGptUsage } from '../../../packages/domain/chatgpt-accounts.js';
 import type { ChatGptAccountUsage } from '../../../packages/domain/sign-in.js';
 
 type Credential = { provider: string; type: string; access?: string; accountId?: string; email?: string; expires?: number };
@@ -90,7 +90,7 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
             if (!checkIdentity()) return emptyChatGptUsage();
             cache.set(cacheId, value); return value;
           };
-          if (!input.refresh && previous && (previous.checkedAt ?? 0) + 30000 > observedAt) usage = previous;
+          if (!input.refresh && previous && (previous.checkedAt ?? 0) + chatGptUsageFreshMs > observedAt) usage = previous;
           else if (input.includeUsage !== false && index < 10 && health !== 'reconnect') {
             let pending = flights.get(cacheId);
             if (!pending) { pending = refresh(); flights.set(cacheId, pending); void pending.finally(() => { if (flights.get(cacheId) === pending) flights.delete(cacheId); }).catch(() => undefined); }

@@ -8,9 +8,13 @@ In Settings → Assistant → ChatGPT Accounts, choose **Add Account** for anoth
 
 Settings → Usage shows each account's own reported allowance and reset time. Unknown usage stays unknown. A failed refresh keeps the previous reading labelled as last known. Duplicate connections to the same identity share an allowance and are not independent backups.
 
+A known exhausted allowance remains unavailable for new requests until its reported reset, even when the reading becomes stale. If no reset was reported, that decision expires 30 seconds after the last successful reading; a failed refresh does not renew it.
+
 Before starting a new reply, Nova selects a ready account using the preference, current cooldowns and available usage readings. The conversation and its context stay intact. Account order cannot change during unsettled work or an active call. An uncertain request is kept for reconciliation; Nova never resends it automatically through another account.
 
 Realtime audio follows the host's shared account order. The per-chat preference selects the backing text brain. Mid-call account switching is not supported; end and reconnect the call when necessary. Saved captions remain in the conversation.
+
+If a final transcription is missing or empty, visible words remain marked **Unconfirmed Transcription · Kept On This Device** after closing the call. They survive reloads and later calls in this browser, including resuming the same Nova chat with another Assistant connection. These review captions are not confirmed server history and do not sync to other devices. If browser storage cannot retain them, Nova keeps the original call available instead of clearing it.
 
 ## Saved History And Recovery
 

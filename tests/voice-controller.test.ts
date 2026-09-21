@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { VoiceController } from '../apps/client/src/voice-controller.js';
 import type { Conversation } from '../packages/domain/assistant.js';
 import { liveTurnDetection } from '../packages/adapters/voice-transcript.js';
+import { voiceHistoryMessages } from '../apps/client/src/voice-transcript.js';
 
 function memoryStorage(t: TestContext) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -195,13 +196,14 @@ function hangupFixture(t: TestContext, options: { caption?: boolean; partial?: b
   const entry = { entryId: 'spoken-turn', ordinal: 0, role: 'user', text: 'Keep these spoken words', timestamp: 1, saved: false };
   const turn = { attemptId: 'attempt', turnId: entry.entryId, role: 'user', text: entry.text, original: entry.text, final: !options.partial, edited: false, sequence: 1, seen: [] };
   internal.view = { ...voice.getSnapshot(), phase: 'connected', turns: options.caption || options.partial || options.pendingFinal ? [turn] : [] };
-  internal.journal = { start: { epoch: 'epoch' }, attempt: { id: 'attempt', state: 'active', entries: [], consults: [] }, entries: options.caption ? [entry] : [], turns: [] };
+  const target = { conversation: { id: 'original-chat', nativeId: 'original-native' } };
+  internal.journal = { start: { epoch: 'epoch' }, attempt: { id: 'attempt', target, state: 'active', entries: [], consults: [] }, entries: options.caption ? [entry] : [], turns: [] };
   if (options.pendingFinal) internal.pendingFinals.set(turn.turnId, turn);
   const previous = globalThis.fetch;
   globalThis.fetch = async input => {
     const path = String(input); paths.push(path);
     if (options.networkFailure || options.unsavedRemote && path.endsWith('/finals')) throw new Error('Connection unavailable');
-    return new Response(JSON.stringify({ id: 'attempt', state: path.endsWith('/end') ? options.endState ?? 'ended' : 'active',
+    return new Response(JSON.stringify({ id: 'attempt', target, state: path.endsWith('/end') ? options.endState ?? 'ended' : 'active',
       entries: options.caption || options.unsavedRemote ? [{ ...entry, saved: !options.unsavedRemote }] : [], consults: [],
       message: options.unsavedRemote ? 'Captions still need saving.' : 'Call ended. Final captions are saved.' }), { headers: { 'Content-Type': 'application/json' } });
   };
@@ -262,6 +264,63 @@ for (const options of [{ partial: true }, { pendingFinal: true }]) test(`hangup 
   assert.equal(JSON.parse(f.stored()!).turns[0].text, 'Keep these spoken words'); assert.ok(f.internal.journal);
 });
 
+for (const options of [{ partial: true }, { pendingFinal: true }]) test(`closing a call retains ${options.partial ? 'provisional words' : 'a final without a commit'} across reload without sending them as confirmed`, async t => {
+  const f = hangupFixture(t, options);
+  await f.voice.end(); await f.voice.recover();
+  assert.equal(f.voice.getSnapshot().phase, 'idle'); assert.equal(f.internal.journal, undefined);
+  assert.doesNotMatch(f.voice.getSnapshot().message, /Call saved/);
+  const stored = JSON.parse(f.stored()!);
+  assert.equal(stored.start, undefined); assert.equal(stored.retainedCaptions.length, 1);
+  const restored = new VoiceController('hangup-fixture');
+  assert.equal(restored.getSnapshot().phase, 'idle');
+  const chat = { id: 'original-chat', nativeId: 'original-native' } as Conversation;
+  const rows = voiceHistoryMessages(restored.getSnapshot(), chat);
+  assert.equal(rows.length, 1); assert.equal(rows[0].text, 'Keep these spoken words');
+  assert.equal(rows[0].unconfirmed, true); assert.equal(rows[0].retainedVoice, true); assert.equal(rows[0].streaming, false);
+  assert.deepEqual(f.paths, ['/api/assistant/voice/end', '/api/assistant/voice/end']);
+  await restored.recover();
+  assert.equal(JSON.parse(f.stored()!).retainedCaptions.length, 1, 'repeated Close cannot duplicate retained calls');
+});
+
+test('a failed review-copy write leaves the original call and words recoverable', async t => {
+  const f = hangupFixture(t, { partial: true }); await f.voice.end();
+  const kept = f.stored(), storage = localStorage, previous = storage.setItem;
+  storage.setItem = () => { throw new Error('QuotaExceededError'); };
+  t.after(() => { storage.setItem = previous; });
+  await f.voice.recover();
+  assert.equal(f.voice.getSnapshot().phase, 'ended'); assert.ok(f.internal.journal);
+  assert.equal(f.stored(), kept); assert.match(f.voice.getSnapshot().message, /storage/);
+  assert.equal(new VoiceController('hangup-fixture').getSnapshot().turns[0].text, 'Keep these spoken words');
+});
+
+test('starting and closing a later call preserves earlier review captions without submitting them', async t => {
+  const f = hangupFixture(t, { partial: true }); await f.voice.end(); await f.voice.recover();
+  const restored = new VoiceController('hangup-fixture');
+  const replaced: [object, string, PropertyDescriptor | undefined][] = [];
+  const replace = (object: object, key: string, value: unknown) => { replaced.push([object, key, Object.getOwnPropertyDescriptor(object, key)]); Object.defineProperty(object, key, { configurable: true, value }); };
+  t.after(() => { for (const [object, key, descriptor] of replaced) { if (descriptor) Object.defineProperty(object, key, descriptor); else Reflect.deleteProperty(object, key); } });
+  replace(navigator, 'mediaDevices', { getUserMedia: async () => ({ getTracks: () => [], getAudioTracks: () => [] }) });
+  replace(globalThis, 'RTCPeerConnection', class {});
+  replace(globalThis, 'AudioContext', class { resume() { return Promise.resolve(); } close() { return Promise.resolve(); } addEventListener() {} removeEventListener() {} });
+  replace(globalThis, 'requestAnimationFrame', () => 1); replace(globalThis, 'cancelAnimationFrame', () => {});
+  const requests: string[] = [];
+  globalThis.fetch = async input => {
+    const path = String(input); requests.push(path);
+    assert.ok(path.endsWith('/start') || path.endsWith('/end'), 'review words never become confirmed finals');
+    return Response.json({ id: 'next-attempt', state: 'failed', message: 'Synthetic setup rejected.', entries: [], consults: [], target: { conversation: { id: 'later-chat', nativeId: 'later-native' } } });
+  };
+  await restored.start({ id: 'later-chat', revision: 1 } as Conversation, 'epoch', 0);
+  assert.deepEqual(requests, ['/api/assistant/voice/start', '/api/assistant/voice/end']);
+  assert.equal(JSON.parse(f.stored()!).start.conversationId, 'later-chat');
+  assert.equal(JSON.parse(f.stored()!).retainedCaptions[0].turns[0].text, 'Keep these spoken words');
+  assert.equal(voiceHistoryMessages(restored.getSnapshot(), { id: 'later-chat', nativeId: 'later-native' } as Conversation).length, 0);
+  await restored.recover();
+  const again = new VoiceController('hangup-fixture');
+  assert.equal(again.getSnapshot().phase, 'idle');
+  assert.equal(voiceHistoryMessages(again.getSnapshot(), { id: 'original-chat', nativeId: 'original-native' } as Conversation)[0].text, 'Keep these spoken words');
+  assert.equal(again.getSnapshot().retainedCaptions?.length, 1, 'a later call without unresolved words adds no retained data');
+});
+
 test('an error remains visible even when its remote cleanup succeeds', async t => {
   const f = hangupFixture(t); await f.internal.fail('Microphone disconnected.');
   assert.equal(f.voice.getSnapshot().phase, 'error'); assert.ok(f.internal.journal); assert.ok(f.stored());
@@ -294,7 +353,7 @@ test('continuous speech survives interleaved replies, out-of-order finals, a bla
   const previous = globalThis.fetch;
   t.after(() => { globalThis.fetch = previous; });
   const voice = new VoiceController('continuous-fixture'), internal = voice as any;
-  const remote: any = { id: 'fixture', state: 'active', entries: [], consults: [] };
+  const remote: any = { id: 'fixture', target: { conversation: { id: 'chat', nativeId: 'native' } }, state: 'active', entries: [], consults: [] };
   const native: string[] = [];
   globalThis.fetch = async (input, options) => {
     const body = JSON.parse(String(options?.body));
@@ -336,6 +395,13 @@ test('continuous speech survives interleaved replies, out-of-order finals, a bla
   assert.equal(voice.getSnapshot().phase, 'ended');
   assert.match(voice.getSnapshot().message, /unconfirmed/);
   assert.match(localStorage.getItem('e3:voice-call:continuous-fixture')!, /Still talking/);
+  await voice.recover();
+  const restored = new VoiceController('continuous-fixture');
+  assert.equal(restored.getSnapshot().phase, 'idle');
+  assert.equal(restored.getSnapshot().retainedCaptions?.[0].turns.length, 1, 'only unresolved words grow the retained journal');
+  const review = restored.getSnapshot().retainedCaptions![0].turns[0];
+  assert.equal(review.text, 'Still talking'); assert.equal(review.original, ''); assert.equal(review.unconfirmed, true);
+  assert.deepEqual(native, ['First thought.', 'First reply', 'Third thought.', 'Third reply'], 'Close never promotes an empty provider final to confirmed speech');
 });
 
 test('finals arriving during an in-flight save are flushed before hangup closes the original call', async t => {

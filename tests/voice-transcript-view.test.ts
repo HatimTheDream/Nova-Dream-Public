@@ -110,3 +110,76 @@ test('an unconfirmed final keeps its words and review flag without pretending to
   assert.equal(row.streaming, false);
   assert.equal(row.voiceParts![1].unconfirmed, true);
 });
+
+function retainedCall() {
+  const messages = [message('before', 'First reply', 'assistant'), message('uncertain', 'Words still needing review'), message('after', 'Following reply', 'assistant')];
+  const { chat, voice, history } = callView(messages);
+  voice.retainedCaptions = [{ attemptId: call, conversationId: chat.id, nativeId: chat.nativeId, closedAt: 1000,
+    order: voice.turns.map(({ turnId, role }: any) => ({ turnId, role })),
+    turns: [{ ...voice.turns[1], original: '', unconfirmed: true }],
+  }];
+  voice.attempt = undefined; voice.turns = [];
+  history.messages = [messages[0], messages[2]];
+  return { chat, voice, history, messages };
+}
+
+test('retained review captions stay between their call anchors and ahead of later calls', () => {
+  const { chat, voice, history, messages } = retainedCall();
+  const later = { ...message('later', 'A later call.', 'user', '00000000-0000-4000-8000-000000000002'), createdAt: new Date(2000).toISOString() };
+  history.messages.push(later);
+  const before = structuredClone({ voice, history });
+  const rows = voiceHistoryMessages(voice, chat, history);
+  assert.deepEqual(rows.map(row => row.id), [...messages, later].map(row => row.id));
+  assert.equal(rows[1].unconfirmed, true); assert.equal(rows[1].streaming, false); assert.equal(rows[1].retainedVoice, true);
+  assert.deepEqual({ voice, history }, before);
+  history.messages = [later];
+  assert.deepEqual(voiceHistoryMessages(voice, chat, history).map(row => row.id), [messages[1].id, later.id], 'the close time places an otherwise unanchored review before later history');
+});
+
+test('review captions survive account-neutral native continuation but cannot cross Nova chats', () => {
+  const { chat, voice, history, messages } = retainedCall();
+  const source = (nativeMessageId: string) => ({ bindingId: 'old-binding', nativeId: chat.nativeId, nativeKey: 'old-key', connectionGeneration: 'old', nativeMessageId, kind: 'voice' as const, observedAt: new Date(900).toISOString() });
+  history.messages = history.messages.map((row: TranscriptMessage, index: number) => ({ ...row, id: `nova-${index}`, aliases: [row.id], source: source(row.id) }));
+  history.nativeId = 'resumed-native';
+  const continued = { ...chat, nativeId: 'resumed-native' };
+  const rows = voiceHistoryMessages(voice, continued, history);
+  assert.deepEqual(rows.map(row => row.id), ['nova-0', messages[1].id, 'nova-1'], 'native aliases retain original call order');
+  assert.deepEqual(voiceHistoryMessages(voice, { ...continued, id: 'other-chat' }, { ...history, messages: [] }), []);
+  history.messages.splice(1, 0, { ...messages[1], id: 'confirmed-nova', text: 'Exact eventual final.', aliases: [messages[1].id], source: source(messages[1].id) });
+  const confirmed = voiceHistoryMessages(voice, continued, history);
+  assert.equal(confirmed.length, 3); assert.equal(confirmed[1].id, 'confirmed-nova');
+  assert.equal(confirmed[1].unconfirmed, undefined, 'only exact source identity yields to a confirmed archive row');
+});
+
+test('a blank archive entry does not hide retained words or duplicate the live review row', () => {
+  const { chat, voice, history, messages } = retainedCall();
+  history.messages.splice(1, 0, { ...messages[1], text: '' });
+  voice.attempt = { id: call, target: { conversation: chat }, entries: [] };
+  voice.turns = [{ turnId: 'uncertain', role: 'user', text: messages[1].text, final: false, unconfirmed: true }];
+  const rows = voiceHistoryMessages(voice, chat, history);
+  assert.equal(rows.length, 3); assert.equal(rows[1].id, messages[1].id);
+  assert.equal(rows[1].text, messages[1].text); assert.equal(rows[1].unconfirmed, true); assert.equal(rows[1].streaming, false);
+});
+
+test('a later active call leaves prior review captions readable and never merges calls', () => {
+  const { chat, voice, history, messages } = retainedCall();
+  const laterCall = '00000000-0000-4000-8000-000000000002';
+  voice.attempt = { id: laterCall, target: { conversation: chat }, entries: [] };
+  voice.turns = [{ turnId: 'new', role: 'user', text: 'New call words.', final: false }];
+  const rows = groupVoiceMessages(voiceHistoryMessages(voice, chat, history));
+  assert.deepEqual(rows.map(row => row.id), [...messages.map(row => row.id), `voice:${laterCall}:new`]);
+  assert.equal(rows[1].retainedVoice, true); assert.equal(rows[3].streaming, true);
+  history.hasNewer = true;
+  assert.deepEqual(voiceHistoryMessages(voice, chat, history), history.messages, 'earlier pages do not append current or retained call tails');
+});
+
+test('an unanchored closed review precedes a later live call even before either has saved history', () => {
+  const { chat, voice, history, messages } = retainedCall();
+  history.messages = [];
+  const laterCall = '00000000-0000-4000-8000-000000000002';
+  voice.attempt = { id: laterCall, target: { conversation: chat }, entries: [] };
+  voice.turns = [{ turnId: 'new', role: 'user', text: 'New call words.', final: false }];
+  const rows = voiceHistoryMessages(voice, chat, history);
+  assert.deepEqual(rows.map(row => row.id), [messages[1].id, `voice:${laterCall}:new`]);
+  assert.equal(rows[0].retainedVoice, true); assert.equal(rows[1].streaming, true);
+});
