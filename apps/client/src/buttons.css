@@ -70,11 +70,11 @@
 :root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 .home-page .home-link-list a:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 /* The logo and module tiles share one square geometry at every viewport. */
-:root { --app-tile-size:60px; --app-tile-radius:24%; --app-tile-corner:round; }
+:root { --app-tile-size:44px; --app-rail-width:calc(var(--app-tile-size) + 16px); --app-module-glyph-size:24px; --app-tile-radius:24%; --app-tile-corner:round; }
 @supports(corner-shape:squircle) {
   :root { --app-tile-radius:50%; --app-tile-corner:squircle; }
 }
-:root .app-shell > nav.primary-rail { width:76px; min-width:76px; padding-inline:7px; }
+:root .app-shell > nav.primary-rail { width:var(--app-rail-width); min-width:var(--app-rail-width); padding-inline:7px; }
 :root .primary-rail .rail-modules,:root .primary-rail .rail-footer { padding-inline:0; }
 :root .primary-rail .nav-item {
   --button-radius:var(--app-tile-radius); corner-shape:var(--app-tile-corner);
@@ -82,6 +82,7 @@
   height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
   padding:0; flex:none;
 }
+:root .primary-rail .nav-icon .e3-icon svg { width:100%; height:100%; }
 /* Let the title yield before the topbar actions are clipped on narrow screens. */
 :root .topbar { flex-wrap:wrap; }
 :root .topbar-leading { flex:1 1 120px; min-width:0; }

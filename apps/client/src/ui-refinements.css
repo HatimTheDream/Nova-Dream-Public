@@ -195,8 +195,8 @@
 :root .app-shell > .workspace { grid-area:2 / 2; min-width:0; min-height:0; }
 :root .app-shell > .topbar .topbar-leading { flex:1; min-width:0; }
 :root .app-shell > .topbar .breadcrumb { flex:1; min-width:0; }
-:root .app-shell > .topbar .icon-button { width:44px; min-width:44px; min-height:44px; height:44px; }
-.primary-rail .nav-popover { inset-inline-start:84px; width:min(255px,calc(100vw - 92px)); max-height:calc(100dvh - 128px); overflow-y:auto; }
+:root .app-shell > .topbar .icon-button { width:var(--app-tile-size); min-width:var(--app-tile-size); min-height:var(--app-tile-size); height:var(--app-tile-size); }
+.primary-rail .nav-popover { inset-inline-start:calc(var(--app-rail-width) + 8px); width:min(255px,calc(100vw - var(--app-rail-width) - 16px)); max-height:calc(100dvh - 128px); overflow-y:auto; }
 :root .search-results .search-result { justify-content:flex-start; align-items:flex-start; text-align:start; }
 :root .search-result > .e3-icon { flex:none; margin-top:2px; }
 :root .search-result > span:not(.e3-icon) { flex:1; min-width:0; overflow-wrap:anywhere; }

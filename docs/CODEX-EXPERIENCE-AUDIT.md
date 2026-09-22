@@ -1,6 +1,6 @@
 # Assistant experience: Codex reference audit
 
-Reviewed 22 September 2026 against the **1.9.8 UI / build 1.0.196**, carried forward through **1.9.9 request efficiency** into the local **1.9.11 header and docked-navigation candidate / build 1.0.199**; earlier evidence is retained below. The candidate is local and unpushed; last observed live Nova remains **1.9.6**. This is a reference and source audit, not a declaration of full parity or live deployment.
+Reviewed 22 September 2026 against the **1.9.8 UI / build 1.0.196**, carried forward through **1.9.9 request efficiency** and **1.9.11 header and docked navigation** into the local **1.9.13 compact-navigation candidate**; earlier evidence is retained below. Both independent 1.9.13 candidates passed their local full quality gates and exact artifact comparison. Source publication and hosted acceptance are recorded separately; the last live version observed during this audit was **1.9.6**. This is a reference and source audit, not a declaration of full parity or live deployment.
 
 ## Evidence and limits
 
@@ -102,6 +102,10 @@ Source paths below are relative to the application root. Ratings apply to the sp
 | Voice | Orange acceptance | Dictation and live voice are separate; interruption and retained captions exist. The native pass observed settings and an incidental start-timeout error, not an active call. | Test actual hardware, interruption, target continuity and reconnect. Do not treat the incidental native failure as a controlled voice comparison. Screen/camera input is not supplied by the audio-only path. [Reference](https://learn.chatgpt.com/docs/features/voice). |
 | Touch/keyboard | Orange completeness | Work disclosure and inspected composer controls meet 44px targets in phone emulation. At 390px and 320px, model controls and bounded long drafts remain reachable without horizontal overflow. Some workspace close/header controls have smaller source dimensions. | Verify physical-phone input, remaining essential targets, focus return and Escape. Add essential shortcuts, not a second navigation system. |
 | Export/share | Orange | Copy loaded messages and specific exports exist; no accepted full share-snapshot journey. | Name scope accurately; keep full transcript export discoverable and define audience/version semantics before adding Share. |
+
+## 1.9.13 consistent compact navigation
+
+The approved configuration uses matching 44 px mascot, module and header buttons on mobile and desktop, a 60 px docked rail, and 24 px module glyphs. Shared size tokens keep these surfaces aligned; navigation options follow the rail's width. The mascot remains in the header with the sidebar shown or hidden, and the workspace continues to resize beside ordinary navigation. This is an explicit Nova design choice. Release-specific visual and live verification remain separate from this source assessment.
 
 ## 1.9.11 header and docked navigation
 

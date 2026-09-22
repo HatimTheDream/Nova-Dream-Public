@@ -1,3 +1,8 @@
+## [1.9.13] — 2026-09-22
+
+- Use matching 44 px mascot, module and header buttons on mobile and desktop, with a 60 px docked rail and clear 24 px module icons.
+- Keep navigation options aligned beside the compact rail while preserving the persistent header, saved sidebar visibility and working drafts.
+
 ## [1.9.12] — 2026-09-22
 
 - Match the persistent header mascot to the square module buttons at every screen size.
