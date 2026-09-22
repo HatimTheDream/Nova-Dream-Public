@@ -1,0 +1,20 @@
+.message-queue { min-width:0; padding-bottom:8px; }
+.message-queue .queue-entry { margin:0; padding:8px 0 12px; border:0; border-top:1px solid var(--line); border-radius:0; background:transparent; }
+.queue-entry-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; }
+.queue-entry-status { color:var(--muted); font-size:12px; font-weight:500; }
+.queue-entry-actions { display:flex; align-items:center; gap:2px; }
+.queue-entry-note,.queue-entry-context { color:var(--muted); font-size:12px; line-height:1.6; margin:0 0 8px; }
+.queue-entry-context { margin:6px 10px; overflow-wrap:anywhere; }
+.queue-entry-writing>p { margin:0; color:var(--text); font-size:13px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.queue-entry-files { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:8px; }
+.queue-entry-files>a.source-link { min-height:44px; display:inline-flex; align-items:center; padding:0; font-size:12px; overflow-wrap:anywhere; }
+:root .message-queue button.queue-entry-action,:root .queue-entry-more>button.composer-control-button { --button-depth:0px; --button-shadow-depth:0px; --button-fill:transparent; --button-border:transparent; min-height:44px; padding:5px 8px; border:0; border-radius:8px; background:transparent; box-shadow:none; color:var(--muted); font-size:12px; font-weight:400; text-transform:none; }
+:root .queue-entry-more>button.composer-control-button { width:44px; min-width:44px; height:44px; padding:0; }
+:root .message-queue button.queue-entry-action:hover:not(:disabled),:root .queue-entry-more>button.composer-control-button:hover:not(:disabled) { background:var(--raised); border-color:transparent; box-shadow:none; color:var(--text); }
+:root .message-queue button.queue-entry-expand { margin:2px 0 0; padding-inline:0; }
+:root .queue-entry-menu>button[role=menuitem] { --button-depth:0px; --button-shadow-depth:0px; display:flex; justify-content:flex-start; width:100%; min-height:44px; padding:9px 10px; border:0; border-radius:8px; background:transparent; box-shadow:none; color:var(--text); font-size:13px; font-weight:400; text-transform:none; }
+:root .queue-entry-menu>button[role=menuitem]:hover:not(:disabled) { background:var(--raised); border-color:transparent; box-shadow:none; }
+.queue-earlier>summary { min-height:44px; align-content:center; color:var(--muted); font-size:12px; cursor:pointer; }
+.message-queue .queue-entry>form { margin-top:4px; }
+.message-queue .queue-entry>form>textarea { width:100%; min-height:88px; }
+.message-queue .queue-entry>form>.button-row { margin-top:8px; }

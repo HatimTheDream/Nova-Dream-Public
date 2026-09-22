@@ -859,12 +859,56 @@ test('tool progress survives completion, late results, native history and restar
   const running = f.service.operations().find(o => o.id === op.id)!;
   const emit = (seq: number, stream: string, data: unknown) => f.gateway.emit({ runId: running.nativeRunId, sessionKey: f.conversation.nativeKey, seq, stream, data });
   emit(1, 'tool', { phase: 'start', toolCallId: 'read-one', name: 'read' }); await tick(); assert.equal(f.service.operations()[0].tools?.[0].state, 'running');
+  assert.equal(f.service.operations()[0].settledAt, undefined);
   emit(3, 'lifecycle', { phase: 'end' }); await tick(); assert.equal(f.service.operations()[0].state, 'completed'); assert.equal(f.service.operations()[0].tools?.[0].state, 'unknown');
+  const settledAt = f.service.operations()[0].settledAt;
+  assert.equal(typeof settledAt, 'string');
   emit(2, 'tool', { phase: 'result', toolCallId: 'read-one', name: 'read', isError: false, output: 'Exact fixture output' }); await tick();
   assert.equal(f.service.operations()[0].state, 'completed'); assert.equal(f.service.operations()[0].lastSequence, 3); assert.equal(f.service.operations()[0].tools?.[0].state, 'completed');
+  assert.equal(f.service.operations()[0].settledAt, settledAt); assert(f.service.operations()[0].updatedAt > settledAt!);
   f.gateway.messages = [{ role: 'toolResult', toolName: 'read', toolCallId: 'read-one', isError: false, content: [{ type: 'toolResult', text: 'Exact fixture output' }], __openclaw: { id: 'tool-result', runId: running.nativeRunId } }];
   const history = await f.service.history(f.conversation.id); assert.equal(history.messages[0].role, 'tool'); assert.equal(history.messages[0].toolInfo?.name, 'read'); assert.equal(history.messages[0].text, 'Exact fixture output'); assert.equal(f.service.operations()[0].tools?.[0].output, history.messages[0].text);
-  f.service.close(); const restarted = new AssistantService(f.store, f.gateway); try { assert.equal(restarted.operations()[0].tools?.[0].output, 'Exact fixture output'); } finally { restarted.close(); }
+  f.service.close(); const restarted = new AssistantService(f.store, f.gateway); try { assert.equal(restarted.operations()[0].tools?.[0].output, 'Exact fixture output'); assert.equal(restarted.operations()[0].settledAt, settledAt); } finally { restarted.close(); }
+}));
+
+test('saved tool observations preserve call details, unknown outcomes and exact run ownership', () => fixture(async f => {
+  const queued = queueDraft(f), op = f.service.runQueued(f.device, { requestId: randomUUID(), epoch: f.store.epoch, queueId: queued.id, expectedRevision: queued.revision }); await tick();
+  const running = f.service.operations().find(o => o.id === op.id)!;
+  const result = (id: string, content: string, extra: object = {}) => ({ role: 'toolResult', toolName: 'exec', toolCallId: id, content, __openclaw: { id: `result-${id}`, runId: running.nativeRunId }, ...extra });
+  f.gateway.messages = [
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'unconfirmed', name: 'exec', arguments: { command: 'git status --short', env: { TOKEN: 'do not retain' } } }], __openclaw: { id: 'call-message', runId: running.nativeRunId } },
+    result('unconfirmed', 'Unconfirmed result'),
+    result('blocked', 'Exec denied (SYSTEM_RUN_DENIED: approval requires a resolved executable): git status'),
+    result('different-run', 'Do not claim this result', { isError: false, __openclaw: { id: 'different-run-result', runId: 'another-run' } }),
+  ];
+  const history = await f.service.history(f.conversation.id), tools = f.service.operations().find(o => o.id === op.id)!.tools!;
+  assert.equal(history.messages[0].toolInfo?.entries?.[0].id, 'unconfirmed');
+  assert.equal(history.messages[1].toolInfo?.state, 'unknown'); assert.equal(history.messages[2].toolInfo?.state, 'blocked');
+  assert.equal(tools.find(tool => tool.id === 'unconfirmed')?.state, 'unknown');
+  assert.equal(tools.find(tool => tool.id === 'unconfirmed')?.input, 'git status --short');
+  assert.equal(tools.find(tool => tool.id === 'blocked')?.state, 'blocked');
+  assert.equal(tools.find(tool => tool.id === 'different-run'), undefined);
+  assert.doesNotMatch(JSON.stringify(history), /do not retain/); assert.equal(f.service.operations().find(o => o.id === op.id)!.settledAt, undefined);
+  f.gateway.emit({ runId: running.nativeRunId, sessionKey: running.nativeKey, seq: 1, stream: 'tool', data: { phase: 'result', name: 'exec', toolCallId: 'unconfirmed', isError: false, output: 'Confirmed output' } }); await tick();
+  const refreshed = await f.service.history(f.conversation.id);
+  const confirmed = f.service.operations().find(o => o.id === op.id)!.tools!.find(tool => tool.id === 'unconfirmed')!;
+  assert.equal(confirmed.state, 'completed', 'missing native outcome cannot erase an explicit result receipt');
+  assert.equal(confirmed.output, 'Confirmed output', 'the explicit outcome and output remain one receipt');
+  assert.equal(refreshed.messages.find(message => message.id === 'result-unconfirmed')?.text, 'Unconfirmed result', 'the different native observation remains separately inspectable');
+  assert.equal(refreshed.messages.find(message => message.id === 'result-unconfirmed')?.toolInfo?.state, 'unknown');
+  for (const [index, state] of ['failed', 'blocked'].entries()) {
+    const id = `confirmed-${state}`, output = `${state} receipt`;
+    f.gateway.emit({ runId: running.nativeRunId, sessionKey: running.nativeKey, seq: index + 2, stream: 'tool', data: { phase: 'result', toolCallId: id, name: 'exec', isError: true, ...(state === 'blocked' ? { code: 'SYSTEM_RUN_DENIED' } : {}), output } }); await tick();
+    f.gateway.messages.push(result(id, 'Weaker observation', { toolName: 'read' }));
+    const history = await f.service.history(f.conversation.id), receipt = f.service.operations().find(o => o.id === op.id)!.tools!.find(tool => tool.id === id)!;
+    assert.deepEqual([receipt.state, receipt.name, receipt.output], [state, 'exec', output]);
+    const observation = history.messages.find(message => message.id === `result-${id}`)!;
+    assert.deepEqual([observation.toolInfo?.state, observation.toolInfo?.name, observation.text], ['unknown', 'read', 'Weaker observation']);
+  }
+  f.gateway.messages = [result('unconfirmed', 'Contradictory failure', { isError: true }), result('confirmed-failed', 'Contradictory success', { isError: false })];
+  const conflicts = await f.service.history(f.conversation.id), receipts = f.service.operations().find(o => o.id === op.id)!.tools!;
+  assert.deepEqual(receipts.filter(tool => ['unconfirmed', 'confirmed-failed'].includes(tool.id)).map(tool => [tool.state, tool.output]), [['completed', 'Confirmed output'], ['failed', 'failed receipt']]);
+  assert.deepEqual(conflicts.messages.filter(message => ['result-unconfirmed', 'result-confirmed-failed'].includes(message.id)).map(message => [message.toolInfo?.state, message.text]), [['failed', 'Contradictory failure'], ['completed', 'Contradictory success']]);
 }));
 
 test('approval destination is prepared before dispatch and failure retains the unsent input', () => fixture(async f => {
@@ -1120,6 +1164,7 @@ test('resumed goals recover one exact native run after a lost acknowledgement an
   const first = f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: draft.id, draftRevision: saved.revision, projectRevision: 1 }); await tick();
   const source = f.service.operations().find(o => o.id === first.id)!;
   f.gateway.emit({ runId: source.nativeRunId, seq: 1, stream: 'lifecycle', data: { phase: 'end' } }); await tick();
+  assert.equal(typeof f.service.operations().find(o => o.id === first.id)!.settledAt, 'string');
   const goal = { id: randomUUID(), objective: 'Keep the captured project context.', status: 'paused', createdAt: 10000, pausedAt: 30000, updatedAt: 30000 }; let started = 0, lost = true;
   const nativeRequest = f.gateway.request.bind(f.gateway), receipts = new Set<string>();
   f.gateway.request = async <T>(method: string, params: any): Promise<T> => {
@@ -1137,6 +1182,7 @@ test('resumed goals recover one exact native run after a lost acknowledgement an
   await f.service.changeGoal(f.device, intent); const observedGoal = await f.service.goal(f.conversation.id);
   assert.equal(observedGoal.goal?.createdAt, 10000); assert.equal(observedGoal.goal?.updatedAt, 30000);
   assert.equal(started, 1); const runs = f.service.operations().filter(o => o.nativeRunId === 'exact-resumed-run'); assert.equal(runs.length, 1);
+  assert.equal(runs[0].settledAt, undefined, 'a new goal turn cannot inherit the prior turn duration');
   await f.service.cancel(f.device, { requestId: randomUUID(), epoch: f.store.epoch, operationId: runs[0].id });
   assert.equal(f.gateway.calls.find(c => c.method === 'chat.abort')!.params.runId, 'exact-resumed-run');
   await assert.rejects(f.service.changeGoal(f.device, { ...intent, requestId: randomUUID(), nativeId: randomUUID() }), /original chat/);

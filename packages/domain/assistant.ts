@@ -93,7 +93,7 @@ export type AssistantOperation = {
   nativeRunId: string | null; state: 'prepared' | 'dispatching' | 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown';
   input: string; context: ContextManifest; model: string | null; thinking: string | null;
   fastMode?: boolean | 'auto' | null;
-  createdAt: string; updatedAt: string; text: string; lastSequence: number; error?: string;
+  createdAt: string; updatedAt: string; settledAt?: string; text: string; lastSequence: number; error?: string;
   tools?: import('./tool-activity.js').ToolActivity[];
   cancelRequested?: boolean;
   steerTarget?: string;

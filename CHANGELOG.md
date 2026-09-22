@@ -1,3 +1,17 @@
+## [1.9.7] — 2026-09-21
+
+- Center Assistant replies and the composer in a tighter reading column, with quieter spacing around work activity.
+- Group a verified reply’s commentary and tool activity behind one elapsed-time disclosure: Working for while active, Worked for after completion, and clear stopped or unconfirmed states. Keep the final answer visible and preserve exact saved-message links.
+- Combine each identified tool call and result into one compact action with useful, bounded input details, Copy controls and expandable output. Distinguish blocked execution from errors and unknown outcomes without inventing success.
+- Keep elapsed time fixed after completion, refresh changed activity metadata, and preserve voice captions, attached files, search matches and uncertain-operation recovery.
+
+- Collapse adjacent successful actions into quiet summaries; keep blocked, failed, running and unconfirmed actions distinct, and reveal exact saved details for search.
+- Simplify queued messages and approval/question cards around clear primary actions with contextual secondary controls. Retain drafts through question expiry and move completed questions into request history.
+- Correct Markdown reply paragraphs that rendered smaller than the intended reading size, and preserve stronger tool-result evidence when later history is uncertain or contradictory.
+- Put saved input and output together in one Shell/Details surface with a full-value Copy action; remove excess depth from Assistant controls and keep the model discoverable on narrow composers. Voice remains in Add to message when space is tight.
+- Preserve tool-only completion timing, refresh identities from overlapping history, reconcile truncated/full action results, and avoid repeated tools around steering messages. Reopen collapsed details when navigating to a new saved search target.
+- Repair duplicated retry prompts when a native receipt arrives before its send acknowledgment. Preserve original records, files and message links, and restore the exact reading position when repaired history changes pagination.
+
 ## [1.9.6] — 2026-09-21
 
 - Simplify Assistant attachments, output actions and narrow conversation headers while preserving the compact effort slider. Clarify paused messages, plan steps, unconfirmed activity, Deleted conversations and voice-caption recovery.

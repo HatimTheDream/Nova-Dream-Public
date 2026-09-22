@@ -120,10 +120,11 @@ import assert from 'node:assert/strict';
 // 1.9.4 adds fresh draft-retention guards, explicit team readiness and keyboard
 // navigation recovery. Measured total 618,499 (+1,117 / 0.18% over 1.9.3).
 // Bound this reliability slice at 619 KB; keep startup and chunk ceilings.
-// 1.9.5 adds reachable Chat actions, complete branch navigation and shared file
-// readiness. Final measured total 619,412 (+913 / 0.15% over 1.9.4). Bound this slice
-// at 620 KB while preserving the startup and individual deferred-chunk limits.
-export const clientLimits = { startup: 180000, total: 620000, deferredChunk: 80000 };
+// 1.9.7 adds work grouping, elapsed status, shared action details and compact
+// queue/request controls. Final total: 626,186 gzip bytes; the measured repair added 427 bytes
+// for the retry receipt and reading-position repair. Bound this slice at 627 KB;
+// startup and individual deferred-chunk ceilings remain unchanged.
+export const clientLimits = { startup: 180000, total: 627000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

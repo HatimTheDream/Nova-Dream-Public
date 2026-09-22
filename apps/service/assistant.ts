@@ -292,7 +292,7 @@ export class AssistantService {
   private saveConversation(value: Conversation) { if (this.closed || this.removals.removed(value.id) || this.removals.pending(value.id)) return value; return this.store.internalWrite(conversationKey(value.id), { ...value, updatedAt: now() }); }
   private saveOperation(value: AssistantOperation) {
     if (this.closed || this.removals.removed(value.conversationId)) return value;
-    const current = this.store.internalRead<AssistantOperation>(operationKey(value.id));
+    const current = this.store.internalRead<AssistantOperation>(operationKey(value.id)), observedAt = now();
     if (current && terminal.has(current.state)) {
       // History, abort and terminal receipts can return after a newer event.
       // Once settled, the original outcome and output are safe to retain or
@@ -300,11 +300,15 @@ export class AssistantService {
       if (value.state !== current.state) return current;
       value = { ...value, text: current.text, error: current.error,
         effectiveModel: current.effectiveModel ?? value.effectiveModel,
-        nativeTurnId: current.nativeTurnId ?? value.nativeTurnId, updatedAt: current.updatedAt };
+        nativeTurnId: current.nativeTurnId ?? value.nativeTurnId, settledAt: current.settledAt ?? current.updatedAt, updatedAt: current.updatedAt };
     }
+    // Tool/history observations may arrive after settlement. Keep the first
+    // confirmed ending separate from this record's latest observation time.
+    if (terminal.has(value.state)) value = { ...value, settledAt: value.settledAt ?? observedAt };
+    else if (value.settledAt !== undefined) value = { ...value, settledAt: undefined };
     if (terminal.has(value.state) || value.state === 'unknown') value = { ...value, ...(value.tools ? { tools: value.tools.map(tool => tool.state === 'running' ? { ...tool, state: 'unknown' as const } : tool) } : {}) };
     if (current && terminal.has(current.state) && canonical(value) === canonical(current)) return current;
-    const saved = this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: now() });
+    const saved = this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: observedAt });
     const conversation = this.store.internalRead<Conversation>(conversationKey(value.conversationId));
     if (conversation && !conversation.deleted && this.savedHistory().observeOperation(conversation, saved)) this.historyVersions[value.conversationId] = (this.historyVersions[value.conversationId] ?? 0) + 1;
     return saved;
@@ -529,14 +533,27 @@ export class AssistantService {
     this.assertConnection(conversation, false);
     if (!options.readOnly && !conversation.nativeId) conversation = this.saveConversation({ ...conversation, nativeId, state: 'ready', error: undefined });
     let messages: ConversationMessage[] = (Array.isArray(result.messages) ? result.messages : []).map((raw: any, index: number) => {
-      const message = object(raw), meta = object(message.__openclaw);
-      return { id: String(meta.id ?? message.id ?? `projection:${index}:${digest(message).slice(0, 16)}`), sequence: Number.isInteger(meta.seq) ? meta.seq : undefined, role: message.role === 'toolResult' ? 'tool' : ['user', 'assistant', 'system', 'tool'].includes(message.role) ? message.role : 'system', ...(historyToolInfo(message) ? { toolInfo: historyToolInfo(message) } : {}), text: textOf(message), textHash: digest(textOf(message)), createdAt: typeof message.timestamp === 'string' ? message.timestamp : undefined, runId: typeof meta.runId === 'string' ? meta.runId : typeof message.runId === 'string' ? message.runId : undefined, attachments: (Array.isArray(message.content) ? message.content : []).filter((part: any) => typeof part?.artifactId === 'string' && part.artifactId.length <= 2000).map((part: any) => ({ artifactId: part.artifactId, name: String(part.fileName ?? part.filename ?? part.alt ?? 'Generated output').slice(0, 150), ...(typeof part.mimeType === 'string' ? { mimeType: part.mimeType } : {}), ...(typeof part.type === 'string' ? { type: part.type } : {}), ...(Number.isSafeInteger(part.sizeBytes) && part.sizeBytes >= 0 ? { size: part.sizeBytes } : {}) })) };
+      const message = object(raw), meta = object(message.__openclaw), toolInfo = historyToolInfo(message);
+      return { id: String(meta.id ?? message.id ?? `projection:${index}:${digest(message).slice(0, 16)}`), sequence: Number.isInteger(meta.seq) ? meta.seq : undefined, role: message.role === 'toolResult' ? 'tool' : ['user', 'assistant', 'system', 'tool'].includes(message.role) ? message.role : 'system', ...(toolInfo ? { toolInfo } : {}), text: textOf(message), textHash: digest(textOf(message)), createdAt: typeof message.timestamp === 'string' ? message.timestamp : undefined, runId: typeof meta.runId === 'string' ? meta.runId : typeof message.runId === 'string' ? message.runId : undefined, attachments: (Array.isArray(message.content) ? message.content : []).filter((part: any) => typeof part?.artifactId === 'string' && part.artifactId.length <= 2000).map((part: any) => ({ artifactId: part.artifactId, name: String(part.fileName ?? part.filename ?? part.alt ?? 'Generated output').slice(0, 150), ...(typeof part.mimeType === 'string' ? { mimeType: part.mimeType } : {}), ...(typeof part.type === 'string' ? { type: part.type } : {}), ...(Number.isSafeInteger(part.sizeBytes) && part.sizeBytes >= 0 ? { size: part.sizeBytes } : {}) })) };
     });
     if (!options.readOnly) for (const operation of this.operations().filter(op => op.epoch === this.store.epoch && op.conversationId === id && op.nativeId === nativeId && op.connectionGeneration === conversation.connectionGeneration)) {
       let tools = operation.tools ?? [];
       for (const message of messages.filter(m => m.role === 'tool' && m.runId === operation.nativeRunId && m.toolInfo?.id)) {
-        const prior = tools.find(tool => tool.id === message.toolInfo!.id);
-        const tool = { ...prior, id: message.toolInfo!.id!, name: message.toolInfo!.name, sequence: prior?.sequence ?? 0, state: message.toolInfo!.state === 'failed' ? 'failed' as const : 'completed' as const, ...(message.text ? { output: message.text.slice(0, 16000), truncated: message.text.length > 16000 } : {}) };
+        const info = message.toolInfo!, prior = tools.find(tool => tool.id === info.id);
+        const calls = messages.filter(call => call.runId === operation.nativeRunId && call.toolInfo?.state === 'called').flatMap(call => call.toolInfo!.entries ?? []).filter(call => call.id === info.id && call.name === info.name);
+        const observedState = info.state === 'called' ? 'unknown' : info.state;
+        // An incomplete native projection is not stronger than an explicit
+        // settled tool receipt already captured for this exact run and call.
+        const keepConfirmed = prior && ['completed', 'failed', 'blocked'].includes(prior.state)
+          && (observedState === 'unknown' || prior.state !== observedState || prior.name !== info.name
+            || !!prior.output && !!message.text && prior.output !== message.text.slice(0, 16000));
+        const state = keepConfirmed ? prior.state : observedState;
+        // Preserve the receipt as a whole, not its state paired with unrelated
+        // weaker or contradictory text. That observation remains in native history
+        // above, where the client can show both pieces of evidence separately.
+        const tool = { ...prior, id: info.id!, name: keepConfirmed ? prior.name : info.name, sequence: prior?.sequence ?? 0, state,
+          ...(calls.length === 1 && calls[0].input && (!keepConfirmed || !prior.input && prior.name === info.name) ? { input: calls[0].input } : {}),
+          ...(!keepConfirmed && message.text ? { output: message.text.slice(0, 16000), truncated: message.text.length > 16000 } : {}) };
         tools = prior ? tools.map(item => item.id === tool.id ? tool : item) : [...tools, tool].slice(-100);
       }
       if (canonical(tools) !== canonical(operation.tools ?? [])) this.saveOperation({ ...operation, tools });

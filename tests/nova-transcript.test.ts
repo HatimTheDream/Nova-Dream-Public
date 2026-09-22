@@ -86,6 +86,49 @@ test('conflicting final observations preserve the original and retain the confli
   assert.equal(reading.messages[1].text, original.messages[1].text); assert.equal(reading.transcript.conflicts, 1); assert.equal(reading.transcript.complete, false);
   assert.equal(f.store.internalList<{ text: string }>('assistant:transcript:' + f.conversation.id + ':conflict:')[0].text, 'Different final');
 });
+
+test('a retry receipt arriving before its send acknowledgement heals the saved placeholder on read without losing originals or repeated messages', t => {
+  const f = fixture(t), device = f.store.session().deviceId;
+  const file = f.store.upload(device, randomUUID(), f.store.epoch, 'Retry source.txt', Buffer.from('Exact retry source').toString('base64'));
+  const operation: AssistantOperation = { id: randomUUID(), requestId: randomUUID(), deviceId: device, epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, connectionGeneration: f.conversation.connectionGeneration, nativeKey: f.conversation.nativeKey, nativeId: f.conversation.nativeId!, nativeRunId: null, state: 'prepared', input: 'Repeat this prompt', text: '', context: { project: null, attachments: [file], draftId: 'draft', draftRevision: 1, digest: digest('retry context') }, model: null, thinking: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastSequence: 0 };
+  const original: ConversationMessage = { id: 'earlier-user', operationId: 'earlier-operation', role: 'user', text: 'Earlier envelope', authoredText: operation.input, textHash: digest('Earlier envelope'), runId: 'earlier-run', attachments: [] };
+  f.archive.observe(f.conversation, { ...f.page(), messages: [original], hasMore: false });
+  f.archive.observeOperation(f.conversation, operation);
+  const placeholder = f.archive.all(f.conversation)!.messages.at(-1)!;
+  const native: ConversationMessage = { id: 'retry-native-user', role: 'user', text: 'Exact retry envelope', authoredText: operation.input, textHash: digest('Exact retry envelope'), runId: 'retry-run', attachments: [] };
+  f.archive.observe(f.conversation, { ...f.page(), messages: [original, native], activeRunIds: ['retry-run'], hasMore: false });
+  assert.equal(f.archive.all(f.conversation)!.messages.length, 3, 'before acknowledgement, matching wording is insufficient');
+  operation.nativeRunId = native.runId!; operation.state = 'accepted';
+  f.archive.observeOperation(f.conversation, operation);
+  f.archive.observe(f.conversation, { ...f.page(), messages: [original, { ...native, operationId: operation.id }], activeRunIds: ['retry-run'], hasMore: false });
+  const recordPrefix = `assistant:transcript:${f.conversation.id}:message:`;
+  const storedPlaceholder = f.store.internalList<{ key: string; message: ConversationMessage }>(recordPrefix).find(entry => entry.message.id === placeholder.id)!;
+  const restarted = new NovaTranscript(f.store), healed = restarted.all(f.conversation)!;
+  assert.deepEqual(healed.messages.map(message => message.id), [original.id, native.id]);
+  assert.equal(healed.messages[1].text, native.text); assert.equal(healed.messages[1].attachments[0].localFile?.id, file.id);
+  assert.equal(f.store.download(file.id).bytes.toString(), 'Exact retry source');
+  for (const oldId of [placeholder.id, placeholder.novaId!]) assert(restarted.read(f.conversation, { messageId: oldId })!.messages.some(message => message.id === native.id));
+  assert.deepEqual(f.store.internalRead(recordPrefix + storedPlaceholder.key), storedPlaceholder, 'the original operation record remains stored unchanged');
+  assert.equal(f.store.internalList(recordPrefix).length, 3, 'reading reconciliation does not erase the saved records');
+  const revision = healed.transcript.revision;
+  assert.equal(restarted.all(f.conversation)!.transcript.revision, revision, 'a repeated read does not rewrite the repair');
+  restarted.observeOperation(f.conversation, { ...operation, state: 'completed' });
+  restarted.observe(f.conversation, { ...f.page(), messages: [original, { ...native, operationId: operation.id }], hasMore: false });
+  assert.deepEqual(restarted.all(f.conversation)!.messages.map(message => message.id), [original.id, native.id], 'late operation and native updates cannot recreate the placeholder');
+});
+
+test('ambiguous or conflicting user receipts cannot retire a saved operation placeholder', async t => {
+  for (const scenario of ['two-native-users', 'different-operation', 'different-run'] as const) await t.test(scenario, t => {
+    const f = fixture(t), operation: AssistantOperation = { id: randomUUID(), requestId: randomUUID(), deviceId: f.store.session().deviceId, epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, connectionGeneration: f.conversation.connectionGeneration, nativeKey: f.conversation.nativeKey, nativeId: f.conversation.nativeId!, nativeRunId: null, state: 'prepared', input: 'Repeat this prompt', text: '', context: { project: null, attachments: [], draftId: 'draft', draftRevision: 1, digest: digest('context') }, model: null, thinking: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastSequence: 0 };
+    f.archive.observeOperation(f.conversation, operation);
+    const native: ConversationMessage = { id: 'native-user', role: 'user', text: operation.input, textHash: digest(operation.input), runId: scenario === 'different-run' ? 'different-run' : 'run', attachments: [] };
+    const receipts = scenario === 'two-native-users' ? [native, { ...native, id: 'another-native-user' }] : [native];
+    f.archive.observe(f.conversation, { ...f.page(), messages: receipts, hasMore: false });
+    operation.nativeRunId = 'run'; f.archive.observeOperation(f.conversation, operation);
+    f.archive.observe(f.conversation, { ...f.page(), messages: receipts.map(message => ({ ...message, operationId: scenario === 'different-operation' ? 'other-operation' : operation.id })), hasMore: false });
+    assert.equal(f.archive.all(f.conversation)!.messages.length, receipts.length + 1);
+  });
+});
 test('a new runtime binding preserves all previous messages and exact original source routes', t => {
   const f = fixture(t); f.archive.observe(f.conversation, { ...f.page(), messages: f.messages.slice(0, 2) }, { complete: true });
   const next = { ...f.conversation, connectionGeneration: randomUUID(), nativeKey: 'agent:main:e3:next', nativeId: randomUUID() };

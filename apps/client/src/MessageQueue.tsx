@@ -5,6 +5,9 @@ import type { QueuedMessage } from '../../../packages/domain/assistant';
 import type { AssistantController } from './useAssistant';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { formatSaved } from './ui';
+import { ComposerMenu } from './ComposerMenu';
+import { MoreHorizontal } from './icons';
+import './message-queue.css';
 
 export function messageQueueSummary(items: QueuedMessage[]) {
   const waiting = items.filter(item => item.state === 'paused');
@@ -18,6 +21,12 @@ export function MessageQueue({ controller, conversationId, epoch, blocked, copy 
   const [editing, setEditing] = useState<string | null>(null);
   const items = (controller.queue ?? []).filter(item => item.conversationId === conversationId);
   const paused = items.filter(item => item.state === 'paused');
+  const unsettled = items.filter(item => {
+    if (item.state !== 'submitted') return false;
+    const operation = controller.operations.find(op => op.id === item.operationId);
+    return !!operation && !['completed', 'failed', 'cancelled'].includes(operation.state);
+  });
+  const earlier = items.filter(item => item.state !== 'paused' && !unsettled.includes(item));
   const move = async (item: QueuedMessage, delta: number) => {
     const index = paused.findIndex(q => q.id === item.id), next = [...paused];
     if (index + delta < 0 || index + delta >= next.length || busy) return;
@@ -52,20 +61,42 @@ export function MessageQueue({ controller, conversationId, epoch, blocked, copy 
   };
   const card = (item: QueuedMessage) => {
     const operation = controller.operations.find(op => op.id === item.operationId);
-    return <article className="queued-message" key={item.id} aria-label={`Queued message: ${item.input.slice(0, 80) || 'Attachments'}`}>
-      <div className="section-heading"><strong>{item.state === 'paused' ? item.automatic ? 'Up next' : 'Paused' : item.state === 'removed' ? 'Kept aside' : operation?.state === 'unknown' ? 'Outcome unconfirmed' : operation?.state ?? 'Submission kept'}</strong><span className="metadata">{formatSaved(item.createdAt)}</span></div>
-      {editing === item.id ? <QueueEditor key={item.id} item={item} epoch={epoch} refresh={controller.refresh} close={() => setEditing(null)}/> : <p className="preserve-lines">{item.input || 'Attachment message'}</p>}
-      {item.autoError && <p className="field-error" role="status">{item.autoError}</p>}<p className="metadata">{item.context.project ? `${item.context.project.name} · ` : ''}{item.model ?? 'Default model'} · {item.context.attachments.length} {item.context.attachments.length === 1 ? 'file' : 'files'}</p>
-      {item.context.attachments.map(file => <a className="source-link" key={file.id} href={`/api/attachments/${file.id}`}>{file.name}</a>)}
-      <div className="queue-actions">
-        {item.state === 'paused' && <><button disabled={!!busy || !!editing || blocked || controller.connection.state !== 'ready'} onClick={() => void act(item, 'run')}>Run next</button><button disabled={!!busy || !!editing} onClick={async () => { if (!item.automatic || await act(item, 'paused')) setEditing(item.id); }}>Edit</button>{item.automatic && <button disabled={!!busy || !!editing} onClick={() => void act(item, 'paused')}>Pause</button>}<button disabled={!!busy || !!editing || paused[0]?.id === item.id} onClick={() => void move(item, -1)}>Move up</button><button disabled={!!busy || !!editing || paused.at(-1)?.id === item.id} onClick={() => void move(item, 1)}>Move down</button><button disabled={!!busy || !!editing} onClick={() => void act(item, 'removed')}>Remove</button></>}
-        {item.state === 'removed' && <button disabled={!!busy} onClick={() => void act(item, 'paused')}>Restore to queue</button>}
-        <button disabled={!!busy || controller.conversation?.archived} onClick={() => copy({ ...emptyDraft, text: item.input, workMode: item.context.workMode, attachments: item.context.attachments, projectId: item.context.project?.id ?? null, ...(item.context.refineSource ? { refineSource: item.context.refineSource } : {}) })}>Copy to draft</button>
-        {operation && !['completed', 'failed', 'cancelled'].includes(operation.state) && <button onClick={() => void controller.checkStatus()}>Check original run</button>}
-      </div>
+    const awaitingRun = unsettled.includes(item), waiting = item.state === 'paused';
+    const runAvailable = !blocked && controller.connection.state === 'ready' && !controller.conversation?.archived;
+    const status = waiting ? item.automatic ? paused[0]?.id === item.id ? 'Up next' : 'Queued' : 'Paused'
+      : item.state === 'removed' ? 'Kept aside'
+      : !operation ? 'Submission kept' : operation.state === 'unknown' ? 'Outcome unconfirmed'
+      : ({ prepared: 'Preparing', dispatching: 'Sending', accepted: 'Starting', running: 'Working', completed: 'Completed', failed: 'Reply failed', cancelled: 'Stopped' }[operation.state]);
+    const copyToDraft = () => copy({ ...emptyDraft, text: item.input, workMode: item.context.workMode, attachments: item.context.attachments, projectId: item.context.project?.id ?? null, ...(item.context.refineSource ? { refineSource: item.context.refineSource } : {}) });
+    return <article className="queued-message queue-entry" key={item.id} aria-label={`Queued message: ${item.input.slice(0, 80) || 'Attachments'}`}>
+      <div className="queue-entry-header"><span className="queue-entry-status">{status}</span><div className="queue-entry-actions">
+        {awaitingRun ? <button type="button" className="queue-entry-action" onClick={() => void controller.checkStatus(conversationId)}>Check original run</button>
+          : waiting && item.automatic ? <button type="button" className="queue-entry-action" disabled={!!busy || !!editing} onClick={() => void act(item, 'paused')}>Pause</button>
+          : waiting && runAvailable ? <button type="button" className="queue-entry-action" disabled={!!busy || !!editing} onClick={() => void act(item, 'run')}>Run next</button>
+          : item.state === 'removed' ? <button type="button" className="queue-entry-action" disabled={!!busy} onClick={() => void act(item, 'paused')}>Restore to queue</button> : null}
+        <ComposerMenu kind="menu" className="queue-entry-more" label="Queued message actions" icon={<MoreHorizontal size={17}/>} align="right">{close => <div className="queue-entry-menu">
+          {waiting && <>
+            <button type="button" role="menuitem" disabled={!!busy || !!editing} onClick={async () => { close(); if (!item.automatic || await act(item, 'paused')) setEditing(item.id); }}>Edit message</button>
+            {item.automatic && runAvailable && <button type="button" role="menuitem" disabled={!!busy || !!editing} onClick={() => { close(); void act(item, 'run'); }}>Run next</button>}
+            {paused.length > 1 && <><button type="button" role="menuitem" disabled={!!busy || !!editing || paused[0]?.id === item.id} onClick={() => { close(); void move(item, -1); }}>Move up</button><button type="button" role="menuitem" disabled={!!busy || !!editing || paused.at(-1)?.id === item.id} onClick={() => { close(); void move(item, 1); }}>Move down</button></>}
+            <button type="button" role="menuitem" disabled={!!busy || !!editing} onClick={() => { close(); void act(item, 'removed'); }}>Remove from queue</button>
+          </>}
+          <button type="button" role="menuitem" disabled={!!busy || controller.conversation?.archived} onClick={() => { close(); copyToDraft(); }}>Copy to draft</button>
+          <p className="queue-entry-context">{item.context.project ? `${item.context.project.name} · ` : ''}{item.model ?? 'Default model'}<br/>Added {formatSaved(item.createdAt)}</p>
+        </div>}</ComposerMenu>
+      </div></div>
+      {editing === item.id ? <QueueEditor key={item.id} item={item} epoch={epoch} refresh={controller.refresh} close={() => setEditing(null)}/> : <QueueMessageText text={item.input}/>}
+      {item.autoError && <p className="field-error" role="status">{item.autoError}</p>}
+      {!!item.context.attachments.length && <div className="queue-entry-files">{item.context.attachments.map(file => <a className="source-link" key={file.id} href={`/api/attachments/${file.id}`}>{file.name}</a>)}</div>}
     </article>;
   };
-  return <section aria-label="Message queue"><h3>Message queue <span className="count">{paused.length}</span></h3><p className="metadata">Queued messages run after this reply. Paused messages wait for Run Next.</p>{paused.map(card)}{!paused.length && <p className="metadata">No messages waiting.</p>}{items.some(item => item.state !== 'paused') && <details><summary>Earlier queue items</summary>{items.filter(item => item.state !== 'paused').map(card)}</details>}{error && <p className="field-error" role="alert">{error}</p>}</section>;
+  return <section className="message-queue" aria-label="Message queue"><h3 className="sr-only">Message queue</h3>{paused.length > 0 && <p className="queue-entry-note">Queued messages run in order. Paused messages wait for you.</p>}{unsettled.map(card)}{paused.map(card)}{!paused.length && !unsettled.length && <p className="queue-entry-note">No messages waiting.</p>}{earlier.length > 0 && <details className="queue-earlier"><summary>Earlier queue items</summary>{earlier.map(card)}</details>}{error && <p className="field-error" role="alert">{error}</p>}</section>;
+}
+
+function QueueMessageText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = text.split('\n').slice(0, 4).join('\n').slice(0, 500), shortened = preview.length < text.length;
+  return <div className="queue-entry-writing"><p className="preserve-lines">{text ? expanded || !shortened ? text : `${preview}…` : 'Attachment message'}</p>{shortened && <button type="button" className="queue-entry-action queue-entry-expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Show less' : 'Show full message'}</button>}</div>;
 }
 
 function QueueEditor({ item, epoch, refresh, close }: { item: QueuedMessage; epoch: string; refresh: () => Promise<void>; close: () => void }) {

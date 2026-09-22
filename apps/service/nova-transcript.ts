@@ -34,6 +34,36 @@ export class NovaTranscript {
     return this.store.internalRead<Binding>(base(conversation.id) + 'binding:' + id) ?? { id, conversationId: conversation.id, nativeId, nativeKey: conversation.nativeKey, generation: conversation.connectionGeneration, order: [], observedAt: new Date().toISOString(), complete: false, status: 'partial', conflicts: 0 };
   }
   private entries(conversation: Conversation, binding: Binding) { return binding.order.map(key => this.store.internalRead<Entry>(base(conversation.id) + 'message:' + key)).filter((entry): entry is Entry => !!entry); }
+  private reconcileOperationUsers(conversation: Conversation, binding: Binding, entries: Entry[]) {
+    const nativeByRun = new Map<string, Entry[]>(), provisionalByRun = new Map<string, Entry[]>();
+    for (const entry of entries) {
+      const message = entry.message;
+      if (message.role !== 'user' || !message.runId) continue;
+      const index = message.source?.kind === 'operation' ? provisionalByRun : ['native', 'legacy'].includes(message.source?.kind ?? '') ? nativeByRun : undefined;
+      if (index) index.set(message.runId, [...index.get(message.runId) ?? [], entry]);
+    }
+    const removed = new Set<string>(), changed: Entry[] = [], links: { id: string; value: string }[] = [];
+    for (const [runId, provisional] of provisionalByRun) {
+      const native = nativeByRun.get(runId);
+      // An early native event can arrive before chat.send acknowledges its run.
+      // Reconcile only one user receipt with one placeholder in this binding,
+      // after both agree on the exact operation and run. Never compare wording
+      // or collapse distinct native messages, even when a prompt was repeated.
+      if (provisional.length !== 1 || native?.length !== 1) continue;
+      const pending = provisional[0], confirmed = native[0];
+      if (!pending.message.operationId || confirmed.message.operationId !== pending.message.operationId || pending.conflicts?.length || confirmed.conflicts?.length) continue;
+      const missingFiles = pending.message.attachments.filter(file => file.localFile && !confirmed.message.attachments.some(other => other.localFile?.id === file.localFile!.id));
+      confirmed.message = { ...confirmed.message, aliases: [...new Set([...confirmed.message.aliases ?? [], ...pending.message.aliases ?? [], pending.message.id, pending.message.novaId].filter((id): id is string => !!id))], attachments: [...confirmed.message.attachments, ...missingFiles] };
+      changed.push(confirmed); removed.add(pending.key);
+      links.push({ id: base(conversation.id) + 'operation:' + hash([binding.id, pending.message.operationId, 'user']), value: confirmed.key });
+    }
+    if (!removed.size) return entries;
+    // Retain the original placeholder record for backups/review. Only the
+    // reading order and operation link change; old message/Nova links are aliases.
+    binding.order = binding.order.filter(key => !removed.has(key));
+    this.persist(conversation, binding, changed, links);
+    return entries.filter(entry => !removed.has(entry.key));
+  }
   private persist(conversation: Conversation, binding: Binding, entries: Entry[], aliases: { id: string; value: unknown }[] = []) {
     if (!this.available(conversation)) return;
     const state = this.state(conversation);
@@ -207,12 +237,12 @@ export class NovaTranscript {
     this.migrate(conversation);
     const state = this.state(conversation), bindings = state.bindings.map(id => this.store.internalRead<Binding>(base(conversation.id) + 'binding:' + id)).filter((binding): binding is Binding => !!binding && (!nativeId || binding.nativeId === nativeId));
     if (!bindings.length) return;
-    const messages = bindings.flatMap(binding => this.entries(conversation, binding).map(entry => ({ ...entry.message, attachments: entry.message.attachments.map(attachment => {
+    const messages = bindings.flatMap(binding => this.reconcileOperationUsers(conversation, binding, this.entries(conversation, binding)).map(entry => ({ ...entry.message, attachments: entry.message.attachments.map(attachment => {
       if (!attachment.localFile) return attachment;
       let available = false; try { available = canonical(this.store.blobMetadata(attachment.localFile.id)) === canonical(attachment.localFile); } catch { /* Preserve the reference with truthful availability. */ }
       return { ...attachment, availability: available ? 'local' as const : 'unavailable' as const };
     }) })));
-    const transcript: NonNullable<ConversationHistory['transcript']> = { revision: state.revision, savedMessages: messages.length, complete: bindings.every(binding => binding.complete), conflicts: bindings.reduce((n, binding) => n + binding.conflicts, 0), unavailableAttachments: messages.flatMap(message => message.attachments).filter(attachment => attachment.availability !== 'local').length,
+    const transcript: NonNullable<ConversationHistory['transcript']> = { revision: this.state(conversation).revision, savedMessages: messages.length, complete: bindings.every(binding => binding.complete), conflicts: bindings.reduce((n, binding) => n + binding.conflicts, 0), unavailableAttachments: messages.flatMap(message => message.attachments).filter(attachment => attachment.availability !== 'local').length,
       synchronizedAt: bindings.map(binding => binding.observedAt).sort().at(-1), bindings: bindings.map(binding => ({ id: binding.id, nativeId: binding.nativeId, complete: binding.complete, status: binding.status, observedAt: binding.observedAt, ...(binding.capture?.nextOffset === undefined ? {} : { nextOffset: binding.capture.nextOffset }) })) };
     return { messages, transcript, nativeId: nativeId ?? conversation.nativeId ?? bindings.at(-1)!.nativeId };
   }

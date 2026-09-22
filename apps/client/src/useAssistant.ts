@@ -7,7 +7,7 @@ import type { Snapshot } from '../../../packages/domain/contracts';
 import { canonical } from '../../../packages/domain/contracts';
 import { ApiError, mayPoll, readLocal, request, saveLocal } from './api';
 import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } from './transcript-position';
-import { historyAfterReadFailure, mergeHistoryPage } from './assistant-history';
+import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from './assistant-history';
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
@@ -95,11 +95,15 @@ export function useAssistant(snapshot: Snapshot) {
       const restore = kept && !kept.following ? kept.anchor : undefined;
       const messageId = options?.messageId ?? restore?.id;
       const query = new URLSearchParams(); if (options?.offset !== undefined) query.set('offset', String(options.offset)); if (messageId) query.set('messageId', messageId); if (restore) query.set('resume', '1');
-      const result = await request<ConversationHistory>(`assistant/history/${id}${query.size ? `?${query}` : ''}`, undefined, signal);
+      let result = await request<ConversationHistory>(`assistant/history/${id}${query.size ? `?${query}` : ''}`, undefined, signal);
+      if (!isCurrent()) return;
+      const repair = !messageId && !options?.latest ? historyRepairAnchor(context.current.history, result, readTranscriptPosition(transcriptPositionKey(epoch, context.current.snapshot.deviceId, conversation))?.anchor?.id) : undefined;
+      if (repair) result = await request<ConversationHistory>(`assistant/history/${id}?messageId=${encodeURIComponent(repair.novaId ?? repair.id)}`, undefined, signal);
       if (!isCurrent()) return;
       if (!matches(result)) throw new Error('The returned history belongs to a different conversation. Refresh this conversation to check its current identity.');
+      if (repair && !result.messages.some(message => message.role === repair.role && (message.id === repair.id || !!repair.novaId && message.novaId === repair.novaId || message.aliases?.includes(repair.novaId ?? repair.id)))) throw new Error('The repaired transcript could not confirm your reading position. Your current messages are kept; open Latest to continue.');
       if (restore && !result.messages.some(m => (m.id === restore.id || m.novaId === restore.id || m.aliases?.includes(restore.id)) && m.role === restore.role)) throw new Error('Your saved reading position is no longer available. Open Latest to continue.');
-      setHistory(current => { const next = messageId || options?.latest || !!current?.retained !== !!result.retained ? result : mergeHistoryPage(current, result, options?.newer ? 'newer' : options?.offset !== undefined); saveLocal(cacheKey, cacheTranscriptWindow(next, readTranscriptPosition(transcriptPositionKey(epoch, context.current.snapshot.deviceId, conversation)))); return next; }); setHistorySource(result.retained ? 'saved' : 'live'); setHistoryError(result.retained && !result.transcript ? 'Showing saved messages.' : '');
+      setHistory(current => { const next = messageId || repair || options?.latest || !!current?.retained !== !!result.retained ? result : mergeHistoryPage(current, result, options?.newer ? 'newer' : options?.offset !== undefined); saveLocal(cacheKey, cacheTranscriptWindow(next, readTranscriptPosition(transcriptPositionKey(epoch, context.current.snapshot.deviceId, conversation)))); return next; }); setHistorySource(result.retained ? 'saved' : 'live'); setHistoryError(result.retained && !result.transcript ? 'Showing saved messages.' : '');
     } catch (reason) {
       if (!isCurrent()) return;
       setHistoryError(reason instanceof Error ? reason.message : 'Conversation history is unavailable.');

@@ -1,0 +1,27 @@
+:root .approval-card.request-card { padding: 14px 0; font-size: 13px; line-height: 1.55; }
+:root .request-card .request-title { display: block; font-size: 14px; font-weight: 600; line-height: 1.5; }
+:root .request-card .request-content { min-width: 0; }
+:root .request-card .request-context, :root .request-tray .request-context { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 6px 0; }
+:root .request-card .request-state { margin: 10px 0; font-size: 13px; }
+:root .request-card pre { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: none; font-size: 12px; line-height: 1.55; }
+:root .request-card .approval-warning, :root .request-card .approval-scope { margin: 10px 0; border-left-width: 2px; font-size: 12px; }
+:root .request-card .request-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 12px; }
+:root .request-card .request-actions:empty { display: none; }
+:root .assistant-workspace .request-card button.request-primary { --button-depth: 1px; --button-shadow-depth:1px; text-transform:none; min-height: 44px; padding: 8px 15px; border-radius: 10px; font-size: 13px; font-weight: 600; box-shadow: 0 1px 0 var(--action-edge); }
+:root .request-card .request-secondary, :root .request-tray .request-secondary { --button-depth: 0px; --button-fill: transparent; --button-border: transparent; min-height: 44px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 500; text-transform:none; box-shadow: none; transform: none; }
+:root .request-card .request-secondary:hover:not(:disabled), :root .request-tray .request-secondary:hover:not(:disabled) { background: var(--raised); color: var(--text); box-shadow: none; transform: none; }
+:root .request-card button:focus-visible, :root .request-tray button:focus-visible, :root .request-card pre:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
+:root .request-card.question-card fieldset { display:block; margin: 0 0 10px; }
+:root .request-card.question-card legend { font-size: 14px; font-weight: 600; line-height: 1.5; padding-bottom: 8px; }
+:root .request-card.question-card .question-choice { gap: 10px; min-height: 44px; margin: 2px 0; padding: 8px 10px; border-color: transparent; border-radius: 8px; background: transparent; }
+:root .request-card.question-card .question-choice:hover { background: var(--raised); }
+:root .request-card.question-card .question-choice:has(input:checked) { border-color: var(--line); background: var(--raised); }
+:root .request-card.question-card .question-choice:has(input:focus-visible) { outline: 2px solid var(--violet); outline-offset: 1px; }
+:root .request-card.question-card .question-choice small { margin-top: 2px; line-height: 1.45; }
+:root .request-card.question-card textarea, :root .request-card.question-card input[type=password] { margin-top: 8px; padding: 10px 12px; border-radius: 10px; box-shadow: none; }
+:root .request-card.question-card .question-number { margin-bottom: 3px; font-size: 11px; }
+:root .request-history { margin-top: 8px; font-size: 12px; }
+:root .request-history > summary { min-height: 44px; padding: 10px 0; color: var(--muted); cursor: pointer; }
+:root .assistant-workspace .approval-tray.request-tray { border-radius: 14px; box-shadow: none; }
+:root .assistant-workspace .request-tray > summary { padding: 10px 14px; font-size: 12px; font-weight: 600; }
+@media (max-width: 480px) { :root .request-card .request-actions { gap: 4px; } :root .assistant-workspace .request-card button.request-primary { padding-inline: 12px; } }
