@@ -1,3 +1,7 @@
+## [1.9.10] — 2026-09-22
+
+- Restore the mascot and square module buttons in compact mobile navigation, with a nearby Close control, scrollable modules and Settings kept at the bottom.
+
 ## [1.9.9] — 2026-09-22
 
 - Reduce repeated workspace and Assistant reads while idle, on another page or in a hidden tab; refresh promptly on return and retain fast updates for active work.
