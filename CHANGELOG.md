@@ -1,3 +1,9 @@
+## [1.9.8] — 2026-09-22
+
+- Make Voice the primary empty-composer action on desktop and narrow screens; switch to Send for text or files, and Stop or Queue during work. Keep dictation separate and prevent empty Enter from starting a call.
+- Show waiting messages as compact visible rows directly above the composer, with direct Remove and supported pause/review actions. Clear admitted rows from the live queue and retain earlier items in conversation-menu history.
+- Preserve queued writing, independent drafts, paused edits and original uncertain submissions. Record the remaining differences from Codex queue steering and editing honestly.
+
 ## [1.9.7] — 2026-09-21
 
 - Center Assistant replies and the composer in a tighter reading column, with quieter spacing around work activity.

@@ -32,7 +32,7 @@ const { Assistant } = await import('../apps/client/src/Assistant');
 hooks.deregister();
 
 type FileState = 'ready' | 'preparing' | 'uploading' | 'failed';
-function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean } = {}) {
+function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean; voicePhase?: 'idle' | 'connecting' | 'connected' | 'ended'; disconnected?: boolean } = {}) {
   const globals = [attachmentFixture, 'localStorage', 'matchMedia'] as const;
   const previous = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const pending = files === 'uploading' || files === 'failed' ? [{ id: 'file', name: 'Fixture.txt' }] : [];
@@ -48,8 +48,8 @@ function renderComposer(files: FileState, existing = false, active = false, text
       appIcon: 'red',
       snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
       legacyJournal: { value: draft, revision: 1, dirty: false, saving: false, change() {}, flush: async () => {} },
-      controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
-      voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) },
+      controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: options.disconnected ? 'disconnected' : 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
+      voice: { subscribeLevels: () => () => {}, getLevelsSnapshot: () => ({input: 0, output: 0}), subscribe: () => () => {}, getSnapshot: () => ({ phase: options.voicePhase ?? 'idle', turns: [] }) },
       contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {},
     } as unknown as ComponentProps<typeof Assistant>;
     const markup = renderToStaticMarkup(createElement(Assistant, props));
@@ -72,7 +72,7 @@ test('new and existing composers block sending and voice while files are prepare
     for (const files of ['preparing', 'uploading', 'failed'] as const) {
       const view = renderComposer(files, existing);
       assert.equal(view.button('Send message').disabled, true);
-      assert.equal(view.button('Start voice call').disabled, true);
+      assert.equal(view.buttons.some(button => button.label === 'Start voice call'), false, 'Voice is secondary while a draft is being sent');
       const switches = view.buttons.filter(button => ['Chat', 'Work'].includes(button.label));
       assert.equal(switches.length, 2);
       assert.ok(switches.every(button => button.disabled));
@@ -80,7 +80,7 @@ test('new and existing composers block sending and voice while files are prepare
     }
     const ready = renderComposer('ready', existing);
     assert.equal(ready.button('Send message').disabled, false);
-    assert.equal(ready.button('Start voice call').disabled, false);
+    assert.equal(ready.buttons.some(button => button.label === 'Start voice call'), false);
   }
 });
 
@@ -129,4 +129,37 @@ test('invalid draft and Project sources block a new dispatch while keeping writi
     assert.equal(queued.button('Queue message').disabled, true);
     assert.equal(queued.button('Stop reply').disabled, false);
   }
+});
+
+
+test('the empty idle composer offers one primary voice action with dictation kept separate', () => {
+  for (const existing of [false, true]) {
+    for (const text of ['', '  \n ']) {
+      const view = renderComposer('ready', existing, false, text);
+      const primary = view.buttons.filter(button => button.className.includes('send-button'));
+      assert.equal(primary.length, 1);
+      assert.equal(primary[0].label, 'Start voice call');
+      assert.equal(primary[0].disabled, false);
+      assert.equal(view.button('Dictate a message').disabled, false);
+      assert.equal(view.buttons.some(button => button.label === 'Send message'), false);
+    }
+    for (const voicePhase of ['connecting', 'connected', 'ended'] as const) {
+      assert.equal(renderComposer('ready', existing, false, '', { voicePhase }).button('Start voice call').disabled, true);
+    }
+    assert.equal(renderComposer('ready', existing, false, '', { disconnected: true }).button('Start voice call').disabled, true);
+  }
+});
+
+test('text and file-only drafts offer Send, uploads do not flicker back to Voice, and active work keeps Stop or Queue', () => {
+  for (const existing of [false, true]) {
+    assert.equal(renderComposer('ready', existing, false, 'A written message').button('Send message').disabled, false);
+    assert.equal(renderComposer('ready', existing, false, '', { attachment: true }).button('Send message').disabled, false);
+    for (const files of ['preparing', 'uploading', 'failed'] as const) {
+      const view = renderComposer(files, existing, false, '');
+      assert.equal(view.button('Send message').disabled, true);
+      assert.equal(view.buttons.some(button => button.label === 'Start voice call'), false);
+    }
+  }
+  assert.equal(renderComposer('ready', true, true, '').button('Stop reply').disabled, false);
+  assert.equal(renderComposer('ready', true, true, 'Follow up').button('Queue message').disabled, false);
 });
