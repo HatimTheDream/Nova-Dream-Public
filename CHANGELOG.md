@@ -1,3 +1,8 @@
+## [1.9.11] — 2026-09-22
+
+- Keep the Nova mascot visible in the app header whether navigation is shown or hidden.
+- Dock square module buttons beside the workspace on mobile and desktop, resize content when toggled, and remember the chosen sidebar visibility.
+
 ## [1.9.10] — 2026-09-22
 
 - Restore the mascot and square module buttons in compact mobile navigation, with a nearby Close control, scrollable modules and Settings kept at the bottom.

@@ -51,7 +51,7 @@
 .sidebar-pin { margin-inline-end:5px; }
 /* Navigation keeps wheel, touch and keyboard scrolling without a visible bar.
    Fluid button widths retain complete edges inside the saved rail width. */
-.primary-rail > .brand,.primary-rail > .rail-footer { flex:0 0 auto; }
+.primary-rail > .rail-footer { flex:0 0 auto; }
 .primary-rail .rail-modules,.primary-rail .rail-footer { min-width:0; padding-inline:2px; }
 .primary-rail .rail-modules { min-height:0; padding-block:6px 8px; overflow-x:hidden; overflow-y:auto; scrollbar-width:none; scrollbar-gutter:auto; scroll-padding-block:8px; }
 .primary-rail .rail-modules::-webkit-scrollbar { display:none; width:0; height:0; }
@@ -187,14 +187,22 @@
 .phone-pairing input { width: 100%; min-width: 0; }
 .phone-pairing button { min-height: 44px; }
 
-/* A phone starts with the workspace; navigation opens only when requested. */
-.rail-drawer-heading,.nav-drawer-label { display:none; }
-.main-navigation-scrim { position:fixed; inset:0; z-index:29; background:rgb(0 0 0 / .35); }
+/* The brand stays visible while navigation shares the workspace's layout. */
+:root .app-shell { display:grid; grid-template-columns:auto minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+:root .app-shell > .topbar { grid-area:1 / 1 / 2 / -1; min-width:0; flex-wrap:nowrap; padding-inline:8px 16px; }
+:root .app-shell > nav.primary-rail { grid-area:2 / 1; min-height:0; }
+:root .app-shell > nav.primary-rail[hidden],.nav-drawer-label { display:none; }
+:root .app-shell > .workspace { grid-area:2 / 2; min-width:0; min-height:0; }
+:root .app-shell > .topbar .topbar-leading { flex:1; min-width:0; }
+:root .app-shell > .topbar .breadcrumb { flex:1; min-width:0; }
+:root .app-shell > .topbar .icon-button { width:44px; min-width:44px; min-height:44px; height:44px; }
+.primary-rail .nav-popover { inset-inline-start:84px; width:min(255px,calc(100vw - 92px)); max-height:calc(100dvh - 128px); overflow-y:auto; }
 :root .search-results .search-result { justify-content:flex-start; align-items:flex-start; text-align:start; }
 :root .search-result > .e3-icon { flex:none; margin-top:2px; }
 :root .search-result > span:not(.e3-icon) { flex:1; min-width:0; overflow-wrap:anywhere; }
 @media(max-width:650px) {
-  :root .app-shell > nav.primary-rail[role=dialog] { position:fixed; inset:0 auto 0 0; width:76px; min-width:76px; padding:max(12px,env(safe-area-inset-top)) 7px max(12px,env(safe-area-inset-bottom)); box-shadow:12px 0 30px #0002; }
-  .rail-drawer-heading { display:block; position:absolute; inset-block-start:max(12px,env(safe-area-inset-top)); inset-inline-start:calc(100% + 8px); }
-  .rail-drawer-heading strong { display:none; }
+  :root .app-shell > .topbar { gap:4px; padding:max(6px,env(safe-area-inset-top)) 8px 6px; }
+  :root .app-shell > .topbar .topbar-leading { gap:4px; }
+  :root .app-shell > .topbar .topbar-actions { gap:0; }
+  :root .app-shell > nav.primary-rail { padding-block:8px max(8px,env(safe-area-inset-bottom)); }
 }
