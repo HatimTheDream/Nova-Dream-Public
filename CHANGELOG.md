@@ -1,3 +1,7 @@
+## [1.9.12] — 2026-09-22
+
+- Match the persistent header mascot to the square module buttons at every screen size.
+
 ## [1.9.11] — 2026-09-22
 
 - Keep the Nova mascot visible in the app header whether navigation is shown or hidden.
