@@ -60,10 +60,10 @@ test('cleanup cancels queued refreshes and permits a clean remount', async () =>
 
 test('failed reads release the slot and obsolete failures do not override a requested refresh', async () => {
   const f = fixture(), fail = f.reader.poll(); await flush(); f.reads[0].reject(Error('offline')); await fail;
-  assert.equal(f.errors.length, 1);
+  assert.equal(f.errors.length, 1); assert.equal(f.reader.failed, true);
   const retry = f.reader.refresh(); await flush(); f.reader.refresh(); f.reads[1].reject(Error('obsolete')); await flush();
   assert.equal(f.errors.length, 1); f.reads[2].resolve('reconnected'); await retry;
-  assert.deepEqual(f.values, ['reconnected']);
+  assert.deepEqual(f.values, ['reconnected']); assert.equal(f.reader.failed, false);
 });
 
 test('a slow outputs reader does not block state updates', async () => {
@@ -74,4 +74,15 @@ test('a slow outputs reader does not block state updates', async () => {
   }
   assert.equal(outputs.reads.length, 1); assert.equal(state.values.length, 3);
   outputs.reads[0].resolve('files'); await outputRead;
+});
+
+test('initial and identity refreshes bypass cached poll delays and share their request with a poll', async () => {
+  let identity = 'first', reads = 0;
+  const accepted: string[] = [];
+  const reader = new RefreshReader({ identity: () => identity, mayPoll: () => false, read: async () => { reads++; return identity; }, accept: value => { accepted.push(value); } });
+  await reader.poll(); assert.equal(reads, 0);
+  const initial = reader.refresh(); assert.equal(reader.poll(), initial); await initial;
+  identity = 'replacement';
+  const next = reader.refresh(); assert.equal(reader.poll(), next); await next;
+  assert.deepEqual(accepted, ['first', 'replacement']); assert.equal(reads, 2);
 });

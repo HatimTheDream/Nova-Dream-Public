@@ -1,6 +1,6 @@
 # Assistant experience: Codex reference audit
 
-Reviewed 22 September 2026 against Nova Dream **1.9.8 candidate / build 1.0.196**; earlier 1.9.7 evidence is retained below. The candidate is local and unpushed; live Nova remains **1.9.6**. This is a reference and source audit, not a declaration of full parity or live deployment.
+Reviewed 22 September 2026 against the **1.9.8 UI / build 1.0.196**, carried forward into the local **1.9.9 request-efficiency candidate / build 1.0.197**; earlier 1.9.7 evidence is retained below. The candidate is local and unpushed; live Nova remains **1.9.6**. This is a reference and source audit, not a declaration of full parity or live deployment.
 
 ## Evidence and limits
 
@@ -102,6 +102,10 @@ Source paths below are relative to the application root. Ratings apply to the sp
 | Voice | Orange acceptance | Dictation and live voice are separate; interruption and retained captions exist. The native pass observed settings and an incidental start-timeout error, not an active call. | Test actual hardware, interruption, target continuity and reconnect. Do not treat the incidental native failure as a controlled voice comparison. Screen/camera input is not supplied by the audio-only path. [Reference](https://learn.chatgpt.com/docs/features/voice). |
 | Touch/keyboard | Orange completeness | Work disclosure and inspected composer controls meet 44px targets in phone emulation. At 390px and 320px, model controls and bounded long drafts remain reachable without horizontal overflow. Some workspace close/header controls have smaller source dimensions. | Verify physical-phone input, remaining essential targets, focus return and Escape. Add essential shortcuts, not a second navigation system. |
 | Export/share | Orange | Copy loaded messages and specific exports exist; no accepted full share-snapshot journey. | Name scope accurately; keep full transcript export discoverable and define audience/version semantics before adding Share. |
+
+## 1.9.9 request-efficiency follow-up
+
+A separate source review found excessive repeated reads in idle and hidden clients, Connections, empty module reviews, and closed tool views. The request-efficiency candidate carries forward the1.9.8 UI. See [Hosted request efficiency](HOSTED-REQUEST-EFFICIENCY.md) for the polling policy and acceptance boundaries. Lower traffic must not suppress active requests, late tool images, voice, or retained mutation recovery.
 
 ## 1.9.8 queue and composer correction
 

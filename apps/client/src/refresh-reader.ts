@@ -3,6 +3,8 @@ type Cycle = { identity: string; abort: AbortController; dirty: boolean; done: P
 /** Polls join a pending read. Explicit refreshes wait for a read after their mutation. */
 export class RefreshReader<T> {
   private current?: Cycle;
+  private failure = false;
+  get failed(): boolean { return this.failure; }
   constructor(private options: {
     identity: () => string;
     read: (signal: AbortSignal) => Promise<T>;
@@ -32,8 +34,8 @@ export class RefreshReader<T> {
         if (!current()) return;
         try {
           const value = await this.options.read(cycle.abort.signal);
-          if (current() && !cycle.dirty) this.options.accept(value);
-        } catch (error) { if (current() && !cycle.dirty) this.options.fail?.(error); }
+          if (current() && !cycle.dirty) { this.options.accept(value); this.failure = false; }
+        } catch (error) { if (current() && !cycle.dirty) { this.failure = true; this.options.fail?.(error); } }
       } while (current() && cycle.dirty);
     } finally { if (this.current === cycle) this.current = undefined; }
   }

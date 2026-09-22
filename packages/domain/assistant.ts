@@ -95,6 +95,8 @@ export type AssistantOperation = {
   fastMode?: boolean | 'auto' | null;
   createdAt: string; updatedAt: string; settledAt?: string; text: string; lastSequence: number; error?: string;
   tools?: import('./tool-activity.js').ToolActivity[];
+  /** Response-only hint for the current transient tool image; never a saved run update. */
+  observationId?: string;
   cancelRequested?: boolean;
   steerTarget?: string;
   effectiveModel?: string; nativeTurnId?: string;

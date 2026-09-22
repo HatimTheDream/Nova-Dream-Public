@@ -621,10 +621,10 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/question/check' && request.method === 'POST') return json(200, await questions.check(await commandBody(request)));
         if (url.pathname === '/api/assistant/question/dismiss' && request.method === 'POST') return json(200, questions.dismiss(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/state' && request.method === 'GET') {
-          const ids = new Set(assistant.conversations().map(conversation => conversation.id)), state = approvals.state();
+          const current = observations.withHints(assistant.state()), ids = new Set(current.conversations.map(conversation => conversation.id)), state = approvals.state();
           // Assignments have their own review surface. Their IDs cannot be
           // selected as ordinary conversations by the Assistant sidebar.
-          return json(200, { ...assistant.state(), approvals: { ...state, items: state.items.filter(item => ids.has(item.conversationId)) }, questions: questions.state() });
+          return json(200, { ...current, approvals: { ...state, items: state.items.filter(item => ids.has(item.conversationId)) }, questions: questions.state() });
         }
         const retainedTranscript = /^\/api\/assistant\/retained\/([a-f0-9-]{36})$/.exec(url.pathname);
         if (retainedTranscript && request.method === 'GET') return json(200, assistant.retainedTranscriptReview(retainedTranscript[1]));
@@ -753,5 +753,5 @@ export async function startServer(options: { directory: string; port: number; pr
     })();
     return closePromise;
   };
-  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, moduleActions, phoneHost, phoneAccess, store, assistant, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, close };
+  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, moduleActions, phoneHost, phoneAccess, store, assistant, observations, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, close };
 }

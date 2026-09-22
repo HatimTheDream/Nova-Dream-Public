@@ -7,6 +7,7 @@ import type { VoiceCatalog } from '../../../packages/domain/voice';
 import type { RuntimeStatus } from '../../../packages/domain/runtime';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { RefreshReader } from './refresh-reader';
+import { pollReader } from './polling';
 import { ChatGptAccountList } from './ChatGptAccounts';
 import { accountIntentWasNotAdmitted, accountSummary, accountTime, keepSignInIntent, type AccountOrderIntent, type AccountSignInIntent } from './chatgpt-account-controls';
 
@@ -38,13 +39,33 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
   const refresh = () => Promise.all(readers.map(reader => reader.refresh())).then(() => undefined);
   useEffect(() => {
     mounted.current = true; setBusy(false); setError(''); setAccountStale(false); setAssistant(undefined); setRuntime(undefined); setSignIn(undefined); setAccount(undefined); setVoice(undefined);
-    void refresh(); const timer = setInterval(() => { readers.forEach(reader => void reader.poll()); }, 1800);
-    return () => { mounted.current = false; clearInterval(timer); readers.forEach(reader => reader.cancel()); };
+    return () => { mounted.current = false; readers.forEach(reader => reader.cancel()); };
   }, [snapshot.epoch, snapshot.deviceId, readers]);
+  const connecting = runtime?.state === 'starting' || assistant?.connection.state === 'connecting';
+  const signingIn = signIn?.state === 'starting' || signIn?.state === 'waiting';
+  useEffect(() => {
+    const stops = readers.slice(0, 2).map(reader => pollReader(reader, () => connecting ? 2000 : 30000));
+    return () => { stops.forEach(stop => stop()); };
+  }, [snapshot.epoch, snapshot.deviceId, readers, connecting]);
   useEffect(() => {
     setSignIn(undefined); setAccount(undefined); setVoice(undefined); setAccountStale(false);
-    readers.slice(2).forEach(reader => { reader.cancel(); void reader.refresh(); });
-  }, [assistant?.connection.generation, assistant?.connection.url, readers]);
+    if (!assistant) return;
+    const stops = readers.slice(3).map((reader, index) => pollReader(reader, () => index === 0 ? 60000 : null));
+    return () => { stops.forEach(stop => stop()); readers.slice(2).forEach(reader => reader.cancel()); };
+  }, [snapshot.epoch, snapshot.deviceId, !!assistant, assistant?.connection.generation, assistant?.connection.url, readers]);
+  useEffect(() => {
+    if (assistant) return pollReader(readers[2], () => signingIn ? 2000 : 30000);
+  }, [snapshot.epoch, snapshot.deviceId, !!assistant, assistant?.connection.generation, assistant?.connection.url, readers, signingIn]);
+  const accountEvidence = JSON.stringify([assistant?.connection.generation, assistant?.connection.modelAuthReady, signIn?.state === 'completed' ? signIn.id : null]);
+  const previousAccountEvidence = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!assistant) { previousAccountEvidence.current = undefined; return; }
+    const changed = previousAccountEvidence.current !== undefined && previousAccountEvidence.current !== accountEvidence; previousAccountEvidence.current = accountEvidence;
+    if (changed && !document.hidden) {
+      // Account and voice readiness change at authentication boundaries, not on every heartbeat.
+      readers.slice(3).forEach(reader => { void reader.refresh(); });
+    }
+  }, [accountEvidence, readers]);
   const perform = async (action: () => Promise<unknown>) => {
     const current = () => mounted.current && snapshot.epoch === context.current.snapshot.epoch && snapshot.deviceId === context.current.snapshot.deviceId;
     setBusy(true); setError('');
@@ -87,7 +108,7 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
       <div className="connection-facts"><div><span>AI runtime</span><strong>{ready ? 'Connected' : runtime?.phase === 'preparing' ? 'Preparing workspace…' : runtime?.phase === 'process' ? 'Starting on this host…' : runtime?.phase === 'gateway' || connection?.state === 'connecting' ? 'Connecting workspace…' : !connection ? 'Checking connection…' : 'Not connected'}</strong></div><div><span>Model access</span><strong>{accountReady ? 'Models available' : !connection || ready ? 'Checking model access' : 'Waiting for OpenClaw'}</strong></div></div>
       {!ready && <p className="metadata" role="status">{connection?.message ?? 'Reading connection status…'}</p>}
       {connection?.pairingRequestId && <p className="notice">OpenClaw needs approval for this device. Request: <code>{connection.pairingRequestId}</code></p>}
-      <div className="setup-actions">{accountReady ? <button className="primary" onClick={openAssistant}>Open Assistant</button> : <button className="primary" disabled={!canConnect || busy || !runtime || !connection || runtime.state === 'starting'} onClick={() => void perform(() => request('assistant/runtime/start', { requestId: crypto.randomUUID(), epoch: snapshot.epoch }))}>{!runtime || !connection ? 'Checking this host…' : runtime.state === 'starting' ? 'Starting OpenClaw…' : runtime.state === 'running' ? 'Reconnect this host' : 'Start on this host'}</button>}<button aria-label="Refresh Assistant connection" disabled={busy} onClick={() => void perform(async () => { if (ready) await request('assistant/models'); await refresh(); })}><RefreshCw size={16}/>Check status</button></div>
+      <div className="setup-actions">{accountReady ? <button className="primary" onClick={openAssistant}>Open Assistant</button> : <button className="primary" disabled={!canConnect || busy || !runtime || !connection || runtime.state === 'starting'} onClick={() => void perform(() => request('assistant/runtime/start', { requestId: crypto.randomUUID(), epoch: snapshot.epoch }))}>{!runtime || !connection ? 'Checking this host…' : runtime.state === 'starting' ? 'Starting OpenClaw…' : runtime.state === 'running' ? 'Reconnect this host' : 'Start on this host'}</button>}<button aria-label="Refresh Assistant connection" disabled={busy} onClick={() => void perform(async () => { if (ready) await request('assistant/models'); })}><RefreshCw size={16}/>Check status</button></div>
       {runtime && ['starting', 'error', 'unavailable'].includes(runtime.state) && <p className={runtime.state === 'starting' ? 'metadata' : 'field-error'} role="status">{runtime.message}{runtime.state === 'starting' && runtime.elapsedSeconds !== undefined && ` · ${runtime.elapsedSeconds < 60 ? `${runtime.elapsedSeconds}s` : `${Math.floor(runtime.elapsedSeconds / 60)}m ${runtime.elapsedSeconds % 60}s`} elapsed`}</p>}
       <details className="gateway-options settings-details"><summary>Advanced connection setup</summary><p className="metadata">{connection?.message}</p><form onSubmit={event => { event.preventDefault(); void perform(async () => { await request('assistant/connection', { requestId: crypto.randomUUID(), epoch: snapshot.epoch, url: address, ...(token ? { token } : {}) }); setToken(''); }); }}><p className="metadata">Use the secure address and connection token from OpenClaw setup on your chosen host.</p><label>Gateway address<input required type="url" placeholder="wss://your-private-host" value={address} onChange={event => setAddress(event.target.value)} autoComplete="off" spellCheck={false}/></label><label>Connection token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Kept only by the private service"/></label><button disabled={busy || !canConnect || !address}>Connect Gateway</button></form></details>
       {error && <p className="field-error" role="alert">{error}</p>}

@@ -10,10 +10,11 @@ import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } 
 import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from './assistant-history';
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
+import { pollReader } from './polling';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
-export function useAssistant(snapshot: Snapshot) {
+export function useAssistant(snapshot: Snapshot, visible = true) {
   const [state, setState] = useState<AssistantState>(initial);
   const spaceKey = `e3:assistant-space:${snapshot.epoch}:${snapshot.deviceId}`;
   const [space, setSpace] = useState<AssistantSpace>(() => readLocal<string>(spaceKey) === 'work' ? 'work' : 'chat');
@@ -34,12 +35,11 @@ export function useAssistant(snapshot: Snapshot) {
   const historyRequest = useRef(0), mounted = useRef(false);
   const historyReader = useRef<AssistantHistoryReader>(undefined);
   const context = useRef({ snapshot, state, history }); context.current = { snapshot, state, history };
-  const modelsReady = useRef(false);
   const [modelReader] = useState(() => new RefreshReader({
     identity: () => canonical([context.current.snapshot.epoch, context.current.snapshot.deviceId, context.current.state.connection.state, context.current.state.connection.generation, context.current.state.connection.url]),
     read: signal => request<AssistantModel[]>('assistant/models', undefined, signal),
-    accept: next => { setModels(current => canonical(current) === canonical(next) ? current : next); modelsReady.current = true; setModelStatus('ready'); },
-    fail: () => { modelsReady.current = false; setModelStatus('error'); },
+    accept: next => { setModels(current => canonical(current) === canonical(next) ? current : next); setModelStatus('ready'); },
+    fail: () => setModelStatus('error'),
   }));
   const retryModels = useCallback(async () => { if (context.current.state.connection.state === 'ready') { setModelStatus('loading'); await modelReader.poll(); } }, [modelReader]);
   const [readers] = useState(() => {
@@ -56,10 +56,14 @@ export function useAssistant(snapshot: Snapshot) {
     mounted.current = true;
     setStatusRead('loading'); setState(initial); setOutputs([]); setModels([]); setHistory(undefined); setHistorySource(undefined); setHistoryError('');
     generation.current++; historyRequest.current++;
-    const poll = () => { for (const reader of readers) void reader.poll(); };
-    void refresh(); const timer = setInterval(poll, 1500);
-    return () => { mounted.current = false; clearInterval(timer); readers.forEach(reader => reader.cancel()); historyReader.current?.cancel(); };
+    void refresh();
+    return () => { mounted.current = false; readers.forEach(reader => reader.cancel()); historyReader.current?.cancel(); };
   }, [readers, refresh, snapshot.epoch, snapshot.deviceId]);
+  const active = state.operations.some(op => ['prepared', 'dispatching', 'accepted', 'running'].includes(op.state));
+  useEffect(() => {
+    const stops = readers.map(reader => pollReader(reader, () => active ? 1500 : visible ? 15000 : 60000, 60000));
+    return () => stops.forEach(stop => stop());
+  }, [readers, active, visible, snapshot.epoch, snapshot.deviceId]);
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
     const nextSpace = hint ?? (conversation ? assistantSpace(conversation) : spaceRef.current);
@@ -127,11 +131,9 @@ export function useAssistant(snapshot: Snapshot) {
     if (stamp !== previousOperations.current) { previousOperations.current = stamp; if (selectedId) void pollHistory(selectedId); }
   }, [state.operations, selectedId, pollHistory]);
   useEffect(() => {
-    let alive = true, timer: ReturnType<typeof setTimeout>;
-    modelsReady.current = false; setModels([]); setModelStatus(state.connection.state === 'ready' ? 'loading' : 'offline');
-    const poll = async () => { await modelReader.poll(); if (alive) timer = setTimeout(() => void poll(), modelsReady.current ? 30000 : 5000); };
-    if (state.connection.state === 'ready') void poll();
-    return () => { alive = false; clearTimeout(timer); modelReader.cancel(); };
+    setModels([]); setModelStatus(state.connection.state === 'ready' ? 'loading' : 'offline');
+    const stop = state.connection.state === 'ready' ? pollReader(modelReader, () => modelReader.failed ? 5000 : 60000, 120000) : undefined;
+    return () => { stop?.(); modelReader.cancel(); };
   }, [modelReader, snapshot.epoch, snapshot.deviceId, state.connection.state, state.connection.generation, state.connection.url, state.connection.modelAuthReady]);
   const create = async (input: { space?: AssistantSpace; requestId: string; title: string; autoTitle?: boolean; projectId: string | null; model?: string; thinking?: string; fastMode?: boolean | 'auto'; permissionMode?: Conversation['permissionMode']; refineSource?: Conversation['refineSource'] }) => {
     const conversation = await request<Conversation>('assistant/conversations', { ...input, epoch: snapshot.epoch }, undefined, 30000); await refresh(); return conversation;

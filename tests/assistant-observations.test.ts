@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 import { AssistantObservations } from '../apps/service/assistant-observations.js';
+import { startServer } from '../apps/service/http.js';
 import { toolImage } from '../packages/domain/assistant-observation.js';
 import { phoneRouteAllowed } from '../apps/service/phone-policy.js';
 
@@ -27,8 +31,45 @@ test('screenshots bind exact epoch, session and run; replacement/removal cannot 
   await assert.rejects(service.accept({ ...input, runId: randomUUID() }), /matching workspace run/);
   await service.accept(input);
   const view = service.read(operation.id)!; assert.equal(view.width, 24); assert.equal(view.height, 12); assert.equal(view.toolCallId, 'observed-call');
+  const state = { operations: [operation], conversations: [conversation] } as any;
+  assert.equal(service.withHints(state).operations[0].observationId, view.id);
+  assert.equal('observationId' in operation, false);
   assert.equal((await sharp(service.image(operation.id, view.id)).metadata()).format, 'webp');
   await service.accept({ ...input, toolCallId: 'next-call' });
   assert.throws(() => service.image(operation.id, view.id), /newer view/);
   conversation.deleted = true; assert.throws(() => service.read(operation.id), /original conversation changed/);
+  assert.equal(service.withHints(state).operations[0].observationId, undefined);
+  conversation.deleted = false; conversation.nativeId = randomUUID();
+  assert.equal(service.withHints(state).operations[0].observationId, undefined);
+  conversation.nativeId = operation.nativeId; store.epoch = randomUUID();
+  assert.equal(service.withHints(state).operations[0].observationId, undefined);
+});
+
+test('a late image changes the authenticated state ETag after completion without changing the saved run', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nova-late-observation-'));
+  const gateway = { status: () => ({ state: 'unconfigured', message: 'Fixture only', methods: [], grantedScopes: [], modelAuthReady: false }), models: async () => [], subscribe: () => () => {}, request: async () => ({}) } as any;
+  const server = await startServer({ directory, port: 0, gateway });
+  t.after(async () => { await server.close(); rmSync(directory, { recursive: true, force: true }); });
+  const headers = { 'X-Edition3-Client': '1', 'Content-Type': 'application/json' };
+  const session = await fetch(server.origin + '/api/session', { method: 'POST', headers, body: '{}' });
+  const cookie = session.headers.get('set-cookie')!.split(';')[0];
+  const settledAt = new Date(Date.now() - 60000).toISOString();
+  const operation = { id: randomUUID(), epoch: server.store.epoch, conversationId: randomUUID(), nativeKey: 'e3:fixture', nativeId: randomUUID(), nativeRunId: randomUUID(), connectionGeneration: randomUUID(), state: 'completed', createdAt: settledAt, updatedAt: settledAt, settledAt, text: 'Completed earlier', tools: [] };
+  const conversation = { id: operation.conversationId, nativeId: operation.nativeId, connectionGeneration: operation.connectionGeneration, deleted: false, createdAt: settledAt, updatedAt: settledAt };
+  server.store.internalWrite(`assistant:operation:${operation.id}`, operation);
+  server.store.internalWrite(`assistant:conversation:${conversation.id}`, conversation);
+  const read = (etag?: string, authenticated = true) => fetch(server.origin + '/api/assistant/state', { headers: { ...headers, ...(authenticated ? { Cookie: cookie } : {}), ...(etag ? { 'If-None-Match': etag } : {}) } });
+  const before = await read(), oldTag = before.headers.get('etag')!;
+  assert.equal(before.status, 200); assert.equal((await before.json()).operations[0].observationId, undefined);
+  assert.equal((await read(oldTag)).status, 304);
+  const bytes = await sharp({ create: { width: 24, height: 12, channels: 3, background: '#f7f6f2' } }).png().toBuffer();
+  await server.observations.accept({ epoch: operation.epoch, nativeKey: operation.nativeKey, nativeId: operation.nativeId, runId: operation.nativeRunId, toolName: 'computer-use.screenshot', toolCallId: 'late-call', image: { mimeType: 'image/png', data: bytes.toString('base64') } });
+  const after = await read(oldTag), newTag = after.headers.get('etag')!;
+  assert.equal(after.status, 200); assert.notEqual(newTag, oldTag);
+  const current = await after.json(), view = server.observations.read(operation.id)!;
+  assert.deepEqual(current.operations[0], { ...operation, observationId: view.id });
+  assert.deepEqual(server.assistant.operations()[0], operation, 'Image discovery cannot change saved status, timestamps, tools or text');
+  assert.equal((await read(newTag)).status, 304);
+  assert.equal((await read(newTag, false)).status, 401, 'Conditional reads still require authentication');
+  assert.equal(JSON.stringify(current).includes(bytes.toString('base64')), false);
 });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { observationSchema, type AssistantObservation } from '../../packages/domain/assistant-observation.js';
+import type { AssistantState } from '../../packages/domain/assistant.js';
 import type { AssistantService } from './assistant.js';
 import { Fault, type Store } from './store.js';
 
@@ -36,5 +37,14 @@ export class AssistantObservations {
     return this.frames.get(operationId);
   }
   read(operationId: string) { return this.frame(operationId)?.metadata ?? null; }
+  withHints(state: AssistantState): AssistantState {
+    if (!this.frames.size) return state;
+    const conversations = new Map(state.conversations.map(conversation => [conversation.id, conversation]));
+    return { ...state, operations: state.operations.map(operation => {
+      const frame = this.frames.get(operation.id), conversation = conversations.get(operation.conversationId);
+      return frame && operation.epoch === this.store.epoch && conversation && !conversation.deleted && conversation.nativeId === operation.nativeId && conversation.connectionGeneration === operation.connectionGeneration
+        ? { ...operation, observationId: frame.metadata.id } : operation;
+    }) };
+  }
   image(operationId: string, id: string) { const frame = this.frame(operationId); if (!frame || frame.metadata.id !== id) throw new Fault(404, 'observation_missing', 'A newer view is available.'); return frame.bytes; }
 }

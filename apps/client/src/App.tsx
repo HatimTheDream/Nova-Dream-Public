@@ -95,10 +95,10 @@ export function App() {
   return <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>;
 }
 function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
-  const assistant = useAssistant(snapshot);
+  const [route, setRoute] = useState<Route>('home');
+  const assistant = useAssistant(snapshot, route === 'assistant');
   const [voice] = useState(() => new VoiceController(snapshot.deviceId));
   useEffect(() => { const release = () => voice.dispose(); window.addEventListener('pagehide', release); return () => { window.removeEventListener('pagehide', release); release(); }; }, [voice]);
-  const [route, setRoute] = useState<Route>('home');
   const [connectionOrigin, setConnectionOrigin] = useState<ModuleId | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null);

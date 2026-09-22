@@ -3,6 +3,7 @@ import { canonical, type Command, type Entity, type Kind, type Snapshot } from '
 import type { AccessContext } from '../../../packages/domain/phone';
 import { ApiError, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
 import type { DownloadProgress } from './download-progress';
+import { startPolling } from './polling';
 
 export function useWorkspace() {
   const [startupPhase, setStartupPhase] = useState<'connecting' | 'session' | 'workspace'>('connecting');
@@ -16,6 +17,7 @@ export function useWorkspace() {
   const [error, setError] = useState('');
   const [updateRequired, setUpdateRequired] = useState(false);
   const refreshing = useRef(false);
+  const failed = useRef(false);
   const refresh = useCallback(async () => {
     if (refreshing.current || gated.current) return;
     refreshing.current = true;
@@ -33,8 +35,9 @@ export function useWorkspace() {
       if (!current.current || next.epoch !== current.current.epoch || next.cursor >= current.current.cursor) {
         current.current = next; setSnapshot(next); saveLocal('e3:snapshot', next);
       }
-      setOnline(true); setError('');
+      failed.current = false; setOnline(true); setError('');
     } catch (reason) {
+      failed.current = true;
       if (reason instanceof ApiError && reason.code === 'phone_pair_required') { denyPhone(); return; }
       setOnline(false); setError(reason instanceof ApiError ? reason.message : 'Host unavailable. Your device keeps unsaved drafts.');
     } finally { refreshing.current = false; }
@@ -62,8 +65,8 @@ export function useWorkspace() {
       }
       setError('Host unavailable. Start the Nova Dream service, then reconnect.');
     });
-    const timer = setInterval(() => { void refresh(); }, 2500);
-    return () => { alive = false; clearInterval(timer); window.removeEventListener('e3:pair-required', denied); window.removeEventListener('e3:update-required', outdated); };
+    const stop = startPolling({ read: async () => { await refresh(); return !failed.current; }, interval: () => gated.current ? null : 10000, hiddenInterval: 30000, immediate: false });
+    return () => { alive = false; stop(); window.removeEventListener('e3:pair-required', denied); window.removeEventListener('e3:update-required', outdated); };
   }, [refresh, denyPhone]);
   const reconnect = async () => { try {
     setError(''); setDownload(undefined); setStartupPhase('connecting');

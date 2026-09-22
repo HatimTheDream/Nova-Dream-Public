@@ -1,3 +1,9 @@
+## [1.9.9] — 2026-09-22
+
+- Reduce repeated workspace and Assistant reads while idle, on another page or in a hidden tab; refresh promptly on return and retain fast updates for active work.
+- Back off failed background reads instead of repeatedly retrying at the normal active rate, without replacing pending requests or interrupting server work.
+- Reduce idle Connections and empty request-card polling, stop recurring closed or completed tool-view checks, and preserve discovery of tool images that arrive later.
+
 ## [1.9.8] — 2026-09-22
 
 - Make Voice the primary empty-composer action on desktop and narrow screens; switch to Send for text or files, and Stop or Queue during work. Keep dictation separate and prevent empty Enter from starting a call.

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AssistantOperation } from '../../../packages/domain/assistant';
 import type { AssistantObservation } from '../../../packages/domain/assistant-observation';
 import { request } from './api';
+import { startPolling } from './polling';
 import { Square } from './icons';
 import './assistant-activity.css';
 
@@ -11,23 +12,29 @@ export function AssistantActivityPanel({ operation, open, show, close, stop, ava
   const [stopping, setStopping] = useState(false);
   const announced = useRef<string | null>(null), callbacks = useRef({ show, available }); callbacks.current = { show, available };
   const working = !!operation && !['completed', 'failed', 'cancelled'].includes(operation.state);
-  const workingRef = useRef(working); workingRef.current = working;
+  const active = working && operation?.state !== 'unknown';
+  const toolEvidence = operation?.tools?.map(tool => `${tool.id}:${tool.state}`).join('|');
   useEffect(() => {
     setView(null); setError(''); announced.current = null; callbacks.current.available(false);
+  }, [operation?.id]);
+  useEffect(() => {
     if (!operation) return;
-    let alive = true, timer: ReturnType<typeof setTimeout>;
+    let alive = true, found = false;
+    // The state response signals late images. Keep a bounded first-view fallback
+    // for older hosts without that hint; a closed view never leaves an idle loop.
+    const discoverUntil = !announced.current ? Date.now() + 6000 : 0;
     const abort = new AbortController();
-    const poll = async () => {
+    const end = startPolling({ read: async () => {
       try {
         const next = await request<AssistantObservation | null>(`assistant/observation/${operation.id}`, undefined, abort.signal);
         if (!alive) return;
+        found = !!next;
         callbacks.current.available(!!next); setView(current => current?.id === next?.id ? current : next); setError('');
         if (next && !announced.current) { announced.current = next.id; callbacks.current.show(); }
-      } catch (e) { if (alive) { callbacks.current.available(false); setView(null); setError(e instanceof Error ? e.message : 'View updates paused.'); } }
-      if (alive) timer = setTimeout(() => void poll(), workingRef.current ? 1000 : 5000);
-    };
-    void poll(); return () => { alive = false; abort.abort(); clearTimeout(timer); };
-  }, [operation?.id]);
+      } catch (e) { if (alive) setError(e instanceof Error ? e.message : 'View updates paused.'); return false; }
+    }, interval: () => open && active ? 1000 : !found && Date.now() < discoverUntil ? 1500 : null, hiddenInterval: null });
+    return () => { alive = false; end(); abort.abort(); };
+  }, [operation?.id, operation?.state, operation?.observationId, toolEvidence, open, active]);
   if (!open) return null;
   const content = <section className="assistant-activity-panel" aria-label="Live tool view">
     <p className={working && operation?.state !== 'unknown' ? 'activity-live' : 'metadata'}>{operation?.state === 'unknown' ? 'Last reported · Outcome unconfirmed' : operation?.cancelRequested ? 'Stopping…' : working ? 'Live' : operation?.state === 'completed' ? 'Finished' : operation?.state === 'cancelled' ? 'Stopped' : 'Latest run'}</p>
