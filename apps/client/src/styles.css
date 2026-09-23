@@ -423,7 +423,7 @@
   .selected-conversation { border: 2px solid color-mix(in srgb, var(--violet) 28%, var(--line)); }
   .conversation-header { background: var(--surface); border-bottom-width: 2px; }
   .conversation-title > strong { font-size: 15px; font-weight: 680; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-  .conversation-reading { background: color-mix(in srgb, var(--canvas) 60%, var(--surface)); }
+  .conversation-reading { background: var(--canvas); }
   .composer { border: 2px solid var(--line); box-shadow: 0 4px 0 var(--line); border-radius: 24px; }
   .composer:focus-within { border-color: color-mix(in srgb, var(--violet) 60%, var(--line)); box-shadow: 0 4px 0 color-mix(in srgb, var(--violet) 60%, var(--line)); }
   .suggestions button { border-color: var(--line); box-shadow: 0 3px 0 var(--line); }

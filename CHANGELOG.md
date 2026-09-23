@@ -1,3 +1,8 @@
+## [1.10.1] — 2026-09-22
+
+- Give Assistant messages and the surrounding composer area one continuous background in both themes, preserving the distinct chat header and input controls.
+- Include the saved planning, Auto effort, Read aloud, generated-image actions, Goal polling and steps-pill improvements from 1.10.0.
+
 ## [1.10.0] — 2026-09-22
 
 - Add saved Assistant plans with numbered questions, retained proposal versions, amendments and exact approval before one implementation run. Enforce Plan and Research tool restrictions through the managed runtime.
