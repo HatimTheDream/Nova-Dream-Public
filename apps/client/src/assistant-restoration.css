@@ -308,7 +308,9 @@
 @media(max-width:480px) { .composer-progress { margin-inline:6px; } .composer-progress summary { gap:6px; padding-inline:8px; } }
 
 .composer-progress .steps-pill { position:relative; z-index:12; width:100%; display:flex; justify-content:center; height:44px; margin:0; color:var(--text); }
-.steps-pill .run-plan-pill { position:relative; display:grid; place-items:center; min-width:64px; min-height:44px; height:44px; padding:0; border:0; border-radius:20px; background:transparent; box-shadow:none; }
+/* Keep the 44px touch target transparent; only its compact inner face is painted. */
+:root .steps-pill>button.run-plan-pill { --button-depth:0px; --button-shadow-depth:0px; --button-fill:transparent; --button-border:transparent; position:relative; display:grid; place-items:center; min-width:64px; min-height:44px; height:44px; padding:0; border:0; border-radius:20px; background:transparent; box-shadow:none; text-transform:none; }
+:root .steps-pill>button.run-plan-pill:is(:hover,:active):not(:disabled) { background:transparent; border-color:transparent; box-shadow:none; translate:none; }
 .steps-pill-face { display:flex; align-items:center; justify-content:center; gap:7px; min-width:62px; height:32px; padding:0 11px; border:1px solid color-mix(in srgb,var(--violet) 22%,var(--line)); border-radius:999px; background:var(--surface); box-shadow:0 2px 0 var(--line); }
 .run-plan-pill:hover .steps-pill-face,.run-plan-pill[aria-expanded=true] .steps-pill-face { background:var(--raised); }
 .steps-pill-face>strong { font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; }

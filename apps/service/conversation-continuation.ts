@@ -1,3 +1,4 @@
+import { nativeThinking } from '../../packages/domain/auto-effort.js';
 import { randomUUID } from 'node:crypto';
 import { GatewayClientRequestError } from '@openclaw/gateway-client';
 import { z } from 'zod';
@@ -143,7 +144,7 @@ export class ConversationContinuation {
       }
       this.current(intent); intent = this.put({ ...intent, state: 'dispatching' });
       awaitingCreate = true;
-      const response = await this.gateway.request<{ key?: string; sessionId?: string; runStarted?: boolean; entry?: { sessionId?: string; permissionMode?: string; permissionModePending?: boolean } }>('sessions.create', { key: intent.nativeKey, idempotencyKey: intent.requestId, label: intent.source.title, ...(intent.source.model ? { model: intent.source.model } : {}), ...(intent.source.thinking ? { thinkingLevel: intent.source.thinking } : {}), ...(intent.source.fastMode != null ? { fastMode: intent.source.fastMode } : {}), permissionMode: 'read-only', emitCommandHooks: false });
+      const response = await this.gateway.request<{ key?: string; sessionId?: string; runStarted?: boolean; entry?: { sessionId?: string; permissionMode?: string; permissionModePending?: boolean } }>('sessions.create', { key: intent.nativeKey, idempotencyKey: intent.requestId, label: intent.source.title, ...(intent.source.model ? { model: intent.source.model } : {}), ...(nativeThinking(intent.source.thinking) ? { thinkingLevel: nativeThinking(intent.source.thinking) } : {}), ...(intent.source.fastMode != null ? { fastMode: intent.source.fastMode } : {}), permissionMode: 'read-only', emitCommandHooks: false });
       awaitingCreate = false;
       this.current(intent);
       if (response.key !== intent.nativeKey || !isSessionId(response.sessionId) || response.sessionId === intent.source.nativeId || response.runStarted || response.entry?.sessionId !== response.sessionId || response.entry?.permissionMode !== 'read-only' || response.entry.permissionModePending === true) throw new Fault(409, 'continuation_unconfirmed', 'The new connection is not confirmed. Check this same continuation again; no message has been replayed.');

@@ -1,0 +1,2 @@
+.assistant-workspace .read-aloud-controls { flex-wrap: wrap; border-radius: 16px; }
+.assistant-workspace .read-aloud-controls > span[role=status] { flex: 1 1 150px; padding-block: 8px; }

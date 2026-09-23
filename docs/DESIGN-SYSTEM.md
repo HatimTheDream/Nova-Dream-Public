@@ -12,6 +12,7 @@ The primary 2.0 target is [Assistant Chat UI and feature parity](ASSISTANT-PARIT
 
 - Simplicity, readability and less is more guide every change. Preserve working compact controls; remove duplication before adding interface. Put secondary options in existing menus or disclosures. Add visible explanation only when a particular state or decision needs it. An alternative layout alone is not a defect.
 - Keep response settings as a compact current effort, model chooser, slider and speed/reset control. Capability parity does not require a separate form section or permanent label for every setting.
+- Assistant 1.10 keeps Auto as one added effort position, the existing composer placeholder and the existing five + actions. A simple question uses compact numbered answers and inline Send. Avoid extra prompts, subtitles or redundant request headings. Active step progress has one visible pill and leaves the composer after confirmed completion; uncertain work keeps its honest status.
 - Make actions recognizable before hover. Use one coherent button family, clear selection and visible focus.
 - Remove redundant navigation arrows and ornamental icons from cards. An icon should identify an action, state or meaningful category.
 - Use Title Case for authored UI headings and short labels. Preserve normal sentence case in explanatory prose and preserve user-entered titles, messages and imported data exactly. Do not add subtitles that merely repeat a heading.

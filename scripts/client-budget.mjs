@@ -127,7 +127,11 @@ import assert from 'node:assert/strict';
 // 1.9.14 adds recoverable project organization and compact Inbox/Calendar controls.
 // First coherent build: 629,040 total (+2,363 / 0.38% over 1.9.13).
 // Bound this slice at 630 KB; startup and individual deferred-chunk ceilings hold.
-export const clientLimits = { startup: 180000, total: 630000, deferredChunk: 80000 };
+// 1.10 adds saved Plan review, task-aware Auto, configured read-aloud playback,
+// and direct image actions. Measured 635,286 total gzip bytes (+6,246 / 0.99%
+// over the 1.9.14 measurement above); startup 147,963 and largest deferred
+// chunk 76,337. Bound at 637 KB; retain startup and per-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 637000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

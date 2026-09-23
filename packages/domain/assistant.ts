@@ -75,6 +75,8 @@ export type Conversation = {
 };
 export type ConversationChanges = Partial<Pick<Conversation, 'title' | 'archived' | 'deleted' | 'pinned' | 'unread' | 'projectId' | 'model' | 'thinking' | 'fastMode' | 'permissionMode'>>;
 export type ContextManifest = {
+  planReview?: import('./assistant-plan.js').PlanReference & { previousProposal?: import('./assistant-plan.js').PlanProposal };
+  approvedPlan?: import('./assistant-plan.js').PlanReference & { digest: string; proposal: import('./assistant-plan.js').PlanProposal };
   resumeDigest?: string;
   space?: AssistantSpace;
   memory?: import('./memory.js').MemorySnapshot;
@@ -86,6 +88,8 @@ export type ContextManifest = {
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;
 };
 export type AssistantOperation = {
+  effortDemand?: import('./auto-effort.js').EffortDemand;
+  autoEffort?: import('./auto-effort.js').AutoEffortDecision;
   accountSelection?: Conversation['accountSelection'];
   plan?: import('./run-plan.js').RunStep[]; planSequence?: number;
   id: string; requestId: string; deviceId: string; epoch: string; conversationId: string;
@@ -102,6 +106,7 @@ export type AssistantOperation = {
   effectiveModel?: string; nativeTurnId?: string;
 };
 export type QueuedMessage = {
+  effortDemand?: import('./auto-effort.js').EffortDemand;
   id: string; revision: number; deviceId: string; epoch: string;
   conversationId: string; nativeId: string; connectionGeneration: string;
   input: string; context: ContextManifest; model: string | null; thinking: string | null;
@@ -135,5 +140,5 @@ export type ConversationHistory = {
   routingContract?: string; leafEntryId?: string | null;
   nativeSettings?: { permissionModePending?: boolean; title?: string; archived?: boolean; pinned?: boolean; unread?: boolean; model?: string; thinking?: string; fastMode?: boolean | 'auto' | null; permissionMode?: 'read-only' | 'guarded' | 'workspace' | 'full' | null; lifecycleRevision?: number };
 };
-export type AssistantState = { removals?: import('./conversation-removal.js').ConversationRemoval[]; memory?: import('./memory.js').MemoryState; questions?: import('./questions.js').QuestionState; approvals?: import('./approvals.js').ApprovalState; connection: AssistantConnection; conversations: Conversation[]; operations: AssistantOperation[]; pins?: import('./message-pins.js').MessagePin[]; historyVersions?: Record<string, number>; queue?: QueuedMessage[] };
+export type AssistantState = { plans?: import('./assistant-plan.js').AssistantPlan[]; removals?: import('./conversation-removal.js').ConversationRemoval[]; memory?: import('./memory.js').MemoryState; questions?: import('./questions.js').QuestionState; approvals?: import('./approvals.js').ApprovalState; connection: AssistantConnection; conversations: Conversation[]; operations: AssistantOperation[]; pins?: import('./message-pins.js').MessagePin[]; historyVersions?: Record<string, number>; queue?: QueuedMessage[] };
 export type AssistantModel = { id: string; name: string; provider: string; reasoning?: string[]; available: boolean; isDefault?: boolean };

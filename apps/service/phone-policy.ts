@@ -36,6 +36,8 @@ GET /api/assistant/models
 GET /api/assistant/outputs
 GET /api/assistant/state
 GET /api/assistant/voice/catalog
+GET /api/assistant/read-aloud/catalog
+POST /api/assistant/read-aloud/speak
 GET /api/home/weather
 GET /api/home/weather/locations
 GET /api/calendar/state
@@ -89,6 +91,8 @@ POST /api/assistant/search
 POST /api/assistant/steer
 POST /api/assistant/module-actions
 POST /api/assistant/module-action
+POST /api/assistant/plan/approve
+POST /api/assistant/plan/amend
 POST /api/assistant/submit
 POST /api/assistant/voice/consult
 POST /api/assistant/voice/end

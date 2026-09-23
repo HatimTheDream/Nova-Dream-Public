@@ -54,7 +54,7 @@ test('source tools bind exact captured files and suppress late readings after th
 });
 test('canonical Task, Contact, Content, Profile, Agent, Project and Home writes preserve unrelated fields and survive duplicate tool calls',async t=>{
  const f=fixture(t);
- for(const [kind,changes] of Object.entries({task:{title:'Workshop'},contact:{name:'Mina',otherOrganizations:['Harbor']},content:{title:'Outline'},agent:{name:'Editor',position:'Content editor'},project:{name:'Workshop',purpose:'Bring people together'},profile:{name:'Alex'}})){
+ for(const [kind,changes] of Object.entries({task:{title:'Workshop'},contact:{name:'Mina',otherOrganizations:['Harbor']},content:{title:'Outline'},agent:{name:'Editor',position:'Content editor'},project:{name:'Workshop',purpose:'Bring people together'},profile:{name:'Hatim'}})){
   const input=f.save(kind,changes),[a,b]=await Promise.all([f.invoke(input),f.invoke(input)]);assert.equal(a.state,'applied',kind);assert.equal(a.id,b.id);assert.equal(f.store.listEntities(kind as any).length,1,kind);
   const entity:any=a.result;assert.equal(entity.revision,1);assert.equal(entity.deviceId,f.device);
   assert.equal((await f.invoke(input)).id,a.id);
@@ -67,7 +67,7 @@ test('canonical Task, Contact, Content, Profile, Agent, Project and Home writes 
 test('read-only, planning, changed native identity, revoked access and inactive runs are blocked before writes',async t=>{
  const f=fixture(t);const input=f.save('task',{title:'Blocked'});
  for(const patch of [{permissionMode:'read-only'},{nativeId:randomUUID()},{epoch:randomUUID()},{nativeKey:'foreign'}])await assert.rejects(f.invoke({...input,...patch}));
- f.operation.context.workMode='plan';await assert.rejects(f.invoke(input),/planning/);f.operation.context.workMode='build';
+ for(const mode of ['plan','research']){f.operation.context.workMode=mode;await assert.rejects(f.invoke(input),/planning|research/);}f.operation.context.workMode='build';
  f.operation.cancelRequested=true;await assert.rejects(f.invoke(input),/no longer running/);f.operation.cancelRequested=false;
  f.operation.state='completed';await assert.rejects(f.invoke(input),/no longer running/);f.operation.state='running';
  f.conversation.pendingSettings={};await assert.rejects(f.invoke(input),/active/);assert.equal(f.store.listEntities('task').length,0);
@@ -80,6 +80,12 @@ test('guarded local changes require review and exact revisions prevent an overwr
  f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'task',entityId:task.id,expectedRevision:task.revision,payload:{...task.value,title:'Newer direct edit'}});
  assert.equal((await f.decide(b,'apply')).state,'failed');assert.equal(f.store.readEntity('task',task.id)?.value.title,'Newer direct edit');
  const cancelled=await f.invoke(f.save('task',{title:'Never applied'}));assert.equal((await f.decide(cancelled,'cancel')).state,'cancelled');assert.equal(f.store.listEntities('task').length,1);
+});
+
+test('ordinary follow-up module writes cannot bypass a pending exact plan review',async t=>{
+ const f=fixture(t);(f.service as any).s.assistant.plans={requiresProtection:()=>true};
+ await assert.rejects(f.invoke(f.save('task',{title:'Plain yes is not approval'})),/approve its proposal/);
+ assert.equal(f.store.listEntities('task').length,0);
 });
 test('tool identities bind the input and local lost responses recover the original receipt exactly once',async t=>{
  const f=fixture(t),input=f.save('task',{title:'Once'}),mutate=f.store.mutate.bind(f.store);let lose=true;

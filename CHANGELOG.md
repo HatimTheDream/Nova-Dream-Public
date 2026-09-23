@@ -1,3 +1,12 @@
+## [1.10.0] — 2026-09-22
+
+- Add saved Assistant plans with numbered questions, retained proposal versions, amendments and exact approval before one implementation run. Enforce Plan and Research tool restrictions through the managed runtime.
+- Add Auto to the existing effort control, choosing a supported reasoning level for each text request and preserving that choice through queues and uncertain retries.
+- Improve Read aloud with speech-ready text, sentence-aware chunks, configured speech playback and explicit device-voice fallback; keep preparation, pause and stop tied to actual playback.
+- Show generated images in the conversation with direct View, Download and Refine actions; retain the existing composer prompt, mode chips and menu layout.
+- Stop recurring Goal reads in ordinary chats without goals and surface unconfirmed goal status with recovery.
+- Fix the doubled steps-pill outline and remove it after confirmed completion, retaining interrupted and unconfirmed progress for review.
+
 ## [1.9.14] — 2026-09-22
 
 - Add reversible project removal from Assistant and Project settings, with Restore in Deleted. Keep conversations, drafts, source folders and captured work intact; hide removed projects from new-work choices.

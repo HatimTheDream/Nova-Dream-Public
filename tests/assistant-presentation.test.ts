@@ -40,3 +40,17 @@ test('queue summary distinguishes automatic work from paused writing and exclude
   assert.equal(messageQueueSummary(items.slice(1)), '2 paused');
   assert.equal(messageQueueSummary(items.slice(3)), 'Message queue');
 });
+
+test('the step dock clears only after confirmed completion, including an unfinished last step report', () => {
+  const plan = [{ id: 'first', label: 'Inspect', status: 'complete' }, { id: 'second', label: 'Finish', status: 'active' }] as NonNullable<AssistantOperation['plan']>;
+  const render = (state: AssistantOperation['state'], steps = plan) => renderToStaticMarkup(createElement(StepsPill, { operation: { id: 'same-operation', state, plan: steps } as AssistantOperation, plan: steps }));
+  assert.equal(render('completed'), '');
+  assert.equal(render('completed', plan.map(step => ({ ...step, status: 'complete' }))), '');
+  assert.match(render('running'), /Step 2 of 2/);
+  assert.match(render('running', plan.map(step => ({ ...step, status: 'complete' }))), /2 of 2 complete/);
+  for (const state of ['failed', 'cancelled', 'unknown'] as const) {
+    assert.match(render(state), /run-plan-pill/);
+    assert.doesNotMatch(render(state), /class="run-pulse"/);
+  }
+  assert.equal(plan[1].status, 'active', 'Hiding the dock must not rewrite saved progress');
+});

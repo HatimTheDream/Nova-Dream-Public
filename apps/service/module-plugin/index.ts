@@ -1,8 +1,11 @@
 import { toolImage } from '../../../packages/domain/assistant-observation.js';
 import { z } from 'zod';
 import { modulePluginId, moduleActionInputSchema } from '../../../packages/domain/module-actions.js';
+import { planProposalSchema } from '../../../packages/domain/assistant-plan.js';
 type Session = { sessionId?:string; permissionMode?:string; permissionModePending?:boolean };
 export type ModulePluginApi = {
+ registerTrustedToolPolicy?(policy: {id:string;description:string;evaluate:(event:{toolName:string},context:{agentId?:string;sessionKey?:string;sessionId?:string;runId?:string})=>Promise<{block:boolean;blockReason?:string}|void>}):void;
+ registerGatewayMethod?(name:string,handler:(context:{params:Record<string,unknown>;respond:(ok:boolean,result?:unknown,error?:unknown)=>void})=>void,options:{scope:'operator.read'}):void;
  on?(name: 'after_tool_call', handler: (event: {toolName:string;toolCallId?:string;runId?:string;result?:unknown;error?:string}, context: {agentId?:string;sessionKey?:string;sessionId?:string;runId?:string;toolCallId?:string}) => Promise<void>):void;
  registrationMode:string; pluginConfig?:Record<string,unknown>;
  runtime:{version:string;agent:{session:{getSessionEntry(input:{agentId:string;sessionKey:string;readConsistency:'latest'}):Session|undefined}}};
@@ -10,8 +13,43 @@ export type ModulePluginApi = {
 };
 export function registerModuleTools(api:ModulePluginApi){
  if(!['full','tool-discovery'].includes(api.registrationMode))return;
- const config=z.object({epoch:z.uuid(),bundlePath:z.string().min(1),url:z.url(),token:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(api.pluginConfig);
+ const config=z.object({epoch:z.uuid(),bundlePath:z.string().min(1),url:z.url(),token:z.string().regex(/^[a-f0-9]{64}$/),sessionBindings:z.array(z.object({nativeKey:z.string().min(1).max(300),nativeId:z.uuid()}).strict()).optional()}).strict().parse(api.pluginConfig);
+ const protectedSessions = new Set((config.sessionBindings ?? []).map(item => JSON.stringify([item.nativeKey,item.nativeId])));
  const url=new URL(config.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.pathname!=='/workspace'||url.search||url.hash||url.username||url.password)throw new Error('Workspace tools require the owning loopback service.');
+ const bridge = async (path:string,body:unknown) => {
+  const response = await fetch(config.url+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.token},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(5000)});
+  const result = await response.json();
+  if(!response.ok)throw new Error(typeof result?.message==='string'?result.message:'The original Nova request could not be verified.');
+  return result;
+ };
+ if(api.registrationMode==='full' && api.runtime.version==='2026.9.2' && api.registerTrustedToolPolicy && api.registerGatewayMethod) {
+  // The declared trusted pre-tool policy checks the original Nova request.
+  // Bridge failures block; planning prompt text is not the permission boundary.
+  api.registerTrustedToolPolicy({id:'nova-plan-read-only',description:'Honor the original Nova Plan and Research tool boundary.',evaluate:async(event,context)=>{
+   if(context.agentId!=='main')return;
+   if(!context.sessionKey||!protectedSessions.has(JSON.stringify([context.sessionKey,context.sessionId])))return;
+   if(!context.sessionKey||!context.sessionId)return {block:true,blockReason:'The Nova conversation identity is unavailable.'};
+   try {
+    const result = await bridge('/policy',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,...(context.runId?{runId:context.runId}:{}),toolName:event.toolName});
+    return z.object({block:z.boolean(),blockReason:z.string().optional()}).strict().parse(result);
+   } catch { return {block:true,blockReason:'The Nova tool policy could not be checked. Reconnect before continuing.'}; }
+  }});
+  api.registerGatewayMethod('e3.workspace.policy',({params,respond})=>{
+   const input=z.object({nativeKey:z.string().min(1),nativeId:z.uuid()}).strict().safeParse(params);
+   if(!input.success||api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:input.data.nativeKey,readConsistency:'latest'})?.sessionId!==input.data.nativeId)return respond(false,undefined,{code:'INVALID_REQUEST',message:'The original Nova session is unavailable.'});
+   protectedSessions.add(JSON.stringify([input.data.nativeKey,input.data.nativeId]));
+   respond(true,{version:1,protected:true,...input.data});
+  },{scope:'operator.read'});
+ }
+ api.registerTool(context=>{
+  if(context.agentId!=='main'||!context.sessionKey||!context.sessionId||api.runtime.version!=='2026.9.2')return null;
+  return {name:'nova_plan',label:'Save plan for review',description:'Save the concrete Plan proposal after necessary questions are answered. The owner reviews the saved version and explicitly approves implementation. This tool does not perform or approve implementation. Call once, then finish this planning turn.',parameters:z.toJSONSchema(planProposalSchema),async execute(toolCallId:string,raw:unknown){
+   const proposal=planProposalSchema.parse(raw),session=api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey!,readConsistency:'latest'});
+   if(!session||session.sessionId!==context.sessionId||session.permissionModePending)throw new Error('The planning conversation changed.');
+   const result=await bridge('/plan',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,toolCallId,proposal});
+   return {content:[{type:'text',text:JSON.stringify(result)}],details:result,isError:false};
+  }};
+ },{names:['nova_plan']});
  if(api.registrationMode==='full')api.on?.('after_tool_call', async (event, context) => {
   if(context.agentId !== 'main' || !context.sessionKey || !context.sessionId || !context.runId || !context.toolCallId || event.error) return;
   if(api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey,readConsistency:'latest'})?.sessionId !== context.sessionId) return;

@@ -42,3 +42,21 @@ test('visual hook forwards actual image results only from the exact main session
  await hook(event,{...context,sessionId:randomUUID()});await hook(event,{...context,agentId:'other'});await hook({...event,error:'failed'},context);await hook({...event,result:{path:'/private/file'}},context);assert.equal(received.length,0);
  await hook(event,context);assert.equal(received.length,1);assert.equal(received[0].url,'/workspace/observation');assert.equal(received[0].body.runId,context.runId);assert.equal(received[0].body.toolCallId,'actual-call');assert.equal(received[0].body.image.data,'aGVsbG8=');
 });
+
+test('trusted native policy checks exact session and blocks failed bridge checks; capability requires the real policy API', async t => {
+ const received:any[]=[];let offline=false;
+ const server=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;received.push({path:req.url,body:JSON.parse(body)});res.setHeader('Content-Type','application/json');if(offline){res.writeHead(503);res.end('{}');return;}res.end(JSON.stringify({block:received.at(-1).body.toolName==='exec',blockReason:'Plan review required'}));});
+ await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise<void>(r=>server.close(()=>r())));
+ const epoch=randomUUID(),sessionId=randomUUID();let policy:any,method:any;
+ const api:ModulePluginApi={registrationMode:'full',pluginConfig:{epoch,bundlePath:'/owned/plugin',url:`http://127.0.0.1:${(server.address() as any).port}/workspace`,token:'b'.repeat(64)},runtime:{version:'2026.9.2',agent:{session:{getSessionEntry:()=>({sessionId})}}},registerTool:()=>{},registerTrustedToolPolicy:value=>policy=value,registerGatewayMethod:(name,value)=>{assert.equal(name,'e3.workspace.policy');method=value;}};
+ registerModuleTools(api);assert.equal(policy.id,'nova-plan-read-only');
+ let handshake:any;method({params:{nativeKey:'agent:main:e3:fixture',nativeId:sessionId},respond:(...args:any[])=>handshake=args});assert.equal(handshake[0],true);
+ const context={agentId:'main',sessionId,sessionKey:'agent:main:e3:fixture',runId:randomUUID()};
+ assert.equal((await policy.evaluate({toolName:'exec'},context)).block,true);assert.equal((await policy.evaluate({toolName:'read'},context)).block,false);
+ assert.equal(received[0].path,'/workspace/policy');assert.equal(received[0].body.nativeId,sessionId);assert.equal(received[0].body.runId,context.runId);
+ const count=received.length;assert.equal(await policy.evaluate({toolName:'exec'},{...context,agentId:'edition3-assignment'}),undefined);assert.equal(received.length,count);
+ offline=true;assert.equal((await policy.evaluate({toolName:'read'},context)).block,true);assert.equal(await policy.evaluate({toolName:'exec'},{...context,sessionKey:'agent:main:unrelated'}),undefined);
+ let response:any;method({params:{nativeKey:context.sessionKey,nativeId:sessionId},respond:(...args:any[])=>response=args});assert.equal(response[0],true);assert.equal(response[1].protected,true);
+ method({params:{nativeKey:context.sessionKey,nativeId:randomUUID()},respond:(...args:any[])=>response=args});assert.equal(response[0],false);
+ let registered=false;registerModuleTools({...api,registerTrustedToolPolicy:undefined,registerGatewayMethod:()=>{registered=true;}});assert.equal(registered,false);
+});

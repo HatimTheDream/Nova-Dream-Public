@@ -99,20 +99,22 @@ test('approval respects restricted and external decisions without inventing perm
 
 test('questions keep saved selected choices, descriptions and a single submit action', () => {
   const view = render(createElement(QuestionCard, { item: question(), epoch: 'epoch', ready: true, refresh }), { writing: { choices: { format: ['Brief'] }, text: {} } });
-  assert.deepEqual(view.buttons.map(button => button.label), ['Submit answer', 'Cancel question']);
-  assert.equal(view.button('Submit answer').disabled, false);
-  assert.match(view.button('Submit answer').className, /request-primary/);
+  assert.deepEqual(view.buttons.map(button => button.label), ['Send answer', 'Cancel question']);
+  assert.equal(view.button('Send answer').disabled, false);
+  assert.match(view.button('Send answer').className, /request-primary/);
   assert.match(view.button('Cancel question').className, /request-secondary/);
-  assert.equal(view.inputs.filter(input => input.type === 'radio').length, 3);
+  assert.equal(view.inputs.filter(input => input.type === 'radio').length, 2);
   assert.equal(view.inputs.filter(input => 'checked' in input).length, 1);
   assert.match(view.markup, /Only the key decisions/);
-  assert.match(view.markup, /Write an answer/);
+  assert.match(view.markup, /Or write your own answer/);
+  assert.match(view.markup, /question-choice-number[^>]*>1<\/span>/);
+  assert.match(view.markup, /question-choice-number[^>]*>2<\/span>/);
 });
 
 test('subscribed expiry disables a still-pending question and preserves its custom draft for recovery', () => {
   const item = question(), writing = { choices: { format: [] }, other: { format: true }, text: { format: 'Keep the decisions and examples.' } };
   const before = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), { writing });
-  assert.equal(before.button('Submit answer').disabled, false);
+  assert.equal(before.button('Send answer').disabled, false);
   assert.ok(!('disabled' in before.fieldsets[0]));
   // The source still says pending with a future timestamp; the subscribed clock
   // has advanced. This catches reverting the card to a one-off Date.now check.
@@ -129,7 +131,7 @@ test('multi-select and custom answers retain their independent selected values',
   item.snapshot.questions[0].multiSelect = true;
   const view = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), { writing: { choices: { format: ['Brief', 'Detailed'] }, other: { format: true }, text: { format: 'Add links.' } } });
   assert.equal(view.inputs.filter(input => input.type === 'checkbox' && 'checked' in input).length, 3);
-  assert.equal(view.button('Submit answer').disabled, false);
+  assert.equal(view.button('Send answer').disabled, false);
   assert.match(view.markup, /Add links/);
 });
 
@@ -175,4 +177,16 @@ test('answered question receipts stay collapsed without inflating the current re
   assert.ok('open' in mixed.details[0]);
   assert.ok(!('open' in mixed.details[1]));
   assert.doesNotMatch(mixed.markup, /2 requests need your attention/);
+});
+
+
+test('the compact single question keeps numbered choices, a named send arrow and actual cancellation without a duplicate heading', () => {
+  const controller = { approvals: { items: [], state: 'ready' }, questions: { items: [question()], state: 'ready' }, refresh, conversations: [], select: () => {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
+  const view = render(createElement(ApprovalTray, { controller, epoch: 'epoch', conversationId: 'conversation', working: true }), { writing: { choices: { format: ['Brief'] }, text: {} } });
+  assert.doesNotMatch(view.markup, /Nova needs your answer/);
+  assert.match(view.markup, /compact-question-tray/);
+  assert.equal(view.button('Send answer').disabled, false); assert.equal(view.button('Cancel question').disabled, false);
+  assert.equal(view.inputs.filter(input => input.type === 'radio').length, 2);
+  assert.match(view.markup, /question-choice-number[^>]*>1<\/span>/);
+  assert.match(view.markup, /Only the key decisions/);
 });

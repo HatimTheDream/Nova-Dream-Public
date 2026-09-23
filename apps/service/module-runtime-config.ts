@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { modulePluginId } from '../../packages/domain/module-actions.js';
-export function withModulePlugin(raw:unknown,epoch:string,bundlePath:string,bridge:{url:string;token:string}){
+export function withModulePlugin(raw:unknown,epoch:string,bundlePath:string,bridge:{url:string;token:string;sessionBindings?:{nativeKey:string;nativeId:string}[]}){
  const config=z.object({plugins:z.object({enabled:z.boolean().optional(),allow:z.array(z.string()).optional(),load:z.object({paths:z.array(z.string()).optional()}).passthrough().optional(),entries:z.record(z.string(),z.any()).optional()}).passthrough().optional()}).passthrough().parse(raw),p=config.plugins??{},prior=p.entries?.[modulePluginId];
  if(p.enabled===false||prior?.enabled===false)return config;
  // Finite agent tool policies disable native Code Mode/tool search. The two

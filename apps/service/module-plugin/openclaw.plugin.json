@@ -1,1 +1,68 @@
-{"id":"edition3-workspace","name":"Nova Dream workspace tools","description":"Assistant access to the owning Nova Dream module services.","activation":{"onStartup":true},"contracts":{"tools":["nova_read","nova_write"]},"configSchema":{"type":"object","additionalProperties":false,"properties":{"epoch":{"type":"string","format":"uuid"},"bundlePath":{"type":"string","minLength":1},"url":{"type":"string","minLength":1},"token":{"type":"string","minLength":64}},"required":["epoch","bundlePath","url","token"]}}
+{
+  "id": "edition3-workspace",
+  "name": "Nova Dream workspace tools",
+  "description": "Assistant access to the owning Nova Dream module services.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "nova_read",
+      "nova_write",
+      "nova_plan"
+    ],
+    "trustedToolPolicies": [
+      "nova-plan-read-only"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "epoch": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "bundlePath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "url": {
+        "type": "string",
+        "minLength": 1
+      },
+      "token": {
+        "type": "string",
+        "minLength": 64
+      },
+      "sessionBindings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nativeKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "nativeId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "nativeKey",
+            "nativeId"
+          ]
+        }
+      }
+    },
+    "required": [
+      "epoch",
+      "bundlePath",
+      "url",
+      "token"
+    ]
+  }
+}

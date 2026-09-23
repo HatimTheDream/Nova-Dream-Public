@@ -51,10 +51,20 @@ test('a captured local image remains openable/downloadable with the Assistant di
   const file = { id: 'local-image', sha256: 'content-hash', name: 'Earlier.png', mimeType: 'image/png', size: 123 };
   const props = { attachment: { name: file.name, type: 'image', localFile: file, availability: 'local' }, message, conversation, controller: { outputs: [], connection: { state: 'disconnected', generation: 'other' } }, epoch: 'epoch', blocked: true, refine: async () => {}, open: () => assert.fail('Rendering must not open a file'), contentActions: { snapshot: { epoch: 'epoch', deviceId: 'device', records: { content: [] } }, refresh: async () => {}, openContent: () => {} } } as unknown as ComponentProps<typeof GeneratedOutput>;
   const html = renderToStaticMarkup(createElement(GeneratedOutput, props));
-  assert.match(html, /<button>Preview image/); assert.match(html, /<button>Open file/); assert.match(html, /href="\/api\/attachments\/local-image"/);
+  assert.match(html, />View image<\/button>/); assert.match(html, />Retry preview<\/button>/); assert.match(html, /href="\/api\/attachments\/local-image"/);
   assert.doesNotMatch(html, /Save output|Use in Content/);
   const unavailable = renderToStaticMarkup(createElement(GeneratedOutput, { ...props, attachment: { name: file.name, type: 'image', artifactId: 'native-image', availability: 'unavailable' } }));
-  assert.match(unavailable, /<button disabled="">Preview image/);
+  assert.match(unavailable, /disabled=""[^>]*>View image<\/button>/); assert.match(unavailable, /disabled=""[^>]*>Retry preview<\/button>/);
+});
+
+test('saved images retain Use in Content inside closed More while keeping their direct image actions', () => {
+  const file = { id: 'saved-image', sha256: 'content-hash', name: 'Saved.png', mimeType: 'image/png', size: 123 };
+  const output = { id: 'output', conversationId: 'chat', nativeId: 'old-native', messageId: 'old-message', messageHash: 'hash', state: 'ready', artifactId: 'image', version: 1, file } as unknown as AssistantOutput;
+  const props = { attachment: { name: file.name, type: 'image', artifactId: 'image', availability: 'local' }, message, conversation, controller: { outputs: [output] }, epoch: 'epoch', blocked: false, refine: async () => {}, open: () => {}, contentActions: { snapshot: { epoch: 'epoch', deviceId: 'device', records: { content: [] } }, refresh: async () => {}, openContent: () => {} } } as unknown as ComponentProps<typeof GeneratedOutput>;
+  const html = renderToStaticMarkup(createElement(GeneratedOutput, props));
+  assert.match(html, />View image<\/button>/); assert.match(html, />Download<\/a>/); assert.match(html, />Refine<\/button>/);
+  assert.match(html, /<details class="output-action-disclosure"><summary>More<\/summary>[\s\S]*>Use in Content<\/button>[\s\S]*<\/details>/);
+  assert.equal((html.match(/Use in Content/g) ?? []).length, 1);
 });
 
 test('coverage UI stays quiet for complete capture and discloses actual gaps', () => {

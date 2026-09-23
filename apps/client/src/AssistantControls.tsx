@@ -1,6 +1,7 @@
 import { LoadingRing } from './ModuleLoading';
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantModel, Conversation, PermissionMode } from '../../../packages/domain/assistant';
+import { responseEffortLevels } from '../../../packages/domain/auto-effort';
 import { request } from './api';
 import { Check, ChevronDown, Reset, Shield, Zap } from './icons';
 import { ArrowLeft } from './icons';
@@ -15,7 +16,7 @@ export function responseModel(models: AssistantModel[], id: string | null) {
 }
 export function ResponseControls({ value, models, modelStatus, retryModels, blocked, save }: { value: ResponsePreferences; models: AssistantModel[]; modelStatus: 'loading' | 'ready' | 'error' | 'offline'; retryModels: () => Promise<void>; blocked: boolean; save: (value: ResponsePreferences) => Promise<unknown> }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [selectingModel, setSelectingModel] = useState(false);
-  const model = responseModel(models, value.model), levels = [null, ...(model?.reasoning ?? [])];
+  const model = responseModel(models, value.model), levels = responseEffortLevels(model?.reasoning);
   const key = JSON.stringify([value.model, model?.id, value.thinking, model?.reasoning]);
   const [preview, setPreview] = useState<{ key: string; index: number }>();
   const proposed = preview?.key === key ? preview : undefined, level = proposed?.index ?? Math.max(0, levels.indexOf(value.thinking));

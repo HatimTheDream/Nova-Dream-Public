@@ -778,7 +778,7 @@ export class Store {
     const drafts = this.list('draft').filter(draft => draft.value.conversationId === conversationId);
     for (const draft of drafts) this.removeDraftData(draft);
     const ownedReceipts = new Set<string>();
-    const prefixes = ['assistant:operation:', 'assistant:queue:', 'assistant:message-pin:', 'assistant:approval:', 'assistant:question:', 'assistant:edit:', 'assistant:continuation:'];
+    const prefixes = ['assistant:plan:', 'assistant:operation:', 'assistant:queue:', 'assistant:message-pin:', 'assistant:approval:', 'assistant:question:', 'assistant:edit:', 'assistant:continuation:'];
     for (const prefix of prefixes) {
       let after = '';
       for (;;) {

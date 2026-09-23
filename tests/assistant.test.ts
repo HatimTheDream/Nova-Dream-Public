@@ -18,6 +18,7 @@ class Transport implements AssistantTransport {
   calls: { method: string; params: any }[] = [];
   sessions = new Map<string, string>();
   listeners = new Set<(event: EventFrame) => void>();
+  protectedPlanning = true;
   rejectSend = false;
   rejectCreate = false;
   holdHistory?: Promise<void>;
@@ -29,13 +30,14 @@ class Transport implements AssistantTransport {
   sessionInfo: Record<string, unknown> = {};
   inFlightRun?: { runId: string; text: string };
   artifactReply: any;
-  status(): AssistantConnection { return { state: 'ready', generation: this.generation, message: 'Fixture transport', grantedScopes: ['operator.read', 'operator.write'], methods: ['artifacts.download', 'sessions.fork'], modelAuthReady: true }; }
+  status(): AssistantConnection { return { state: 'ready', generation: this.generation, message: 'Fixture transport', grantedScopes: ['operator.read', 'operator.write'], methods: ['artifacts.download', 'sessions.fork', ...(this.protectedPlanning ? ['e3.workspace.policy'] : [])], modelAuthReady: true }; }
   attachmentPolicy() { return { maxBytes: 10000, maxPayload: 100000 }; }
   models() { return Promise.resolve([]); }
   subscribe(fn: (event: EventFrame) => void) { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; }
   emit(payload: unknown) { for (const fn of this.listeners) fn({ type: 'event', event: 'agent', payload }); }
   async request<T>(method: string, raw: unknown): Promise<T> {
     const params = raw as any; this.calls.push({ method, params });
+    if (method === 'e3.workspace.policy') return { version: 1, protected: true, ...params } as T;
     if (method === 'artifacts.download') return this.artifactReply as T;
     if (method === 'sessions.create') { if (!/^agent:main:/.test(params.key)) throw new GatewayClientRequestError({ code: 'INVALID_REQUEST', message: 'Multiple agents are configured; session creation needs an explicit owner.' }); if (this.rejectCreate) throw new GatewayClientRequestError({ code: 'INVALID_REQUEST', message: 'label already in use' }); const sessionId = randomUUID(); this.sessions.set(params.key, sessionId); if (params.fork && params.parentSessionKey) this.forkHistories.set(params.key, [...this.messages]); return { key: params.key, sessionId, entry: { sessionId, permissionMode: params.permissionMode } } as T; }
     if (method === 'sessions.fork') { const key = `fixture:fork:${randomUUID()}`; this.sessions.set(key, randomUUID()); this.forkHistories.set(key, this.messages.slice(0, this.messages.findIndex(m => m.__openclaw?.id === params.entryId))); return { sessionKey: key } as T; }
@@ -708,6 +710,51 @@ test('Plan and Research are retained with exact submitted inputs and affect runn
     const live = f.service.operations().find(o => o.id === op.id)!;
     f.gateway.emit({ runId: live.nativeRunId, sessionKey: live.nativeKey, seq: 10, stream: 'lifecycle', data: { phase: 'end' } }); await tick();
   }
+}));
+
+test('Plan and Research refuse dispatch when the owned native read-only policy cannot be verified', async () => fixture(async f => {
+  f.gateway.protectedPlanning = false;
+  for (const mode of ['plan', 'research'] as const) {
+    const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
+    const kept = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, workMode: mode } });
+    const original = f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: draft.id, draftRevision: kept.revision, projectRevision: 1 });
+    await tick();
+    const saved = f.service.operations().find(op => op.id === original.id)!;
+    assert.equal(saved.state, 'failed'); assert.match(saved.error!, /protected Plan and Research/);
+    assert.equal(saved.input, draft.value.text); assert.equal(saved.nativeRunId, null);
+  }
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 0);
+}));
+
+test('queued Plan creates its review identity atomically when admitted', async () => fixture(async f => {
+  const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
+  const kept = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, workMode: 'plan' } });
+  const queued = f.service.enqueue(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: draft.id, draftRevision: kept.revision, projectRevision: 1 });
+  assert.equal(f.service.plans.list().length, 0);
+  const decision = { requestId: randomUUID(), epoch: f.store.epoch, queueId: queued.id, expectedRevision: queued.revision };
+  const operation = f.service.runQueued(f.device, decision); await tick();
+  assert.ok(operation.context.planReview); assert.equal(f.service.plans.list().length, 1);
+  assert.equal(f.service.runQueued(f.device, decision).context.planReview?.id, operation.context.planReview?.id);
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1);
+}));
+
+test('plan amendments and approval show concise owner actions while the runner retains the exact proposal', async () => fixture(async f => {
+  const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
+  const kept = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, workMode: 'plan' } });
+  const original = f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: draft.id, draftRevision: kept.revision, projectRevision: 1 });
+  await tick();
+  const proposal = { title: 'Improve inbox', summary: 'Retain list formatting.', steps: ['Keep the exact sentinel step'], assumptions: [], verification: ['Check mobile'] };
+  const settle = async (id: string) => { const operation = f.service.operations().find(op => op.id === id)!; f.service.plans.propose({ epoch: f.store.epoch, nativeKey: operation.nativeKey, nativeId: operation.nativeId, runId: operation.nativeRunId, toolCallId: randomUUID(), proposal }); f.gateway.emit({ runId: operation.nativeRunId, sessionKey: operation.nativeKey, seq: 10, stream: 'lifecycle', data: { phase: 'end' } }); await tick(); };
+  const decision = () => { const item = f.service.plans.list()[0]; return { requestId: randomUUID(), epoch: f.store.epoch, id: item.id, expectedRevision: item.revision, version: item.version, digest: item.reviewDigest! }; };
+  await settle(original.id);
+  const amendment = f.service.plans.decide(f.device, { ...decision(), text: 'Check narrow screens first.' }, true); await tick();
+  assert.equal(amendment.input, 'Check narrow screens first.'); assert.doesNotMatch(amendment.input, /summary|Previous proposal/);
+  assert.deepEqual(amendment.context.planReview?.previousProposal, proposal);
+  assert.ok(f.gateway.calls.filter(call => call.method === 'chat.send').at(-1)!.params.message.includes(JSON.stringify(proposal)));
+  await settle(amendment.id);
+  const approved = f.service.plans.decide(f.device, decision()); await tick();
+  assert.equal(approved.input, 'Approve and start: Improve inbox'); assert.deepEqual(approved.context.approvedPlan?.proposal, proposal);
+  assert.ok(f.gateway.calls.filter(call => call.method === 'chat.send').at(-1)!.params.message.includes(JSON.stringify(proposal)));
 }));
 
 test('new automatic queue sends once after completion and stops after failure; older paused queues stay paused', async () => fixture(async f => {

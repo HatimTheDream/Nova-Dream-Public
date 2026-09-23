@@ -155,7 +155,8 @@ export class ManagedRuntime {
       parsedConfig.gateway={...parsedConfig.gateway,nodes:{...parsedConfig.gateway?.nodes,browser:{mode:'off'}}};
       parsedConfig.plugins = { ...parsedConfig.plugins, allow:[...new Set([...(parsedConfig.plugins?.allow??[]),'browser'])], entries:{...parsedConfig.plugins?.entries,browser:{...parsedConfig.plugins?.entries?.browser,enabled:true}} };
       const stagedConfig = withAccountPlugin(withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache')), this.store.epoch, join(dirname(bundlePath), 'account-plugin'), entry);
-      const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),this.moduleBridge()) : stagedConfig,null,2);
+      const sessionBindings = this.store.internalList<import('../../packages/domain/assistant.js').Conversation>('assistant:conversation:').flatMap(conversation => conversation.nativeId && !conversation.deleted ? [{nativeKey:conversation.nativeKey,nativeId:conversation.nativeId}] : []);
+      const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig,null,2);
       if (JSON.stringify(JSON.parse(originalConfig)) !== JSON.stringify(JSON.parse(updatedConfig))) {
         // The old path and replacement are recorded in the same atomic config
         // write. A service crash cannot leave a forgotten duplicate plugin path.

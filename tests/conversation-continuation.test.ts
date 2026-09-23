@@ -71,6 +71,12 @@ test('a lost create response reconciles its exact original key after restart wit
   assert.equal(completed.pendingResume, undefined); assert.equal(completed.nativeKey, createdKey); assert.equal(f.calls.filter(call => call.method === 'sessions.create').length, 1); assert.deepEqual(f.calls[1], { method: 'sessions.describe', params: { key: createdKey } }); assert.equal(f.calls.at(-1)!.method, 'chat.history');
   assert.equal(f.store.download(completed.resumeContext!.transcript.id).bytes.toString(), frozen);
 });
+test('continuation retains the local Auto preference without passing auto as native session effort', async t => {
+  const f = fixture(t); f.hooks.save({ ...f.conversation, thinking: 'auto' });
+  const result = await f.service.resume(f.device, f.input());
+  assert.equal(result.thinking, 'auto');
+  assert.equal(f.calls.find(call => call.method === 'sessions.create')!.params.thinkingLevel, undefined);
+});
 test('an absent target after a lost response remains unconfirmed and never triggers blind retry', async t => {
   const f = fixture(t), request = f.input(); f.behavior.loseCreate = true;
   await f.service.resume(f.device, request); f.sessions.clear();

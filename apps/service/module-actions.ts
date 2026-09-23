@@ -186,7 +186,7 @@ export class ModuleActions {
   if(input.operation==='goal.update'&&!goalReport)throw new Fault(403,'goal_request','Report a goal only from its current Goal request.');
   const teamReport=input.operation==='team.review.submit';
   if(teamReport)activeTeamReviewScope(this.s.store,{operation:op,conversation:c,generation:this.s.gateway.status().generation});
-  if(input.write&&!goalReport&&!teamReport&&(input.permissionMode==='read-only'||op.context.workMode==='plan'))throw new Fault(403,'workspace_read_only','This conversation is read only or planning. Change Access to Guarded or Workspace before asking for edits.');
+  if(input.write&&!goalReport&&!teamReport&&(input.permissionMode==='read-only'||['plan','research'].includes(op.context.workMode??'')||this.s.assistant.plans?.requiresProtection(op)))throw new Fault(403,'workspace_read_only','This turn is read only, planning or researching. Finish planning and approve its proposal before asking for edits.');
   return {conversationId:c.id,operationId:op.id,deviceId:op.deviceId,guarded:false,assignmentId:undefined};
  }
  async invoke(raw:unknown){

@@ -1,3 +1,5 @@
+import { SpeechGatewayControl } from './speech-control.js';
+import { SpeechPlayback } from './read-aloud.js';
 import { TeamWorkService } from './team-work.js';
 import { HomeWeatherService } from './home-weather.js';
 import { HostBrowser } from './host-browser.js';
@@ -147,6 +149,8 @@ export async function startServer(options: { directory: string; port: number; pr
   const accessControl = new SessionSettingsControl(gateway, options.accessControlFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'permission-control') : undefined));
   const responseControl = options.responseControlFactory || gateway instanceof Gateway ? new SessionSettingsControl(gateway, options.responseControlFactory ?? (() => new Gateway(store, options.version, undefined, 'response-control')), 'response') : undefined;
   const assistant = new AssistantService(store, gateway, undefined, accessControl, responseControl);
+  const speechGateway = gateway instanceof Gateway ? new SpeechGatewayControl(gateway, () => new Gateway(store, options.version, undefined, 'speech-playback')) : undefined;
+  const speechPlayback = new SpeechPlayback(speechGateway ?? gateway, () => store.epoch, Date.now, speechGateway ? () => speechGateway.prepare() : undefined);
   const assignments = new AssignmentService(store, gateway);
   const teamWork = new TeamWorkService(store,assistant);
   const approvals = new AssistantApprovals(store, gateway, () => [...assistant.conversations(), ...assignments.approvalTargets()], options.approvalReviewFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'approval-review') : undefined));
@@ -235,9 +239,11 @@ export async function startServer(options: { directory: string; port: number; pr
       if (request.headers['sec-fetch-site'] === 'cross-site' && !ownerLanding) throw new Fault(403, 'origin_rejected', 'Cross-site access is not allowed.');
       if (store.recoveryHeld && request.method === 'POST' && url.pathname !== '/api/session') throw new Fault(409, 'recovery_held', 'This is a recovered copy for review. Changes and connected services are paused; your current workspace is separate.');
       if (!store.recoveryHeld && store.recoveryEffectsPaused && request.method === 'POST' && !recoveredLocalRoutes.has(url.pathname)) throw new Fault(409, 'recovery_connections_paused', 'Connected services and automated work remain paused in this recovered workspace. Local records can be edited.');
-      if (['/workspace', '/workspace/observation'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
+      if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
         const supplied=Buffer.from(request.headers.authorization??''),expected=Buffer.from('Bearer '+moduleToken);
         if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected))throw new Fault(403,'workspace_tool_auth','Use the connected Assistant for workspace tools.');
+        if (url.pathname === '/workspace/plan') return json(200, assistant.plans.propose(await commandBody(request, 150000)));
+        if (url.pathname === '/workspace/policy') return json(200, assistant.plans.toolPolicy(await commandBody(request, 4096)));
         if (url.pathname === '/workspace/observation') { await observations.accept(await commandBody(request, 13*1024*1024)); return json(200, { accepted: true }); }
         const result=await moduleActions.invoke(await commandBody(request,2*1024*1024));
         if(Buffer.byteLength(JSON.stringify(result))>512*1024)throw new Fault(413,'workspace_result_large','Narrow this request to one record or a smaller page.');
@@ -665,6 +671,8 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/conversation/resume' && request.method === 'POST') return json(200, await assistant.continuations.resume(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversation/resume/check' && request.method === 'POST') return json(200, await assistant.continuations.recover(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversations' && request.method === 'POST') return json(200, await assistant.create(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/plan/approve' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/plan/amend' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request), true));
         if (url.pathname === '/api/assistant/submit' && request.method === 'POST') {
           if (gateway.status().state === 'unconfigured') throw new Fault(503, 'assistant_unverified', 'Assistant execution is not configured. The draft remains saved; nothing was dispatched.');
           return json(200, assistant.submit(device, await commandBody(request)));
@@ -681,6 +689,8 @@ export async function startServer(options: { directory: string; port: number; pr
           if (messageId && messageId.length > 1000) throw new Fault(400, 'message_identity', 'This message identity is invalid.');
           return json(200, await assistant.historyForReading(historyMatch[1], { offset, messageId, resume: url.searchParams.get('resume') === '1' }));
         }
+        if (url.pathname === '/api/assistant/read-aloud/catalog' && request.method === 'GET') return json(200, await speechPlayback.catalog());
+        if (url.pathname === '/api/assistant/read-aloud/speak' && request.method === 'POST') return json(200, await speechPlayback.speak(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/goal' && request.method === 'POST') return json(200, await assistant.changeGoal(device, await commandBody(request)));
         const goalMatch = /^\/api\/assistant\/goal\/([a-f0-9-]{36})$/.exec(url.pathname);
         if (goalMatch && request.method === 'GET') return json(200, await assistant.goal(goalMatch[1]));
@@ -722,7 +732,7 @@ export async function startServer(options: { directory: string; port: number; pr
   if (webServer) { webServer.requestTimeout = 15000; webServer.headersTimeout = 10000; }
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
+  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
   if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); contactCrm.tick();
     assignments.startPolling(); teamWork.start(); subtaskSuggestions.startPolling();
     agentRoutines.start(); hubMeetings.startPolling(); }
@@ -745,7 +755,7 @@ export async function startServer(options: { directory: string; port: number; pr
     closePromise = (async () => {
       try {
         await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
-        await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
+        await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
         await signIn?.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
       } finally {
         try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }
