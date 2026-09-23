@@ -13,12 +13,14 @@ export function withQuestionReceipts(rows: TranscriptMessage[], options: Options
   const { epoch, conversationId, history } = options;
   if (!history || history.conversationId !== conversationId) return rows;
   const times = history.messages.flatMap(message => message.createdAt && Number.isFinite(Date.parse(message.createdAt)) ? [Date.parse(message.createdAt)] : []);
-  const additions = new Map<number, AssistantQuestion[]>();
+  const additions = new Map<TranscriptMessage, AssistantQuestion[]>();
+  const after = new Map<TranscriptMessage, AssistantQuestion[]>();
+  const trailing = new Map<TranscriptMessage, AssistantQuestion[]>();
   const seen = new Set<string>();
   for (const question of options.questions ?? []) {
     if (seen.has(question.id) || !confirmedQuestion(question) || question.epoch !== epoch || question.conversationId !== conversationId) continue;
     seen.add(question.id);
-    const time = question.snapshot.createdAtMs;
+    const time = question.resolvedAtMs ?? question.snapshot.createdAtMs;
     // A partial history page must not acquire answers from outside its window.
     if ((history.hasMore && (!times.length || time < Math.min(...times))) || (history.hasNewer && (!times.length || time > Math.max(...times)))) continue;
     const linked = new Set((options.plans ?? []).filter(plan => plan.epoch === epoch && plan.conversationId === conversationId)
@@ -27,7 +29,7 @@ export function withQuestionReceipts(rows: TranscriptMessage[], options: Options
       && operation.nativeId === question.nativeId && operation.nativeKey === question.nativeKey && operation.connectionGeneration === question.connectionGeneration
       && (question.snapshot.runId ? operation.nativeRunId === question.snapshot.runId
         : linked.size ? linked.has(operation.id)
-          : time >= Date.parse(operation.createdAt) && time <= Date.parse(operation.settledAt ?? operation.updatedAt)));
+          : question.snapshot.createdAtMs >= Date.parse(operation.createdAt) && question.snapshot.createdAtMs <= Date.parse(operation.settledAt ?? operation.updatedAt)));
     if (candidates.length !== 1) continue;
     const operation = candidates[0];
     const matches = (message: TranscriptMessage) => {
@@ -37,13 +39,31 @@ export function withQuestionReceipts(rows: TranscriptMessage[], options: Options
         && (message.operationId ? message.operationId === operation.id && (!message.runId || message.runId === operation.nativeRunId)
           : !!message.runId && message.runId === operation.nativeRunId);
     };
-    const owned = rows.flatMap((row, index) => (row.workOperation?.id === operation.id || transcriptParts(row).some(matches)) ? [{ row, index }] : []);
-    const whole = owned.filter(({ row }) => row.workOperation?.id === operation.id);
-    // Prefer the complete turn, before its proven final answer. Split turns can
-    // use a dated following assistant message, never a nearby unrelated reply.
-    const target = whole.length === 1 ? whole[0] : owned.find(({ row }) => !row.workParts && row.role === 'assistant' && row.createdAt && Date.parse(row.createdAt) >= time);
-    if (!target) continue; // Existing conversation history remains the fallback.
-    additions.set(target.index, [...(additions.get(target.index) ?? []), question]);
+    const owned = rows.filter(row => row.workOperation?.id === operation.id || transcriptParts(row).some(matches));
+    const whole = owned.filter(row => row.workOperation?.id === operation.id);
+    const following = question.resolvedAtMs === undefined ? undefined : owned.flatMap(transcriptParts).find(part => matches(part)
+      && part.role === 'assistant' && !part.toolInfo && part.createdAt && Date.parse(part.createdAt) >= time);
+    // New receipts use the first observation of resolution, not the time the
+    // question was asked. Legacy records have no answer-time evidence: retain
+    // them before the proven final answer instead of inventing interleaving.
+    const final = question.resolvedAtMs !== undefined ? undefined : whole.length === 1 ? whole[0].workFinal : owned.find(row => !row.workParts && matches(row)
+      && row.role === 'assistant' && row.text === operation.text && !!row.text.trim() && row.createdAt && Date.parse(row.createdAt) >= time);
+    const target = following ?? final;
+    if (target) additions.set(target, [...(additions.get(target) ?? []), question]);
+    else if (whole.length === 1 && !['completed', 'failed', 'cancelled'].includes(operation.state)) {
+      trailing.set(whole[0], [...(trailing.get(whole[0]) ?? []), question]);
+    } else if (question.resolvedAtMs !== undefined && ['completed', 'failed', 'cancelled'].includes(operation.state)) {
+      const last = owned.flatMap(transcriptParts).findLast(part => matches(part) && part.role === 'assistant' && !part.toolInfo && part.createdAt && Date.parse(part.createdAt) < time);
+      if (last) after.set(last, [...(after.get(last) ?? []), question]);
+    }
   }
-  return rows.map((row, index) => additions.has(index) ? { ...row, questionReceipts: additions.get(index)!.sort((a, b) => a.snapshot.createdAtMs - b.snapshot.createdAtMs || a.id.localeCompare(b.id)) } : row);
+  const ordered = (items: AssistantQuestion[]) => items.sort((a, b) => (a.resolvedAtMs ?? a.snapshot.createdAtMs) - (b.resolvedAtMs ?? b.snapshot.createdAtMs) || a.id.localeCompare(b.id));
+  const enrich = (part: TranscriptMessage): TranscriptMessage => additions.has(part) || after.has(part)
+    ? { ...part, ...(additions.has(part) ? { questionReceipts: ordered(additions.get(part)!) } : {}), ...(after.has(part) ? { questionReceiptsAfter: ordered(after.get(part)!) } : {}) } : part;
+  return rows.map(row => {
+    if (!row.workParts) return enrich(row);
+    const parts = row.workParts.map(enrich);
+    if (!trailing.has(row) && parts.every((part, index) => part === row.workParts![index])) return row;
+    return { ...row, workParts: parts, ...(row.workFinal ? { workFinal: parts[row.workParts.indexOf(row.workFinal)] ?? row.workFinal } : {}), ...(trailing.has(row) ? { questionReceipts: ordered(trailing.get(row)!) } : {}) };
+  });
 }

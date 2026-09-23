@@ -25,6 +25,8 @@ export const dismissQuestionSchema = checkQuestionSchema.extend({ expectedRevisi
 export type AssistantQuestion = {
   id: string; revision: number; epoch: string; connectionGeneration: string; conversationId: string; nativeId: string; nativeKey: string;
   snapshot: NativeQuestion; fingerprint: string; availability: 'live' | 'missing'; dismissed?: boolean;
+  /** First observed terminal outcome of a previously pending request, not a provider timestamp. */
+  resolvedAtMs?: number;
   action?: { requestId: string; kind: 'answer' | 'cancel'; state: 'sending' | 'unknown' | 'confirmed'; answerHash?: string; message?: string };
 };
 export type QuestionState = { state: 'unavailable' | 'connecting' | 'ready' | 'error'; message?: string; items: AssistantQuestion[] };

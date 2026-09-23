@@ -87,6 +87,59 @@ test('native questions subscribe before execution, submit once and retain exact 
   f.event({ ...f.native, status: 'pending', answers: undefined }); assert.equal(f.item().snapshot.status, 'answered');
   await f.service.close(); f.service = f.make(); assert.deepEqual(f.item().snapshot.answers.answers, answer);
 }));
+for (const status of ['answered', 'cancelled', 'expired']) test(`the first observed ${status} outcome keeps its position through refresh, restart and rebinding`, t => fixture(async f => {
+  const original = structuredClone(f.item()), observed = Date.now();
+  const clock = t.mock.method(Date, 'now', () => observed);
+  assert.equal(original.resolvedAtMs, undefined);
+  f.native = { ...f.native, status, ...(status === 'answered' ? { answers: { answers: answer } } : {}) };
+  const result = await f.check();
+  assert.equal(result.resolvedAtMs, observed);
+  assert.equal(result.snapshot.createdAtMs, original.snapshot.createdAtMs);
+  assert.equal(result.snapshot.expiresAtMs, original.snapshot.expiresAtMs);
+  clock.mock.mockImplementation(() => observed + 30_000);
+  assert.deepEqual(await f.check(), result);
+  f.event(f.native);
+  assert.deepEqual(f.item(), result);
+  await f.service.close(); f.service = f.make();
+  assert.deepEqual(f.item(), result);
+  f.generation = 'host-two'; f.conversation.connectionGeneration = 'host-two';
+  f.conversation.nativeId = randomUUID();
+  assert.deepEqual(f.service.state().items, [result]);
+}));
+test('pending, lost and missing answer receipts acquire no resolution time before a confirmed outcome', t => fixture(async f => {
+  const started = Date.now(), clock = t.mock.method(Date, 'now', () => started);
+  f.lose = true;
+  const input = f.input(), uncertain = await f.service.resolve(f.device, input);
+  assert.equal(uncertain.snapshot.status, 'pending');
+  assert.equal(uncertain.action.state, 'unknown');
+  assert.equal(uncertain.resolvedAtMs, undefined);
+  clock.mock.mockImplementation(() => started + 5_000);
+  assert.equal((await f.service.resolve(f.device, input)).resolvedAtMs, undefined);
+  f.missing = true;
+  const missing = await f.check();
+  assert.equal(missing.availability, 'missing');
+  assert.equal(missing.snapshot.status, 'pending');
+  assert.equal(missing.resolvedAtMs, undefined);
+  f.missing = false;
+  clock.mock.mockImplementation(() => started + 10_000);
+  const confirmed = await f.check();
+  assert.equal(confirmed.snapshot.status, 'answered');
+  assert.equal(confirmed.resolvedAtMs, started + 10_000);
+  assert.equal(f.calls.filter((call: any) => call.method === 'question.resolve').length, 1);
+}));
+test('terminal requests first discovered as history do not invent a resolution time', t => fixture(async f => {
+  const observed = Date.now(), clock = t.mock.method(Date, 'now', () => observed);
+  for (const status of ['answered', 'cancelled', 'expired']) {
+    const native = { ...f.native, id: randomUUID(), createdAtMs: 200, status, ...(status === 'answered' ? { answers: { answers: answer } } : {}) };
+    f.event(native);
+    const item = f.service.state().items.find((question: any) => question.snapshot.id === native.id);
+    assert.ok(item);
+    assert.equal(item.resolvedAtMs, undefined);
+    clock.mock.mockImplementation(() => observed + 30_000);
+    f.event(native);
+    assert.deepEqual(f.service.state().items.find((question: any) => question.id === item.id), item);
+  }
+}));
 for (const changed of ['generation', 'nativeId', 'nativeKey']) test(`confirmed question history survives a ${changed} change without lending authority to old requests`, () => fixture(async f => {
   const answered = await f.service.resolve(f.device, f.input());
   f.native = { ...f.native, id: randomUUID(), createdAtMs: 200, status: 'pending', answers: undefined };

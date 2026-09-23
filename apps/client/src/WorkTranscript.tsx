@@ -50,18 +50,33 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
         renderedSources.add(identity); return true;
       }).map(source => <Fragment key={`files:${source.novaId ?? source.id}`}>{renderMessage({ ...source, text: '', authoredText: '' }, { hideTool: true })}</Fragment>)}
     </div>;
-  const activity = groupWorkActions(entries).map((entry, index) => entry.kind === 'actions'
-    ? <ActionGroup key={`actions:${entry.entries[0].tool.id}:${index}`} summary={entry.summary} forceOpen={entry.entries.some(action => action.sources.some(matches))} revealKey={revealKey}>{entry.entries.map(renderEntry)}</ActionGroup>
-    : renderEntry(entry, index));
-  return <div className="work-transcript">
-    {fragment ? activity : <WorkPhase operation={operation} active={active} forceOpen={containsMatch} revealKey={revealKey} summary={summary}>
-      {activity}
+  const activity = (expanded: boolean) => {
+    renderedSources.clear();
+    return groupWorkActions(entries).map((entry, index) => entry.kind === 'actions'
+    ? <div hidden={!expanded} key={`actions:${entry.entries[0].tool.id}:${index}`}><ActionGroup summary={entry.summary} forceOpen={entry.entries.some(action => action.sources.some(matches))} revealKey={revealKey}>{entry.entries.map(renderEntry)}</ActionGroup></div>
+    : <Fragment key={`entry:${index}`}>
+      {entry.kind === 'message' && <QuestionReceipts items={entry.message.questionReceipts}/>}
+      <div hidden={!expanded}>{renderEntry(entry, index)}</div>
+      {entry.kind === 'message' && <QuestionReceipts items={entry.message.questionReceiptsAfter}/>}
+    </Fragment>);
+  };
+  const persistentAnswers = !!message.questionReceipts?.length || parts.some(part => part.questionReceipts?.length || part.questionReceiptsAfter?.length);
+  const content = (expanded: boolean) => <>
+    {activity(expanded)}
+    <QuestionReceipts items={message.questionReceipts}/>
+    <div hidden={!expanded}>
       {streamed && <ReplyText text={operation!.text} role="assistant" streaming={operation?.state !== 'unknown'}/>}
       {operation?.error && <p className="metadata">{operation.error}</p>}
       {operation?.state === 'unknown' && checkStatus && <button className="text-button" onClick={checkStatus}>Check status</button>}
       {!entries.length && !streamed && <p className="metadata">{active ? 'Preparing your reply…' : 'No activity details were saved for this reply.'}</p>}
+    </div>
+  </>;
+  return <div className="work-transcript">
+    {fragment ? <>{activity(true)}<QuestionReceipts items={message.questionReceipts}/></> : <WorkPhase operation={operation} active={active} forceOpen={containsMatch} revealKey={revealKey} summary={summary}>
+      {persistentAnswers ? content : content(true)}
     </WorkPhase>}
-    <QuestionReceipts items={message.questionReceipts}/>
+    <QuestionReceipts items={message.workFinal?.questionReceipts}/>
     {message.workFinal && renderMessage(message.workFinal)}
+    <QuestionReceipts items={message.workFinal?.questionReceiptsAfter}/>
   </div>;
 }

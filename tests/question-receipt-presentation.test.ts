@@ -45,12 +45,13 @@ function render(item: AssistantQuestion, compact = false) {
 test('saved question answers are paired by question ID in one user bubble without interactive decision controls', () => {
   const view = render(question());
   assert.equal(view.tags.filter(tag => tag.name === 'article' && tag.attrs.class.includes('message-user')).length, 1);
+  assert.ok(view.tags.find(tag => tag.name === 'article')!.attrs.class.split(' ').includes('message-text'));
   assert.deepEqual(view.sections, ['Which formats should I include?SlidesReport', 'What else matters?Keep the examples.\nUse <specific> details & context.']);
   assert.ok(!view.tags.some(tag => ['form', 'input', 'textarea', 'button', 'fieldset'].includes(tag.name)));
   assert.match(view.markup, /&lt;specific&gt; details &amp; context/);
 });
 
-test('long question text stays complete in a keyboard-accessible native disclosure', () => {
+test('long questions retain discreet keyboard-accessible expansion without visible icons or truncated saved text', () => {
   const item = question();
   const longQuestion = 'Which information matters?\n' + 'Additional context for this decision. '.repeat(60);
   item.snapshot.questions[0].question = longQuestion;
@@ -59,6 +60,7 @@ test('long question text stays complete in a keyboard-accessible native disclosu
   assert.equal(view.tags.filter(tag => tag.name === 'summary').length, 2);
   assert.ok(view.markup.includes(longQuestion));
   assert.ok(!view.tags.some(tag => tag.name === 'details' && 'open' in tag.attrs));
+  assert.ok(!view.tags.some(tag => tag.name === 'svg' || 'data-icon' in tag.attrs));
   assert.match(view.markup, /question-receipt-compact/);
 });
 

@@ -34,7 +34,7 @@ function activitySummary(operation?: AssistantOperation): string | undefined {
 export function WorkPhase({ operation, active = !!operation && !isSettled(operation), children, forceOpen = false, revealKey, summary }: {
   operation?: AssistantOperation;
   active?: boolean;
-  children: ReactNode;
+  children: ReactNode | ((expanded: boolean) => ReactNode);
   forceOpen?: boolean;
   revealKey?: string;
   summary?: string;
@@ -54,9 +54,9 @@ export function WorkPhase({ operation, active = !!operation && !isSettled(operat
     <button className="work-phase-trigger" type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(value => !value)}>
       <span className="work-phase-label">{label}</span><ChevronDown size={14} className="work-disclosure-chevron"/>
     </button>
-    <div id={panelId} className="work-phase-content" hidden={!open}>
-      {description && <p className="work-phase-summary">{description}</p>}
-      {children}
+    <div id={panelId} className="work-phase-content" hidden={!open && typeof children !== 'function'}>
+      {open && description && <p className="work-phase-summary">{description}</p>}
+      {typeof children === 'function' ? children(open) : children}
     </div>
   </section>;
 }

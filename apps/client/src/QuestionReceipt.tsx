@@ -1,5 +1,4 @@
 import type { AssistantQuestion } from '../../../packages/domain/questions';
-import { ChevronDown } from './icons';
 import './question-receipt.css';
 
 export function QuestionReceipt({ item, compact = false }: { item: AssistantQuestion; compact?: boolean }) {
@@ -11,7 +10,7 @@ export function QuestionReceipt({ item, compact = false }: { item: AssistantQues
   }
   if (snapshot.status !== 'answered') return null;
 
-  return <article className={`chat-message message-user question-receipt${compact ? ' question-receipt-compact' : ''}`} aria-label="Your answers">
+  return <article className={`chat-message message-user message-text question-receipt${compact ? ' question-receipt-compact' : ''}`} aria-label="Your answers">
     {snapshot.questions.map(question => {
       const secret = question.isSecret || !!question.secretStore;
       const answers = snapshot.answers?.answers[question.questionId];
@@ -19,7 +18,6 @@ export function QuestionReceipt({ item, compact = false }: { item: AssistantQues
         <details className="question-receipt-question">
           <summary>
             <span className="question-receipt-label">{question.question}</span>
-            <ChevronDown className="question-receipt-chevron" size={12} aria-hidden="true" />
           </summary>
         </details>
         <div className="question-receipt-answers">

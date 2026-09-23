@@ -1,3 +1,9 @@
+## [1.10.7] — 2026-09-23
+
+- Show each answered question batch as a normal, visible user reply with muted questions above the answers, following the supplied Codex reference. Keep replies visible when work details collapse.
+- Place new answer replies between the surrounding assistant messages using the saved first resolution observation; preserve legacy history without inventing its answer time.
+- Keep Next and Previous limited to question navigation, including after revisiting completed answers; submit the batch only with Send answers.
+
 ## [1.10.6] — 2026-09-23
 
 - Return the composer to writing after questions are answered. Keep confirmed answers in compact conversation bubbles with an Asked questions summary, following the Codex interaction pattern.

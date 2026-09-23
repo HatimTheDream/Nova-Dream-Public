@@ -481,7 +481,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const activeTextInTranscript = !!active && hasVisibleOperationText(voiceMessages, active, controller.history?.nativeId);
   const renderTranscriptMessage = (message: TranscriptMessage) => message.workParts
     ? <WorkTranscript message={message} renderMessage={renderMessage} checkStatus={() => void controller.checkStatus()}/>
-    : <><QuestionReceipts items={message.questionReceipts}/>{message.voiceParts || message.pendingVoice ? <VoiceMessage message={message} renderPart={part => renderMessage(part)}/> : renderMessage(message)}</>;
+    : <><QuestionReceipts items={message.questionReceipts}/>{message.voiceParts || message.pendingVoice ? <VoiceMessage message={message} renderPart={part => renderMessage(part)}/> : renderMessage(message)}<QuestionReceipts items={message.questionReceiptsAfter}/></>;
   const accountControl = useConversationAccount({ snapshot, conversation, blocked: busy || !!active || callingHere || !!conversation?.pendingSettings || !!conversation?.pendingResume || dictation.phase !== 'idle', onChange: async profileId => { if (conversation) await controller.selectAccount(conversation, profileId); } });
   return <div className={`assistant-workspace ${sidePanel || activityOpen ? 'inspector-open' : ''}`}>
     {organizingProject && snapshot.projects.find(item => item.id === organizingProject) && <ProjectOrganizationDialog snapshot={snapshot} project={snapshot.projects.find(item => item.id === organizingProject)!} close={() => setOrganizingProject(undefined)} refresh={refreshWorkspace}/>}

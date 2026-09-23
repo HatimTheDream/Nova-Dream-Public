@@ -22,7 +22,7 @@ function message(id: string, seconds: number, changes: Partial<TranscriptMessage
 }
 function question(changes: Partial<AssistantQuestion> = {}): AssistantQuestion {
   return {
-    id: 'question', revision: 2, epoch: 'epoch', connectionGeneration: 'generation', conversationId: 'chat', nativeId: 'native', nativeKey: 'key', fingerprint: 'fingerprint', availability: 'live',
+    id: 'question', revision: 2, epoch: 'epoch', connectionGeneration: 'generation', conversationId: 'chat', nativeId: 'native', nativeKey: 'key', fingerprint: 'fingerprint', availability: 'live', resolvedAtMs: base + 40000,
     snapshot: { id: 'native-question', sessionKey: 'key', runId: 'run', status: 'answered', createdAtMs: base + 30000, expiresAtMs: base + 60000, questions: [{ questionId: 'format', header: 'Format', question: 'Which format?', options: [{ label: 'Brief' }, { label: 'Detailed' }] }], answers: { answers: { format: ['Brief'] } } },
     ...changes,
   };
@@ -30,7 +30,10 @@ function question(changes: Partial<AssistantQuestion> = {}): AssistantQuestion {
 function options(messages: TranscriptMessage[], changes: Partial<Parameters<typeof withQuestionReceipts>[1]> = {}) {
   return { epoch: 'epoch', conversationId: 'chat', operations: [operation()], questions: [question()], history: { conversationId: 'chat', nativeId: 'native', messages, hasMore: false, activeRunIds: [] } satisfies ConversationHistory, ...changes };
 }
-const receipts = (rows: TranscriptMessage[]) => rows.flatMap(row => row.questionReceipts ?? []);
+const partReceipts = (part: TranscriptMessage) => [...(part.questionReceipts ?? []), ...(part.questionReceiptsAfter ?? [])];
+const receipts = (rows: TranscriptMessage[]) => rows.flatMap(row => row.workParts
+  ? [...transcriptParts(row).flatMap(partReceipts), ...partReceipts(row)]
+  : partReceipts(row));
 
 const hooks = registerHooks({ load(url, context, next) {
   if (url.endsWith('.css')) return { format: 'module', source: '', shortCircuit: true };
@@ -38,6 +41,7 @@ const hooks = registerHooks({ load(url, context, next) {
 } });
 const { ApprovalTray } = await import('../apps/client/src/ApprovalTray');
 const { QuestionReceipts } = await import('../apps/client/src/QuestionReceipts');
+const { WorkTranscript } = await import('../apps/client/src/WorkTranscript');
 hooks.deregister();
 function tray(items: AssistantQuestion[], conversationId = 'chat') {
   const controller = { approvals: { state: 'ready', items: [] }, questions: { state: 'ready', items }, conversations: [{ id: 'chat', title: 'Original chat' }], refresh: async () => {}, select() {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
@@ -54,13 +58,18 @@ test('question receipts enrich a proven turn without replacing any native messag
   const before = structuredClone(rows), item = question();
   const result = withQuestionReceipts(rows, options(messages, { questions: [item] }));
   assert.equal(result.length, 1);
-  assert.deepEqual(result[0].questionReceipts, [item]);
-  assert.equal(result[0].workParts, rows[0].workParts);
-  assert.equal(result[0].workFinal, rows[0].workFinal);
-  assert.deepEqual(transcriptParts(result[0]), messages);
+  assert.equal(result[0].questionReceipts, undefined);
+  assert.deepEqual(result[0].workFinal?.questionReceipts, [item]);
+  assert.equal(result[0].workFinal, result[0].workParts![1]);
+  assert.equal(result[0].workParts![0], rows[0].workParts![0]);
+  assert.notEqual(result[0].workParts![1], rows[0].workParts![1]);
+  assert.deepEqual(transcriptParts(result[0]).map(({ questionReceipts: _receipts, ...part }) => part), messages);
   for (const part of messages) {
     for (const id of [part.id, part.novaId!, ...part.aliases!]) assert.ok(transcriptContains(result[0], id, part.role));
-    assert.equal(transcriptParts(result[0]).find(row => row.id === part.id)?.textHash, part.textHash);
+    const projected = transcriptParts(result[0]).find(row => row.id === part.id)!;
+    assert.equal(projected.textHash, part.textHash);
+    assert.equal(projected.source, part.source);
+    assert.equal(projected.attachments, part.attachments);
   }
   assert.deepEqual(rows, before);
   assert.deepEqual(messages, before[0].workParts);
@@ -101,8 +110,8 @@ test('an older confirmed answer stays with its original source after a conversat
 });
 
 test('repeated identical question wording remains attached to distinct runs and repeated batches retain their order', () => {
-  const first = question(), second = question({ id: 'second-question', snapshot: { ...question().snapshot, id: 'second-native', createdAtMs: base + 45000 } });
-  const later = question({ id: 'later-question', snapshot: { ...question().snapshot, id: 'later-native', runId: 'later-run', createdAtMs: base + 140000 } });
+  const first = question(), second = question({ id: 'second-question', resolvedAtMs: base + 60000, snapshot: { ...question().snapshot, id: 'second-native', createdAtMs: base + 45000 } });
+  const later = question({ id: 'later-question', resolvedAtMs: base + 150000, snapshot: { ...question().snapshot, id: 'later-native', runId: 'later-run', createdAtMs: base + 140000 } });
   const rows = [message('first-final', 90), message('later-final', 180, { operationId: 'later-operation', runId: 'later-run' })];
   const result = withQuestionReceipts(rows, options(rows, { questions: [later, second, first, first], operations: [operation(), operation({ id: 'later-operation', nativeRunId: 'later-run', createdAt: at(100), updatedAt: at(180), settledAt: at(180) })] }));
   assert.deepEqual(result.map(row => row.questionReceipts?.map(item => item.id)), [['question', 'second-question'], ['later-question']]);
@@ -136,24 +145,158 @@ test('undated run metadata falls back only to one matching operation time window
   assert.equal(receipts(withQuestionReceipts(rows, options(rows, { questions: [item], operations: [operation(), operation({ id: 'duplicate-owner' })] }))).length, 0);
 });
 
-test('partial history pages do not import batches from before or after their loaded time window', () => {
+test('partial history pages use observed answer time rather than the earlier request time for their bounds', () => {
   const rows = [message('start', 40, { text: 'Continuing.' }), message('final', 90)];
-  const config = options(rows), item = question();
+  const item = question({ resolvedAtMs: base + 39000 }), config = options(rows, { questions: [item] });
   assert.equal(receipts(withQuestionReceipts(rows, { ...config, history: { ...config.history, hasMore: true } })).length, 0);
-  item.snapshot.createdAtMs = base + 100000;
+  item.resolvedAtMs = base + 100000;
   assert.equal(receipts(withQuestionReceipts(rows, { ...config, questions: [item], history: { ...config.history, hasNewer: true } })).length, 0);
-  item.snapshot.createdAtMs = base + 40000;
+  item.resolvedAtMs = base + 40000;
+  assert.ok(item.snapshot.createdAtMs < base + 40000);
   assert.deepEqual(receipts(withQuestionReceipts(rows, { ...config, questions: [item], history: { ...config.history, hasMore: true, hasNewer: true } })), [item]);
   const undated = rows.map(row => ({ ...row, createdAt: undefined }));
   for (const boundary of [{ hasMore: true }, { hasNewer: true }]) assert.equal(receipts(withQuestionReceipts(undated, { ...config, history: { ...config.history, ...boundary, messages: undated } })).length, 0);
 });
 
 test('split turns place the receipt before a following assistant message from the same run, not an unrelated nearby reply', () => {
-  const rows = [message('before', 10, { text: 'Before question.' }), message('other', 40, { operationId: 'other', runId: 'other-run' }), message('following', 60)];
+  const rows = [message('before', 35, { text: 'After the request, before the answer.' }), message('other', 45, { operationId: 'other', runId: 'other-run' }), message('following', 50)];
   const result = withQuestionReceipts(rows, options(rows));
   assert.deepEqual(result.map(row => row.questionReceipts?.map(item => item.id)), [undefined, undefined, ['question']]);
   const notAnsweredHere = rows.slice(0, 2);
-  assert.equal(receipts(withQuestionReceipts(notAnsweredHere, options(notAnsweredHere))).length, 0);
+  const late = withQuestionReceipts(notAnsweredHere, options(notAnsweredHere));
+  assert.deepEqual(late[0].questionReceiptsAfter?.map(item => item.id), ['question']);
+  assert.equal(late[1].questionReceiptsAfter, undefined);
+});
+
+test('late resolution observations stay after the proven final instead of being moved ahead of its timestamp', () => {
+  const item = question({ resolvedAtMs: base + 95000 });
+  const messages = [message('comment', 35, { text: 'Earlier narration.' }), message('final', 90)];
+  const rows = groupWorkMessages(messages, { operations: [operation()], conversationId: 'chat', nativeId: 'native' });
+  const result = withQuestionReceipts(rows, options(messages, { questions: [item] }));
+  assert.equal(result[0].workFinal?.questionReceipts, undefined);
+  assert.deepEqual(result[0].workFinal?.questionReceiptsAfter, [item]);
+  assert.equal(result[0].workFinal, result[0].workParts!.at(-1));
+  assert.deepEqual(receipts(result), [item]);
+  assert.equal(rows[0].workFinal?.questionReceiptsAfter, undefined);
+  const html = renderToStaticMarkup(createElement(WorkTranscript, {
+    message: result[0], renderMessage: part => createElement('p', { 'data-native-message': part.id }, part.text),
+  }));
+  assert.ok(html.indexOf('class="question-receipt-answer"') > html.indexOf('data-native-message="final"'));
+  assert.ok(html.indexOf('class="question-receipt-answer"') > html.lastIndexOf('</section>'));
+  assert.equal((html.match(/class="question-receipt-answer"/g) ?? []).length, 1);
+});
+
+test('split activity keeps earlier and late batches on their exact ordinary narration row, with no receipts on tool fragments', () => {
+  const first = question(), late = question({ id: 'late-question', resolvedAtMs: base + 60000 });
+  const messages = [
+    message('before', 35, { text: 'Before both answers.' }),
+    message('tool-result', 36, { role: 'tool', text: 'File contents.', toolInfo: { id: 'read', name: 'read', state: 'completed' } }),
+    message('steer', 37, { role: 'user', text: 'Additional request.', operationId: 'steer-operation', runId: undefined }),
+    message('following', 50, { text: 'After the first answer, before the second.' }),
+    message('unrelated', 80, { operationId: 'other-operation', runId: 'other-run' }),
+  ];
+  const rows = groupWorkMessages(messages, { operations: [operation()], conversationId: 'chat', nativeId: 'native' });
+  assert.ok(rows.some(row => row.workActivityOperation));
+  const result = withQuestionReceipts(rows, options(messages, { questions: [late, first] }));
+  const following = result.find(row => row.id === 'following')!;
+  assert.deepEqual(following.questionReceipts, [first]);
+  assert.deepEqual(following.questionReceiptsAfter, [late]);
+  assert.equal(result.find(row => row.id === 'unrelated')?.questionReceiptsAfter, undefined);
+  assert.ok(result.filter(row => row.workParts).every(row => receipts([row]).length === 0));
+  assert.equal(result.find(row => row.id === 'steer'), rows.find(row => row.id === 'steer'));
+  assert.deepEqual(receipts(result).map(item => item.id), ['question', 'late-question']);
+});
+
+function interleaved() {
+  const first = question();
+  first.snapshot.questions = [...first.snapshot.questions, { questionId: 'desk', header: 'Desk', question: 'Can you attach a clamp?', options: [], isOther: true }];
+  first.snapshot.answers = { answers: { format: ['One or two monitors'], desk: ['Freestanding items only'] } };
+  const second = question({ id: 'second-batch', resolvedAtMs: base + 70000,
+    snapshot: { ...question().snapshot, id: 'second-native', createdAtMs: base + 55000, questions: [{ questionId: 'laptop', header: 'Laptop', question: 'What laptop model will you use?', options: [], isOther: true }], answers: { answers: { laptop: ['OmniBook'] } } } });
+  const messages = [
+    message('before-first', 35, { text: 'Narration while the first answer is still pending.' }),
+    message('after-first', 50, { text: 'Narration after the first answer.' }),
+    message('before-second', 65, { text: 'Narration while the second answer is still pending.' }),
+    message('after-second', 75, { text: 'Narration after the second answer.' }),
+    message('final', 90),
+  ];
+  const rows = groupWorkMessages(messages, { operations: [operation()], conversationId: 'chat', nativeId: 'native' });
+  return { first, second, messages, rows, projected: withQuestionReceipts(rows, options(messages, { questions: [second, first] })) };
+}
+
+test('two answered batches interleave with nested narration using resolution time, not question creation time', () => {
+  const fixture = interleaved();
+  assert.equal(fixture.projected.length, 1);
+  const parts = transcriptParts(fixture.projected[0]);
+  assert.deepEqual(parts.map(part => [part.id, part.questionReceipts?.map(item => item.id)]), [
+    ['before-first', undefined], ['after-first', ['question']], ['before-second', undefined], ['after-second', ['second-batch']], ['final', undefined],
+  ]);
+  assert.equal(fixture.projected[0].questionReceipts, undefined);
+  assert.equal(fixture.projected[0].workFinal, parts.at(-1));
+  assert.deepEqual(receipts(fixture.projected).map(item => item.id), ['question', 'second-batch']);
+  assert.ok(fixture.rows[0].workParts!.every(part => !part.questionReceipts));
+});
+
+test('legacy answers without an observed resolution time stay before the proven final instead of inventing chronology', () => {
+  const fixture = interleaved();
+  delete fixture.first.resolvedAtMs;
+  const result = withQuestionReceipts(fixture.rows, options(fixture.messages, { questions: [fixture.first] }));
+  assert.deepEqual(transcriptParts(result[0]).map(part => part.questionReceipts?.map(item => item.id)), [undefined, undefined, undefined, undefined, ['question']]);
+  assert.equal(result[0].workFinal, result[0].workParts!.at(-1));
+});
+
+test('an active turn keeps an answered batch at its tail until later native narration supplies its exact position', () => {
+  const item = question(), active = operation({ state: 'running', text: 'Waiting for the answer.', updatedAt: at(40), settledAt: undefined });
+  const early = [message('waiting', 35, { text: active.text })];
+  const group = (messages: TranscriptMessage[], op: AssistantOperation) => groupWorkMessages(messages, { operations: [op], active: op, conversationId: 'chat', nativeId: 'native' });
+  const first = withQuestionReceipts(group(early, active), options(early, { questions: [item], operations: [active] }));
+  assert.deepEqual(first[0].questionReceipts, [item]);
+  assert.ok(first[0].workParts!.every(part => !part.questionReceipts));
+  const later = [...early, message('continuing', 50, { text: 'Continuing from your answer.' })];
+  const updated = { ...active, text: later[1].text, updatedAt: at(50) };
+  const next = withQuestionReceipts(group(later, updated), options(later, { questions: [item], operations: [updated] }));
+  assert.equal(next[0].questionReceipts, undefined);
+  assert.deepEqual(next[0].workParts![1].questionReceipts, [item]);
+  assert.equal(receipts(next).length, 1);
+  assert.deepEqual(first[0].questionReceipts, [item]);
+});
+
+test('collapsing work details preserves both visible answer bubbles while expanding restores their narration order', () => {
+  const { projected } = interleaved();
+  const inspect = (expanded: boolean) => {
+    const html = renderToStaticMarkup(createElement(WorkTranscript, {
+      message: projected[0], ...(expanded ? { match: { id: 'after-first' } } : {}),
+      renderMessage: part => createElement('p', { 'data-native-message': part.id }, part.text),
+    }));
+    const stack: Record<string, string>[] = [];
+    const items: { kind: string; text: string; hidden: boolean }[] = [];
+    const bubbles: Record<string, string>[] = [];
+    let current: typeof items[number] | undefined;
+    new Parser({
+      onopentag(name, attrs) {
+        if (name === 'article' && attrs.class?.includes('question-receipt')) bubbles.push(attrs);
+        if (name === 'p' && (attrs.class === 'question-receipt-answer' || attrs['data-native-message'])) {
+          current = { kind: attrs['data-native-message'] ?? 'answer', text: '', hidden: stack.some(parent => 'hidden' in parent) };
+          items.push(current);
+        }
+        stack.push(attrs);
+      },
+      ontext(text) { if (current) current.text += text; },
+      onclosetag(name) { if (name === 'p') current = undefined; stack.pop(); },
+    }).end(html);
+    return { html, items, bubbles };
+  };
+  for (const expanded of [false, true]) {
+    const view = inspect(expanded);
+    assert.equal(view.bubbles.length, 2);
+    assert.ok(!view.html.includes('Asked 3 questions'));
+    assert.deepEqual(view.items.filter(item => item.kind === 'answer').map(({ text, hidden }) => ({ text, hidden })), [
+      { text: 'One or two monitors', hidden: false }, { text: 'Freestanding items only', hidden: false }, { text: 'OmniBook', hidden: false },
+    ]);
+    assert.ok(view.items.filter(item => item.kind !== 'answer' && item.kind !== 'final').every(item => item.hidden === !expanded));
+    assert.equal(view.items.find(item => item.kind === 'final')?.hidden, false);
+    assert.deepEqual(view.items.map(item => item.kind), ['before-first', 'answer', 'answer', 'after-first', 'before-second', 'answer', 'after-second', 'final']);
+  }
 });
 
 test('pending, sending and unknown outcomes stay out of confirmed transcript receipts', () => {
@@ -184,7 +327,7 @@ test('terminal but uncertain requests retain recovery in the tray without offeri
   assert.equal(tray([item]).markup, '');
 });
 
-test('completed series preserve every batch behind one closed disclosure while a single answer stays directly visible', () => {
+test('completed batches remain separate visible reply bubbles without an Asked questions disclosure', () => {
   const first = question(), second = question({ id: 'second-batch' });
   second.snapshot.questions = [...second.snapshot.questions, { questionId: 'notes', header: 'Notes', question: 'Anything else?', options: [], isOther: true }];
   second.snapshot.answers = { answers: { format: ['Detailed'], notes: ['Keep my first line.\nAnd my second line.'] } };
@@ -210,13 +353,12 @@ test('completed series preserve every batch behind one closed disclosure while a
     return { markup, disclosures, answers, mutable };
   };
   const series = inspect([first, second]);
-  assert.equal(series.disclosures.length, 1);
-  assert.ok(!('open' in series.disclosures[0]));
-  assert.match(series.markup, /Asked 3 questions/);
+  assert.equal(series.disclosures.length, 0);
+  assert.ok(!series.markup.includes('Asked 3 questions'));
   assert.deepEqual(series.answers, [
-    { text: 'Brief', behindSeries: true },
-    { text: 'Detailed', behindSeries: true },
-    { text: 'Keep my first line.\nAnd my second line.', behindSeries: true },
+    { text: 'Brief', behindSeries: false },
+    { text: 'Detailed', behindSeries: false },
+    { text: 'Keep my first line.\nAnd my second line.', behindSeries: false },
   ]);
   assert.deepEqual(series.mutable, []);
   const single = inspect([first]);

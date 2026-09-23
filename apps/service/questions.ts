@@ -64,7 +64,8 @@ export class AssistantQuestions {
     if (old?.fingerprint && old.fingerprint !== fp) throw new Fault(409, 'question_changed', 'The question changed. The original answer has not been sent.');
     if (old && (old.snapshot.status !== 'pending' || canonical(old.snapshot) === canonical(record) && old.availability === 'live')) return old;
     const action = old?.action && record.status !== 'pending' ? { ...old.action, state: 'confirmed' as const, message: record.status === 'answered' ? old.action.answerHash === hash(record.answers?.answers) ? 'Answer confirmed.' : 'This request was answered with a different response.' : record.status === 'cancelled' ? 'Question cancelled.' : 'Question expired.' } : old?.action;
-    return this.save({ id, revision: old?.revision ?? 0, epoch: this.store.epoch, connectionGeneration: conversation.connectionGeneration, conversationId: conversation.id, nativeId: conversation.nativeId!, nativeKey: conversation.nativeKey, fingerprint: fp, availability: 'live', snapshot: record, ...(action ? { action } : {}) });
+    const resolution = old?.snapshot.status === 'pending' && record.status !== 'pending' ? { resolvedAtMs: Date.now() } : {};
+    return this.save({ id, revision: old?.revision ?? 0, epoch: this.store.epoch, connectionGeneration: conversation.connectionGeneration, conversationId: conversation.id, nativeId: conversation.nativeId!, nativeKey: conversation.nativeKey, fingerprint: fp, availability: 'live', snapshot: record, ...resolution, ...(action ? { action } : {}) });
   }
   sync() {
     if (this.syncing) return this.syncing;
