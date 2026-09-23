@@ -1,3 +1,8 @@
+## [1.10.10] — 2026-09-23
+
+- Clear every Assistant feature chip as soon as Send, Queue or Steer is pressed, including failed and unconfirmed attempts, while preserving the submitted feature and exact retry identity.
+- Keep subsequent messages in Chat and protect new writing or explicitly reselected features from late responses, conversation changes and plan approval.
+
 ## [1.10.9] — 2026-09-23
 
 - Restore dictation setup when multiple agents are configured by explicitly addressing its isolated main-agent session.

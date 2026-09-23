@@ -22,6 +22,7 @@ import { usePlanReview } from './plan-review-state';
 import { ConversationHeaderTools } from './ConversationHeaderTools';
 import { assistantAttachmentAccept, assistantAttachmentsIssue } from '../../../packages/domain/assistant-attachments';
 import { workModes } from '../../../packages/domain/work-mode';
+import { consumeDraftMode, useComposerMode } from './useComposerMode';
 import { UseOutputInContent, type ContentOutputActions } from './ContentOutputs';
 import { ReplyText, SavedMessageText } from './ReplyText';
 import { ConversationSearch } from './ConversationSearch';
@@ -30,7 +31,7 @@ import type { BrowseTarget } from '../../../packages/domain/search';
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { lazy } from './preload-lazy';
 import { Archive, ArrowDown, ArrowUp, Check, Download, File, Folder, MessageSquare, Mic, Paperclip, PanelLeft, Device, PanelRight, Plus, RotateCcw, Save, Settings2, Square, X, Shield, AudioLines, Trash2, MoreHorizontal, ChevronDown, Search, Research, Queue, Image, Target, List } from './icons';
-import { canonical, emptyDraft, type Attachment, type Command, type Draft, type Entity, type Snapshot } from '../../../packages/domain/contracts';
+import { emptyDraft, type Attachment, type Command, type Draft, type Entity, type Snapshot } from '../../../packages/domain/contracts';
 import type { AssistantOperation, AssistantOutput, Conversation, ConversationMessage, PermissionMode } from '../../../packages/domain/assistant';
 import { Conflict, Dialog, Empty, formatSaved } from './ui';
 import { useRetained } from './useWorkspace';
@@ -200,6 +201,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   };
   useLayoutEffect(() => registerAssistantDraftNavigation(() => retainBeforeLeaving.current()), []);
   const draft = journal.value, conversation = controller.conversation;
+  const composerMode = useComposerMode(snapshot.epoch, draftId, journal);
+  const { mode: workMode } = composerMode;
   const response = conversation ? { model: conversation.model, thinking: effortPreference(conversation.thinking), fastMode: conversation.fastMode ?? null } : preferences;
   const responseName = responseModel(controller.models, response.model)?.name ?? response.model ?? 'Default model';
   const [compactComposer, setCompactComposer] = useState(false);
@@ -248,7 +251,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); setSidePanel(null); } else { if (!controller.select(item.id)) return; setReading(null); } rail.closeMobile(); }}/>;
   };
   const ready = controller.statusRead === 'ready' && controller.connection.state === 'ready' && controller.connection.grantedScopes.includes('operator.write');
-  const planReviewController = usePlanReview({ item: planReview, epoch: snapshot.epoch, ready: ready && !active && !busy && !callingHere && !conversation?.pendingSettings && conversation?.state === 'ready', readOnly: !!conversation?.archived || !!reading, refresh: async () => { await controller.refresh(); if (conversation) await controller.loadHistory(conversation.id); }, onApproved: () => journal.change(value => value.text.trim() || value.attachments.length ? value : { ...value, workMode: 'chat' }) });
+  const planReviewController = usePlanReview({ item: planReview, epoch: snapshot.epoch, ready: ready && !active && !busy && !callingHere && !conversation?.pendingSettings && conversation?.state === 'ready', readOnly: !!conversation?.archived || !!reading, refresh: async () => { await controller.refresh(); if (conversation) await controller.loadHistory(conversation.id); } });
   const showPlanDecision = planReviewController.decisionVisible && !reading && !preview && !active && !callingHere && dictation.phase === 'idle' && !dictation.preview && !controller.history?.hasNewer && !conversation?.archived;
   const priorPlanDecision = useRef(false);
   useLayoutEffect(() => { if (priorPlanDecision.current && !showPlanDecision && !reading && !conversation?.archived) textarea.current?.focus({ preventScroll: true }); priorPlanDecision.current = showPlanDecision; }, [showPlanDecision, reading, conversation?.archived]);
@@ -267,6 +270,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const append = (source: Draft) => {
     const combined = [...new Map([...draft.attachments, ...source.attachments].map(a => [a.id, a])).values()];
     if (combined.length > 10) { setNotice('This copy would exceed 10 attachments. Keep or export the originals before continuing.'); return; }
+    if (!draft.text.trim() && !draft.attachments.length) composerMode.select(source.workMode ?? 'chat');
     journal.change(value => ({ ...value, text: `${value.text}${value.text && source.text ? '\n\n' : ''}${source.text}`, attachments: combined, ...(!value.text.trim() && !value.attachments.length ? { workMode: source.workMode ?? 'chat' } : {}), ...(source.refineSource ? { refineSource: source.refineSource } : {}), ...(conversation ? {} : { projectId: value.text ? value.projectId : source.projectId }) }));
     setPreview(null); textarea.current?.focus();
   };
@@ -274,59 +278,29 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     const file = new Blob([`${draft.title}\n\n${draft.text}\n\n${draft.attachments.map(a => `Attachment: ${a.name} (${a.size} bytes)`).join('\n')}`], { type: 'text/plain' });
     const url = URL.createObjectURL(file), link = document.createElement('a'); link.href = url; link.download = 'conversation-draft.txt'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const rejectedInput = (error: unknown) => error instanceof ApiError && ['draft_changed', 'conversation_changed', 'project_changed', 'attachment_changed', 'attachment_limit', 'attachment_type', 'unsupported_attachment', 'empty_message', 'refinement_instructions', 'steer_project_changed', 'steer_attachments', 'steer_target_changed'].includes(error.code);
-  const send = async () => {
+  const rejectedInput = (error: unknown) => error instanceof ApiError && ['draft_changed', 'conversation_changed', 'project_changed', 'attachment_changed', 'attachment_limit', 'attachment_type', 'unsupported_attachment', 'empty_message', 'refinement_instructions', 'steer_project_changed', 'steer_attachments', 'steer_target_changed', 'queue_full', 'mode_steering'].includes(error.code);
+  const dispatchDraft = async (action: 'submit' | 'queue' | 'steer') => {
     if (sourceCount > 10) { setContextDialog({ kind: 'sources' }); return; }
     if (!conversation) { await startAndSend(); return; }
-    if (busy || active || journal.dirty || journal.saving || journal.conflict || filesPending) return;
-    const key = `e3:submit:${draftId}`;
+    if (busy || journal.dirty || journal.saving || journal.conflict || filesPending) return;
+    const requestedKey = action === 'queue' ? `e3:queue-capture:${draftId}` : action === 'steer' ? `e3:steer:${draftId}:${active?.id}` : `e3:submit:${draftId}`;
+    // Reconcile a prior uncertain send before capturing a new follow-up, even
+    // when arriving activity has changed the primary button from Send to Queue.
+    const key = composerMode.pendingKey ?? [`e3:submit:${draftId}`, `e3:queue-capture:${draftId}`].find(key => readLocal(key)) ?? requestedKey;
     const retained = readLocal<{ request: object; captured: Draft }>(key);
+    const endpoint = key.startsWith('e3:queue-capture:') ? 'queue' : key.startsWith('e3:steer:') ? 'steer' : 'submit';
+    if (!retained && (endpoint === 'submit' && active || endpoint === 'steer' && (!active || draft.attachments.length))) return;
     if (!retained && attachmentIssue) { setNotice(attachmentIssue); return; }
-    const pending = retained ?? { request: { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, draftId, draftRevision: journal.revision, projectRevision: project?.revision ?? 0 }, captured: draft };
-    if (!saveLocal(key, pending)) { setNotice('Free browser storage before sending. Your draft is kept.'); return; }
+    const pending = retained ?? { request: { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, draftId, draftRevision: journal.revision, projectRevision: project?.revision ?? 0, ...(endpoint === 'queue' ? { automatic: true } : endpoint === 'steer' ? { targetOperationId: active!.id } : {}) }, captured: draft };
+    const consumed = composerMode.consume(key);
+    if (!saveLocal(key, pending)) { composerMode.finish(consumed); setNotice('Free browser storage before sending. Your draft is kept.'); return; }
     setBusy(true); setNotice('');
     try {
-      await request<AssistantOperation>('assistant/submit', pending.request);
-      localStorage.removeItem(key);
-      journal.change(value => {
-        if (canonical(value) !== canonical(pending.captured)) return value;
-        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256), ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) };
-        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...((kept.workMode === 'goal' || kept.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
-      });
+      await request(`assistant/${endpoint}`, pending.request); localStorage.removeItem(key);
+      composerMode.finish(consumed, pending.captured, conversation.refineSource?.sha256);
       await controller.refresh();
-    } catch (e) { if (rejectedInput(e)) localStorage.removeItem(key); keepError(e); }
+    } catch (e) { if (rejectedInput(e)) { localStorage.removeItem(key); composerMode.finish(consumed); } keepError(e); }
     finally { setBusy(false); }
-  };
-  const steer = async () => {
-    if (!conversation || !active || busy || journal.dirty || journal.saving || journal.conflict || filesPending || draft.attachments.length) return;
-    const key = `e3:steer:${draftId}:${active.id}`;
-    const pending = readLocal<{ request: object; captured: Draft }>(key) ?? { request: { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, targetOperationId: active.id, draftId, draftRevision: journal.revision, projectRevision: project?.revision ?? 0 }, captured: draft };
-    if (!saveLocal(key, pending)) { setNotice('Free browser storage before sending direction.'); return; }
-    setBusy(true); setNotice('');
-    try { await request('assistant/steer', pending.request); localStorage.removeItem(key); journal.change(value => canonical(value) === canonical(pending.captured) ? { ...value, text: '', ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) } : value); await controller.refresh(); }
-    catch (e) { if (rejectedInput(e)) localStorage.removeItem(key); keepError(e); } finally { setBusy(false); }
-  };
-  const enqueue = async () => {
-    if (sourceCount > 10) { setContextDialog({ kind: 'sources' }); return; }
-    if (!conversation || busy || journal.dirty || journal.saving || journal.conflict || filesPending) return;
-    const key = `e3:queue-capture:${draftId}`;
-    const retained = readLocal<{ request: object; captured: Draft }>(key);
-    if (!retained && attachmentIssue) { setNotice(attachmentIssue); return; }
-    const pending = retained ?? { request: { automatic: true, requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, draftId, draftRevision: journal.revision, projectRevision: project?.revision ?? 0 }, captured: draft };
-    if (!saveLocal(key, pending)) { setNotice('Free browser storage before queuing this message. Your draft is kept.'); return; }
-    setBusy(true); setNotice('');
-    try {
-      await request('assistant/queue', pending.request); localStorage.removeItem(key);
-      journal.change(value => {
-        if (canonical(value) !== canonical(pending.captured)) return value;
-        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256), ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) };
-        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...((kept.workMode === 'goal' || kept.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
-      });
-      await controller.refresh();
-    } catch (reason) {
-      if (reason instanceof ApiError && ['draft_changed', 'conversation_changed', 'project_changed', 'attachment_changed', 'attachment_limit', 'attachment_type', 'unsupported_attachment', 'empty_message', 'refinement_instructions', 'queue_full'].includes(reason.code)) localStorage.removeItem(key);
-      keepError(reason);
-    } finally { setBusy(false); }
   };
   const cancel = async (reportFailure = false) => {
     if (!active) return;
@@ -334,7 +308,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   };
   const clearSubmittedDraft = async (entityId: string, expectedRevision: number, captured: Draft, submissionKey: string) => {
     const key = `${submissionKey}:clear`;
-    const payload = { ...captured, text: '', attachments: [], ...((captured.workMode === 'goal' || captured.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
+    const payload = { ...captured, text: '', attachments: [], workMode: 'chat' as const };
     const command = readLocal<Command>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, kind: 'draft' as const, entityId, expectedRevision, payload };
     if (!saveLocal(key, command)) throw Error('Your message was submitted. Reopen the conversation to reconcile its retained draft.');
     await commit(command); localStorage.removeItem(key); localStorage.removeItem(submissionKey);
@@ -346,7 +320,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     const retained = readLocal<Start>(key);
     if (!retained && attachmentIssue) { setNotice(attachmentIssue); return; }
     const intent = retained ?? { requestId: crypto.randomUUID(), copyRequestId: crypto.randomUUID(), submitRequestId: crypto.randomUUID(), space: controller.space, captured: draft, preferences, permissionMode: accessPreference };
-    if (!saveLocal(key, intent)) { setNotice('Free browser storage before starting this conversation.'); return; }
+    const consumed = composerMode.consume(key);
+    if (!saveLocal(key, intent)) { composerMode.finish(consumed); setNotice('Free browser storage before starting this conversation.'); return; }
     setBusy(true); setNotice('');
     let created: Conversation | undefined;
     try {
@@ -356,6 +331,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       created = await controller.create({ requestId: intent.requestId, space: intent.space ?? assistantSpace(captured), title, autoTitle, projectId: captured.projectId, permissionMode: intent.permissionMode ?? 'read-only', ...(settings.model ? { model: settings.model } : {}), ...(settings.thinking ? { thinking: settings.thinking } : {}), ...(settings.fastMode != null ? { fastMode: settings.fastMode } : {}) });
       const branchId = `draft:${snapshot.deviceId}:${created.id}`;
       const payload = { ...captured, space: assistantSpace(created), conversationId: created.id, projectId: created.projectId, title: created.title };
+      consumeDraftMode(snapshot.epoch, branchId, `e3:submit:${branchId}`, payload.workMode);
       const command = { requestId: intent.copyRequestId, epoch: snapshot.epoch, kind: 'draft' as const, entityId: branchId, expectedRevision: 0, payload };
       if (!saveLocal(`e3:conversation-copy:${branchId}`, command)) throw new Error('The new chat exists. Your original draft is still here. Free browser storage to continue.');
       const copy = await commit<Draft>(command); localStorage.removeItem(`e3:conversation-copy:${branchId}`);
@@ -371,9 +347,9 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       if (!saveLocal(submitKey, { request: requestInput, captured: payload })) throw new Error('The new draft is saved. Free browser storage before sending.');
       await request<AssistantOperation>('assistant/submit', requestInput);
       await clearSubmittedDraft(branchId, copy.revision, payload, submitKey); localStorage.removeItem(key);
-      journal.change(value => canonical(value) === canonical(captured) ? { ...value, text: '', attachments: [], ...((value.workMode === 'goal' || value.workMode === 'plan') ? { workMode: 'chat' as const } : {}) } : value);
+      composerMode.finish(consumed, captured);
       await refreshWorkspace(); await controller.refresh(); if (editorAlive.current) { controller.select(created.id, assistantSpace(created)); rail.closeMobile(); }
-    } catch (e) { if (!created) releaseRejectedProjectRequest(key, intent.requestId, e); if (created && rejectedInput(e)) { localStorage.removeItem(`e3:submit:draft:${snapshot.deviceId}:${created.id}`); localStorage.removeItem(key); } if (editorAlive.current) keepError(e); if (created) { await refreshWorkspace(); await controller.refresh(); if (editorAlive.current) controller.select(created.id, assistantSpace(created)); } }
+    } catch (e) { if (!created) releaseRejectedProjectRequest(key, intent.requestId, e); if (created && rejectedInput(e)) { localStorage.removeItem(`e3:submit:draft:${snapshot.deviceId}:${created.id}`); localStorage.removeItem(key); } if (!readLocal(key)) composerMode.finish(consumed); if (editorAlive.current) keepError(e); if (created) { await refreshWorkspace(); await controller.refresh(); if (editorAlive.current) controller.select(created.id, assistantSpace(created)); } }
     finally { setBusy(false); }
   };
   const forkMessage = async (message: ConversationMessage, purpose: 'branch' | 'edit' | 'retry', text?: string) => {
@@ -539,7 +515,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
         {conversation && <MessageQueue controller={controller} conversationId={conversation.id} epoch={snapshot.epoch} blocked={!!active || callingHere || !!conversation.pendingSettings} copy={append} historyOpen={queueExpanded} onHistoryToggle={open => { setQueueExpanded(open); if (!open) textarea.current?.focus(); }}/>}
         {showPlanDecision && <PlanReviewDecision review={planReviewController}/>}
         <div className={`composer${showPlanDecision ? ' plan-decision-composer' : ''}`} onDragOver={event => { if (!showPlanDecision && event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={event => { if (!showPlanDecision && event.dataTransfer.files.length) { event.preventDefault(); void attachments.add(event.dataTransfer.files); } }}>
-          {((draft.workMode && draft.workMode !== 'chat') || active && hasFollowUp) && <div className="composer-mode-row">{draft.workMode && draft.workMode !== 'chat' && <button className="work-mode-chip" aria-label={`Turn off ${draft.workMode} mode`} title="Return to Chat" onClick={() => { journal.change(value => ({ ...value, workMode: 'chat' })); textarea.current?.focus(); }}>{workModes.find(mode => mode.id === draft.workMode)?.label}<X size={13}/></button>}{active && hasFollowUp && <button className="text-button stop-reply" disabled={!active.nativeRunId || !!active.cancelRequested} onClick={() => void cancel()}><Square size={15}/>{active.cancelRequested ? 'Stopping…' : 'Stop reply'}</button>}{active && draft.text.trim() && <button className="text-button steer-reply" disabled={draft.workMode === 'goal' || busy || journal.dirty || journal.saving || !!journal.conflict || !!draft.attachments.length || filesPending || active.cancelRequested || !active.nativeRunId} onClick={() => void steer()}>Steer current reply</button>}</div>}
+          {((workMode !== 'chat') || active && hasFollowUp) && <div className="composer-mode-row">{workMode !== 'chat' && <button className="work-mode-chip" aria-label={`Turn off ${workMode} mode`} title="Return to Chat" onClick={() => { composerMode.select('chat'); textarea.current?.focus(); }}>{workModes.find(mode => mode.id === workMode)?.label}<X size={13}/></button>}{active && hasFollowUp && <button className="text-button stop-reply" disabled={!active.nativeRunId || !!active.cancelRequested} onClick={() => void cancel()}><Square size={15}/>{active.cancelRequested ? 'Stopping…' : 'Stop reply'}</button>}{active && draft.text.trim() && <button className="text-button steer-reply" disabled={workMode === 'goal' || busy || journal.dirty || journal.saving || !!journal.conflict || !!draft.attachments.length || filesPending || active.cancelRequested || !active.nativeRunId} onClick={() => void dispatchDraft('steer')}>Steer current reply</button>}</div>}
           <label className="sr-only" htmlFor="assistant-draft">Message draft</label><textarea rows={1} id="assistant-draft" ref={textarea} onPaste={event => { if (event.clipboardData.files.length) { event.preventDefault(); void attachments.add(event.clipboardData.files); } }} value={draft.text} maxLength={100000} placeholder={draft.refineSource ? 'What would you like to change in this output?' : controller.space === 'work' ? 'Describe what you want to get done…' : 'Write what’s on your mind…'} onChange={e => journal.change(v => ({ ...v, text: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); const button = textarea.current?.closest('.composer')?.querySelector<HTMLButtonElement>('.send-button'); if (button && !button.disabled && (primaryAction === 'send' || primaryAction === 'queue')) button.click(); } }}/>
           {attachmentIssue && <p id="assistant-source-issue" className="field-error" role="alert">{attachmentIssue.replace(/ (?:Use TXT, Markdown, JSON, CSV, PDF, PNG, JPEG or WebP\. )?Your draft and saved files are kept\.$/, '')} <button type="button" className="text-button" onClick={() => setContextDialog({ kind: 'sources' })}>Review sources</button></p>}
           {sourceCount > 10 && <p className="field-error" role="alert">{sourceCount} files selected; up to 10 can accompany a message. <button type="button" className="text-button" onClick={() => setContextDialog({ kind: 'sources' })}>Review sources</button></p>}
@@ -553,12 +529,12 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
               {close => <>
                 <button role="menuitem" title="TXT, Markdown, JSON, CSV, PDF, PNG, JPEG or WebP · up to 8 MB each · 10 sources per message" onClick={() => { close(); fileInput.current?.click(); }}><Paperclip size={18}/><span>Attachments</span></button>
                 {primaryAction !== 'voice' && <button role="menuitem" disabled={voiceDisabled} onClick={() => { close(); void startVoice(); }}><AudioLines size={18}/><span>Start voice call</span></button>}
-                {workModes.filter(mode => mode.id !== 'chat').map(mode => { const Icon = modeIcons[mode.id], unavailable = mode.id === 'goal' && !goalSupported; return <button role="menuitemradio" key={mode.id} className="work-mode-option" disabled={unavailable} title={unavailable ? 'Connect a runtime with Goal support to start an objective.' : undefined} aria-checked={(draft.workMode ?? 'chat') === mode.id} onClick={() => { journal.change(value => ({ ...value, workMode: mode.id })); close(); requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true })); }}><Icon size={18}/><span>{mode.label}</span>{(draft.workMode ?? 'chat') === mode.id && <Check size={16}/>}</button>; })}
+                {workModes.filter(mode => mode.id !== 'chat').map(mode => { const Icon = modeIcons[mode.id], unavailable = mode.id === 'goal' && !goalSupported; return <button role="menuitemradio" key={mode.id} className="work-mode-option" disabled={unavailable} title={unavailable ? 'Connect a runtime with Goal support to start an objective.' : undefined} aria-checked={workMode === mode.id} onClick={() => { composerMode.select(mode.id); close(); requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true })); }}><Icon size={18}/><span>{mode.label}</span>{workMode === mode.id && <Check size={16}/>}</button>; })}
               </>}
 
             </ComposerMenu><ComposerMenu label="Access / permissions" description={`${actualAccess ? accessLabels[actualAccess] : 'Access not confirmed'}${conversation?.pendingSettings?.permissionMode ? '; change awaiting confirmation' : ''}`} icon={<Shield size={20}/>} text={actualAccess ? accessLabels[actualAccess] : 'Access'} className="access-control">{() => <AccessDetails conversation={conversation} preference={accessPreference} blocked={!!active || busy || callingHere || !!conversation?.pendingSettings} save={async mode => { if (conversation) return controller.edit(conversation, { permissionMode: mode }); if (!saveLocal(accessKey, mode)) throw Error('The access preference could not be saved.'); setAccessPreference(mode); }}/>}</ComposerMenu></div><div className="composer-tools-right">
             {conversation && !compactComposer && <ComposerMenu label="ChatGPT Account" icon={<UserRound size={20}/>} align="right">{() => <ConversationAccountPanel {...accountControl}/>}</ComposerMenu>}
-            <ComposerMenu label="Response settings" description={`${responseName}; ${effortLabel(response.thinking)} reasoning; ${response.fastMode === true ? 'Fast speed' : response.fastMode === false ? 'Standard speed' : response.fastMode === 'auto' ? 'Automatic speed' : 'Default speed'}${conversation?.pendingSettings ? '; change awaiting confirmation' : ''}`} icon={null} text={<><span className="response-model-name">{responseName}</span>{response.thinking && <em>{effortLabel(response.thinking)}</em>}<ChevronDown size={15}/></>} className="response-control" align="right">{() => <><ResponseControls models={controller.models} modelStatus={controller.modelStatus} retryModels={controller.retryModels} value={response} blocked={!!active || callingHere || !!conversation?.pendingSettings} save={async next => { if (conversation) return controller.edit(conversation, next); if (!saveLocal(preferencesKey, next)) throw Error('The preferences could not be saved.'); setPreferences(next); }}/>{conversation && compactComposer && <ConversationAccountPanel {...accountControl}/>}</>}</ComposerMenu><button className={`composer-control-button ${dictation.phase !== 'idle' ? 'dictation-active' : ''}`} aria-label={dictationLabel} title={dictationLabel} disabled={dictation.phase === 'finishing' || (dictation.phase === 'idle' && (callingHere || !ready || !!dictation.preview))} onClick={() => void (dictation.phase === 'idle' ? dictation.start() : dictation.phase === 'connecting' ? dictation.cancel() : dictation.stop())}>{dictation.phase === 'idle' ? <Mic size={20}/> : <Square size={20}/>}</button><button className="primary send-button" aria-describedby={primaryAction !== 'voice' && attachmentIssue ? 'assistant-source-issue' : undefined} aria-label={primaryLabel} title={callingHere ? 'End the voice call to continue' : primaryLabel} onClick={() => void (primaryAction === 'voice' ? startVoice() : primaryAction === 'stop' ? cancel() : primaryAction === 'queue' ? enqueue() : send())} disabled={primaryAction === 'voice' ? voiceDisabled : primaryAction === 'stop' ? !active?.nativeRunId || !!active?.cancelRequested : !ready || busy || dictation.phase !== 'idle' || (!!conversation && conversation.state !== 'ready') || callingHere || !!conversation?.pendingSettings || !!journal.conflict || journal.dirty || journal.saving || filesPending || !!attachmentIssue && !retainedDispatch || sourceCount > 10 || (!draft.text.trim() && (!!conversation?.refineSource || !draft.attachments.length))}>{primaryAction === 'voice' ? <AudioLines size={20}/> : primaryAction === 'stop' ? <Square size={19}/> : primaryAction === 'queue' ? <Queue size={19}/> : <ArrowUp size={19}/>}</button></div></div>
+            <ComposerMenu label="Response settings" description={`${responseName}; ${effortLabel(response.thinking)} reasoning; ${response.fastMode === true ? 'Fast speed' : response.fastMode === false ? 'Standard speed' : response.fastMode === 'auto' ? 'Automatic speed' : 'Default speed'}${conversation?.pendingSettings ? '; change awaiting confirmation' : ''}`} icon={null} text={<><span className="response-model-name">{responseName}</span>{response.thinking && <em>{effortLabel(response.thinking)}</em>}<ChevronDown size={15}/></>} className="response-control" align="right">{() => <><ResponseControls models={controller.models} modelStatus={controller.modelStatus} retryModels={controller.retryModels} value={response} blocked={!!active || callingHere || !!conversation?.pendingSettings} save={async next => { if (conversation) return controller.edit(conversation, next); if (!saveLocal(preferencesKey, next)) throw Error('The preferences could not be saved.'); setPreferences(next); }}/>{conversation && compactComposer && <ConversationAccountPanel {...accountControl}/>}</>}</ComposerMenu><button className={`composer-control-button ${dictation.phase !== 'idle' ? 'dictation-active' : ''}`} aria-label={dictationLabel} title={dictationLabel} disabled={dictation.phase === 'finishing' || (dictation.phase === 'idle' && (callingHere || !ready || !!dictation.preview))} onClick={() => void (dictation.phase === 'idle' ? dictation.start() : dictation.phase === 'connecting' ? dictation.cancel() : dictation.stop())}>{dictation.phase === 'idle' ? <Mic size={20}/> : <Square size={20}/>}</button><button className="primary send-button" aria-describedby={primaryAction !== 'voice' && attachmentIssue ? 'assistant-source-issue' : undefined} aria-label={primaryLabel} title={callingHere ? 'End the voice call to continue' : primaryLabel} onClick={() => void (primaryAction === 'voice' ? startVoice() : primaryAction === 'stop' ? cancel() : dispatchDraft(primaryAction === 'queue' ? 'queue' : 'submit'))} disabled={primaryAction === 'voice' ? voiceDisabled : primaryAction === 'stop' ? !active?.nativeRunId || !!active?.cancelRequested : !ready || busy || dictation.phase !== 'idle' || (!!conversation && conversation.state !== 'ready') || callingHere || !!conversation?.pendingSettings || !!journal.conflict || journal.dirty || journal.saving || filesPending || !!attachmentIssue && !retainedDispatch || sourceCount > 10 || (!draft.text.trim() && (!!conversation?.refineSource || !draft.attachments.length))}>{primaryAction === 'voice' ? <AudioLines size={20}/> : primaryAction === 'stop' ? <Square size={19}/> : primaryAction === 'queue' ? <Queue size={19}/> : <ArrowUp size={19}/>}</button></div></div>
         </div>{!ready && <p className="composer-footnote">{controller.statusRead === 'loading' ? <span role="status">Checking the Assistant connection…</span> : controller.statusRead === 'error' ? <><span role="status">Chat updates paused · your draft is kept.</span><button type="button" className="text-button" onClick={() => void controller.refresh()}>Retry</button></> : <><span>Assistant disconnected · your draft is kept.</span><button type="button" className="text-button" onClick={openSettings}>Connect</button></>}</p>}
       </div>}
     </div>
