@@ -131,7 +131,11 @@ import assert from 'node:assert/strict';
 // and direct image actions. Measured 635,286 total gzip bytes (+6,246 / 0.99%
 // over the 1.9.14 measurement above); startup 147,963 and largest deferred
 // chunk 76,337. Bound at 637 KB; retain startup and per-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 637000, deferredChunk: 80000 };
+// 1.10.3 adds inline plan documents, optional read-only plan tabs and retained
+// decision recovery. First coherent measurement: 637,655 total gzip bytes
+// (+1,835 / 0.29% over 1.10.2); startup 147,989. Bound total at 638 KB;
+// retain the 180 KB startup and 80 KB individual deferred-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 638000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

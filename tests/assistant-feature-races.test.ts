@@ -13,14 +13,17 @@ const loader = registerHooks({
       export const useRef = v => globalThis[Symbol.for('nova.test.feature-races')].ref(v);
       export const useId = () => globalThis[Symbol.for('nova.test.feature-races')].ref('test-panel').current;
       export const useEffect = (f,d) => globalThis[Symbol.for('nova.test.feature-races')].effect(f,d);
-      export const useCallback = (f,d) => globalThis[Symbol.for('nova.test.feature-races')].memo(f,d);` };
+      export const useLayoutEffect = (f,d) => globalThis[Symbol.for('nova.test.feature-races')].effect(f,d);
+      export const useCallback = (f,d) => globalThis[Symbol.for('nova.test.feature-races')].memo(f,d);
+      export const useMemo = (f,d) => globalThis[Symbol.for('nova.test.feature-races')].memoValue(f,d);` };
     if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
     return next(url, context);
   },
 });
 const { ChatGoalControl } = await import('../apps/client/src/ChatGoal');
 const { GeneratedOutput } = await import('../apps/client/src/GeneratedOutput');
-const { PlanReviewCard } = await import('../apps/client/src/PlanReviewCard');
+const { PlanReviewCard, PlanReviewDecision, PlanReviewDocument } = await import('../apps/client/src/PlanReviewCard');
+const { usePlanReview } = await import('../apps/client/src/plan-review-state');
 const { StepsPill } = await import('../apps/client/src/ToolActivity');
 loader.deregister();
 
@@ -37,6 +40,7 @@ function host(component: (props: any) => any, initial: any, respond: (path: stri
       ref(value: any) { return cells[cursor++] ??= { current: value }; },
       effect(run: () => void | (() => void), deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((v, n) => !Object.is(v, prior.deps[n]))) { cells[i] = { deps, cleanup: prior?.cleanup }; effects.push(() => { cells[i].cleanup?.(); cells[i].cleanup = run(); }); } },
       memo(value: any, deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((v, n) => !Object.is(v, prior.deps[n]))) cells[i] = { deps, value }; return cells[i].value; },
+      memoValue(read: () => unknown, deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((v, n) => !Object.is(v, prior.deps[n]))) cells[i] = { deps, value: read() }; return cells[i].value; },
     }, document, window,
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value); }, removeItem: (key: string) => { storage.delete(key); } },
     setTimeout: (run: () => void, delay: number) => setTimer(run, delay), clearTimeout: (id: number) => timers.delete(id),
@@ -130,20 +134,185 @@ for (const restriction of ['blocked', 'archived']) test(`a pending image save ca
 });
 
 
+const reviewPlan = () => ({ id: 'plan-a', revision: 3, version: 1, state: 'ready', reviewDigest: 'a'.repeat(64), versions: [{ version: 1, digest: 'a'.repeat(64), proposal: { title: 'Review', summary: 'Retain this exact proposal.', steps: ['First'], assumptions: [], verification: ['Check'] } }] });
 test('a lost plan amendment retries the original identity and text while retaining newer writing', async () => {
-  const item = { id: 'plan-a', revision: 3, version: 1, state: 'ready', reviewDigest: 'hash', versions: [{ version: 1, proposal: { title: 'Review', summary: 'Retain this exact proposal.', steps: ['First'], assumptions: [], verification: ['Check'] } }] };
+  const item = reviewPlan();
   let attempts = 0;
-  const app = host(PlanReviewCard, { item, epoch: 'epoch', ready: true, refresh: async () => {} }, () => { if (++attempts === 1) throw Error('Response lost'); return { id: 'same-operation' }; });
+  const app = host(usePlanReview, { item, epoch: 'epoch', ready: true, refresh: async () => {} }, () => { if (++attempts === 1) throw Error('Response lost'); return { id: 'same-operation' }; });
   try {
-    await app.flush(); find(app.tree, node => node.type === 'button' && node.props.children === 'Request changes').props.onClick(); await app.flush();
-    find(app.tree, node => node.type === 'textarea').props.onChange({ target: { value: 'Original change' } }); await app.flush();
-    find(app.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await app.flush();
+    await app.flush(); app.tree.setText('Original change'); await app.flush();
+    void app.tree.amend(); await app.flush();
     assert.equal(app.calls.length, 1); const original = JSON.parse(String(app.calls[0].init.body));
-    find(app.tree, node => node.type === 'textarea').props.onChange({ target: { value: 'Newer unsent writing' } }); await app.flush();
-    find(app.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await app.flush(); assert.equal(app.calls.length, 1);
-    find(app.tree, node => node.type === 'button' && node.props.children === 'Retry original decision').props.onClick(); await app.flush();
+    app.tree.setText('Newer unsent writing'); await app.flush();
+    void app.tree.amend(); void app.tree.approve(); await app.flush(); assert.equal(app.calls.length, 1);
+    void app.tree.retry(); await app.flush();
     assert.equal(app.calls.length, 2); assert.deepEqual(JSON.parse(String(app.calls[1].init.body)), original);
-    assert.equal(find(app.tree, node => node.type === 'textarea').props.value, 'Newer unsent writing');
+    assert.equal(app.tree.text, 'Newer unsent writing');
     assert.equal(JSON.parse(app.storage.get('e3:plan-amendment:epoch:plan-a')!), 'Newer unsent writing');
+  } finally { app.close(); }
+});
+
+test('Skip and return preserve plan changes without submitting or approving anything', async () => {
+  const app = host(usePlanReview, { item: reviewPlan(), epoch: 'epoch', ready: true, refresh: async () => {} });
+  try {
+    await app.flush(); assert.equal(app.tree.decisionVisible, true);
+    app.tree.setText('Keep the existing navigation.'); await app.flush();
+    app.tree.skip(); await app.flush();
+    assert.equal(app.tree.decisionVisible, false); assert.equal(app.tree.text, 'Keep the existing navigation.');
+    assert.equal(app.calls.length, 0);
+    app.tree.openDecision(); await app.flush();
+    assert.equal(app.tree.decisionVisible, true); assert.equal(app.tree.text, 'Keep the existing navigation.');
+    assert.equal(app.calls.length, 0);
+  } finally { app.close(); }
+});
+
+test('a new saved plan version reopens its own decision and retains unsent amendment writing', async () => {
+  const item = reviewPlan(), app = host(usePlanReview, { item, epoch: 'epoch', ready: true, refresh: async () => {} });
+  try {
+    await app.flush(); app.tree.setText('Unsent changes for later review.'); app.tree.skip(); await app.flush();
+    assert.equal(app.tree.decisionVisible, false);
+    await app.update({ item: { ...item, revision: 6, version: 2, reviewDigest: 'b'.repeat(64), versions: [...item.versions, { version: 2, digest: 'b'.repeat(64), proposal: { ...item.versions[0].proposal, summary: 'The current revised proposal.' } }] } });
+    assert.equal(app.tree.decisionVisible, true); assert.equal(app.tree.text, 'Unsent changes for later review.');
+    assert.equal(app.tree.version.version, 2); assert.equal(app.calls.length, 0);
+  } finally { app.close(); }
+});
+
+test('two immediate approval actions admit one request before React can rerender', async () => {
+  const receipt = deferred<any>(); let approved = 0;
+  const app = host(usePlanReview, { item: reviewPlan(), epoch: 'epoch', ready: true, refresh: async () => {}, onApproved: () => { approved++; } }, () => receipt.promise);
+  try {
+    await app.flush(); const original = app.tree.approve;
+    void original(); void original(); await app.flush();
+    assert.equal(app.calls.length, 1); assert.equal(app.tree.busy, true);
+    receipt.resolve({ id: 'implementation' }); await app.flush();
+    assert.equal(approved, 1); assert.equal(app.calls.length, 1);
+  } finally { app.close(); }
+});
+
+for (const change of ['plan', 'epoch', 'version'] as const) test(`a late plan approval cannot act on a different ${change}`, async () => {
+  const item = reviewPlan(), receipt = deferred<any>(); let approved = 0;
+  const app = host(usePlanReview, { item, epoch: 'epoch', ready: true, refresh: async () => {}, onApproved: () => { approved++; } }, () => receipt.promise);
+  try {
+    await app.flush(); void app.tree.approve(); await app.flush(); assert.equal(app.calls.length, 1);
+    if (change === 'plan') await app.update({ item: { ...item, id: 'plan-b' } });
+    else if (change === 'epoch') await app.update({ epoch: 'new-epoch' });
+    else await app.update({ item: { ...item, version: 2, revision: 6, reviewDigest: 'b'.repeat(64), versions: [...item.versions, { ...item.versions[0], version: 2, digest: 'b'.repeat(64) }] } });
+    app.tree.setText('The new review must keep this writing.'); await app.flush();
+    receipt.resolve({ id: 'old-implementation' }); await app.flush();
+    assert.equal(approved, 0); assert.equal(app.tree.text, 'The new review must keep this writing.');
+    assert.equal(app.calls.length, 1);
+  } finally { app.close(); }
+});
+
+test('a retained approval callback cannot authorize work after navigating to another review', async () => {
+  const item = reviewPlan(), app = host(usePlanReview, { item, epoch: 'epoch', ready: true, refresh: async () => {} });
+  try {
+    await app.flush(); const approveOldReview = app.tree.approve;
+    await app.update({ item: { ...item, id: 'plan-b' } });
+    void approveOldReview(); await app.flush();
+    assert.equal(app.calls.length, 0);
+    assert.equal(app.tree.item.id, 'plan-b'); assert.equal(app.tree.canApprove, true);
+  } finally { app.close(); }
+});
+
+test('a deferred decision and amendment writing survive reopening the same saved plan', async () => {
+  const props = { item: reviewPlan(), epoch: 'epoch', ready: true, refresh: async () => {} };
+  let app = host(usePlanReview, props);
+  try {
+    await app.flush(); app.tree.setText('Keep this change until I return.'); app.tree.skip(); await app.flush();
+    const persisted = [...app.storage.entries()]; app.close(); app = host(usePlanReview, props);
+    for (const [key, value] of persisted) app.storage.set(key, value);
+    await app.flush();
+    assert.equal(app.tree.decisionVisible, false); assert.equal(app.tree.text, 'Keep this change until I return.');
+    app.tree.openDecision(); await app.flush();
+    assert.equal(app.tree.decisionVisible, true); assert.equal(app.calls.length, 0);
+  } finally { app.close(); }
+});
+
+test('an uncertain approval reopens with its exact original payload after a plan revision refresh', async () => {
+  const item = reviewPlan(), props = { item, epoch: 'epoch', ready: true, refresh: async () => {} };
+  let app = host(usePlanReview, props, () => { throw Error('Response lost'); });
+  try {
+    await app.flush(); void app.tree.approve(); await app.flush();
+    const original = JSON.parse(String(app.calls[0].init.body)), persisted = [...app.storage.entries()];
+    app.close(); app = host(usePlanReview, { ...props, item: { ...item, revision: item.revision + 1 } });
+    for (const [key, value] of persisted) app.storage.set(key, value);
+    await app.flush();
+    assert.equal(app.tree.pendingAction, 'approve'); assert.equal(app.tree.canApprove, false); assert.equal(app.tree.canAmend, false);
+    app.tree.setText('A later idea must not replace the pending approval.'); await app.flush();
+    void app.tree.amend(); void app.tree.approve(); await app.flush(); assert.equal(app.calls.length, 0);
+    void app.tree.retry(); await app.flush();
+    assert.equal(app.calls.length, 1); assert.deepEqual(JSON.parse(String(app.calls[0].init.body)), original);
+    assert.equal(app.tree.accepted, true); assert.equal(app.tree.decisionVisible, false);
+    void app.tree.retry(); void app.tree.approve(); await app.flush(); assert.equal(app.calls.length, 1);
+    assert.equal(app.tree.text, 'A later idea must not replace the pending approval.');
+  } finally { app.close(); }
+});
+
+test('an uncertain decision that settles away from its plan is not stuck busy when revisited', async () => {
+  const item = reviewPlan(), receipt = deferred<void>(); let attempts = 0;
+  const app = host(usePlanReview, { item, epoch: 'epoch', ready: true, refresh: async () => {} }, async () => { if (++attempts === 1) { await receipt.promise; throw Error('Response lost'); } return { id: 'same-operation' }; });
+  try {
+    await app.flush(); void app.tree.approve(); await app.flush(); assert.equal(app.tree.busy, true);
+    await app.update({ item: { ...item, id: 'plan-b' } }); assert.equal(app.tree.busy, false);
+    receipt.resolve(); await app.flush();
+    await app.update({ item });
+    assert.equal(app.tree.busy, false); assert.equal(app.tree.pendingAction, 'approve');
+    void app.tree.retry(); await app.flush();
+    assert.equal(app.calls.length, 2);
+    assert.deepEqual(JSON.parse(String(app.calls[1].init.body)), JSON.parse(String(app.calls[0].init.body)));
+  } finally { app.close(); }
+});
+
+test('expanding an inline plan and opening its optional pane do not approve or amend it', async () => {
+  const item = reviewPlan(); let panels = 0, decisions = 0;
+  const review = { item, proposal: item.versions[0].proposal, decisionVisible: true, canReview: true, approve: () => { decisions++; }, amend: () => { decisions++; } };
+  const app = host(PlanReviewCard, { review, onOpenPanel: () => { panels++; } });
+  try {
+    await app.flush();
+    let expand = find(app.tree, node => node.type === 'button' && 'aria-expanded' in node.props);
+    assert.equal(expand.props['aria-expanded'], false); expand.props.onClick(); await app.flush();
+    expand = find(app.tree, node => node.type === 'button' && 'aria-expanded' in node.props);
+    assert.equal(expand.props['aria-expanded'], true);
+    assert.equal(find(app.tree, node => node.type === PlanReviewDocument)?.props.item, item);
+    find(app.tree, node => node.props?.['aria-label'] === 'Open plan in side panel').props.onClick(); await app.flush();
+    assert.equal(panels, 1); assert.equal(decisions, 0); assert.equal(app.calls.length, 0);
+    expand.props.onClick(); await app.flush();
+    assert.equal(find(app.tree, node => node.type === PlanReviewDocument), undefined);
+    await app.update({ onOpenPanel: undefined });
+    assert.equal(find(app.tree, node => node.props?.['aria-label'] === 'Open plan in side panel'), undefined);
+  } finally { app.close(); }
+});
+
+test('the full plan reads earlier versions without changing the current approval target', async () => {
+  const first = reviewPlan(), second = { ...first.versions[0], version: 2, digest: 'b'.repeat(64), proposal: { ...first.versions[0].proposal, summary: 'The current proposal.' } };
+  const item = { ...first, epoch: 'epoch', version: 2, reviewDigest: second.digest, versions: [...first.versions, second] };
+  const wrapper = PlanReviewDocument({ item } as any), app = host(wrapper.type as any, wrapper.props);
+  try {
+    await app.flush();
+    assert.equal(find(app.tree, node => node.type === 'select').props.value, 2);
+    assert.equal(find(app.tree, node => node.props?.proposal)?.props.proposal, second.proposal);
+    find(app.tree, node => node.type === 'select').props.onChange({ target: { value: '1' } }); await app.flush();
+    assert.equal(find(app.tree, node => node.props?.proposal)?.props.proposal, first.versions[0].proposal);
+    assert.equal(item.version, 2); assert.equal(item.reviewDigest, second.digest);
+    assert.equal(find(app.tree, node => node.type === 'button' || node.type === 'form' || node.type === 'textarea'), undefined);
+    assert.equal(app.calls.length, 0);
+  } finally { app.close(); }
+});
+
+test('plan-change Enter submits only an amendment while Shift and composition keep writing', async () => {
+  let amended = 0, approved = 0, prevented = 0;
+  const review = { item: reviewPlan(), decisionVisible: true, text: 'Use a smaller review.', canApprove: true, canAmend: true, ready: true, approve: () => { approved++; }, amend: () => { amended++; } };
+  const app = host(PlanReviewDecision, { review });
+  try {
+    await app.flush(); const textarea = find(app.tree, node => node.type === 'textarea');
+    const event = { key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => { prevented++; } };
+    textarea.props.onKeyDown({ ...event, shiftKey: true });
+    textarea.props.onKeyDown({ ...event, nativeEvent: { isComposing: true } });
+    assert.equal(amended, 0); assert.equal(approved, 0); assert.equal(prevented, 0);
+    textarea.props.onKeyDown(event); assert.equal(amended, 1); assert.equal(prevented, 1); assert.equal(approved, 0);
+    await app.update({ review: { ...review, text: '  ' } });
+    find(app.tree, node => node.type === 'form').props.onSubmit(event);
+    assert.equal(amended, 1); assert.equal(approved, 0); assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });

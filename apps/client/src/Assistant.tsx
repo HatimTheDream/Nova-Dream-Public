@@ -15,7 +15,8 @@ import { WorkTranscript } from './WorkTranscript';
 import { groupWorkMessages, hasVisibleOperationText, unrepresentedWorkTools } from './work-transcript';
 import { ReadAloud } from './read-aloud';
 import { ReadAloudControls } from './ReadAloudControls';
-import { PlanReviewCard } from './PlanReviewCard';
+import { PlanReviewCard, PlanReviewDecision, PlanReviewDocument } from './PlanReviewCard';
+import { usePlanReview } from './plan-review-state';
 import { ConversationHeaderTools } from './ConversationHeaderTools';
 import { assistantAttachmentAccept, assistantAttachmentsIssue } from '../../../packages/domain/assistant-attachments';
 import { workModes } from '../../../packages/domain/work-mode';
@@ -65,7 +66,7 @@ import { MessageActions } from './MessageActions';
 import { ComposerMenu } from './ComposerMenu';
 import { AccessDetails, ResponseControls, responseModel, type ResponsePreferences, accessLabels, effortLabel } from './AssistantControls';
 import './assistant-restoration.css';
-import { useAssistantRail, type AssistantRailState } from './assistant-rail-state';
+import { useAssistantRail, useMediaQuery, type AssistantRailState } from './assistant-rail-state';
 import { AssistantOrganizationRailFrame } from './dreamclaw/components/Chat/AssistantOrganizationRailFrame';
 import { ChatTabs } from './dreamclaw/components/Chat/ChatTabs';
 import './dreamclaw/assistant-rail.css';
@@ -138,13 +139,16 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const [continueSaved, setContinueSaved] = useState(false);
   const workspace = useWorkspaceTabs(`${snapshot.epoch}:${controller.space}:${controller.conversation?.id ?? draftId}`);
   const selectedView = workspace.tabs.find(tab => tab.id === workspace.active)!.view;
-  const sidePanel = workspace.visible ? selectedView : null;
+  const planPanelWide = useMediaQuery('(min-width: 1101px)');
+  const panelVisible = workspace.visible && (selectedView.kind !== 'plan' || planPanelWide);
+  const sidePanel = panelVisible ? selectedView : null;
   const activityOpen = sidePanel?.kind === 'live';
-  const setSidePanel = (view: WorkspaceView | null) => workspace.dispatch(view ? { type: 'open', view } : { type: 'visibility', visible: false });
+  const setSidePanel = (view: WorkspaceView | null) => { if (view?.kind === 'plan' && !matchMedia('(min-width: 1101px)').matches) return; workspace.dispatch(view ? { type: 'open', view } : { type: 'visibility', visible: false }); if (view?.kind === 'plan') workspace.dispatch({ type: 'expand', expanded: false }); };
+  useEffect(() => { if (!planPanelWide && selectedView.kind === 'plan' && workspace.visible) workspace.dispatch({ type: 'visibility', visible: false }); }, [planPanelWide, selectedView.kind, workspace.visible]);
   const [activityContainer, setActivityContainer] = useState<HTMLDivElement | null>(null);
   const [contextDialog, setContextDialog] = useState<{ kind: 'sources' | 'memory' | 'history' | 'technical'; operationId?: string } | null>(null);
   const [hasLiveView, setHasLiveView] = useState(false);
-  const closePanel = () => { setSidePanel(null); requestAnimationFrame(() => (document.querySelector<HTMLButtonElement>('[aria-label="Toggle side panel"]') ?? document.querySelector<HTMLButtonElement>('[aria-label="Conversation menu"]'))?.focus()); };
+  const closePanel = () => { const planOpen = selectedView.kind === 'plan'; setSidePanel(null); requestAnimationFrame(() => ((planOpen ? document.querySelector<HTMLButtonElement>('[aria-label="Open plan in side panel"]') : null) ?? document.querySelector<HTMLButtonElement>('[aria-label="Toggle side panel"]') ?? document.querySelector<HTMLButtonElement>('[aria-label="Conversation menu"]'))?.focus()); };
   const openFile = (file: Attachment, output?: AssistantOutput) => { setSidePanel({ kind: 'file', file, ...(output ? { outputId: output.id, outputVersion: output.version } : {}) }); rail.closeMobile(); };
   const [preview, setPreview] = useState<Entity<Draft> | null>(initialPreview ?? null);
   useEffect(() => { if (preview && snapshot.draftRemovals?.some(item => item.draftId === preview.id && item.revision > preview.revision)) setPreview(null); }, [preview, snapshot.draftRemovals]);
@@ -197,13 +201,6 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const responseName = responseModel(controller.models, response.model)?.name ?? response.model ?? 'Default model';
   const [compactComposer, setCompactComposer] = useState(false);
   const actualAccess = conversation ? controller.history?.nativeSettings?.permissionMode ?? conversation.permissionMode : accessPreference;
-  useEffect(() => {
-    const field = textarea.current; if (!field) return;
-    const fit = () => { field.style.height = 'auto'; field.style.height = `${Math.min(180, Math.max(42, field.scrollHeight))}px`; setCompactComposer(field.clientWidth < 520); };
-    fit(); let width = field.clientWidth;
-    const observer = new ResizeObserver(() => { if (field.clientWidth !== width) { width = field.clientWidth; fit(); } });
-    observer.observe(field); return () => observer.disconnect();
-  }, [draft.text, reading, conversation?.archived]);
   const dictation = useDictation(snapshot.epoch, draftId, text => { journal.change(value => ({ ...value, text: `${value.text}${value.text ? '\n' : ''}${text}` })); textarea.current?.focus(); });
   useEffect(() => { if (conversation && draft.projectId !== conversation.projectId) journal.change(value => ({ ...value, projectId: conversation.projectId })); }, [conversation?.projectId]);
   const project = snapshot.projects.find(p => p.id === draft.projectId);
@@ -247,6 +244,18 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); setSidePanel(null); } else { if (!controller.select(item.id)) return; setReading(null); } rail.closeMobile(); }}/>;
   };
   const ready = controller.statusRead === 'ready' && controller.connection.state === 'ready' && controller.connection.grantedScopes.includes('operator.write');
+  const planReviewController = usePlanReview({ item: planReview, epoch: snapshot.epoch, ready: ready && !active && !busy && !callingHere && !conversation?.pendingSettings && conversation?.state === 'ready', readOnly: !!conversation?.archived || !!reading, refresh: async () => { await controller.refresh(); if (conversation) await controller.loadHistory(conversation.id); }, onApproved: () => journal.change(value => value.text.trim() || value.attachments.length ? value : { ...value, workMode: 'chat' }) });
+  const showPlanDecision = planReviewController.decisionVisible && !reading && !preview && !active && !callingHere && dictation.phase === 'idle' && !dictation.preview && !controller.history?.hasNewer && !conversation?.archived;
+  const priorPlanDecision = useRef(false);
+  useLayoutEffect(() => { if (priorPlanDecision.current && !showPlanDecision && !reading && !conversation?.archived) textarea.current?.focus({ preventScroll: true }); priorPlanDecision.current = showPlanDecision; }, [showPlanDecision, reading, conversation?.archived]);
+  useEffect(() => {
+    const field = textarea.current; if (!field) return;
+    const region = field.closest<HTMLElement>('.composer-region') ?? field;
+    const fit = () => { if (!showPlanDecision) { field.style.height = 'auto'; field.style.height = `${Math.min(180, Math.max(42, field.scrollHeight))}px`; } setCompactComposer(region.clientWidth < 520); };
+    fit(); let width = region.clientWidth;
+    const observer = new ResizeObserver(() => { if (region.clientWidth !== width) { width = region.clientWidth; fit(); } });
+    observer.observe(region); return () => observer.disconnect();
+  }, [draft.text, reading, conversation?.archived, showPlanDecision]);
   const primaryAction = active ? hasFollowUp ? 'queue' : 'stop' : hasFollowUp || filesPending ? 'send' : 'voice';
   const primaryLabel = { voice: 'Start voice call', send: 'Send message', queue: 'Queue message', stop: 'Stop reply' }[primaryAction];
   const voiceDisabled = !ready || busy || !!active || voiceState.phase !== 'idle' || !!draft.attachments.length || filesPending || dictation.phase !== 'idle' || !!dictation.preview || !!journal.conflict || journal.saving || !!conversation?.pendingSettings || (!!conversation && conversation.state !== 'ready');
@@ -510,10 +519,11 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
           {readingParent && controller.history && <VirtualTranscript ref={transcript} key={conversation.id} parent={readingParent} scroll={scroll} history={controller.history} cacheKey={transcriptCacheKey(snapshot.epoch, conversation)} positionKey={transcriptPositionKey(snapshot.epoch, snapshot.deviceId, conversation)} messages={transcriptRows} render={renderTranscriptMessage} footer={<>
 {controller.history && !voiceMessages.length && !controller.loading && !controller.historyError && !active && <Empty title={conversation.state === 'ready' ? 'A clear place to think.' : conversation.state === 'failed' ? 'Conversation setup was rejected.' : 'Waiting for OpenClaw confirmation.'}>{conversation.state === 'ready' ? 'Your first message will use this conversation and its selected Project.' : conversation.error ?? 'Use Check status to find the original native session. It will not be created again automatically.'}</Empty>}
           {active && !activeInTranscript && !controller.history?.hasNewer && <WorkTranscript message={{ id: `active:${active.id}`, role: 'assistant', text: '', textHash: '', attachments: [], workParts: [], workOperation: { ...active, tools: unrepresentedWorkTools(transcriptRows, active) } }} hideStream={activeTextInTranscript} renderMessage={renderMessage} checkStatus={() => void controller.checkStatus()}/>}
-          {planReview && !controller.history?.hasNewer && <PlanReviewCard key={planReview.id} item={planReview} epoch={snapshot.epoch} ready={ready && !active && !busy && !callingHere} readOnly={!!conversation.archived} onApproved={() => journal.change(value => value.text.trim() || value.attachments.length ? value : { ...value, workMode: 'chat' })} refresh={async () => { await controller.refresh(); await controller.loadHistory(conversation.id); }}/>}
+          {planReview && !controller.history?.hasNewer && <PlanReviewCard key={planReview.id} review={planReviewController} onOpenPanel={planPanelWide ? () => setSidePanel({ kind: 'plan', planId: planReview.id }) : undefined}/>}
           {latest && ['failed', 'cancelled'].includes(latest.state) && <div className="notice warning"><span>{latest.error ?? 'The run stopped. Its submitted input is kept.'}</span><button onClick={() => setContextDialog({ kind: 'history' })}>Review input</button></div>}
           {controller.history?.hasNewer && <button className="quiet transcript-newer" disabled={controller.loading || controller.history.offset === undefined} onClick={() => { transcript.current?.keepReadingPosition(); void controller.loadHistory(conversation.id, { newer: true, offset: Math.max(0, (controller.history?.offset ?? 0) - 50) }); }}>Newer messages</button>}
           {['unknown', 'creating'].includes(conversation.state) && <button onClick={() => void controller.checkStatus()}>Check status</button>}</>}/>}
+          {(!readingParent || !controller.history) && planReview && !controller.history?.hasNewer && <PlanReviewCard key={planReview.id} review={planReviewController} onOpenPanel={planPanelWide ? () => setSidePanel({ kind: 'plan', planId: planReview.id }) : undefined}/>}
           {!controller.history && voiceTranscript}{!controller.history && active && <p className="metadata" role="status">Working…</p>}
         </div> : <div className="assistant-welcome"><NovaAssistantMark choice={appIcon} width="92" height="92" alt="Nova at rest"/><h1>{controller.space === 'work' ? 'What would you like to get done?' : 'What’s on your mind?'}</h1><p>{controller.space === 'work' ? 'Bring a task. We’ll work through it together.' : 'Bring a question, a plan, or an unfinished thought.'}</p><div className="suggestions">{controller.space==='work'?<><button onClick={newProject}>Open repository</button><button onClick={openTeam}>Team work</button><button onClick={()=>setSidePanel({kind:'browser'})}>Host browser</button></>:<><button onClick={() => journal.change(v => ({ ...v, text: `${v.text}${v.text ? '\n\n' : ''}Help me plan my day. The things I want to move forward are: ` }))}>Plan my day</button><button onClick={() => journal.change(v => ({ ...v, text: `${v.text}${v.text ? '\n\n' : ''}Help me think through this idea: ` }))}>Think through an idea</button></>}</div></div>}
       </div>
@@ -523,7 +533,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
         {journal.conflict && <Conflict name="Draft" message={journal.conflict.message} current={journal.conflict.current?.value.text} reapplyLabel={journal.conflict.code === 'draft_removed' ? 'Keep as new draft' : undefined} reapply={journal.reapply} discard={journal.discard}/>}
         {!reading && <div className="composer-progress"><StepsPill key={planOperation?.id} plan={currentPlan} operation={planOperation}/>{!reading && conversation?.nativeId && goalSupported && <ChatGoalControl key={conversation.id} conversation={conversation} epoch={snapshot.epoch} refresh={controller.refresh} activityKey={latestGoal ? `${latestGoal.id}:${latestGoal.state}` : undefined}/>}</div>}
         {conversation && <MessageQueue controller={controller} conversationId={conversation.id} epoch={snapshot.epoch} blocked={!!active || callingHere || !!conversation.pendingSettings} copy={append} historyOpen={queueExpanded} onHistoryToggle={open => { setQueueExpanded(open); if (!open) textarea.current?.focus(); }}/>}
-        <div className="composer" onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attachments.add(event.dataTransfer.files); } }}>
+        {showPlanDecision && <PlanReviewDecision review={planReviewController}/>}
+        <div className={`composer${showPlanDecision ? ' plan-decision-composer' : ''}`} onDragOver={event => { if (!showPlanDecision && event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={event => { if (!showPlanDecision && event.dataTransfer.files.length) { event.preventDefault(); void attachments.add(event.dataTransfer.files); } }}>
           {((draft.workMode && draft.workMode !== 'chat') || active && hasFollowUp) && <div className="composer-mode-row">{draft.workMode && draft.workMode !== 'chat' && <button className="work-mode-chip" aria-label={`Turn off ${draft.workMode} mode`} title="Return to Chat" onClick={() => { journal.change(value => ({ ...value, workMode: 'chat' })); textarea.current?.focus(); }}>{workModes.find(mode => mode.id === draft.workMode)?.label}<X size={13}/></button>}{active && hasFollowUp && <button className="text-button stop-reply" disabled={!active.nativeRunId || !!active.cancelRequested} onClick={() => void cancel()}><Square size={15}/>{active.cancelRequested ? 'Stopping…' : 'Stop reply'}</button>}{active && draft.text.trim() && <button className="text-button steer-reply" disabled={draft.workMode === 'goal' || busy || journal.dirty || journal.saving || !!journal.conflict || !!draft.attachments.length || filesPending || active.cancelRequested || !active.nativeRunId} onClick={() => void steer()}>Steer current reply</button>}</div>}
           <label className="sr-only" htmlFor="assistant-draft">Message draft</label><textarea rows={1} id="assistant-draft" ref={textarea} onPaste={event => { if (event.clipboardData.files.length) { event.preventDefault(); void attachments.add(event.clipboardData.files); } }} value={draft.text} maxLength={100000} placeholder={draft.refineSource ? 'What would you like to change in this output?' : controller.space === 'work' ? 'Describe what you want to get done…' : 'Write what’s on your mind…'} onChange={e => journal.change(v => ({ ...v, text: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); const button = textarea.current?.closest('.composer')?.querySelector<HTMLButtonElement>('.send-button'); if (button && !button.disabled && (primaryAction === 'send' || primaryAction === 'queue')) button.click(); } }}/>
           {attachmentIssue && <p id="assistant-source-issue" className="field-error" role="alert">{attachmentIssue.replace(/ (?:Use TXT, Markdown, JSON, CSV, PDF, PNG, JPEG or WebP\. )?Your draft and saved files are kept\.$/, '')} <button type="button" className="text-button" onClick={() => setContextDialog({ kind: 'sources' })}>Review sources</button></p>}
@@ -551,10 +562,11 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     {memorySeed && <Suspense fallback={<LoadingRing label="Opening memory…"/>}><MemoryEditor key={`${snapshot.epoch}:${memorySeed.source.messageId}`} snapshot={snapshot} seed={memorySeed} refresh={controller.refresh} close={() => setMemorySeed(null)}/></Suspense>}
     {continueSaved && conversation && <Suspense fallback={<LoadingRing label="Opening saved transcript…"/>}><ContinueSavedConversation conversationId={conversation.id} snapshot={snapshot} controller={controller} refreshWorkspace={refreshWorkspace} close={() => setContinueSaved(false)}/></Suspense>}
     {!reading && <AssistantActivityPanel key={conversation?.id ?? controller.space} operation={planOperation} open={activityOpen} container={activityContainer} available={setHasLiveView} show={() => setSidePanel({ kind: 'live' })} close={closePanel} stop={() => cancel(true)}/>}
-    {!reading && workspace.opened && <AssistantSidePanel tabs={workspace.tabs} active={workspace.active} visible={workspace.visible} expanded={workspace.expanded} select={id => workspace.dispatch({ type: 'select', id })} closeTab={id => workspace.dispatch({ type: 'close', id })} addTab={() => setSidePanel({ kind: 'home' })} expand={() => workspace.dispatch({ type: 'expand', expanded: !workspace.expanded })} close={closePanel}>
+    {!reading && workspace.opened && <AssistantSidePanel tabs={workspace.tabs} active={workspace.active} visible={panelVisible} expanded={workspace.expanded} select={id => workspace.dispatch({ type: 'select', id })} closeTab={id => workspace.dispatch({ type: 'close', id })} addTab={() => setSidePanel({ kind: 'home' })} expand={() => workspace.dispatch({ type: 'expand', expanded: !workspace.expanded })} close={closePanel}>
       {workspace.tabs.map(tab => { const view = tab.view; const output = view.kind === 'file' ? conversationFiles.find(item => item.id === view.outputId && item.version === view.outputVersion) : undefined; return <section key={tab.id} className="workspace-tab-content" role="tabpanel" id={`workspace-view-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={workspace.active !== tab.id}>
         {view.kind === 'home' && <div className="assistant-workspace-launcher"><button onClick={openTeam}><Folder size={20}/>Team work</button><button onClick={()=>setSidePanel({kind:"browser"})}><Device size={20}/>Browser</button>{openChanges && <button onClick={openChanges}><List size={20}/>Review</button>}{hasLiveView && <button onClick={() => setSidePanel({ kind: 'live' })}><Device size={20}/>Live tool view</button>}<button onClick={openFiles}><Folder size={20}/>Files</button></div>}
         {view.kind === 'files' && <ConversationFiles outputs={conversationFiles} sourceFiles={sourceFiles} openFile={openFile} addFiles={addFiles}/>}
+        {view.kind === 'plan' && (() => { const item = controller.plans?.find(item => item.id === view.planId && item.conversationId === conversation?.id && item.epoch === snapshot.epoch); return item ? <PlanReviewDocument key={`${item.id}:${item.version}`} item={item}/> : <Empty title="Plan unavailable">Return to the conversation to review the latest saved plan.</Empty>; })()}
         {view.kind === "team" && <Suspense fallback={<LoadingRing label="Opening team work…"/>}><TeamWorkPanel openProjects={newProject} snapshot={snapshot} projectId={project?.value.space === 'work' && project.value.workspace?.environment === 'local' ? project.id : undefined} openConversation={id=>controller.select(id,"work")} active={workspace.visible && workspace.active===tab.id}/></Suspense>}
         {view.kind === "browser" && <Suspense fallback={<LoadingRing label="Opening browser…"/>}><HostBrowserPanel epoch={snapshot.epoch} active={workspace.visible && workspace.active===tab.id}/></Suspense>}
         {view.kind === 'changes' && conversation && <Suspense fallback={<LoadingRing label="Opening changes…"/>}><WorkProjectChanges conversation={conversation} epoch={snapshot.epoch}/></Suspense>}

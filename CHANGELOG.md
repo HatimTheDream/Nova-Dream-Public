@@ -1,3 +1,9 @@
+## [1.10.3] — 2026-09-23
+
+- Keep plan proposals inside the conversation with expansion in place, earlier versions and an optional desktop reading panel.
+- Replace separate plan approval buttons with an Implement this plan? question, a numbered Yes answer and retained amendment writing. Skip returns to the saved message draft; revised plans require a fresh decision.
+- Preserve exact proposal approval, single execution and recovery of unconfirmed decisions across navigation and retries.
+
 ## [1.10.2] — 2026-09-23
 
 - Show Assistant question sets one question at a time with Previous/Next navigation, retained answers and complete-set submission from the last question.

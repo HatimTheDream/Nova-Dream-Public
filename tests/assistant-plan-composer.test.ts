@@ -31,10 +31,10 @@ const loader = registerHooks({
 const { Assistant } = await import('../apps/client/src/Assistant');
 loader.deregister();
 
-const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
+const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children), ...nodes(node.props.footer)] : [];
 const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
-function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false) {
+function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false, plan?: any) {
   const state = { index: 0, values: [] as any[] }, storage = new Map<string, string>();
   const time = '2026-09-23T12:00:00Z';
   const file = { id: 'original', name: 'Original.png', mime: 'image/png', size: 10, sha256: 'a'.repeat(64) };
@@ -55,6 +55,11 @@ function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false)
     fetch: async (path: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)); calls.push({ path, body });
       if (path === '/api/commands') { savedDrafts.set(body.entityId, structuredClone(body.payload)); return new Response(JSON.stringify({ id: body.entityId, revision: 2, value: body.payload })); }
+      if (['/api/assistant/plan/amend', '/api/assistant/plan/approve'].includes(path)) {
+        await gate;
+        if (admission === 'unknown') throw Error('Connection interrupted');
+        return new Response(JSON.stringify({ id: 'plan-operation', state: 'prepared' }));
+      }
       if (!['/api/assistant/submit', '/api/assistant/queue', '/api/assistant/steer'].includes(path)) throw Error(`Unexpected request ${path}`);
       submitted.push(structuredClone(savedDrafts.get(body.draftId) ?? draft));
       await gate;
@@ -66,7 +71,8 @@ function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false)
   const originals = Reflect.ownKeys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   for (const key of Reflect.ownKeys(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: values[key] });
   t.after(() => { for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
-  const controller = { space: 'chat', selectedId: kind === 'new' ? undefined : conversation.id, conversation: kind === 'new' ? undefined : conversation, conversations: kind === 'new' ? [] : [conversation], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: kind === 'queue' ? [{ id: 'active', conversationId: conversation.id, nativeId: 'native', nativeRunId: 'run', state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() { return true; }, create: async () => conversation, refresh: async () => {} };
+  const controller = { space: 'chat', selectedId: kind === 'new' ? undefined : conversation.id, conversation: kind === 'new' ? undefined : conversation, conversations: kind === 'new' ? [] : [conversation], statusRead: 'ready', connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: kind === 'queue' ? [{ id: 'active', conversationId: conversation.id, nativeId: 'native', nativeRunId: 'run', state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], plans: plan ? [plan] : [], select() { return true; }, create: async () => conversation, refresh: async () => {}, loadHistory: async () => {} };
+  if (plan) Object.assign(controller, { history: { nativeId: 'native', messages: [], hasMore: false, hasNewer: false } });
   const props = { appIcon: 'red', snapshot: { epoch: 'epoch', deviceId: 'device', projects: [], drafts: [], records: {} }, legacyJournal: journal, controller, voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) }, contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {} } as any;
   // Obtain the Editor through its public parent, then provide the retained journal
   // directly so edits arriving while a request is in flight can be exercised.
@@ -80,8 +86,61 @@ function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false)
     async finish(outcome: typeof admission) { admission = outcome; release(); await settle(); },
     retry() { admission = 'pending'; gate = new Promise<void>(resolve => { release = resolve; }); },
     edit(update: Partial<Draft>) { journal.change(value => ({ ...value, ...update })); },
+    failHistory() { Object.assign(controller, { history: undefined, historyError: 'Transcript is temporarily unavailable.' }); },
   };
 }
+
+function savedPlan() {
+  return { id: 'plan', conversationId: 'conversation', epoch: 'epoch', revision: 3, version: 1, state: 'ready', reviewDigest: 'a'.repeat(64), createdAt: '2026-09-23T12:00:00Z', versions: [{ version: 1, digest: 'a'.repeat(64), proposal: { title: 'Plan the update', summary: 'Keep a readable review.', steps: ['Review before implementation'], assumptions: [], verification: ['Approval is explicit'] } }] };
+}
+
+test('the Editor keeps its ordinary draft and attachments across Skip, return and amendment writing', async t => {
+  const f = fixture(t, 'existing', true, savedPlan());
+  f.edit({ text: 'An ordinary message I have not sent.', workMode: 'chat' });
+  const kept = structuredClone(f.draft);
+  let tree = f.render();
+  nodes(tree).find(node => node.props?.['aria-label'] === 'Conversation history').props.ref({}); tree = f.render();
+  const decision = nodes(tree).find(node => node.type?.name === 'PlanReviewDecision'); assert.ok(decision);
+  assert.ok(nodes(tree).some(node => node.props?.className?.includes('plan-decision-composer')));
+  assert.equal(nodes(tree).find(node => node.type === 'textarea' && node.props.id === 'assistant-draft')?.props.value, kept.text);
+  decision.props.review.setText('Keep mobile actions compact.'); tree = f.render();
+  nodes(tree).find(node => node.type?.name === 'PlanReviewDecision').props.review.skip(); tree = f.render();
+  assert.equal(nodes(tree).some(node => node.type?.name === 'PlanReviewDecision'), false);
+  assert.equal(nodes(tree).some(node => node.props?.className?.includes('plan-decision-composer')), false);
+  assert.deepEqual(f.draft, kept); assert.equal(f.calls.length, 0);
+  const card = nodes(tree).find(node => node.type?.name === 'PlanReviewCard'); assert.ok(card);
+  card.props.review.openDecision(); tree = f.render();
+  const returned = nodes(tree).find(node => node.type?.name === 'PlanReviewDecision'); assert.ok(returned);
+  assert.equal(returned.props.review.text, 'Keep mobile actions compact.');
+  assert.deepEqual(f.draft, kept); assert.equal(f.calls.length, 0);
+});
+
+test('the Editor submits amendments through the saved plan while keeping normal composer writing untouched', async t => {
+  const plan = savedPlan(), f = fixture(t, 'existing', true, plan);
+  f.edit({ text: 'Keep this normal draft.', workMode: 'chat' }); const kept = structuredClone(f.draft);
+  nodes(f.render()).find(node => node.type?.name === 'PlanReviewDecision').props.review.setText('Change only the plan layout.');
+  const decision = nodes(f.render()).find(node => node.type?.name === 'PlanReviewDecision');
+  void decision.props.review.amend(); await settle();
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].path, '/api/assistant/plan/amend');
+  assert.equal(f.calls[0].body.id, plan.id); assert.equal(f.calls[0].body.version, 1);
+  assert.equal(f.calls[0].body.digest, plan.reviewDigest); assert.equal(f.calls[0].body.text, 'Change only the plan layout.');
+  assert.equal(f.submitted.length, 0, 'amendments must not be sent as an ordinary conversation draft');
+  await f.finish('accepted'); assert.deepEqual(f.draft, kept);
+});
+
+test('the saved proposal remains reviewable before transcript mounting and when history fails', t => {
+  const plan = savedPlan(), f = fixture(t, 'existing', false, plan);
+  let tree = f.render();
+  let cards = nodes(tree).filter(node => node.type?.name === 'PlanReviewCard'); assert.equal(cards.length, 1);
+  assert.equal(cards[0].props.review.proposal, plan.versions[0].proposal);
+  nodes(tree).find(node => node.props?.['aria-label'] === 'Conversation history').props.ref({});
+  f.failHistory(); tree = f.render();
+  cards = nodes(tree).filter(node => node.type?.name === 'PlanReviewCard'); assert.equal(cards.length, 1);
+  const decision = nodes(tree).find(node => node.type?.name === 'PlanReviewDecision'); assert.ok(decision);
+  assert.equal(cards[0].props.review, decision.props.review);
+  assert.equal(cards[0].props.review.proposal, plan.versions[0].proposal);
+  assert.equal(f.calls.length, 0);
+});
 
 for (const kind of ['existing', 'queue', 'new'] as const) {
   test(`accepted ${kind} Plan submission consumes the composer mode while captured work stays Plan`, async t => {

@@ -41,3 +41,17 @@ test('hiding preserves selection and recovery restores validated tabs without op
     assert.deepEqual(restoreWorkspace(invalid), emptyWorkspace());
   }
 });
+
+test('optional plan tabs retain identity but reopen closed after recovery', () => {
+  let state = workspaceTabs(emptyWorkspace(), { type: 'open', view: { kind: 'plan', planId: 'proposal-a' } });
+  const first = state.active;
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'plan', planId: 'proposal-b' } });
+  assert.equal(state.tabs.length, 2);
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'plan', planId: 'proposal-a' } });
+  assert.equal(state.tabs.length, 2);
+  assert.equal(state.active, first);
+  const restored = restoreWorkspace(JSON.parse(JSON.stringify(state)));
+  assert.equal(restored.visible, false, 'restoring a chat must not force the plan panel open');
+  assert.deepEqual(restored.tabs, state.tabs);
+  assert.deepEqual(restoreWorkspace({ ...state, tabs: [{ id: first, view: { kind: 'plan', planId: '' } }] }), emptyWorkspace());
+});

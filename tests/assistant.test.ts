@@ -753,7 +753,7 @@ test('plan amendments and approval show concise owner actions while the runner r
   assert.ok(f.gateway.calls.filter(call => call.method === 'chat.send').at(-1)!.params.message.includes(JSON.stringify(proposal)));
   await settle(amendment.id);
   const approved = f.service.plans.decide(f.device, decision()); await tick();
-  assert.equal(approved.input, 'Approve and start: Improve inbox'); assert.deepEqual(approved.context.approvedPlan?.proposal, proposal);
+  assert.equal(approved.input, 'Yes, implement this plan: Improve inbox'); assert.deepEqual(approved.context.approvedPlan?.proposal, proposal);
   assert.ok(f.gateway.calls.filter(call => call.method === 'chat.send').at(-1)!.params.message.includes(JSON.stringify(proposal)));
 }));
 
