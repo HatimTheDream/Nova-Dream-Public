@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { EventFrame } from '@openclaw/gateway-protocol/frame-guards';
 import { dictationActionSchema, dictationAudioSchema, dictationStartSchema, type DictationAttempt } from '../../packages/domain/dictation.js';
+import { orderDictationTurns } from '../../packages/domain/dictation-order.js';
 import type { AssistantTransport } from './gateway.js';
 import { Fault, Store } from './store.js';
 
@@ -78,13 +79,17 @@ export class DictationService {
     return this.browser.offer(a, input.sdp);
   }
   caption(device: string, raw: unknown) {
-    const input = dictationActionSchema.extend({ turnId: z.string().min(1).max(256), text: z.string().max(100000), final: z.literal(true) }).strict().parse(raw), a = this.read(device, input.attemptId); this.connected(a);
+    const input = dictationActionSchema.extend({ turnId: z.string().min(1).max(256), text: z.string().max(100000), final: z.literal(true), order: z.number().int().min(0).max(499).optional(), previousTurnId: z.string().min(1).max(256).nullable().optional() }).strict().refine(value => value.previousTurnId !== value.turnId).parse(raw), a = this.read(device, input.attemptId); this.connected(a);
     if (a.route !== 'browser' || input.epoch !== a.epoch || !['listening', 'ending'].includes(a.state)) throw new Fault(409, 'dictation_ended', 'These words belong to an ended dictation.');
     this.store.admit(device, input, { type: 'dictation.caption', ...input }, () => {
-      const current = this.get(a.id), turns = [...current.turns ?? []], prior = turns.find(t => t.id === input.turnId);
-      if (prior && prior.text !== input.text) throw new Fault(409, 'dictation_caption_changed', 'The original dictated words are kept.');
-      if (!prior && turns.length < 500) turns.push({ id: input.turnId, text: input.text, final: true });
-      return this.save({ ...current, turns, text: turns.map(t => t.text).join('\n').slice(0, 100000), final: true, updatedAt: Date.now() });
+      const current = this.get(a.id), turns = [...current.turns ?? []], index = turns.findIndex(t => t.id === input.turnId), prior = turns[index];
+      if (prior && (prior.text !== input.text || prior.order !== undefined && input.order !== undefined && prior.order !== input.order || prior.previousTurnId !== undefined && input.previousTurnId !== undefined && prior.previousTurnId !== input.previousTurnId)) throw new Fault(409, 'dictation_caption_changed', 'The original dictated words are kept.');
+      const turn = { ...prior, id: input.turnId, text: input.text, final: true, ...(input.order !== undefined ? { order: input.order } : {}), ...(input.previousTurnId !== undefined ? { previousTurnId: input.previousTurnId } : {}) };
+      if (prior) turns[index] = turn;
+      else { if (turns.length >= 500) throw new Fault(409, 'dictation_limit', 'Recording reached its limit. Available words are kept.'); turns.push(turn); }
+      const ordered = orderDictationTurns(turns), text = ordered.map(t => t.text).filter(Boolean).join('\n');
+      if (text.length > 100000) throw new Fault(409, 'dictation_limit', 'Recording reached its limit. Available words are kept.');
+      return this.save({ ...current, turns: ordered, text, final: true, updatedAt: Date.now() });
     }); return this.read(device, a.id);
   }
   async audio(device: string, raw: unknown) {
@@ -121,6 +126,10 @@ export class DictationService {
       const id = typeof p.talkEvent?.turnId === 'string' ? p.talkEvent.turnId : 'stream';
       const turns = [...a.turns ?? []], index = turns.findIndex(t => t.id === id);
       if (index >= 0 && turns[index].final && p.final !== true) return;
+      if (p.final === true && !p.text.trim() && turns[index]?.text.trim()) {
+        if (!turns[index].final) { this.save({ ...a, final: false, error: 'The last spoken phrase was not confirmed. Available words are kept.' }); void this.finish(a.id); }
+        return;
+      }
       const turn = { id, text: p.text.slice(0, 100000), final: p.final === true };
       if (index >= 0) turns[index] = turn; else if (turns.length < 500) turns.push(turn);
       this.save({ ...a, turns, text: turns.map(t => t.text).join('\n').slice(0, 100000), final: turns.every(t => t.final) });

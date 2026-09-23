@@ -11,7 +11,9 @@ export class BrowserDictation {
     const provider = catalog.realtime?.providers?.find((p: any) => p.id === 'openai' && p.configured && p.supportsBrowserSession && p.transports?.includes('webrtc'));
     const model = provider?.models?.find((m: string) => /^gpt-realtime-2(?:\.1(?:-mini)?)?$/.test(m));
     if (!model) throw new Fault(409, 'dictation_unconfigured', 'Connect ChatGPT voice in Settings to use dictation.');
-    const session = await this.gateway.request<{ key: string; sessionId: string }>('sessions.create', { key: `e3:dictation:${a.id}`, idempotencyKey: a.id, permissionMode: 'read-only', emitCommandHooks: false });
+    // Match Assistant's explicit main-agent namespace. An unscoped key becomes
+    // ambiguous as soon as the runtime has more than one configured agent.
+    const session = await this.gateway.request<{ key: string; sessionId: string }>('sessions.create', { key: `agent:main:e3:dictation:${a.id}`, idempotencyKey: a.id, permissionMode: 'read-only', emitCommandHooks: false });
     const identity = { route: 'browser' as const, nativeId: a.id, nativeKey: session.key, browserNativeId: session.sessionId };
     if (!session.key.endsWith(`e3:dictation:${a.id}`) || !session.sessionId) throw new Error('Unexpected dictation session identity.');
     capture?.(identity);

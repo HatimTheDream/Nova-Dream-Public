@@ -138,7 +138,10 @@ import assert from 'node:assert/strict';
 // 1.10.6 adds scoped question history and compact answer receipts. Measured
 // 638,957 total gzip bytes (+1,216 / 0.19% over 1.10.5). Bound at 640 KB;
 // retain the 180 KB startup and 80 KB individual deferred-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 640000, deferredChunk: 80000 };
+// 1.10.9 repairs dictation connection, cancellation, retries and transcript order.
+// Measured total 640,060 (+940 / 0.15% over 1.10.8); bound at 641 KB while
+// preserving the startup and individual deferred-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 641000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

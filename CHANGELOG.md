@@ -1,3 +1,9 @@
+## [1.10.9] — 2026-09-23
+
+- Restore dictation setup when multiple agents are configured by explicitly addressing its isolated main-agent session.
+- Let a connecting recording be cancelled, keep slow microphone setup alive, explain microphone and no-speech failures, and prevent stale errors from stopping a retry.
+- Keep dictated phrases in spoken order, preserve the existing draft, and retain unconfirmed words for review instead of silently losing or submitting them.
+
 ## [1.10.8] — 2026-09-23
 
 - Keep each chat focused on its own questions and approvals. Remove the cross-chat request tray and review shortcuts from the composer while preserving requests in their original conversations.

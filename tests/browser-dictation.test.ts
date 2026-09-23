@@ -7,14 +7,14 @@ import type { DictationAttempt } from '../packages/domain/dictation.js';
 import type { AssistantTransport } from '../apps/service/gateway.js';
 
 const attempt = (): DictationAttempt => ({ id: randomUUID(), requestId: randomUUID(), epoch: randomUUID(), deviceId: 'device', draftId: 'draft', generation: 'generation', state: 'listening', route: 'browser', text: '', final: false, sequence: -1, updatedAt: Date.now() });
-function clientFixture() {
+function clientFixture(offer?: Promise<{ sdp: string }>) {
   const sent: any[] = [], requests: any[] = [], updates: string[] = [], errors: Error[] = [];
   const track = { enabled: true, stopped: false, stop() { this.stopped = true; } };
   const stream = { getAudioTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream;
   const channel: any = { readyState: 'open', send(value: string) { sent.push(JSON.parse(value)); }, close() {} };
   const event = (value: any) => channel.onmessage({ data: JSON.stringify(value) });
   const peer: any = { addTrack() {}, createDataChannel: () => channel, createOffer: async () => ({ sdp: 'v=0\r\n' }), setLocalDescription: async () => {}, setRemoteDescription: async () => { event({ type: 'session.created' }); }, close() {} };
-  const api: any = async (path: string, value: any) => { requests.push({ path, value }); return path.endsWith('/offer') ? { sdp: 'v=0\r\n' } : {}; };
+  const api: any = async (path: string, value: any) => { requests.push({ path, value }); return path.endsWith('/offer') ? offer ?? { sdp: 'v=0\r\n' } : {}; };
   const a = attempt(), client = new Client(a.epoch, a, text => updates.push(text), e => errors.push(e), api, () => peer);
   const ack = () => event({ type: 'session.updated', session: { tools: [], tool_choice: 'none', audio: { input: { transcription: { model: 'gpt-live-transcribe' }, turn_detection: { create_response: false } } } } });
   return { client, event, ack, track, stream, sent, requests, updates, errors };
@@ -47,11 +47,78 @@ test('dictation rejects an unexpected reply and retains words on connection inte
   assert.equal(f.track.stopped, true); assert.equal(f.updates.at(-1), 'Retain this'); assert.equal(f.errors.length, 1);
   await assert.rejects(f.client.finish(), /last words/);
 });
-test('host uses one-use voice SDP and removes only the exact empty dictation session', async () => {
+test('dictation displays and saves phrases in microphone order when transcription finishes out of order', async () => {
+  const f = clientFixture();
+  try {
+    const started = f.client.start(f.stream); await new Promise(r => setTimeout(r, 0)); f.ack(); await started;
+    f.event({ type: 'input_audio_buffer.speech_started', item_id: 'first' });
+    f.event({ type: 'input_audio_buffer.committed', item_id: 'first', previous_item_id: null });
+    f.event({ type: 'input_audio_buffer.speech_started', item_id: 'second' });
+    f.event({ type: 'input_audio_buffer.committed', item_id: 'second', previous_item_id: 'first' });
+    f.event({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'second', transcript: 'Second phrase.' });
+    f.event({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'first', transcript: 'First phrase.' });
+    const finished = f.client.finish(); f.event({ type: 'error', error: { code: 'input_audio_buffer_commit_empty' } }); await finished;
+    assert.equal(f.updates.at(-1), 'First phrase.\nSecond phrase.');
+    assert.deepEqual(f.requests.filter(r => r.path.endsWith('/caption')).map(r => [r.value.turnId, r.value.order, r.value.previousTurnId]), [['second', 1, 'first'], ['first', 0, null]]);
+  } finally { f.client.close(); }
+});
+test('dictation uses commit predecessors when speech events are absent or arrive after final captions', async () => {
+  const f = clientFixture();
+  try {
+    const started = f.client.start(f.stream); await new Promise(r => setTimeout(r, 0)); f.ack(); await started;
+    f.event({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'second', transcript: 'Second.' });
+    f.event({ type: 'input_audio_buffer.committed', item_id: 'second', previous_item_id: 'first' });
+    f.event({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'first', transcript: 'First.' });
+    f.event({ type: 'input_audio_buffer.committed', item_id: 'first', previous_item_id: null });
+    const finished = f.client.finish(); f.event({ type: 'error', error: { code: 'input_audio_buffer_commit_empty' } }); await finished;
+    assert.equal(f.updates.at(-1), 'First.\nSecond.');
+    assert.equal(f.requests.filter(r => r.path.endsWith('/caption') && r.value.turnId === 'second').at(-1).value.previousTurnId, 'first');
+    assert.equal(f.errors.length, 0);
+  } finally { f.client.close(); }
+});
+test('an empty final transcript preserves partial words without confirming or automatically finishing them', async () => {
+  const f = clientFixture();
+  try {
+    const started = f.client.start(f.stream); await new Promise(r => setTimeout(r, 0)); f.ack(); await started;
+    f.event({ type: 'conversation.item.input_audio_transcription.delta', item_id: 'one', delta: 'Keep these words.' });
+    f.event({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'one', transcript: '  ' });
+    await assert.rejects(f.client.finish(), /last words/);
+    assert.equal(f.updates.at(-1), 'Keep these words.');
+    assert.equal(f.requests.some(r => r.path.endsWith('/caption')), false);
+    assert.equal(f.track.stopped, true); assert.match(f.errors[0].message, /not confirmed/);
+  } finally { f.client.close(); }
+});
+test('dictation allows SDP exchange to finish before starting the settings acknowledgement timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let answer!: (value: { sdp: string }) => void;
+  const f = clientFixture(new Promise(resolve => { answer = resolve; }));
+  try {
+    const started = f.client.start(f.stream); void started.catch(() => undefined);
+    await new Promise<void>(resolve => setImmediate(resolve)); t.mock.timers.tick(20000);
+    assert.equal(f.track.enabled, false); assert.equal(f.sent.length, 0);
+    answer({ sdp: 'v=0\r\n' }); await new Promise<void>(resolve => setImmediate(resolve));
+    f.ack(); await started; assert.equal(f.track.enabled, true);
+  } finally { f.client.close(); }
+});
+test('dictation still refuses to enable the microphone when settings are never acknowledged', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = clientFixture();
+  try {
+    const started = f.client.start(f.stream); const rejected = assert.rejects(started, /confirm its microphone settings/);
+    await new Promise<void>(resolve => setImmediate(resolve)); t.mock.timers.tick(15000); await rejected;
+    assert.equal(f.track.enabled, false);
+  } finally { f.client.close(); }
+});
+test('host uses an explicit main-agent session and one-use voice SDP, then removes only that empty session', async () => {
   const a = attempt(), calls: any[] = []; let exchanges = 0;
   const gateway = { status: () => ({ generation: a.generation, url: 'ws://127.0.0.1:1234' }), request: async (method: string, params: any) => {
     calls.push({ method, params });
-    if (method === 'sessions.create') return { key: `agent:main:${params.key}`, sessionId: 'exact-empty-session' };
+    if (method === 'sessions.create') {
+      // A runtime with several agents cannot resolve the old unscoped key.
+      if (!params.key.startsWith('agent:main:')) throw Error('INVALID_REQUEST: sessions.create requires an explicit agentId or agent-scoped key');
+      assert.equal(params.key, `agent:main:e3:dictation:${a.id}`); assert.equal(params.permissionMode, 'read-only'); assert.equal(params.emitCommandHooks, false); assert.equal(params.idempotencyKey, a.id);
+      return { key: params.key, sessionId: 'exact-empty-session' };
+    }
     if (method === 'sessions.describe') return { session: { key: params.key, sessionId: 'exact-empty-session' } };
     if (method === 'sessions.delete') { assert.equal(params.archivedOnly, true); return { ok: true, key: params.key, deleted: true }; }
     if (method === 'talk.client.create') return { provider: 'openai', transport: 'webrtc', voiceSessionId: a.id, clientSecret: 'fixture-ephemeral', offerUrl: '/plugins/openai/realtime/calls' };
@@ -59,6 +126,7 @@ test('host uses one-use voice SDP and removes only the exact empty dictation ses
   } } as unknown as AssistantTransport;
   const host = new Host(gateway, (async (url: any, options: any) => { exchanges++; assert.equal(url, 'http://127.0.0.1:1234/plugins/openai/realtime/calls'); assert.equal(options.headers.Authorization, 'Bearer fixture-ephemeral'); return new Response('v=0\r\n'); }) as typeof fetch);
   const identity = await host.prepare(a, { realtime: { providers: [{ id: 'openai', configured: true, supportsBrowserSession: true, transports: ['webrtc'], models: ['gpt-realtime-2.1'] }] } });
+  assert.equal(calls.find(c => c.method === 'talk.client.create').params.sessionKey, `agent:main:e3:dictation:${a.id}`);
   assert.equal(JSON.stringify(identity).includes('fixture-ephemeral'), false);
   await host.offer({ ...a, ...identity }, 'v=0\r\n'); await assert.rejects(host.offer({ ...a, ...identity }, 'v=0\r\n'), /expired/); assert.equal(exchanges, 1);
   assert.equal(await host.close({ ...a, ...identity }), true);
@@ -85,7 +153,7 @@ test('dictation cleanup recovers lost deletion without touching replacement or a
 test('dictation captures backing identity before provider preparation can fail', async () => {
   const a = attempt(); let captured: any;
   const gateway = { status: () => ({ generation: a.generation }), request: async (method: string, params: any) => {
-    if (method === 'sessions.create') return { key: `agent:main:${params.key}`, sessionId: 'kept-identity' };
+    if (method === 'sessions.create') return { key: params.key, sessionId: 'kept-identity' };
     if (method === 'talk.client.create') throw Error('Provider unavailable');
     throw Error('Connection interrupted');
   } } as unknown as AssistantTransport;
