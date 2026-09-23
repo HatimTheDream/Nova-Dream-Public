@@ -1,3 +1,7 @@
+## [1.10.5] — 2026-09-23
+
+- Keep older planning messages readable after native history refresh by recognizing their original saved instruction format. Internal planning instructions stay hidden while the owner's exact message remains visible.
+
 ## [1.10.4] — 2026-09-23
 
 - Make Auto the single automatic effort choice; remove Default from the existing effort slider. Reset and model changes select Auto.

@@ -11,6 +11,7 @@ import type { AssistantTransport } from '../apps/service/gateway.js';
 import { Fault, Store } from '../apps/service/store.js';
 import { AssistantService } from '../apps/service/assistant.js';
 import { computerControlGuidance } from '../packages/domain/computer-control.js';
+import { workModeInstructions } from '../packages/domain/work-mode.js';
 import { canonical, emptyDraft } from '../packages/domain/contracts.js';
 
 class Transport implements AssistantTransport {
@@ -446,6 +447,66 @@ for (const version of [1, 2]) for (const legacy of [false, true]) test(`native-t
   assert.equal(revised.text, input); assert.deepEqual(revised.attachments, op.context.attachments);
   f.store.internalWrite(`assistant:operation:${op.id}`, { ...f.service.operations().find(o => o.id === op.id)!, connectionGeneration: randomUUID() });
   assert.equal((await f.service.history(f.conversation.id)).messages[0].authoredText, undefined, 'another connection generation cannot lend its display text');
+}));
+
+// Exact instruction fixture retained from the 1.10.1 Plan envelope.
+const planInstructions1101 = 'The owner selected Plan mode. Produce a concrete plan before implementation: clarify the intended outcome, inspect relevant available context, identify dependencies and meaningful decisions, and propose ordered steps and verification. Ask only necessary questions. Do not implement the plan, change files, publish, or take external actions in this turn. Ask necessary clarifying questions through request_user_input so the owner can choose or write an answer. Once decisions are settled, use nova_plan to save a structured proposal with title, summary, ordered steps, assumptions, and verification criteria. Finish the planning turn after saving it. The app presents Approve and start; a chat message saying yes or a progress update does not authorize implementation. Only read-only tools are available until the exact saved proposal is approved.';
+for (const version of [1, 2] as const) test(`pre-1.10.3 Plan v${version} envelopes retain owner writing after native refresh and offline reload`, () => fixture(async f => {
+  const input = "  Let's plan my daily work schedule.\nNova Dream owner message:\nKeep this literal heading and my words.\n  ";
+  // The older layout also exercised the brand-prefixed owner marker without a Project.
+  if (version === 1) f.conversation = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: f.conversation.revision, projectId: null });
+  else f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, autoTitle: true });
+  const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
+  const kept = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, text: input, projectId: f.conversation.projectId, workMode: 'plan' } });
+  const submitted = f.service.submit(f.device, { ...submission(f), draftRevision: kept.revision, projectRevision: version === 1 ? 0 : 1 }); await tick();
+  const operation = f.service.operations().find(op => op.id === submitted.id)!;
+  const captured = JSON.parse(JSON.stringify({ input: operation.input, context: operation.context }));
+  const sent = f.gateway.calls.find(call => call.method === 'chat.send')!.params.message as string;
+  assert.equal(operation.context.messageVersion ?? 1, version);
+  assert.ok(sent.includes(workModeInstructions('plan')));
+  assert.notEqual(workModeInstructions('plan'), planInstructions1101, 'fixture must exercise changed historical guidance');
+  const historic = sent.replace(workModeInstructions('plan'), planInstructions1101).trim();
+  const current = sent.trim();
+  const literal = 'Nova Dream work mode:\nA user-pasted heading.\n\nNova Dream owner message:\nKeep everything.';
+  const changedInput = historic.replace('Keep this literal heading and my words.', 'Different owner writing.');
+  const changedGuidance = historic.replace('Ask only necessary questions.', 'An unrecognized instruction was added.');
+  f.gateway.messages = [
+    { role: 'user', content: historic, __openclaw: { id: 'historical-plan', seq: 1 } },
+    { role: 'user', content: current, __openclaw: { id: 'current-plan', seq: 2 } },
+    { role: 'user', content: changedInput, __openclaw: { id: 'different-input', seq: 3 } },
+    { role: 'user', content: changedGuidance, __openclaw: { id: 'different-guidance', seq: 4 } },
+    { role: 'user', content: literal, __openclaw: { id: 'literal-headings', seq: 5 } },
+    { role: 'assistant', content: historic, __openclaw: { id: 'quoted-envelope', seq: 6 } },
+  ];
+  const history = await f.service.history(f.conversation.id);
+  assert.deepEqual(history.messages.slice(0, 2).map(message => message.authoredText), [input, input]);
+  assert.deepEqual(history.messages.slice(0, 2).map(message => message.operationId), [operation.id, operation.id]);
+  assert.deepEqual(history.messages.map(message => message.text), [historic, current, changedInput, changedGuidance, literal, historic]);
+  assert(history.messages.slice(2).every(message => message.authoredText === undefined), 'unmatched writing and quoted instructions stay literal');
+  assert.equal(history.messages[0].textHash, createHash('sha256').update(canonical(historic)).digest('hex'));
+  const latest = f.service.operations().find(op => op.id === operation.id)!;
+  assert.deepEqual({ input: latest.input, context: latest.context }, captured, 'reading does not rewrite captured work');
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1, 'reading never resubmits planning');
+
+  // An older cache may already lack authoredText after observing the bad native refresh.
+  const older = { ...history, messages: history.messages.map(({ authoredText: _display, ...message }) => message) };
+  for (const row of f.store.internalPage(`assistant:transcript:${f.conversation.id}:`, '', 500)) f.store.internalDelete(row.id);
+  f.store.internalDelete(`assistant:transcript-state:${f.conversation.id}`);
+  f.store.internalWrite(`assistant:history:${f.conversation.id}`, older);
+  f.store.internalWrite(`assistant:retained-history:${f.conversation.id}`, { history: older, complete: true, capturedAt: '2026-09-22T12:00:00.000Z' });
+  const cachedBefore = f.store.internalRead(`assistant:history:${f.conversation.id}`);
+  const retainedBefore = f.store.internalRead(`assistant:retained-history:${f.conversation.id}`);
+  assert.equal(f.service.cachedHistory(f.conversation.id)!.messages[0].authoredText, input);
+  const generation = f.gateway.generation; f.gateway.generation = randomUUID();
+  const offline = await f.service.historyForReading(f.conversation.id);
+  assert.equal(offline.messages[0].authoredText, input);
+  assert.equal(offline.messages[0].text, historic);
+  assert.equal(offline.messages[0].textHash, history.messages[0].textHash);
+  assert.deepEqual(f.store.internalRead(`assistant:history:${f.conversation.id}`), cachedBefore);
+  assert.deepEqual(f.store.internalRead(`assistant:retained-history:${f.conversation.id}`), retainedBefore);
+  f.gateway.generation = generation;
+  f.store.internalWrite(`assistant:operation:${operation.id}`, { ...latest, connectionGeneration: randomUUID() });
+  assert((await f.service.history(f.conversation.id)).messages.every(message => message.authoredText === undefined), 'another runtime cannot lend an operation to a pasted envelope');
 }));
 
 test('Project changes during history preflight fence the dispatch and retain the original input', () => fixture(async f => {
