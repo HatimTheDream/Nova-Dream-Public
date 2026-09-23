@@ -87,6 +87,43 @@ test('native questions subscribe before execution, submit once and retain exact 
   f.event({ ...f.native, status: 'pending', answers: undefined }); assert.equal(f.item().snapshot.status, 'answered');
   await f.service.close(); f.service = f.make(); assert.deepEqual(f.item().snapshot.answers.answers, answer);
 }));
+for (const changed of ['generation', 'nativeId', 'nativeKey']) test(`confirmed question history survives a ${changed} change without lending authority to old requests`, () => fixture(async f => {
+  const answered = await f.service.resolve(f.device, f.input());
+  f.native = { ...f.native, id: randomUUID(), createdAtMs: 200, status: 'pending', answers: undefined };
+  f.event(f.native);
+  const pending = f.item(), before = structuredClone(f.store.internalList('assistant:question:'));
+  assert.equal(pending.snapshot.status, 'pending');
+  const calls = f.calls.length;
+  if (changed === 'generation') { f.generation = 'host-two'; f.conversation.connectionGeneration = 'host-two'; }
+  else f.conversation[changed] = randomUUID();
+  assert.deepEqual(f.service.state().items, [answered]);
+  for (const item of [answered, pending]) {
+    await assert.rejects(f.service.resolve(f.device, { requestId: randomUUID(), epoch: f.store.epoch, id: item.id, expectedRevision: item.revision, answers: answer }), { code: 'question_host_changed' });
+    await assert.rejects(f.check(item.id), { code: 'question_host_changed' });
+  }
+  assert.equal(f.calls.length, calls);
+  assert.deepEqual(f.store.internalList('assistant:question:'), before);
+}));
+test('only confirmed terminal history crosses bindings and it retains workspace and conversation ownership', () => fixture(async f => {
+  const pending = f.item();
+  for (const [index, changes] of [
+    { snapshot: { ...pending.snapshot, status: 'expired' } },
+    { snapshot: { ...pending.snapshot, status: 'cancelled' } },
+    { snapshot: { ...pending.snapshot, status: 'answered', answers: { answers: answer } } },
+    ...['unknown', 'sending'].map(state => ({ snapshot: { ...pending.snapshot, status: 'answered', answers: { answers: answer } }, action: { requestId: randomUUID(), kind: 'answer', state } })),
+    { snapshot: { ...pending.snapshot, status: 'answered', answers: { answers: answer } }, epoch: randomUUID() },
+    { snapshot: { ...pending.snapshot, status: 'answered', answers: { answers: answer } }, conversationId: randomUUID() },
+  ].entries()) {
+    const item = { ...pending, id: String(index + 1).padStart(64, '0'), ...changes };
+    f.store.internalWrite(`assistant:question:${item.id}`, item);
+  }
+  f.conversation.connectionGeneration = 'resumed-host';
+  const items = f.service.state().items;
+  assert.deepEqual(items.map((item: any) => item.snapshot.status).sort(), ['answered', 'cancelled', 'expired']);
+  assert.ok(items.every((item: any) => item.nativeId === pending.nativeId && item.nativeKey === pending.nativeKey && item.connectionGeneration === pending.connectionGeneration));
+  f.conversation.id = randomUUID();
+  assert.deepEqual(f.service.state().items, []);
+}));
 test('lost answers reconcile native truth without replay; a competing native answer wins', () => fixture(async f => {
   f.lose = true; const input = f.input(); assert.equal((await f.service.resolve(f.device, input)).action.state, 'unknown');
   await f.service.resolve(f.device, input); assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 1);
@@ -129,6 +166,10 @@ test('secret bytes are exact on the native request and absent from app snapshots
   await f.service.resolve(f.device, input); assert.equal(f.calls.filter((c: any) => c.method === 'question.resolve').length, 1);
   await assert.rejects(f.service.resolve(f.device, { ...input, answers: { token: ['another-value'] } }), /request/i);
   assert.equal(safeQuestionSnapshot({ ...f.native, status: 'answered', answers: { answers: { token: [value] } } }).answers!.answers.token[0], 'stored');
+  f.conversation.nativeId = randomUUID(); f.conversation.nativeKey = 'agent:main:resumed';
+  f.generation = 'host-two'; f.conversation.connectionGeneration = 'host-two';
+  assert.deepEqual(f.service.state().items, [result]);
+  assert.equal(JSON.stringify(f.service.state()).includes('fixture-secret-DO-NOT-RETAIN'), false);
 }));
 test('missing preflight is never left confirming and a missing uncertain outcome is never retried', () => fixture(async f => {
   f.missing = true; const result = await f.service.resolve(f.device, f.input()); assert.equal(result.availability, 'missing'); assert.equal(result.action.state, 'unknown');

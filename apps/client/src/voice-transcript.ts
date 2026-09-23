@@ -1,5 +1,6 @@
 import type { AssistantOperation, Conversation, ConversationHistory, ConversationMessage } from '../../../packages/domain/assistant';
 import type { VoiceController } from './voice-controller';
+import type { AssistantQuestion } from '../../../packages/domain/questions';
 
 /** Keep partial and unsaved speech in its original chat until native history owns it. */
 export function pendingVoiceTurns(voice: ReturnType<VoiceController['getSnapshot']>, conversation?: Conversation, history?: ConversationHistory) {
@@ -10,7 +11,7 @@ export function pendingVoiceTurns(voice: ReturnType<VoiceController['getSnapshot
   return voice.turns.filter(turn => turn.text.trim() && !saved.has(`${turn.role}:voice:${attempt.id}:${turn.turnId}`));
 }
 
-export type TranscriptMessage = ConversationMessage & { workParts?: TranscriptMessage[]; workOperation?: AssistantOperation; workActivityOperation?: AssistantOperation; workFinal?: TranscriptMessage; voiceParts?: TranscriptMessage[]; pendingVoice?: boolean; streaming?: boolean; unconfirmed?: boolean; retainedVoice?: boolean };
+export type TranscriptMessage = ConversationMessage & { questionReceipts?: AssistantQuestion[]; workParts?: TranscriptMessage[]; workOperation?: AssistantOperation; workActivityOperation?: AssistantOperation; workFinal?: TranscriptMessage; voiceParts?: TranscriptMessage[]; pendingVoice?: boolean; streaming?: boolean; unconfirmed?: boolean; retainedVoice?: boolean };
 const callIdentity = (message: ConversationMessage) => /^voice:([a-f0-9-]{36}):[A-Za-z0-9_-]+$/.exec(message.id)?.[1];
 export const transcriptParts = (message: TranscriptMessage): TranscriptMessage[] => (message.workParts ?? message.voiceParts)?.flatMap(transcriptParts) ?? [message];
 export const transcriptText = (message: TranscriptMessage) => transcriptParts(message).map(part => part.authoredText ?? part.text).join(' ');

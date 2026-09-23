@@ -37,7 +37,17 @@ export class AssistantQuestions {
     const base = this.ordinary.status(), control = this.control?.status();
     const ready = !this.closed && base.state === 'ready' && control?.state === 'ready' && base.generation === control.generation && base.url === control.url && control.grantedScopes.includes('operator.questions');
     const conversations = this.conversations();
-    return { state: this.error ? 'error' : ready ? 'ready' : this.control ? 'connecting' : 'unavailable', ...(this.error ? { message: this.error } : {}), items: this.all().filter(item => item.epoch === this.store.epoch && item.connectionGeneration === base.generation && conversations.some(c => c.id === item.conversationId && c.nativeId === item.nativeId && c.nativeKey === item.nativeKey)).sort((a, b) => b.snapshot.createdAtMs - a.snapshot.createdAtMs) };
+    const items = this.all().filter(item => {
+      const conversation = conversations.find(c => c.id === item.conversationId);
+      if (item.epoch !== this.store.epoch || !conversation) return false;
+      // Confirmed history belongs to the Nova conversation after it resumes on
+      // another binding. Its original source remains intact; target() still
+      // guards every native read and resolution against that exact source.
+      const confirmed = item.snapshot.status !== 'pending' && (!item.action || item.action.state === 'confirmed');
+      return confirmed || item.connectionGeneration === base.generation && conversation.connectionGeneration === item.connectionGeneration
+        && conversation.nativeId === item.nativeId && conversation.nativeKey === item.nativeKey;
+    }).sort((a, b) => b.snapshot.createdAtMs - a.snapshot.createdAtMs);
+    return { state: this.error ? 'error' : ready ? 'ready' : this.control ? 'connecting' : 'unavailable', ...(this.error ? { message: this.error } : {}), items };
   }
   private target(item: AssistantQuestion, forResolution = false) {
     const base = this.ordinary.status(), control = this.control?.status(), conversation = this.conversations().find(c => c.id === item.conversationId);

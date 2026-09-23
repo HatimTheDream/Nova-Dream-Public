@@ -1,3 +1,8 @@
+## [1.10.6] — 2026-09-23
+
+- Return the composer to writing after questions are answered. Keep confirmed answers in compact conversation bubbles with an Asked questions summary, following the Codex interaction pattern.
+- Preserve completed question history when a chat resumes on a new connection; keep pending and unconfirmed requests tied to their original authorization and status checks.
+
 ## [1.10.5] — 2026-09-23
 
 - Keep older planning messages readable after native history refresh by recognizing their original saved instruction format. Internal planning instructions stay hidden while the owner's exact message remains visible.

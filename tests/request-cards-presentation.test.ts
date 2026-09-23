@@ -161,24 +161,19 @@ test('secure requests never read ordinary draft values into the secret field or 
   assert.ok('disabled' in expired.fieldsets[0]);
 });
 
-test('answered question receipts stay collapsed without inflating the current request count', () => {
+test('confirmed answers leave the composer while new approvals stay actionable', () => {
   const answered = question();
   answered.snapshot = { ...answered.snapshot, status: 'answered', answers: { answers: { format: ['Brief'] } } };
   const controller = { approvals: { state: 'ready', items: [] }, questions: { state: 'ready', items: [answered] }, conversations: [], refresh, select() {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
   const past = render(createElement(ApprovalTray, { controller, conversationId: 'conversation', epoch: 'epoch', working: false }));
-  assert.match(past.markup, /<summary>Past requests<\/summary>/);
-  assert.ok(!('open' in past.details[0]));
-  assert.match(past.markup, /Brief/);
-  assert.ok(past.button('Dismiss'));
+  assert.equal(past.markup, '');
   controller.approvals!.items = [approval()];
   const mixed = render(createElement(ApprovalTray, { controller, conversationId: 'conversation', epoch: 'epoch', working: false }));
   assert.match(mixed.markup, /<summary>Approval needed<\/summary>/);
-  assert.match(mixed.markup, /Past requests · 1/);
+  assert.doesNotMatch(mixed.markup, /Brief|Past requests|Dismiss/);
   assert.ok('open' in mixed.details[0]);
-  assert.ok(!('open' in mixed.details[1]));
-  assert.doesNotMatch(mixed.markup, /2 requests need your attention/);
+  assert.equal(mixed.button('Allow once').disabled, false);
 });
-
 
 test('the compact single question keeps numbered choices, a named send arrow and actual cancellation without a duplicate heading', () => {
   const controller = { approvals: { items: [], state: 'ready' }, questions: { items: [question()], state: 'ready' }, refresh, conversations: [], select: () => {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];

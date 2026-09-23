@@ -1,3 +1,5 @@
+import { withQuestionReceipts } from './question-transcript';
+import { QuestionReceipts } from './QuestionReceipts';
 import { activeProjects, projectIsDeleted } from '../../../packages/domain/project-organization';
 import { ProjectOptions } from './ProjectOptions';
 import { ProjectOrganizationDialog } from './ProjectOrganizationDialog';
@@ -474,12 +476,12 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       {message.attachments.map((file, index) => message.role === 'assistant' && (file.artifactId || file.localFile) ? <GeneratedOutput key={`${file.artifactId ?? file.localFile?.id}:${message.textHash}`} open={openFile} attachment={file} message={message} conversation={conversation!} controller={controller} epoch={snapshot.epoch} blocked={!!active || busy} refine={refine} contentActions={contentActions}/> : file.localFile && file.availability !== 'unavailable' ? <button className="source-link" key={file.localFile.id} onClick={() => openFile(file.localFile!)}>{file.name}</button> : <span className="source-link" key={file.artifactId ?? `${file.name}:${index}`}>{file.name}</span>)}
     </article>;
   };
-  const transcriptRows = groupWorkMessages(groupVoiceMessages(voiceMessages), { operations, conversationId: conversation?.id ?? '', nativeId: controller.history?.nativeId, active: controller.history?.hasNewer ? undefined : active });
+  const transcriptRows = withQuestionReceipts(groupWorkMessages(groupVoiceMessages(voiceMessages), { operations, conversationId: conversation?.id ?? '', nativeId: controller.history?.nativeId, active: controller.history?.hasNewer ? undefined : active }), { epoch: snapshot.epoch, conversationId: conversation?.id ?? '', operations, questions: controller.questions?.items, plans: controller.plans, history: controller.history });
   const activeInTranscript = !!active && transcriptRows.some(message => message.workOperation?.id === active.id);
   const activeTextInTranscript = !!active && hasVisibleOperationText(voiceMessages, active, controller.history?.nativeId);
   const renderTranscriptMessage = (message: TranscriptMessage) => message.workParts
     ? <WorkTranscript message={message} renderMessage={renderMessage} checkStatus={() => void controller.checkStatus()}/>
-    : message.voiceParts || message.pendingVoice ? <VoiceMessage message={message} renderPart={part => renderMessage(part)}/> : renderMessage(message);
+    : <><QuestionReceipts items={message.questionReceipts}/>{message.voiceParts || message.pendingVoice ? <VoiceMessage message={message} renderPart={part => renderMessage(part)}/> : renderMessage(message)}</>;
   const accountControl = useConversationAccount({ snapshot, conversation, blocked: busy || !!active || callingHere || !!conversation?.pendingSettings || !!conversation?.pendingResume || dictation.phase !== 'idle', onChange: async profileId => { if (conversation) await controller.selectAccount(conversation, profileId); } });
   return <div className={`assistant-workspace ${sidePanel || activityOpen ? 'inspector-open' : ''}`}>
     {organizingProject && snapshot.projects.find(item => item.id === organizingProject) && <ProjectOrganizationDialog snapshot={snapshot} project={snapshot.projects.find(item => item.id === organizingProject)!} close={() => setOrganizingProject(undefined)} refresh={refreshWorkspace}/>}

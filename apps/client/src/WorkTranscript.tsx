@@ -7,6 +7,7 @@ import { transcriptContains, type TranscriptMessage } from './voice-transcript';
 import { workEntries, type WorkEntry } from './work-transcript';
 import { groupWorkActions } from './work-action-groups';
 import { ChevronDown, Device } from './icons';
+import { QuestionReceipts } from './QuestionReceipts';
 
 function ActionGroup({ summary, forceOpen, revealKey, children }: { summary: string; forceOpen: boolean; revealKey?: string; children: ReactNode }) {
   const [open, setOpen] = useState(forceOpen);
@@ -60,6 +61,7 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
       {operation?.state === 'unknown' && checkStatus && <button className="text-button" onClick={checkStatus}>Check status</button>}
       {!entries.length && !streamed && <p className="metadata">{active ? 'Preparing your reply…' : 'No activity details were saved for this reply.'}</p>}
     </WorkPhase>}
+    <QuestionReceipts items={message.questionReceipts}/>
     {message.workFinal && renderMessage(message.workFinal)}
   </div>;
 }
