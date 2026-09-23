@@ -85,6 +85,56 @@ function deferred<T = void>() {
 }
 const queueDraft = (f: Parameters<Parameters<typeof fixture>[0]>[0]) => f.service.enqueue(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: f.conversation.revision, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 });
 
+test('moving a Project to Deleted preserves queued context, voice targets, saved history and continued conversations', () => fixture(async f => {
+  const queued = queueDraft(f), project = f.store.readEntity('project', f.projectId)!;
+  f.gateway.messages = [{ id: 'kept-before-removal', role: 'assistant', content: 'The saved answer remains readable.' }];
+  await f.service.history(f.conversation.id);
+  const history = await f.service.historyForReading(f.conversation.id);
+  const voice = f.service.captureVoiceTarget(f.conversation.id, f.conversation.revision, project.revision);
+  f.store.organizeProject(f.device, { requestId: randomUUID(), epoch: f.store.epoch, projectId: project.id, projectRevision: project.revision, expectedRevision: 0, action: 'delete' });
+  assert.deepEqual(f.service.queue(), [queued]);
+  assert.deepEqual(f.service.captureVoiceTarget(f.conversation.id, f.conversation.revision, project.revision), voice);
+  assert.deepEqual((await f.service.historyForReading(f.conversation.id)).messages, history.messages);
+  const operation = f.service.runQueued(f.device, { requestId: randomUUID(), epoch: f.store.epoch, queueId: queued.id, expectedRevision: queued.revision });
+  await tick();
+  assert.deepEqual(operation.context, queued.context);
+  assert.equal(f.service.operations().find(value => value.id === operation.id)?.state, 'accepted');
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1);
+  assert.deepEqual(f.store.readEntity('project', project.id), project);
+}));
+
+test('removed Projects reject new chats and moves while completed creation and edit receipts still replay', () => fixture(async f => {
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, title: 'Admitted before removal', projectId: f.projectId };
+  const existing = await f.service.create(f.device, input);
+  const other = await f.service.create(f.device, { ...input, requestId: randomUUID(), title: 'Outside', projectId: null });
+  const edit = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: other.id, expectedRevision: other.revision, projectId: f.projectId };
+  const moved = await f.service.edit(f.device, edit);
+  const outsider = await f.service.create(f.device, { ...input, requestId: randomUUID(), title: 'Still outside', projectId: null });
+  f.store.organizeProject(f.device, { requestId: randomUUID(), epoch: f.store.epoch, projectId: f.projectId, projectRevision: 1, expectedRevision: 0, action: 'delete' });
+  const calls = f.gateway.calls.length;
+  await assert.rejects(f.service.create(f.device, { ...input, requestId: randomUUID() }), { code: 'project_deleted' });
+  await assert.rejects(f.service.edit(f.device, { ...edit, requestId: randomUUID(), conversationId: outsider.id, expectedRevision: outsider.revision }), { code: 'project_deleted' });
+  assert.deepEqual(await f.service.create(f.device, input), existing);
+  assert.deepEqual(await f.service.edit(f.device, edit), JSON.parse(JSON.stringify(moved)));
+  assert.equal(f.gateway.calls.length, calls);
+  f.store.organizeProject(f.device, { requestId: randomUUID(), epoch: f.store.epoch, projectId: f.projectId, projectRevision: 1, expectedRevision: 1, action: 'restore' });
+  assert.equal((await f.service.create(f.device, { ...input, requestId: randomUUID() })).state, 'ready');
+}));
+
+test('an admitted team can create its later stage after Project removal without allowing unrelated new work', () => fixture(async f => {
+  const projectId = 'project:admitted-team';
+  f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'project', entityId: projectId, expectedRevision: 0, payload: { name: 'Existing team', purpose: '', space: 'work' } });
+  const project = f.store.readEntity('project', projectId)!, teamId = randomUUID();
+  f.store.internalWrite(`team:run:${teamId}`, { id: teamId, projectId, projectRevision: project.revision, epoch: f.store.epoch, folder: project.value.workspace!.folder, state: 'running' });
+  f.store.organizeProject(f.device, { requestId: randomUUID(), epoch: f.store.epoch, projectId, projectRevision: 1, expectedRevision: 0, action: 'delete' });
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, title: 'Next admitted stage', space: 'work', projectId };
+  const stage = await f.service.create(f.device, input, teamId);
+  assert.equal(stage.state, 'ready'); assert.equal(stage.workspace?.folder, project.value.workspace!.folder);
+  f.store.internalWrite(`team:run:${teamId}`, { id: teamId, projectId, projectRevision: project.revision, epoch: f.store.epoch, folder: project.value.workspace!.folder, state: 'complete' });
+  await assert.rejects(f.service.create(f.device, { ...input, requestId: randomUUID() }), { code: 'project_deleted' });
+  await assert.rejects(f.service.create(f.device, { ...input, requestId: randomUUID() }, randomUUID()), { code: 'project_deleted' });
+}));
+
 for (const [eventState, operationState] of [['final', 'completed'], ['error', 'failed'], ['aborted', 'cancelled']] as const) {
   test(`delayed active history cannot reopen a ${operationState} run or replace its final output`, () => fixture(async f => {
     const input = submission(f), submitted = f.service.submit(f.device, input); await tick();

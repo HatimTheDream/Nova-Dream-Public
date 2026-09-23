@@ -33,7 +33,7 @@ export function EventCard({ event, variant = 'medium', showReminder = false, onC
       <div
         {...interaction}
         onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-        className="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap overflow-hidden text-ellipsis font-medium cursor-pointer hover:brightness-125 transition-all"
+        className="dc-calendar-event-block text-[10px] px-1.5 py-0.5 whitespace-nowrap overflow-hidden text-ellipsis font-medium cursor-pointer hover:brightness-125 transition-all"
         style={{
           background: `color-mix(in srgb, ${color} 12%, transparent)`,
           color,
@@ -52,7 +52,7 @@ export function EventCard({ event, variant = 'medium', showReminder = false, onC
       <div
         {...interaction}
         onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-        className="h-full rounded-md px-1.5 py-1 overflow-hidden cursor-pointer hover:brightness-110 transition-all"
+        className="dc-calendar-event-block h-full px-1.5 py-1 overflow-hidden cursor-pointer hover:brightness-110 transition-all"
         style={{
           background: `color-mix(in srgb, ${color} 18%, transparent)`,
           borderInlineStart: `3px solid ${color}`,
@@ -80,7 +80,7 @@ export function EventCard({ event, variant = 'medium', showReminder = false, onC
     <div
       {...interaction}
       onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-      className="h-full overflow-hidden rounded-lg px-3 py-2 cursor-pointer hover:brightness-110 transition-all"
+      className="dc-calendar-event-block h-full overflow-hidden px-3 py-2 cursor-pointer hover:brightness-110 transition-all"
       style={{
         background: `color-mix(in srgb, ${color} 15%, transparent)`,
         borderInlineStart: `4px solid ${color}`,

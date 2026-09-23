@@ -1,3 +1,4 @@
+import { activeProjects } from '../../../packages/domain/project-organization';
 import { useEffect,useId,useReducer,useRef,useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import type { TeamWork } from '../../../packages/domain/team-work';
@@ -15,7 +16,7 @@ export function TeamWorkPanel(props:Props){
 }
 function TeamWorkSession({snapshot,projectId,openConversation,openProjects,openAgents,active=true}:Props){
   const key=`e3:team-work:${snapshot.epoch}:${snapshot.deviceId}`;
-  const projects=snapshot.projects.filter(p=>p.value.space==='work'&&p.value.workspace?.environment==='local'&&p.value.workspace.folder),agents=(snapshot.records?.agent??[]).filter(a=>!a.value.archived);
+  const projects=activeProjects(snapshot).filter(p=>p.value.space==='work'&&p.value.workspace?.environment==='local'&&p.value.workspace.folder),agents=(snapshot.records?.agent??[]).filter(a=>!a.value.archived);
   const [draft,setForm]=useState<Form>(()=>readLocal(key)??{projectId:projectId??projects[0]?.id??'',title:'',brief:'',maxMinutes:10,steps:suggestedTeamMembers(agents)});
   const [{runs,readError,actionError},dispatch]=useReducer(teamWorkStatus,{runs:[],readError:'',actionError:''});
   const [selected,setSelected]=useState<string>(),[editing,setEditing]=useState(false),[pending,setPending]=useState<PendingTeamStart|undefined>(()=>readLocal(key+':pending')),[busy,setBusy]=useState(false);

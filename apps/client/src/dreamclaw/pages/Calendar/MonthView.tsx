@@ -1,9 +1,10 @@
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import clsx from 'clsx';
 import { useCalendarStore } from '@dreamclaw/stores/calendarStore';
 import { daysInMonth, eventsForDate, filterCalendarEvents, firstDayOffset, getDayName, getWeekOrder, toDateStr } from './calendarUtils';
 import { getEventColor } from './calendarUtils';
 import type { CalendarEvent } from './calendarTypes';
+import { monthEventGeometry, monthEventLayout } from '../../../calendar-month-layout';
 
 interface MonthViewProps {
   onDateClick: (date: Date) => void;
@@ -31,12 +32,23 @@ function buildGregorianCells(year: number, month: number, weekStart: number): Mo
 }
 
 export function MonthView({ onDateClick, onEventClick }: MonthViewProps) {
-  const { selectedDate, events, operationalEvents, settings, filter } = useCalendarStore();
+  const { selectedDate, events, operationalEvents, settings, filter, setView } = useCalendarStore();
   const gridRef = useRef<HTMLDivElement>(null);
+  const eventArea = useRef<HTMLDivElement>(null);
+  const [eventHeight, setEventHeight] = useState(0);
   const year = selectedDate.getFullYear();
   const month = selectedDate.getMonth();
   const selected = toDateStr(selectedDate);
   const cells = useMemo(() => buildGregorianCells(year, month, settings.weekStartDay), [year, month, settings.weekStartDay]);
+  useLayoutEffect(() => {
+    const area = eventArea.current;
+    if (!area) return;
+    const measure = () => setEventHeight(area.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, [cells]);
   const weekdayHeaders = useMemo(
     () => getWeekOrder(settings.weekStartDay).map((day) => getDayName(day, 'en-US', 'short')),
     [settings.weekStartDay],
@@ -60,42 +72,45 @@ export function MonthView({ onDateClick, onEventClick }: MonthViewProps) {
       <div className="grid shrink-0 grid-cols-7 border-b border-aegis-border bg-aegis-surface-solid" role="row">
         {weekdayHeaders.map((name) => <div key={name} role="columnheader" className="py-2 text-center text-[10px] font-bold uppercase tracking-[0.08em] text-aegis-text-dim sm:text-[11px]">{name}</div>)}
       </div>
-      <div ref={gridRef} role="grid" className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-px overflow-hidden bg-aegis-border">
+      <div ref={gridRef} role="grid" className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-px overflow-hidden bg-aegis-border"
+        style={{ '--calendar-event-height': `${monthEventGeometry.event}px`, '--calendar-more-height': `${monthEventGeometry.more}px`, '--calendar-event-gap': `${monthEventGeometry.gap}px` } as CSSProperties}>
         {cells.map((cell, index) => {
           const dayEvents = eventsForDate(filteredEvents, cell.dateStr);
+          const layout = monthEventLayout(dayEvents.length, eventHeight);
           const isSelected = cell.dateStr === selected;
           const label = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', calendar: 'gregory' }).format(cell.date);
+          const openDay = () => { onDateClick(cell.date); setView('day'); };
           return (
             <div key={cell.dateStr} role="gridcell" aria-selected={isSelected} className={clsx(
-              'relative flex min-h-0 min-w-0 flex-col bg-aegis-bg p-1 sm:p-1.5',
+              'dc-calendar-month-cell relative flex min-h-0 min-w-0 flex-col bg-aegis-bg p-1 sm:p-1.5',
               cell.isOtherMonth && 'bg-aegis-surface-solid/60',
-              isSelected && 'ring-1 ring-inset ring-aegis-primary/50',
-              cell.isToday && 'bg-aegis-primary-surface',
             )}>
               <button
                 type="button"
                 data-calendar-day
                 tabIndex={isSelected || (!cells.some((item) => item.dateStr === selected) && index === 0) ? 0 : -1}
-                aria-label={`${label}, ${dayEvents.length} ${dayEvents.length === 1 ? 'event' : 'events'}`}
+                aria-label={`${label}, ${dayEvents.length} ${dayEvents.length === 1 ? 'event' : 'events'}${layout.inlineOverflow ? '. Show all events' : ''}`}
                 aria-current={cell.isToday ? 'date' : undefined}
-                onClick={() => onDateClick(cell.date)}
+                aria-pressed={isSelected}
+                data-outside-month={cell.isOtherMonth || undefined}
+                onClick={() => layout.inlineOverflow ? openDay() : onDateClick(cell.date)}
                 onKeyDown={(event) => moveFocus(event, index)}
-                className={clsx(
-                  'grid h-6 w-6 shrink-0 place-items-center rounded-lg text-[11px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-aegis-primary sm:h-7 sm:w-7 sm:text-[12px]',
-                  cell.isToday ? 'bg-aegis-primary text-aegis-btn-primary-text' : isSelected ? 'bg-aegis-primary-surface text-aegis-primary' : cell.isOtherMonth ? 'text-aegis-text-dim opacity-55' : 'text-aegis-text-muted hover:bg-aegis-elevated',
-                )}
+                className="dc-calendar-date"
               >
-                {cell.day}
+                <span className="dc-calendar-date-number">{cell.day}</span>
+                {layout.inlineOverflow && <span className="dc-calendar-inline-count" aria-hidden="true">+{layout.hidden}</span>}
               </button>
-              <div className="mt-1 min-h-0 space-y-0.5 overflow-hidden">
-                {dayEvents.slice(0, 3).map((calendarEvent) => (
+              <div ref={index === 0 ? eventArea : undefined} className="dc-calendar-month-events">
+                {dayEvents.slice(0, layout.visible).map((calendarEvent) => (
                   <button key={calendarEvent.id} type="button" onClick={() => onEventClick(calendarEvent)} title={`${calendarEvent.startTime || 'All day'} · ${calendarEvent.title}`}
-                    className="preserve-case block w-full truncate rounded-md px-1 py-0.5 text-start text-[9px] font-medium text-aegis-text transition-[filter] hover:brightness-125 sm:text-[10px]"
+                    data-calendar-event-id={calendarEvent.id}
+                    className="dc-calendar-event-block dc-calendar-month-event preserve-case truncate text-aegis-text transition-[filter] hover:brightness-125"
                     style={{ background: `color-mix(in srgb, ${getEventColor(calendarEvent)} 16%, transparent)`, borderInlineStart: `2px solid ${getEventColor(calendarEvent)}` }}>
                     <span className="hidden lg:inline">{calendarEvent.startTime ? `${calendarEvent.startTime} ` : ''}</span>{calendarEvent.title}
                   </button>
                 ))}
-                {dayEvents.length > 3 && <span className="block px-1 text-[9px] font-semibold text-aegis-text-dim">+{dayEvents.length - 3} more</span>}
+                {layout.hidden > 0 && !layout.inlineOverflow && <button type="button" className="dc-calendar-more" onClick={openDay}
+                  aria-label={`Show all ${dayEvents.length} events for ${label}`}>+{layout.hidden}<span className="dc-calendar-more-word"> more</span></button>}
               </div>
             </div>
           );

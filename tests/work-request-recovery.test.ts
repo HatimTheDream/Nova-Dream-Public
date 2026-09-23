@@ -56,7 +56,7 @@ for (const action of ['retry', 'apply_findings'] as const) test(`an uncertain ${
 });
 
 test('known team, checkout, publication and browser preconditions remain correctable', () => {
-  for (const code of ['team_project', 'team_agent', 'team_changed', 'team_review_changed', 'team_retry_unconfirmed', 'work_preparing', 'work_changed', 'work_uncommitted', 'browser_tab', 'browser_stale']) {
+  for (const code of ['team_project', 'project_deleted', 'team_agent', 'team_changed', 'team_review_changed', 'team_retry_unconfirmed', 'work_preparing', 'work_changed', 'work_uncommitted', 'browser_tab', 'browser_stale']) {
     assert.equal(workRequestRejected(new ApiError(code, 'Review this operation.', undefined, 409)), true, code);
   }
   for (const code of ['team_closing', 'host_unavailable', 'request_failed', 'team_missing', 'browser_reused', 'new_future_error']) {

@@ -1,3 +1,4 @@
+import { projectIsDeleted } from '../../../packages/domain/project-organization';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Clock3, Copy, EyeOff, GripVertical, MoreHorizontal, Plus, Settings2, Trash2, X } from './icons';
 import { sizes, type Draft, type Entity, type Layout, type ModuleId, type Snapshot, type Task } from '../../../packages/domain/contracts';
@@ -80,7 +81,7 @@ export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask
           <button className="icon-button" title="Hide Widget" aria-label="Hide Widget" onClick={() => { if (changeWidget(id, { hidden: true })) { setMenu(null); setNotice('Widget hidden. Restore it from Add Widget; its content is kept.'); } }}><EyeOff size={17}/></button>
           <button className="icon-button widget-remove" title="Remove Widget" aria-label="Remove Widget" onClick={() => { setMenu(null); setRemoving(widget); }}><Trash2 size={17}/></button></div>
         </div>}
-        <div className="widget-body" aria-label={`${title} content`}><HomeWidgetContent id={type} snapshot={snapshot} widget={widget} state={state} draft={draft} dirty={dirty} draftStatus={draftStatus} time={time} date={date} timezone={timezone} now={clock} projectMissing={projectMissing} customize={() => setEditor(widget)} open={open} openSettings={openSettings} newTask={() => newTask(projectId ? { projectId } : undefined)} editTask={editTask} complete={complete}/></div>
+        <div className="widget-body" aria-label={`${title} content`}><HomeWidgetContent id={type} snapshot={snapshot} widget={widget} state={state} draft={draft} dirty={dirty} draftStatus={draftStatus} time={time} date={date} timezone={timezone} now={clock} projectMissing={projectMissing} customize={() => setEditor(widget)} open={open} openSettings={openSettings} newTask={() => newTask(projectId && !projectIsDeleted(snapshot, projectId) ? { projectId } : undefined)} editTask={editTask} complete={complete}/></div>
       </section>;
     })}</div>
     {reorder.order.length > 0 && <p className="board-hint">Use a widget’s move control, or hold its background, to rearrange it. Options include customization, size, and visibility.</p>}

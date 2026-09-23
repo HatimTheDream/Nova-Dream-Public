@@ -670,6 +670,7 @@ export async function startServer(options: { directory: string; port: number; pr
           return json(200, assistant.submit(device, await commandBody(request)));
         }
         if (url.pathname === '/api/assistant/conversation/edit' && request.method === 'POST') return json(200, await assistant.edit(device, await commandBody(request)));
+        if (url.pathname === '/api/projects/organize' && request.method === 'POST') return json(200, store.organizeProject(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/draft/remove' && request.method === 'POST') return json(200, store.removeDraft(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/draft/organize' && request.method === 'POST') return json(200, store.organizeDraft(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/cancel' && request.method === 'POST') return json(200, await assistant.cancel(device, assistantRequestSchema.extend({ operationId: z.string().uuid() }).strict().parse(await commandBody(request))));

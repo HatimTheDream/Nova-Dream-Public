@@ -343,6 +343,10 @@ export class AssistantService {
       const project = input.projectId ? this.store.readEntity('project', input.projectId) : undefined;
       this.assertTeamCheckout(project?.value.workspace?.folder,teamId);
       if (input.projectId && !project) throw new Fault(409, 'missing_project', 'The selected Project is unavailable.');
+      if (project && this.store.projectIsDeleted(project.id)) {
+        const team = teamId ? this.store.internalRead<{ projectId: string; projectRevision: number; epoch: string }>(`team:run:${teamId}`) : undefined;
+        if (!team || team.epoch !== input.epoch || team.projectId !== project.id || team.projectRevision !== project.revision) throw new Fault(409, 'project_deleted', 'Restore this Project from Deleted before starting new work in it.');
+      }
       if (project && assistantSpace(project.value) !== assistantSpace(input)) throw new Fault(409, 'project_space', 'Choose a Project in this space.');
       if (input.refineSource) {
         const source = this.outputs().find(o => o.id === input.refineSource!.outputId);
@@ -869,6 +873,7 @@ export class AssistantService {
     this.assertConnection(conversation);
     if (this.voiceBusy(conversation.id)) throw new Fault(409, 'voice_active', 'End the voice call before changing this conversation.');
     const intent = this.store.admit(device, input, { type: 'conversation.edit', ...input }, () => {
+      if (input.projectId && input.projectId !== conversation.projectId && this.store.projectIsDeleted(input.projectId)) throw new Fault(409, 'project_deleted', 'Restore this Project from Deleted before moving a conversation into it.');
       if (conversation.revision !== input.expectedRevision || conversation.pendingSettings || !conversation.nativeId) throw new Fault(409, 'conversation_changed', 'The conversation changed. Review its current state.');
       if (this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Settle the current run before changing conversation settings.');
       this.saveConversation({ ...conversation, settingsResult: undefined, pendingSettings: { permissionMode: input.permissionMode, requestId: input.requestId, title: input.title, archived: input.archived, deleted: input.deleted, pinned: input.pinned, unread: input.unread, projectId: input.projectId, model: input.model, thinking: input.thinking, fastMode: input.fastMode } });

@@ -23,7 +23,7 @@ import type { AssignmentAttempt } from '../../packages/domain/assignments.js';
 import type { AssistantOutput } from '../../packages/domain/assistant.js';
 import { contactSchema, type Contact } from '../../packages/domain/workspace-records.js';
 import { contactEmailKey, mailContactLinkSchema, mailContactSourceKey, type MailContactReview } from '../../packages/domain/mail-contact.js';
-import { draftOrganizationCommandSchema, removeDraftSchema, type DraftRemoval, type DraftOrganization } from '../../packages/domain/contracts.js';
+import { draftOrganizationCommandSchema, projectOrganizationCommandSchema, removeDraftSchema, type DraftRemoval, type DraftOrganization, type ProjectOrganization } from '../../packages/domain/contracts.js';
 
 export class Fault extends Error {
   constructor(public status: number, public code: string, message: string, public current?: unknown) { super(message); }
@@ -230,6 +230,7 @@ export class Store {
     // One transaction gives a consistent cursor and all projections.
     return this.transaction(() => { if (!this.recoveryEffectsPaused) { this.materializeRoutines(); this.sweepReminders(); } return { epoch: this.epoch, cursor: this.entityCursor, deviceId,
       layout: this.get('layout', 'layout')!, tasks: this.list('task').filter(t => !t.value.trashed), trashedTasks: this.list('task').filter(t => t.value.trashed), routines: this.list('routine'), calendarCompletions: this.internalList<import('../../packages/domain/calendar-completion.js').CalendarCompletion>('tasks:calendar-completion:'), taskState: this.taskState(), drafts: this.list('draft'), draftOrganization: this.internalList<DraftOrganization>('assistant:draft-organization:'), draftRemovals: this.internalList<DraftRemoval>('assistant:draft-removed:'), projects: this.list('project'),
+      projectOrganization: this.internalList<ProjectOrganization>('assistant:project-organization:'),
       records: { contact: this.list('contact'), content: this.list('content'), agent: this.list('agent'), assignment: this.list('assignment'), profile: this.list('profile') },
       capabilities: { assistant: false, voice: false, reason: 'A verified Assistant and speech connection has not been configured for this workspace.' } }; });
   }
@@ -240,6 +241,21 @@ export class Store {
     const value = this.open(`receipt:${requestId}`, existing.payload);
     if (value?.removedWork) throw new Fault(409, `${value.removedWork}_removed`, 'This saved work was removed. Its old request cannot restore it.');
     return value;
+  }
+  projectIsDeleted(projectId: string): boolean {
+    return this.internalRead<ProjectOrganization>(`assistant:project-organization:${projectId}`)?.deleted === true;
+  }
+  organizeProject(device: string, raw: unknown): ProjectOrganization {
+    const input = projectOrganizationCommandSchema.parse(raw);
+    return this.admit(device, input, { type: 'project.organize', ...input }, () => {
+      const project = this.get('project', input.projectId), key = `assistant:project-organization:${input.projectId}`;
+      const previous = this.internalRead<ProjectOrganization>(key);
+      if (!project || project.revision !== input.projectRevision || (previous?.revision ?? 0) !== input.expectedRevision) throw new Fault(409, 'project_changed', 'This Project changed. Review its current version before organizing it.');
+      // Sidebar organization must not revise captured project context or remove its files and saved work.
+      const result = this.internalWrite(key, { projectId: project.id, revision: (previous?.revision ?? 0) + 1, deleted: input.action === 'delete' } satisfies ProjectOrganization);
+      this.advanceCursor();
+      return result;
+    }).value;
   }
   organizeDraft(device: string, raw: unknown) {
     const input = draftOrganizationCommandSchema.parse(raw);

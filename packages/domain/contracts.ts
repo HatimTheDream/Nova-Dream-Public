@@ -53,6 +53,8 @@ export const draftOrganizationCommandSchema = /* @__PURE__ */ (() => z.object({ 
 export const removeDraftSchema = /* @__PURE__ */ (() => draftOrganizationCommandSchema.omit({ action: true }).strict())();
 export type DraftRemoval = { draftId: string; revision: number };
 export type DraftOrganization = { draftId: string; draftRevision: number; revision: number; pinned: boolean; folder: 'active' | 'archive' | 'deleted' };
+export const projectOrganizationCommandSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), projectId: id, projectRevision: z.number().int().positive(), expectedRevision: z.number().int().min(0), action: z.enum(['delete', 'restore']) }).strict())();
+export type ProjectOrganization = { projectId: string; revision: number; deleted: boolean };
 export type Project = z.infer<typeof projectSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
 export type Entity<T> = { id: string; revision: number; updatedAt: string; deviceId: string; value: T };
@@ -60,7 +62,7 @@ export type Kind = 'layout' | 'task' | 'draft' | 'project' | 'routine' | keyof R
 export type Values = { layout: Layout; task: Task; draft: Draft; project: Project; routine: Routine } & RecordValues;
 export const commandSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), entityId: id, expectedRevision: z.number().int().min(0), kind: z.enum(['layout', 'task', 'draft', 'project', 'routine', ...recordKinds]), payload: z.unknown() }).strict())();
 export type Command = z.infer<typeof commandSchema>;
-export type Snapshot = { calendarCompletions?: import('./calendar-completion.js').CalendarCompletion[]; records?: { [K in keyof RecordValues]: Entity<RecordValues[K]>[] }; calendarReminders?: import('./calendar-reminders.js').CalendarReminderState; epoch: string; cursor: number; deviceId: string; layout: Entity<Layout>; tasks: Entity<Task>[]; trashedTasks?: Entity<Task>[]; routines?: Entity<Routine>[]; taskState?: TaskState; drafts: Entity<Draft>[]; draftOrganization?: DraftOrganization[]; draftRemovals?: DraftRemoval[]; projects: Entity<Project>[]; capabilities: { assistant: boolean; voice: boolean; reason: string } };
+export type Snapshot = { calendarCompletions?: import('./calendar-completion.js').CalendarCompletion[]; records?: { [K in keyof RecordValues]: Entity<RecordValues[K]>[] }; calendarReminders?: import('./calendar-reminders.js').CalendarReminderState; epoch: string; cursor: number; deviceId: string; layout: Entity<Layout>; tasks: Entity<Task>[]; trashedTasks?: Entity<Task>[]; routines?: Entity<Routine>[]; taskState?: TaskState; drafts: Entity<Draft>[]; draftOrganization?: DraftOrganization[]; draftRemovals?: DraftRemoval[]; projects: Entity<Project>[]; projectOrganization?: ProjectOrganization[]; capabilities: { assistant: boolean; voice: boolean; reason: string } };
 export const emptyDraft: Draft = { title: 'New conversation', text: '', projectId: null, attachments: [] };
 export function moveItem<T>(items: readonly T[], from: number, to: number): T[] {
   if (from < 0 || to < 0 || from >= items.length || to >= items.length) return [...items];

@@ -1,3 +1,4 @@
+import { ProjectOptions } from './ProjectOptions';
 import { assistantSpace } from '../../../packages/domain/assistant-space';
 import { useState } from 'react';
 import type { Conversation, ConversationChanges } from '../../../packages/domain/assistant';
@@ -47,7 +48,7 @@ export function ConversationRow({ conversation, controller, snapshot, selected, 
         {error && <p className="field-error" role="alert">{error}</p>}
       </div> : <form className="chat-action-form" onSubmit={event => { event.preventDefault(); void save(view === 'rename' ? { title: title.trim() } : { projectId: projectId || null }, close); }}>
         <button type="button" className="text-button" onClick={() => setView('actions')}><ArrowLeft size={17}/>Back</button>
-        {view === 'rename' ? <label>Chat name<input autoFocus required maxLength={150} value={title} onChange={event => setTitle(event.target.value)}/></label> : <label>Project<select aria-label="Move chat to Project" value={projectId} onChange={event => setProjectId(event.target.value)}><option value="">No Project</option>{snapshot.projects.filter(project => assistantSpace(project.value) === assistantSpace(conversation)).map(project => <option key={project.id} value={project.id}>{project.value.name}</option>)}</select></label>}
+        {view === 'rename' ? <label>Chat name<input autoFocus required maxLength={150} value={title} onChange={event => setTitle(event.target.value)}/></label> : <label>Project<select aria-label="Move chat to Project" value={projectId} onChange={event => setProjectId(event.target.value)}><option value="">No Project</option><ProjectOptions snapshot={snapshot} selected={projectId} space={assistantSpace(conversation)}/></select></label>}
         <button className="primary" disabled={blocked || view === 'rename' && !title.trim()}>{busy ? 'Saving…' : view === 'rename' ? 'Save name' : 'Move chat'}</button>
         {error && <p className="field-error" role="alert">{error}</p>}
       </form>}

@@ -46,7 +46,7 @@ export function UpcomingEvents({ onEventClick, maxItems = 8 }: UpcomingEventsPro
           <div
             key={ev.id}
             onClick={() => onEventClick(ev)}
-            className="p-2.5 rounded-xl bg-aegis-card border border-aegis-border hover:border-aegis-primary/30 hover:bg-aegis-primary-surface transition-all cursor-pointer"
+            className="dc-calendar-event-block p-2.5 bg-aegis-card border border-aegis-border hover:border-aegis-primary/30 hover:bg-aegis-primary-surface transition-all cursor-pointer"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-[11px] font-semibold font-mono" style={{ color }}>

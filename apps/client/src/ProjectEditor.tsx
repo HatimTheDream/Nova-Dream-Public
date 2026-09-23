@@ -1,3 +1,5 @@
+import { projectIsDeleted } from '../../../packages/domain/project-organization';
+import { ProjectOrganizationDialog } from './ProjectOrganizationDialog';
 import { LoadingRing } from './ModuleLoading';
 import { assistantSpace, type AssistantSpace } from '../../../packages/domain/assistant-space';
 import { Suspense, useMemo, useRef, useState } from 'react';
@@ -14,6 +16,7 @@ const GitHubRepositoryPicker = lazy(() => import('./GitHubRepositoryPicker').the
 type Form = Project & { attachments: Attachment[] };
 const form = (value?: Project): Form => ({ name: '', purpose: '', ...value, attachments: value?.attachments ?? [] });
 export function ProjectEditor({ snapshot, projectId, space = 'chat', close, saved, refresh }: { snapshot: Snapshot; projectId?: string; space?: AssistantSpace; close: () => void; saved: () => void; refresh: () => Promise<void> }) {
+  const [organizing, setOrganizing] = useState(false);
   const newKey = `e3:new-project:${snapshot.deviceId}:${retainedWindowId}:${space}`, legacyKey = `e3:project-editor:${snapshot.deviceId}`;
   const [id] = useState(() => {
     if (projectId) return projectId;
@@ -39,6 +42,7 @@ export function ProjectEditor({ snapshot, projectId, space = 'chat', close, save
   const desktop = (window as Window & { novaDesktop?: { chooseWorkingFolder: () => Promise<string | null> } }).novaDesktop;
   const isWork = assistantSpace(editor.value) === 'work';
   const host = editor.conflict?.current as Entity<Form> | undefined;
+  if (organizing && entity) return <ProjectOrganizationDialog snapshot={snapshot} project={entity} refresh={refresh} close={() => setOrganizing(false)}/>;
   return <Dialog title={projectId ? 'Project settings' : space === 'work' ? 'Create a Work Project' : 'Create a Chat Project'} close={close}>
     {projectId && !entity ? <Empty title="This Project is unavailable">Your kept changes remain on this device.</Empty> : <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={blocked}><label>Project name<input autoFocus required maxLength={100} value={editor.value.name} onChange={event => editor.change(value => ({ ...value, name: event.target.value }))}/></label>
@@ -57,7 +61,7 @@ export function ProjectEditor({ snapshot, projectId, space = 'chat', close, save
       {uploads.notice && <p role="status" className="field-error">{uploads.notice}</p>}</fieldset>
       {editor.conflict && <section className="notice warning" role="alert"><div><strong>Review Project changes</strong><p>{editor.conflict.message}</p>{host && <details><summary>Current saved Project</summary><h3>{host.value.name}</h3><p className="preserve-lines">{host.value.purpose}</p>{host.value.attachments?.map(file => <p key={file.id}>{file.name}</p>)}</details>}<div className="button-row"><button type="button" onClick={editor.editProposal}>Continue with my changes</button><button type="button" onClick={editor.discard}>Use saved version</button></div></div></section>}
       {(editor.storageError || editor.networkError || error) && <p role="alert" className="field-error">{error || editor.status}</p>}
-      <div className="dialog-footer"><button type="button" onClick={close}>Keep for later</button><button className="primary" disabled={editor.saving || !!editor.conflict || uploads.pending.length > 0 || !editor.value.name.trim() || isWork && !editor.value.workspace?.folder.trim()}>{editor.saving ? 'Saving…' : editor.pending ? 'Reconcile save' : projectId ? 'Save Project' : 'Create Project'}</button></div>
+      <div className="dialog-footer">{entity && <button type="button" className="text-button" disabled={blocked || uploads.pending.length > 0} onClick={() => setOrganizing(true)}>{projectIsDeleted(snapshot, entity.id) ? 'Restore project' : 'Move project to Deleted'}</button>}<button type="button" onClick={close}>Keep for later</button><button className="primary" disabled={editor.saving || !!editor.conflict || uploads.pending.length > 0 || !editor.value.name.trim() || isWork && !editor.value.workspace?.folder.trim()}>{editor.saving ? 'Saving…' : editor.pending ? 'Reconcile save' : projectId ? 'Save Project' : 'Create Project'}</button></div>
     </form>}
   </Dialog>;
 }

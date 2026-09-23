@@ -22,6 +22,7 @@ import { useStore } from 'zustand';
 import { CalendarEditScope, ProviderCalendarEditScope } from './CalendarEditScope';
 import type { CalendarHost } from './dreamclaw/stores/calendarStore';
 import './dreamclaw/styles.css';
+import './calendar-presentation.css';
 import { CalendarAccountSetup } from './AccountSetup';
 
 type Props = { snapshot: Snapshot; online: boolean; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void };

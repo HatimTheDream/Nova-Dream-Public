@@ -58,23 +58,21 @@ export function WeekView({ onDateClick, onEventClick }: WeekViewProps) {
         <div /> {/* Time gutter */}
         {weekDates.map((date, i) => {
           const isToday = isSameDay(date, now);
+          const isSelected = isSameDay(date, selectedDate);
           return (
-            <div key={i} onClick={() => onDateClick(date)}
-              className={clsx(
-                'py-2.5 text-center cursor-pointer border-aegis-border transition-colors',
-                'border-s',
-                isToday && 'bg-aegis-primary-surface',
-              )}>
-              <div className="text-[11px] font-semibold text-aegis-text-dim uppercase">
+            <button key={i} type="button" onClick={() => onDateClick(date)}
+              data-calendar-day
+              aria-label={date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', calendar: 'gregory' })}
+              aria-current={isToday ? 'date' : undefined}
+              aria-pressed={isSelected}
+              className="dc-calendar-date dc-calendar-week-date">
+              <span className="text-[11px] font-semibold text-aegis-text-dim uppercase">
                 {getDayName(date.getDay(), 'en-US')}
-              </div>
-              <div className={clsx(
-                'w-8 h-8 mx-auto mt-0.5 flex items-center justify-center rounded-full text-[14px] font-bold',
-                isToday ? 'bg-aegis-primary text-aegis-btn-primary-text' : 'text-aegis-text-muted',
-              )}>
+              </span>
+              <span className="dc-calendar-date-number">
                 {date.getDate()}
-              </div>
-            </div>
+              </span>
+            </button>
           );
         })}
       </div>

@@ -6,6 +6,7 @@ import type { ConversationChanges, AssistantModel, AssistantOutput, AssistantSta
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { canonical } from '../../../packages/domain/contracts';
 import { ApiError, mayPoll, readLocal, request, saveLocal } from './api';
+import { releaseRejectedProjectRequest } from './project-admission';
 import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } from './transcript-position';
 import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from './assistant-history';
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
@@ -151,7 +152,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
       const result = await request<Conversation>('assistant/conversation/edit', intent, undefined, 30000);
       if (!result.pendingSettings) localStorage.removeItem(key);
       return result;
-    } catch (e) { if (e instanceof ApiError && e.code === 'edit_rejected') localStorage.removeItem(key); throw e; }
+    } catch (e) { if (e instanceof ApiError && e.code === 'edit_rejected') localStorage.removeItem(key); else releaseRejectedProjectRequest(key, intent.requestId, e); throw e; }
     finally { await refresh(); if (selectedRef.current === conversation.id) await loadHistory(conversation.id); }
   };
   const remove = async (conversation: Conversation) => {

@@ -72,6 +72,7 @@ POST /api/assistant/dictation/offer
 POST /api/assistant/dictation/start
 POST /api/assistant/draft/organize
 POST /api/assistant/draft/remove
+POST /api/projects/organize
 POST /api/assistant/goal
 POST /api/assistant/memory
 POST /api/assistant/message-pin

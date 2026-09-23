@@ -132,7 +132,7 @@ export default function CalendarPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="dc-calendar-actions flex items-center gap-2">
               <button type="button" onClick={() => handleAddEvent()} aria-label={editor.draft ? 'Continue event draft' : 'Add event'}
                 className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-aegis-primary px-3 text-[12px] font-semibold text-aegis-btn-primary-text shadow-sm transition-colors hover:bg-aegis-primary-hover">
                 <Plus size={15} /> <span className="hidden sm:inline">{editor.draft ? "Continue event draft" : "Add event"}</span><span className="sm:hidden">{editor.draft ? 'Continue' : 'Add'}</span>
@@ -141,7 +141,7 @@ export default function CalendarPage() {
                 className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted hover:text-aegis-primary disabled:opacity-50" aria-label="Refresh this month">
                 <RefreshCw size={15} className={loading || syncing ? 'animate-spin motion-reduce:animate-none' : ''} />
               </button>
-              <div className="flex rounded-xl border border-aegis-border bg-aegis-elevated p-1" aria-label="Calendar view">
+              <div className="dc-calendar-view flex rounded-xl border border-aegis-border bg-aegis-elevated p-1" aria-label="Calendar view">
                 {(['month', 'week', 'day'] as const).map((item) => (
                   <button key={item} type="button" onClick={() => setView(item)} aria-pressed={view === item}
                     className={clsx('rounded-lg px-3 py-1.5 text-[11px] font-semibold capitalize transition-colors', view === item ? 'bg-aegis-primary text-aegis-btn-primary-text' : 'text-aegis-text-dim hover:text-aegis-text')}>
@@ -194,7 +194,7 @@ export default function CalendarPage() {
               ) : (
                 <div className="dc-calendar-agenda mt-2 space-y-1.5">
                   {selectedDayEvents.map((event) => (
-                    <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="preserve-case block w-full rounded-xl border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
+                    <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="dc-calendar-event-block dc-calendar-agenda-event preserve-case block w-full border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
                       <span className="block text-[13px] font-semibold text-aegis-text">{event.title}</span>
                       <span className="block text-[12px] text-aegis-text-dim">{event.allDay || !event.startTime ? 'All day' : `${event.startTime}${event.endTime ? `–${event.endTime}` : ''}`} · {event.source === 'local' ? 'Event' : SOURCE_META[event.source].label}</span>
                     </button>

@@ -1,3 +1,4 @@
+import { ProjectOptions } from './ProjectOptions';
 import { LoadingRing } from './ModuleLoading';
 import { useEffect, useRef, useState } from 'react';
 import { calendarWindowIdentity } from './calendar-window';
@@ -51,7 +52,7 @@ function MemoryWriting({ snapshot, entry, seed, refresh, close, owner }: EditorP
     <p className="metadata">Keep a fact, preference or constraint for future chats. Only notes you choose to save are added here.</p>
     <label>Memory<textarea autoFocus rows={5} value={kept.text} disabled={busy || !!kept.pending} onChange={event => change({ ...kept, text: event.target.value })}/></label>
     <p className={kept.text.length > 4000 ? 'field-error' : 'metadata'}>{kept.text.length.toLocaleString()} / 4,000 characters</p>
-    <label>Use in<select value={kept.projectId ?? ''} disabled={busy || !!kept.pending} onChange={event => change({ ...kept, projectId: event.target.value || null })}><option value="">All chats</option>{snapshot.projects.map(project => <option key={project.id} value={project.id}>{project.value.name}</option>)}</select></label>
+    <label>Use in<select value={kept.projectId ?? ''} disabled={busy || !!kept.pending} onChange={event => change({ ...kept, projectId: event.target.value || null })}><option value="">All chats</option><ProjectOptions snapshot={snapshot} selected={kept.projectId}/></select></label>
     {(entry?.source || seed?.source) && <p className="metadata">The original message stays linked as the source. Editing this note leaves that message intact.</p>}
     <p className="metadata">Changes apply to newly sent messages and new voice calls. Earlier messages, already queued inputs, active calls and backup copies keep the context they received.</p>
     {error && <p className="field-error" role="alert">{error}</p>}

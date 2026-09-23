@@ -121,6 +121,7 @@ export class TeamWorkService {
     const receipt = this.store.admit(device, input, { type: 'team.create', ...input }, () => {
       if (this.list().length >= 100) throw new Fault(409, 'team_limit', 'This workspace already contains 100 team workflows.');
       const project = this.store.readEntity('project', input.projectId);
+      if (this.store.projectIsDeleted(input.projectId)) throw new Fault(409, 'project_deleted', 'Restore this Project from Deleted before starting a new team workflow.');
       if (!project?.value.workspace?.folder || project.value.space !== 'work' || project.value.workspace.environment !== 'local') throw new Fault(409, 'team_project', 'Choose a Work Project with one host checkout. GitHub projects are prepared this way automatically.');
       this.assertIdle(project.value.workspace.folder);
       const agents = input.steps.map(step => { const a = this.store.readEntity('agent', step.agentId); if (!a || a.value.archived) throw new Fault(409, 'team_agent', 'Choose active team members.'); return a; });

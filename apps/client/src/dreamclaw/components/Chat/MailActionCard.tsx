@@ -13,7 +13,7 @@ import {
   Mail,
   Undo,
   ShieldCheck,
-  Star,
+  Flag,
   Tag,
   Trash2,
   X,
@@ -35,8 +35,8 @@ function actionLabel(action: MailActionKind, organization?: string): string {
     case 'archive': return 'Archive';
     case 'mark-read': return 'Mark as read';
     case 'mark-unread': return 'Mark as unread';
-    case 'flag': return 'Star or flag';
-    case 'unflag': return 'Remove star or flag';
+    case 'flag': return 'Flag';
+    case 'unflag': return 'Remove flag';
     case 'organize': return `Organize as ${organization || 'label'}`;
     case 'remove-organization': return `Remove ${organization || 'label'}`;
     case 'unsubscribe': return 'Unsubscribe';
@@ -49,7 +49,7 @@ function ActionIcon({ action }: { action: MailActionKind }) {
   const props = { size: 18, emphasis: 'duotone' as const, decorative: true };
   if (action === 'delete') return <Trash2 {...props} tone="coral" />;
   if (action === 'archive') return <Archive {...props} tone="sky" />;
-  if (action === 'flag' || action === 'unflag') return <Star {...props} tone="gold" />;
+  if (action === 'flag' || action === 'unflag') return <Flag {...props} tone="gold" />;
   if (action === 'organize' || action === 'remove-organization') return <Tag {...props} tone="violet" />;
   if (action === 'block-sender') return <Ban {...props} tone="coral" />;
   if (action === 'unblock-sender') return <Unblock {...props}/>;

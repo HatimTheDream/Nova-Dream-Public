@@ -1,3 +1,4 @@
+import { ProjectOptions } from './ProjectOptions';
 import { useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { questDraftSchema, type PersonalQuest, type QuestDraft } from '../../../packages/domain/profile-progression';
@@ -50,7 +51,7 @@ export function ProfileQuestEditor({ id, quest, snapshot, saved, discard }: { id
     <fieldset disabled={busy || !!journal.pending || !!quest?.archived}>
       <label>Quest name<input autoFocus maxLength={160} value={journal.draft.title} onChange={e => change({ ...journal.draft, title: e.target.value })} placeholder="What do you want to accomplish?"/></label>
       <label>Why it matters<textarea rows={3} maxLength={4000} value={journal.draft.description} onChange={e => change({ ...journal.draft, description: e.target.value })}/></label>
-      <div className="record-field-grid"><label>Project<select value={journal.draft.projectId ?? ''} onChange={e => change({ ...journal.draft, projectId: e.target.value || null })}><option value="">No Project</option>{snapshot.projects.map(p => <option key={p.id} value={p.id}>{p.value.name}</option>)}</select></label><label>Target date · optional<input type="date" value={journal.draft.due} onChange={e => change({ ...journal.draft, due: e.target.value })}/></label></div>
+      <div className="record-field-grid"><label>Project<select value={journal.draft.projectId ?? ''} onChange={e => change({ ...journal.draft, projectId: e.target.value || null })}><option value="">No Project</option><ProjectOptions snapshot={snapshot} selected={journal.draft.projectId}/></select></label><label>Target date · optional<input type="date" value={journal.draft.due} onChange={e => change({ ...journal.draft, due: e.target.value })}/></label></div>
       <h3>Steps</h3><ol className="quest-edit-steps">{journal.draft.steps.map((step, i) => <li key={step.id}>
         <span className="quest-step-number" aria-hidden="true">{i + 1}</span>
         <div>{step.taskId ? <><strong>{[...snapshot.tasks, ...(snapshot.trashedTasks ?? [])].find(t => t.id === step.taskId)?.value.title ?? step.title}</strong><span className="metadata">Linked Task · edit its details in Tasks</span></> : <label>Step {i + 1}<input maxLength={300} value={step.title} placeholder="A clear next action" onChange={e => change({ ...journal.draft, steps: journal.draft.steps.map(s => s.id === step.id ? { ...s, title: e.target.value } : s) })}/></label>}</div>

@@ -1,0 +1,78 @@
+/* Calendar content keeps the flat date and event treatment used by Home's
+   appointment widget, independent of the shared raised action buttons. */
+.calendar-module .dc-calendar-page { container:calendar-page / inline-size; }
+.calendar-module .dc-calendar-actions { flex-wrap:wrap; min-width:0; max-width:100%; }
+.calendar-module .dc-calendar-view { flex:none; }
+@container calendar-page (max-width:420px) {
+  .calendar-module .dc-calendar-actions { width:100%; }
+  .calendar-module .dc-calendar-view { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; }
+}
+.calendar-module .dc-calendar-month-cell { container:calendar-day / inline-size; }
+@container calendar-day (max-width:54px) {
+  .calendar-module .dc-calendar-more-word { display:none; }
+  :root .dreamclaw-module.calendar-module button.dc-calendar-more { padding-inline:1px; }
+}
+:root .dreamclaw-module.calendar-module button.dc-calendar-date[aria-pressed] {
+  display:flex; align-items:center; justify-content:flex-start; flex-shrink:0;
+  width:100%; min-width:0; min-height:28px; padding:0;
+  border:0; border-radius:0; background:transparent; box-shadow:none;
+  color:var(--text); font-size:12px; font-weight:500;
+  text-transform:none; translate:none;
+}
+:root .calendar-module .dc-calendar-date:hover,
+:root .calendar-module .dc-calendar-date:active {
+  background:transparent; border:0; box-shadow:none; translate:none;
+}
+.calendar-module .dc-calendar-date-number {
+  display:grid; place-items:center; width:28px; height:28px;
+  border-radius:4px; font-variant-numeric:tabular-nums;
+}
+.calendar-module .dc-calendar-date[data-outside-month] .dc-calendar-date-number { color:rgb(var(--dim-rgb)); }
+.calendar-module .dc-calendar-date[aria-current=date] .dc-calendar-date-number {
+  color:rgb(var(--accent-rgb)); font-weight:700;
+}
+.calendar-module .dc-calendar-date:hover .dc-calendar-date-number { background:var(--raised); }
+.calendar-module .dc-calendar-date[aria-pressed=true] .dc-calendar-date-number {
+  background:var(--soft-gold); color:var(--text); font-weight:700;
+}
+.calendar-module .dc-calendar-month-cell[aria-selected=true] {
+  background:color-mix(in srgb,var(--soft-gold) 25%,var(--canvas));
+}
+:root .calendar-module .dc-calendar-date:focus-visible { outline-offset:-2px; }
+:root .dreamclaw-module.calendar-module button.dc-calendar-week-date[aria-pressed] {
+  flex-direction:column; justify-content:center; gap:2px; min-height:64px;
+  border-inline-start:1px solid var(--line); padding:6px 0;
+}
+.calendar-module .dc-calendar-week-date .dc-calendar-date-number { font-size:14px; }
+
+:root .calendar-module .dc-calendar-event-block {
+  min-width:0; border-radius:0; box-shadow:none; text-transform:none; translate:none;
+}
+:root .calendar-module button.dc-calendar-event-block {
+  display:block; width:100%; min-height:0; border:0; text-align:start;
+}
+:root .calendar-module button.dc-calendar-event-block:hover,
+:root .calendar-module button.dc-calendar-event-block:active {
+  box-shadow:none; translate:none;
+}
+:root .calendar-module .dc-calendar-month-event {
+  padding:3px 4px; font-size:10px; font-weight:500; line-height:1.4;
+}
+.calendar-module .dc-calendar-month-events {
+  display:flex; flex-direction:column; flex:1; min-height:0;
+  gap:var(--calendar-event-gap); margin-top:4px; overflow:hidden;
+}
+.calendar-module .dc-calendar-month-events > .dc-calendar-month-event {
+  flex:none; height:var(--calendar-event-height);
+}
+:root .dreamclaw-module.calendar-module button.dc-calendar-more {
+  display:block; flex:none; width:100%; height:var(--calendar-more-height); min-height:0;
+  padding:0 4px; border:0; border-radius:0; background:transparent; box-shadow:none;
+  color:var(--muted); font-size:10px; font-weight:600; line-height:var(--calendar-more-height);
+  text-align:start; text-transform:none; white-space:nowrap; translate:none;
+}
+:root .calendar-module .dc-calendar-more:focus-visible { outline-offset:-2px; }
+.calendar-module .dc-calendar-inline-count { margin-inline-start:auto; font-size:9px; color:var(--muted); }
+:root .calendar-module .dc-calendar-agenda-event {
+  padding:8px 12px; background:var(--raised); border-inline-start:3px solid var(--line);
+}

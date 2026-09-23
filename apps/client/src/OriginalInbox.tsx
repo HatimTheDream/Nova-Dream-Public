@@ -24,6 +24,7 @@ import { DEFAULT_SETTINGS } from './dreamclaw/pages/Calendar/calendarTypes';
 import type { PageViewState } from './dreamclaw/types/missionControl';
 import './dreamclaw/styles.css';
 import './dreamclaw/inbox.css';
+import './dreamclaw/inbox-refinements.css';
 import { inboxLoadingPercent, prepareRecentMessages, type InboxStartupProgress } from './inbox-startup-progress';
 
 import { ModuleLoading } from './ModuleLoading';

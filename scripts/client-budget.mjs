@@ -124,7 +124,10 @@ import assert from 'node:assert/strict';
 // queue/request controls. Final total: 626,186 gzip bytes; the measured repair added 427 bytes
 // for the retry receipt and reading-position repair. Bound this slice at 627 KB;
 // startup and individual deferred-chunk ceilings remain unchanged.
-export const clientLimits = { startup: 180000, total: 627000, deferredChunk: 80000 };
+// 1.9.14 adds recoverable project organization and compact Inbox/Calendar controls.
+// First coherent build: 629,040 total (+2,363 / 0.38% over 1.9.13).
+// Bound this slice at 630 KB; startup and individual deferred-chunk ceilings hold.
+export const clientLimits = { startup: 180000, total: 630000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

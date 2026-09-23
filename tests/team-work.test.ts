@@ -44,6 +44,19 @@ function fixture(t:any){
 }
 
 function deferred(){let resolve!:()=>void,reject!:(reason:unknown)=>void;const promise=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+
+test('Project removal blocks new teams while an admitted workflow and its request survive unchanged', async t => {
+  const f = fixture(t), project = f.store.readEntity('project', f.project.id), team = f.service.create(f.device, f.input);
+  await f.service.reconcile();
+  f.store.organizeProject(f.device, { requestId: randomUUID(), epoch: f.store.epoch, projectId: f.project.id, projectRevision: f.project.revision, expectedRevision: 0, action: 'delete' });
+  assert.throws(() => f.service.create(f.device, { ...f.input, requestId: randomUUID() }), { code: 'project_deleted' });
+  assert.equal(f.service.create(f.device, f.input).id, team.id);
+  f.finish('Kept first-stage evidence'); await f.service.reconcile(); await f.service.reconcile();
+  assert.equal(f.current().state, 'running');
+  assert.equal(f.current().steps[1].state, 'running');
+  assert.equal(f.calls.filter(call => call.type === 'submit').length, 2);
+  assert.deepEqual(f.store.readEntity('project', f.project.id), project);
+});
 function fullHandoff(service:TeamWorkService,teamId:string,id:string){let text='',offset=0;for(;;){const page=service.handoff(teamId,{id,offset,limit:7000});text+=page.text;if(page.nextOffset===null)return text;offset=page.nextOffset;}}
 async function failedStage(t:any){const f=fixture(t);f.service.create(f.device,f.input);await f.service.reconcile();f.finish('Retained failed attempt','failed');await f.service.reconcile();assert.equal(f.current().steps[0].state,'failed');return f;}
 async function legacyDraft(t:any){

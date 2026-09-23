@@ -7,14 +7,14 @@ import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { useInboxHost, useInboxWriting } from '../../inbox-host';
 import { InboxDeliveryCard } from '../../InboxDeliveryCard';
+import { InboxRowActions, InboxThreadMenu } from '../../InboxThreadActions';
+import { inboxSyncStatus } from '../../services/inbox/inboxSyncStatus';
 import {useInboxOutgoingFiles,type InboxOutgoingFiles} from '../../inbox-outgoing-files';
 import { inboxActiveCompose, inboxComposeSources, inboxWritingKey } from '../../inbox-writing';
 import {
   AlertCircle,
   Archive,
   FileArchive,
-  Unsubscribe,
-  Unblock,
   Ban,
   Check,
   Clock,
@@ -34,7 +34,6 @@ import {
   Film,
   Filter,
   Flag,
-  FlagOff,
   Inbox,
   IconParkMail,
   Image as ImageIcon,
@@ -44,15 +43,12 @@ import {
   MailOpen,
   ListTree,
   Minus,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
   Play,
   Pin,
-  PinOff,
   Plug,
-  Star,
   RefreshCw,
   Reply,
   ReplyAll,
@@ -260,6 +256,7 @@ const INBOX_GROUPING_STORAGE_KEY = 'inbox-grouping';
 const INBOX_SORT_STORAGE_KEY = 'inbox-sort';
 const INBOX_PAGE_SIZE_STORAGE_KEY = 'inbox-page-size';
 const INBOX_LIST_COLLAPSED_STORAGE_KEY = 'inbox-list-collapsed';
+const INBOX_READING_PANE_STORAGE_KEY = 'inbox-reading-pane';
 const INBOX_FOLDER_STORAGE_KEY = 'inbox-folder';
 const DEFAULT_MAIL_RAIL_WIDTH = 224;
 const MIN_MAIL_RAIL_WIDTH = 200;
@@ -1414,6 +1411,8 @@ export function InboxPage() {
   const [isCompactMailLayout, setIsCompactMailLayout] = useState<boolean>(() => (
     typeof window !== 'undefined' && window.matchMedia('(max-width: 1180px)').matches
   ));
+  const [readingPaneEnabled, setReadingPaneEnabled] = useState(() => host.preferences.getItem(INBOX_READING_PANE_STORAGE_KEY) === '1');
+  const [inboxWidth, setInboxWidth] = useState(0);
   const [listPaneWidth, setListPaneWidth] = useState<number>(() => {
     if (typeof window === 'undefined') return DEFAULT_LIST_PANE_WIDTH;
     const raw = host.preferences.getItem(INBOX_LIST_WIDTH_STORAGE_KEY);
@@ -1444,7 +1443,6 @@ export function InboxPage() {
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<string[]>([]);
   const [suppressedThreadKeys, setSuppressedThreadKeys] = useState<string[]>([]);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [showActionMenu, setShowActionMenu] = useState(false);
   const [showNativeTagMenu, setShowNativeTagMenu] = useState(false);
   const [showInboxOptions, setShowInboxOptions] = useState(false);
   const [inboxOptionsGeometry, setInboxOptionsGeometry] = useState<InboxFilterPanelGeometry | null>(null);
@@ -1489,6 +1487,10 @@ export function InboxPage() {
   const composeError = composeErrors[composeSource];
   const setComposeError = useCallback((value:string|null) => setComposeErrors(current => ({...current, [composeSource]:value})), [composeSource]);
   const [compactReaderOpen, setCompactReaderOpen] = useState(false);
+  const readingPaneAvailable = inboxWidth >= 960;
+  const splitReaderVisible = readingPaneEnabled && readingPaneAvailable;
+  const readingLayout = splitReaderVisible ? 'split' : compactReaderOpen ? 'reader' : 'list';
+  const readerVisible = readingLayout !== 'list';
   const [savingDraft, setSavingDraft] = useState(false);
   const [sendingReply, setSendingReply] = useState(false);
   const [mutatingThread, setMutatingThread] = useState(false);
@@ -1545,7 +1547,6 @@ export function InboxPage() {
   const threadListRef = useRef<HTMLDivElement | null>(null);
   const readingPaneRef = useRef<HTMLDivElement | null>(null);
   const splitPaneRef = useRef<HTMLDivElement | null>(null);
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const nativeTagMenuRef = useRef<HTMLDivElement | null>(null);
   const inboxOptionsPanelRef = useRef<HTMLDivElement | null>(null);
   const inboxOptionsTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1560,6 +1561,17 @@ export function InboxPage() {
   const isResizingSplitRef = useRef(false);
   const listPaneWidthBeforeCollapseRef = useRef(listPaneWidth);
   const senderStateRequestRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const pane = splitPaneRef.current;
+    if (!pane) return;
+    const measure = () => setInboxWidth(Math.round(pane.getBoundingClientRect().width));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => { host.preferences.setItem(INBOX_READING_PANE_STORAGE_KEY, readingPaneEnabled ? '1' : '0'); }, [host.preferences, readingPaneEnabled]);
 
   const loadInbox = useCallback(async (force = false) => {
     await loadInboxFolder(activeFolder, {
@@ -1749,15 +1761,7 @@ export function InboxPage() {
     };
   }, []);
 
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!showActionMenu) return;
-      if (actionMenuRef.current?.contains(event.target as Node)) return;
-      setShowActionMenu(false);
-    };
-    window.addEventListener('mousedown', handlePointerDown);
-    return () => window.removeEventListener('mousedown', handlePointerDown);
-  }, [showActionMenu]);
+
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -1895,7 +1899,7 @@ export function InboxPage() {
   ]).filter(isPresentObject), [gmailAccounts, microsoftAccounts]);
 
   useEffect(() => { void host.source.load(availableAccounts, host.scopeVersion); }, [availableAccounts, host.source, host.scopeVersion, linkedState.target?.nonce]);
-  useEffect(() => { if (linkedState.target) { setComposeOpen(false); setIsMailRailOpen(false); setShowActionMenu(false); setCompactReaderOpen(true); } }, [linkedState.target?.nonce]);
+  useEffect(() => { if (linkedState.target) { setComposeOpen(false); setIsMailRailOpen(false); setCompactReaderOpen(true); } }, [linkedState.target?.nonce]);
 
   const accountByKey = useMemo(
     () => new Map(availableAccounts.map((account) => [account.key, account])),
@@ -2133,24 +2137,17 @@ export function InboxPage() {
     () => scopedIndexSnapshots.filter((snapshot) => snapshot.indexStatus === 'paused' || snapshot.indexStatus === 'error'),
     [scopedIndexSnapshots],
   );
-  const activeIndexError = pausedIndexSnapshots.find((snapshot) => snapshot.indexError)?.indexError;
-  const latestIndexUpdate = useMemo(() => scopedIndexSnapshots.reduce<string | undefined>((latest, snapshot) => {
-    if (!snapshot.indexUpdatedAt) return latest;
-    if (!latest || Date.parse(snapshot.indexUpdatedAt) > Date.parse(latest)) return snapshot.indexUpdatedAt;
-    return latest;
-  }, undefined), [scopedIndexSnapshots]);
-  const indexStatusLabel = indexingSnapshots.length > 0
-    ? 'Syncing older mail…'
-    : pausedIndexSnapshots.length > 0
-      ? 'Sync paused'
-      : scopedIndexSnapshots.length > 0 && scopedIndexSnapshots.every((snapshot) => snapshot.indexStatus === 'complete')
-        ? formatIndexUpdatedAt(latestIndexUpdate)
-        : formatIndexUpdatedAt(latestIndexUpdate);
-  const folderStatusLabel = activeFolder === 'inbox'
-    ? indexStatusLabel
-    : snapshots.some((snapshot) => snapshot.truncated)
-      ? `${allThreadItems.length.toLocaleString('en-US')} recent conversations loaded`
-      : `${allThreadItems.length.toLocaleString('en-US')} conversations loaded`;
+  const [syncClock, setSyncClock] = useState(() => Date.now());
+  const syncHasActiveWork = indexingSnapshots.length > 0;
+  useEffect(() => {
+    if (!syncHasActiveWork) return;
+    setSyncClock(Date.now());
+    // Local presentation only: this does not poll Vercel or a mail provider.
+    const timer = window.setInterval(() => setSyncClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [syncHasActiveWork]);
+  const syncStatus = inboxSyncStatus(scopedIndexSnapshots, syncClock);
+  const folderStatusLabel = activeFolder === 'inbox' ? syncStatus.label : 'Mailbox details';
   const canLoadMoreFolderMail = activeFolder !== 'inbox'
     && snapshots.some((snapshot) => snapshot.truncated)
     && mailFolderThreadLimit < MAIL_FOLDER_MAX_THREADS;
@@ -2434,11 +2431,11 @@ export function InboxPage() {
   }), [threadMessages, emailImages, imageContextKey, selectedThreadItem?.safety.protected]);
   const conversationPrepared = renderedEmails.length > 0 && renderedEmails.every(item => item.imagesReady && preparedFrames[item.message.id]?.html === item.html && !preparedFrames[item.message.id]?.failed);
   const displayedOpening=useRef(createDisplayedMailOpening());
-  const openingKey=JSON.stringify([host.scopeVersion,selectedThreadIdentityKey,isCompactMailLayout?compactReaderOpen:true]);
+  const openingKey=JSON.stringify([host.scopeVersion,selectedThreadIdentityKey,readerVisible]);
   displayedOpening.current.select(openingKey);
   useLayoutEffect(()=>{
     const ready=conversationPrepared&&readerMatchesSelection&&readerSession.status==='ready'&&!pendingMailAction&&!mutatingThread;
-    const visible=()=>document.visibilityState==='visible'&&(!isCompactMailLayout||compactReaderOpen)&&!!readingPaneRef.current?.getClientRects().length;
+    const visible=()=>document.visibilityState==='visible'&&readerVisible&&!!readingPaneRef.current?.getClientRects().length;
     const schedule=()=>{
       if(!ready||!visible())return;
       if(!selectedAccount?.generation||!selectedThreadItem||!displayedOpening.current.take(openingKey,ready,visible(),selectedThreadItem.labels.includes('UNREAD'),selectedAccount.canModify))return;
@@ -2453,7 +2450,7 @@ export function InboxPage() {
     };
     schedule();document.addEventListener('visibilitychange',schedule);
     return ()=>{document.removeEventListener('visibilitychange',schedule);};
-  },[openingKey,conversationPrepared,readerMatchesSelection,readerSession.status,pendingMailAction,mutatingThread,triageState.busy,selectedThreadItem,selectedAccount,host.api,threadMessages,loadInbox,addNotification,isCompactMailLayout,compactReaderOpen,activeFolder]);
+  },[openingKey,conversationPrepared,readerMatchesSelection,readerSession.status,pendingMailAction,mutatingThread,triageState.busy,selectedThreadItem,selectedAccount,host.api,threadMessages,loadInbox,addNotification,readerVisible,activeFolder]);
   const preparationFailed = renderedEmails.some(item => !!item.images?.error || !!item.images?.unavailable || preparedFrames[item.message.id]?.html === item.html && preparedFrames[item.message.id]?.failed);
   const retryPreparation = () => { attemptedImageMessages.current.clear(); setEmailImages({}); setPreparedFrames({}); setImageRetry(value => value + 1); retrySelectedMessage(); };
   useEffect(() => {
@@ -2728,7 +2725,6 @@ export function InboxPage() {
     if (previousReplyThreadKeyRef.current !== selectedThreadIdentityKey) {
       previousReplyThreadKeyRef.current = selectedThreadIdentityKey;
       setReplyError(null);
-      setShowActionMenu(false);
     }
 
   }, [readerMatchesThread, readerSession.microsoftSignatureDraft, selectedAccount, selectedThreadIdentityKey, selectedThreadItem]);
@@ -2899,7 +2895,6 @@ export function InboxPage() {
       return;
     }
     if (!bulkSelectionScope) return;
-    setShowActionMenu(false);
     setShowNativeTagMenu(true);
     void loadNativeTagOptions(bulkSelectionScope);
   }, [bulkSelectionScope, loadNativeTagOptions, showNativeTagMenu]);
@@ -3652,11 +3647,13 @@ export function InboxPage() {
               <div className="dc-inbox-page-heading min-w-0 max-w-full text-aegis-text">
                   <h1 className="truncate text-[18px] font-bold tracking-tight text-aegis-text">{activeFolderDefinition.label}</h1>
                   <div className="dc-inbox-page-status flex max-w-full flex-wrap items-center gap-1.5 text-[12px] text-aegis-text-dim tabular-nums">
-                    <span className="min-w-0 max-w-full">
-                      {loading && snapshots.length === 0
+                    <span className="min-w-0 max-w-full" title={inboxCoverageLabel}>
+                      {mutatingThread
+                        ? <span role="status">Preparing review…</span>
+                        : loading && snapshots.length === 0
                         ? <LoadingRing label={`Loading ${activeFolderDefinition.label}`}/>
                         : activeFolder === 'inbox'
-                          ? inboxCoverageLabel
+                          ? `${inboxCoverage.loadedConversations.toLocaleString('en-US')} conversations`
                           : `${inboxCoverage.loadedConversations.toLocaleString('en-US')} conversations loaded`}
                     </span>
                   </div>
@@ -3691,14 +3688,8 @@ export function InboxPage() {
                       disabled={mutatingThread || !selectedThreadsCanModify}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-aegis-border px-2 py-1 text-aegis-text-muted hover:bg-[rgb(var(--aegis-overlay)/0.05)] disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {bulkSelectionScope?.provider === 'microsoft' ? (
-                        <Flag size={12} className={clsx(allSelectedFlagged && 'text-aegis-primary')} />
-                      ) : (
-                        <Star size={12} className={clsx(allSelectedFlagged && 'fill-current text-amber-300')} />
-                      )}
-                      {bulkSelectionScope?.provider === 'microsoft'
-                        ? (allSelectedFlagged ? 'Unflag' : 'Flag')
-                        : (allSelectedFlagged ? 'Unstar' : 'Star')}
+                      <Flag size={12} className={clsx(allSelectedFlagged && 'text-aegis-primary')} />
+                      {allSelectedFlagged ? 'Remove flag' : 'Flag'}
                     </button>
                     <button
                       type="button"
@@ -3809,7 +3800,7 @@ export function InboxPage() {
             </div>
 
             <div className="dc-inbox-page-actions flex items-center gap-2 xl:justify-end">
-    {Object.values(triageState.records).some(record => record.plan || record.pending) && <details className="inbox-action-history" ref={reviewHistoryRef} onToggle={event=>setReviewHistoryOpen(event.currentTarget.open)} onKeyDown={event=>{if(event.key==='Escape'){event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary aria-label="Action reviews" title="Action reviews"><Clock size={17}/><span className="sr-only">Action reviews</span></summary><div>
+    {Object.values(triageState.records).some(record => record.plan || record.pending) && <details className="inbox-action-history" ref={reviewHistoryRef} onToggle={event=>setReviewHistoryOpen(event.currentTarget.open)} onKeyDown={event=>{if(event.key==='Escape'){event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary aria-label="Action reviews" title="Action reviews"><Clock size={15}/><span>Reviews</span></summary><div>
       {Object.entries(triageState.records).filter(([,record])=>record.plan||record.pending).reverse().map(([id,record])=><div className="inbox-action-history-row" key={id}>
         <button disabled={triageState.busy} onClick={()=>{if(reviewHistoryRef.current)reviewHistoryRef.current.open=false;if(record.plan)host.triage.open(record.plan.id);else void host.triage.check(id).catch(error=>host.addNotification({title:'Review not confirmed',body:error.message,severity:'error'}));}}>{record.plan?.summary??'Recover preparing review'}<small>{record.plan?.resultMessage??record.plan?.status.replaceAll('_',' ')??'Preparing'}{record.pending?' · Check unconfirmed response':''}</small></button>
         {record.error && <span role="status">{record.error}</span>}
@@ -3829,8 +3820,8 @@ export function InboxPage() {
                 <Edit3 size={15} />
                 <span className="hidden sm:inline">Compose</span>
               </button>
-                <details className="dc-inbox-sync"><summary><span className={activeIndexError ? 'dc-sync-warning' : ''}>{folderStatusLabel}</span><ChevronDown size={12}/></summary><div>
-                  <p>{activeIndexError || (indexingSnapshots.length > 0 ? 'Older messages are syncing in the background. You can keep reading.' : 'Your loaded messages remain searchable.')}</p>
+                <details className="dc-inbox-sync"><summary><span className={syncStatus.warning ? 'dc-sync-warning' : ''}>{folderStatusLabel}</span><ChevronDown size={12}/></summary><div>
+                  <p>{activeFolder === 'inbox' ? syncStatus.detail : `${allThreadItems.length.toLocaleString('en-US')} conversations loaded. Your loaded messages remain searchable.`}</p>
                   {indexingSnapshots.length > 0 && (
                     <button
                       type="button"
@@ -3934,8 +3925,9 @@ export function InboxPage() {
         <div
           ref={splitPaneRef}
           className="dc-inbox-split min-h-0 flex-1 grid items-stretch gap-0 overflow-hidden"
+          data-reading-layout={readingLayout}
           data-compact-view={compactReaderOpen ? 'reader' : 'list'}
-          data-list-collapsed={isListPaneCollapsed ? 'true' : 'false'}
+          data-list-collapsed={splitReaderVisible && isListPaneCollapsed ? 'true' : 'false'}
           style={{ '--dc-inbox-list-width': `${isListPaneCollapsed ? COLLAPSED_LIST_PANE_WIDTH : listPaneWidth}px` } as CSSProperties}
         >
           <div
@@ -3944,7 +3936,7 @@ export function InboxPage() {
             onWheel={(event) => delegatePaneWheel(event, threadListRef.current)}
             className={clsx(
               'dc-inbox-list-pane min-h-0 h-full overflow-hidden transition-opacity',
-              isListPaneCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100',
+              splitReaderVisible && isListPaneCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100',
             )}
           >
           <GlassCard
@@ -3965,16 +3957,16 @@ export function InboxPage() {
                     name="inbox-search"
                   />
                 </div>
-                <button
+                {readingPaneAvailable && <button
                   type="button"
-                  onClick={toggleListPaneCollapsed}
-                  aria-label="Collapse inbox list"
-                  aria-controls="inbox-conversation-list"
-                  aria-expanded={!isListPaneCollapsed}
-                  className="dc-inbox-desktop-pane-toggle inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-aegis-border bg-[rgb(var(--aegis-overlay)/0.03)] text-aegis-text-muted hover:bg-[rgb(var(--aegis-overlay)/0.06)]"
+                  onClick={() => { setReadingPaneEnabled(!readingPaneEnabled); setIsListPaneCollapsed(false); setCompactReaderOpen(false); }}
+                  aria-label="Reading pane"
+                  title={readingPaneEnabled ? 'Turn off reading pane' : 'Show reading pane beside the list'}
+                  aria-pressed={readingPaneEnabled}
+                  className="dc-inbox-reading-pane-toggle inline-flex shrink-0 items-center gap-1.5 px-2 text-[11px]"
                   >
-                    <PanelLeftClose size={14} />
-                  </button>
+                    <PanelLeftOpen size={14} /><span>Reading pane</span>
+                  </button>}
                 </div>
               <div className="mt-2 text-[11px] text-aegis-text-dim tabular-nums">
                 <div className="flex flex-wrap items-center gap-2">
@@ -4115,26 +4107,7 @@ export function InboxPage() {
                                 className="mt-1.5 h-3.5 w-3.5 rounded border-aegis-border bg-transparent"
                               />
                             </label>
-                            {(canModifyThread || thread.isFlagged) && <button
-                              type="button"
-                              onClick={async (event) => {
-                                event.stopPropagation();
-                                await handleToggleRowFlag(thread);
-                              }}
-                              disabled={!canModifyThread || mutatingThread}
-                              data-mail-flag={thread.isFlagged ? 'active' : 'available'}
-                              title={thread.provider === 'gmail' ? (thread.isFlagged ? 'Starred in Gmail' : 'Star in Gmail') : (thread.isFlagged ? 'Flagged in Outlook' : 'Flag in Outlook')}
-                              aria-label={thread.provider === 'gmail'
-                                ? (thread.isFlagged ? 'Unstar thread' : 'Star thread')
-                                : (thread.isFlagged ? 'Unflag thread' : 'Flag thread')}
-                              className="mt-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-aegis-text-dim hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {thread.provider === 'gmail' ? (
-                                <Star size={13} className={clsx(thread.isFlagged && 'fill-current text-amber-300')} />
-                              ) : (
-                                <Flag size={13} className={clsx(thread.isFlagged && 'fill-current text-aegis-primary')} />
-                              )}
-                            </button>}
+
                           </div>
                           <button
                             type="button"
@@ -4187,16 +4160,8 @@ export function InboxPage() {
                               </div>
                             )}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleRowPin(thread)}
-                            aria-label={thread.isPinned ? 'Unpin thread' : 'Pin thread'}
-                            title={thread.isPinned ? 'Unpin thread' : 'Pin thread'}
-                            className="dc-mail-row-pin"
-                            data-pinned={thread.isPinned ? 'true' : 'false'}
-                          >
-                            {thread.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-                          </button>
+                          <InboxRowActions pinned={thread.isPinned} flagged={thread.isFlagged} canModify={canModifyThread} busy={mutatingThread || triageState.busy} inTrash={activeFolder === 'trash'}
+                            onPin={() => handleToggleRowPin(thread)} onFlag={() => void handleToggleRowFlag(thread)} onDelete={() => void prepareInboxMailAction([thread], 'delete')} />
                         </div>
                       </div>
                       </Fragment>
@@ -4289,6 +4254,7 @@ export function InboxPage() {
                         <button
                           type="button"
                           onClick={() => {
+                            setReadingPaneEnabled(false);
                             setCompactReaderOpen(false);
                             window.requestAnimationFrame(() => threadListRef.current?.querySelector<HTMLButtonElement>('button[data-inbox-thread]')?.focus());
                           }}
@@ -4297,7 +4263,7 @@ export function InboxPage() {
                         >
                           <ChevronLeft size={13} />
                         </button>
-                        <button
+                        {splitReaderVisible && <button
                           type="button"
                           onClick={toggleListPaneCollapsed}
                           aria-label={isListPaneCollapsed ? 'Show inbox list' : 'Hide inbox list'}
@@ -4307,7 +4273,7 @@ export function InboxPage() {
                           className={clsx(threadToolbarButtonClass, 'dc-inbox-desktop-pane-toggle')}
                         >
                           {isListPaneCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
-                        </button>
+                        </button>}
                         <button
                           type="button"
                           onClick={() => navigateToThread(newerThreadItem)}
@@ -4330,7 +4296,7 @@ export function InboxPage() {
                         </button>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-0.5">
+                      <div className="dc-inbox-reader-actions flex flex-wrap items-center gap-0.5">
                         <button
                           type="button"
                           onClick={() => void handleThreadMutation(showsUnread(selectedThreadItem) ? 'mark-read' : 'mark-unread')}
@@ -4365,7 +4331,6 @@ export function InboxPage() {
                           onClick={() => {
                             setReplyAll(false);
                             setShowReplyComposer(true);
-                            setShowActionMenu(false);
                           }}
                           disabled={!selectedAccount.canRead || !replySourceMessage}
                           aria-label="Reply"
@@ -4374,85 +4339,10 @@ export function InboxPage() {
                         >
                           <Reply size={12} />
                         </button>
-                        <div ref={actionMenuRef} className="relative">
-                          <button
-                            type="button"
-                            onClick={() => setShowActionMenu((current) => !current)}
-                            aria-haspopup="menu"
-                            aria-expanded={showActionMenu}
-                            aria-label="More actions"
-                            title="More actions"
-                            className={threadToolbarButtonClass}
-                          >
-                            <MoreHorizontal size={12} />
-                          </button>
-                          {showActionMenu && (
-                            <div className="absolute right-0 z-20 mt-2 min-w-[180px] rounded-xl border border-[rgb(var(--aegis-overlay)/0.16)] bg-aegis-card-solid p-1.5 shadow-2xl">
-                              <button
-                                onClick={() => {
-                                  handleTogglePin();
-                                  setShowActionMenu(false);
-                                }}
-                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-aegis-text hover:bg-white/5"
-                              >
-                                {selectedThreadItem.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-                                {selectedThreadItem.isPinned ? 'Unpin' : 'Pin thread'}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  void handleToggleFlag();
-                                  setShowActionMenu(false);
-                                }}
-                                disabled={mutatingThread || !selectedAccount.canModify}
-                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-aegis-text hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {selectedThreadItem.isFlagged ? <FlagOff size={13} /> : <Flag size={13} />}
-                                {selectedThreadItem.isFlagged ? 'Remove flag' : 'Flag thread'}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setReplyAll(true);
-                                  setShowReplyComposer(true);
-                                  setShowActionMenu(false);
-                                }}
-                                disabled={!selectedAccount.canRead || !replySourceMessage}
-                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-aegis-text hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <ReplyAll size={13} />
-                                Reply all
-                              </button>
-                              <div className="my-1 border-t border-aegis-border/60" />
-                              <button
-                                onClick={() => {
-                                  void handleSenderAction('unsubscribe');
-                                  setShowActionMenu(false);
-                                }}
-                                disabled={mutatingThread || senderActionState.canManage === false}
-                                title={senderActionState.canManage === false ? 'This connection does not support unsubscribe yet.' : undefined}
-                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-aegis-text hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <Unsubscribe size={13} />
-                                Unsubscribe from sender
-                              </button>
-                              <button
-                                onClick={() => {
-                                  void handleSenderAction(senderActionState.blocked ? 'unblock-sender' : 'block-sender');
-                                  setShowActionMenu(false);
-                                }}
-                                disabled={mutatingThread || senderActionState.loading || senderActionState.canManage === false}
-                                title={senderActionState.error || (senderActionState.canManage === false ? 'This connection does not support sender management yet.' : undefined)}
-                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-aegis-text hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {senderActionState.blocked ? <Unblock size={13} /> : <Ban size={13} />}
-                                {senderActionState.canManage === false
-                                  ? 'Sender management unavailable'
-                                  : senderActionState.blocked
-                                    ? 'Unblock sender'
-                                    : 'Block future mail'}
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        <InboxThreadMenu key={getInboxThreadKey(selectedThreadItem)} pinned={selectedThreadItem.isPinned} flagged={selectedThreadItem.isFlagged} canModify={selectedAccount.canModify} busy={mutatingThread || triageState.busy} inTrash={activeFolder === 'trash'}
+                          onPin={handleTogglePin} onFlag={() => void handleToggleFlag()} onDelete={() => void handleThreadMutation('delete')}
+                          canReply={selectedAccount.canRead && !!replySourceMessage} onReplyAll={() => { setReplyAll(true); setShowReplyComposer(true); }}
+                          sender={senderActionState} onSender={action => void handleSenderAction(action)} />
                       </div>
                     </div>
 

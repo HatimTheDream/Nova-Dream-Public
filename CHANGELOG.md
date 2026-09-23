@@ -1,3 +1,10 @@
+## [1.9.14] — 2026-09-22
+
+- Add reversible project removal from Assistant and Project settings, with Restore in Deleted. Keep conversations, drafts, source folders and captured work intact; hide removed projects from new-work choices.
+- Keep a full-width, two-line Inbox list by default on every screen, with visible Flag, Pin and Trash inside each row. Make the side-by-side reading pane an optional wide-window view, unify provider flags, and fix cramped menus and header spacing.
+- Clarify mail action reviews and older-mail synchronization status without adding background polling.
+- Use plain Calendar day numbers, highlight the selected date independently of today, and display events as flat rectangular blocks with explicit overflow counts and complete narrow-screen view controls.
+
 ## [1.9.13] — 2026-09-22
 
 - Use matching 44 px mascot, module and header buttons on mobile and desktop, with a 60 px docked rail and clear 24 px module icons.

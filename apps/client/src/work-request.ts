@@ -5,7 +5,7 @@ import { ApiError } from './api';
 // client/epoch gates and upstream GitHub errors can block receipt replay itself:
 // they do not prove that an earlier attempt with this ID was rejected.
 const admissionRejections = new Set([
-  'team_limit', 'team_project', 'team_agent', 'team_busy', 'team_checkout_busy',
+  'team_limit', 'team_project', 'project_deleted', 'team_agent', 'team_busy', 'team_checkout_busy',
   'team_changed', 'team_review_unfinished', 'team_review_limit', 'team_review_missing',
   'team_review_changed', 'team_review_builder', 'team_project_changed',
   'team_agent_changed', 'team_agent_busy', 'team_ended', 'team_retry_unconfirmed',
