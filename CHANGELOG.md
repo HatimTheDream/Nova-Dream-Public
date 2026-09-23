@@ -1,3 +1,7 @@
+## [1.10.8] — 2026-09-23
+
+- Keep each chat focused on its own questions and approvals. Remove the cross-chat request tray and review shortcuts from the composer while preserving requests in their original conversations.
+
 ## [1.10.7] — 2026-09-23
 
 - Show each answered question batch as a normal, visible user reply with muted questions above the answers, following the supplied Codex reference. Keep replies visible when work details collapse.

@@ -175,6 +175,31 @@ test('confirmed answers leave the composer while new approvals stay actionable',
   assert.equal(mixed.button('Allow once').disabled, false);
 });
 
+test('pending questions and approvals stay actionable only in their owning chat without changing their saved state', () => {
+  const localQuestion = question(), remoteApproval = approval();
+  remoteApproval.conversationId = 'other-chat';
+  const controller = { approvals: { state: 'ready', items: [remoteApproval] }, questions: { state: 'ready', items: [localQuestion] }, conversations: [], refresh, select() {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
+  const saved = structuredClone({ approvals: controller.approvals, questions: controller.questions });
+  const view = (conversationId?: string) => render(createElement(ApprovalTray, { controller, conversationId, epoch: 'epoch', working: true }), { writing: { choices: { format: ['Brief'] }, text: {} } });
+
+  const local = view('conversation');
+  assert.deepEqual(local.buttons.map(button => button.label), ['Cancel question', 'Send answer']);
+  assert.equal(local.button('Send answer').disabled, false);
+  assert.equal(local.inputs.filter(input => input.type === 'radio').length, 2);
+  assert.doesNotMatch(local.markup, /npm run build/);
+
+  const remote = view('other-chat');
+  assert.deepEqual(remote.buttons.map(button => button.label), ['Allow once', 'Always allow', 'Deny']);
+  assert.ok(remote.buttons.every(button => !button.disabled));
+  assert.match(remote.markup, /npm run build/);
+  assert.equal(remote.inputs.length, 0);
+
+  assert.equal(view('unrelated-chat').markup, '');
+  assert.equal(view().markup, '');
+  assert.deepEqual({ approvals: controller.approvals, questions: controller.questions }, saved);
+  assert.equal(view('conversation').button('Send answer').disabled, false);
+});
+
 test('the compact single question keeps numbered choices, a named send arrow and actual cancellation without a duplicate heading', () => {
   const controller = { approvals: { items: [], state: 'ready' }, questions: { items: [question()], state: 'ready' }, refresh, conversations: [], select: () => {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
   const view = render(createElement(ApprovalTray, { controller, epoch: 'epoch', conversationId: 'conversation', working: true }), { writing: { choices: { format: ['Brief'] }, text: {} } });

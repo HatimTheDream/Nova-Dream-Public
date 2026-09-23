@@ -318,7 +318,8 @@ test('terminal but uncertain requests retain recovery in the tray without offeri
   assert.deepEqual(unknown.buttons, ['Check status']);
   assert.ok(!unknown.markup.includes('Brief'));
   const elsewhere = tray([item], 'another-chat');
-  assert.deepEqual(elsewhere.buttons, ['Review · Original chat']);
+  assert.equal(elsewhere.markup, '');
+  assert.deepEqual(tray([item]).buttons, ['Check status']);
   item.action!.state = 'sending';
   const sending = tray([item]);
   assert.deepEqual(sending.buttons, []);
