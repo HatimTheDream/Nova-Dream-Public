@@ -1,3 +1,8 @@
+## [1.10.2] — 2026-09-23
+
+- Show Assistant question sets one question at a time with Previous/Next navigation, retained answers and complete-set submission from the last question.
+- Clear the Plan composer chip after an accepted assignment or queue submission while preserving the submitted planning workflow and unsent writing.
+
 ## [1.10.1] — 2026-09-22
 
 - Give Assistant messages and the surrounding composer area one continuous background in both themes, preserving the distinct chat header and input controls.

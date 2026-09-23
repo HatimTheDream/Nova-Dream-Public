@@ -45,3 +45,6 @@
 :root .assistant-workspace .compact-question button.compact-question-cancel { position: absolute; top: 0; right: -6px; background: transparent; color: var(--muted); }
 :root .assistant-workspace .compact-question button.compact-question-send { background: var(--text); color: var(--surface); margin-left: auto; }
 :root .assistant-workspace .compact-question button.compact-question-send:disabled { background: color-mix(in srgb, var(--text) 12%, var(--surface)); color: var(--muted); opacity: 1; }
+:root .request-card.question-card.paged-question { padding: 8px 12px; border: 0; }
+:root .paged-question .question-navigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+:root .paged-question fieldset:focus { outline: none; }

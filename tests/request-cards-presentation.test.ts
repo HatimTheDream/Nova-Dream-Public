@@ -43,17 +43,17 @@ function render(element: ReactElement, options: { expired?: boolean; writing?: u
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => key.startsWith('e3:question:') && options.writing ? JSON.stringify(options.writing) : null } });
   try {
     const markup = renderToStaticMarkup(element);
-    const buttons: { label: string; disabled: boolean; className: string }[] = [];
+    const buttons: { label: string; disabled: boolean; className: string; type?: string }[] = [];
     const inputs: Record<string, string>[] = [], fieldsets: Record<string, string>[] = [], details: Record<string, string>[] = [];
-    let current: typeof buttons[number] | undefined;
+    let current: typeof buttons[number] | undefined, named = false;
     new Parser({
       onopentag(name, attrs) {
-        if (name === 'button') { current = { label: attrs['aria-label'] ?? '', disabled: 'disabled' in attrs, className: attrs.class ?? '' }; buttons.push(current); }
+        if (name === 'button') { named = !!attrs['aria-label']; current = { label: attrs['aria-label'] ?? '', disabled: 'disabled' in attrs, className: attrs.class ?? '', type: attrs.type }; buttons.push(current); }
         if (name === 'input') inputs.push(attrs);
         if (name === 'fieldset') fieldsets.push(attrs);
         if (name === 'details') details.push(attrs);
       },
-      ontext(text) { if (current) current.label += text; },
+      ontext(text) { if (current && !named) current.label += text; },
       onclosetag(name) { if (name === 'button') current = undefined; },
     }).end(markup);
     const button = (label: string) => { const found = buttons.find(item => item.label === label); assert.ok(found, `Missing ${label}`); return found; };
@@ -189,4 +189,128 @@ test('the compact single question keeps numbered choices, a named send arrow and
   assert.equal(view.inputs.filter(input => input.type === 'radio').length, 2);
   assert.match(view.markup, /question-choice-number[^>]*>1<\/span>/);
   assert.match(view.markup, /Only the key decisions/);
+});
+
+function questionBatch(): AssistantQuestion {
+  const item = question();
+  item.snapshot.questions.push(
+    { questionId: 'surfaces', header: 'Surfaces', question: 'Which screens should I cover?', options: [{ label: 'Desktop' }, { label: 'Phone' }], multiSelect: true, isOther: true },
+    { questionId: 'notes', header: 'Notes', question: 'What should the proposal preserve?', options: [] },
+  );
+  return item;
+}
+const batchWriting = () => ({
+  choices: { format: ['Brief'], surfaces: ['Desktop', 'Phone'] },
+  other: { surfaces: true }, text: { surfaces: 'Also check the tablet.', notes: 'Preserve the existing navigation.' },
+});
+const navigation = (view: ReturnType<typeof render>, direction: 'Previous' | 'Next') => {
+  const found = view.buttons.find(button => new RegExp(`^${direction}( question)?$`, 'i').test(button.label));
+  assert.ok(found, `Missing ${direction} question navigation`); return found;
+};
+
+test('a pending question batch presents one page and cannot send the whole batch from its first page', () => {
+  const item = questionBatch();
+  const view = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh, compact: true }), { writing: batchWriting() });
+  assert.equal(view.fieldsets.length, 1);
+  assert.match(view.markup, /How much detail should I include/);
+  assert.doesNotMatch(view.markup, /Which screens should I cover|What should the proposal preserve/);
+  assert.match(view.markup, /1 of 3/);
+  assert.equal(navigation(view, 'Next').disabled, false);
+  assert.equal(navigation(view, 'Next').type, 'button');
+  assert.equal(view.buttons.some(button => /^Send answers?$/.test(button.label)), false);
+});
+
+test('restoring an intermediate page preserves multi-select and custom answers while keeping navigation local', () => {
+  const item = questionBatch(), writing = { ...batchWriting(), activeQuestionId: 'surfaces' };
+  const view = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh, compact: true }), { writing });
+  assert.equal(view.fieldsets.length, 1);
+  assert.match(view.markup, /2 of 3/);
+  assert.match(view.markup, /Which screens should I cover/);
+  assert.doesNotMatch(view.markup, /How much detail should I include|What should the proposal preserve/);
+  assert.equal(view.inputs.filter(input => input.type === 'checkbox' && 'checked' in input).length, 3);
+  assert.match(view.markup, /Also check the tablet/);
+  assert.equal(navigation(view, 'Previous').type, 'button');
+  assert.equal(navigation(view, 'Previous').disabled, false);
+  assert.equal(navigation(view, 'Next').disabled, false);
+  assert.equal(view.buttons.some(button => /^Send answers?$/.test(button.label)), false);
+});
+
+test('question navigation validates the current page and final submission requires answers on every page', () => {
+  const item = questionBatch();
+  const blankMiddle = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), {
+    writing: { activeQuestionId: 'surfaces', choices: { format: ['Brief'] }, text: { notes: 'Keep the draft.' } },
+  });
+  assert.equal(navigation(blankMiddle, 'Next').disabled, true);
+  assert.equal(navigation(blankMiddle, 'Previous').disabled, false);
+  const incomplete = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), {
+    writing: { activeQuestionId: 'notes', choices: { surfaces: ['Phone'] }, text: { notes: 'Keep the draft.' } },
+  });
+  assert.equal(incomplete.fieldsets.length, 1);
+  assert.equal(incomplete.button('Send answers').disabled, true);
+  assert.equal(navigation(incomplete, 'Previous').disabled, false);
+  const complete = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), {
+    writing: { ...batchWriting(), activeQuestionId: 'notes' },
+  });
+  assert.match(complete.markup, /3 of 3/);
+  assert.match(complete.markup, /Preserve the existing navigation/);
+  assert.equal(complete.button('Send answers').disabled, false);
+  assert.equal(complete.buttons.some(button => /^Next( question)?$/i.test(button.label)), false);
+});
+
+test('an unavailable saved question cursor falls back to the first page without inventing answers', () => {
+  const view = render(createElement(QuestionCard, { item: questionBatch(), epoch: 'epoch', ready: true, refresh }), {
+    writing: { activeQuestionId: 'question_from_an_earlier_batch', choices: {}, text: {} },
+  });
+  assert.equal(view.fieldsets.length, 1);
+  assert.match(view.markup, /1 of 3/);
+  assert.match(view.markup, /How much detail should I include/);
+  assert.equal(navigation(view, 'Next').disabled, true);
+  assert.equal(view.inputs.some(input => 'checked' in input), false);
+});
+
+test('expired, unconfirmed and read-only question batches remain navigable for review without resubmission', () => {
+  for (const state of ['expired', 'unknown', 'readOnly'] as const) {
+    const item = questionBatch();
+    if (state === 'unknown') item.action = { requestId: 'original-request', kind: 'answer', state: 'unknown' };
+    const view = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh, readOnly: state === 'readOnly' }), {
+      writing: { ...batchWriting(), activeQuestionId: 'surfaces' }, expired: state === 'expired',
+    });
+    assert.equal(view.fieldsets.length, 1, state);
+    assert.ok('disabled' in view.fieldsets[0], state);
+    assert.equal(navigation(view, 'Previous').disabled, false, state);
+    assert.equal(navigation(view, 'Next').disabled, false, state);
+    assert.equal(navigation(view, 'Next').type, 'button', state);
+    assert.equal(view.buttons.some(button => /^Send answers?$/.test(button.label)), false, state);
+    assert.match(view.markup, /Also check the tablet/, state);
+    if (state === 'expired') assert.ok(view.button('Copy draft answer'));
+  }
+});
+
+test('answered batch history retains all questions and confirmed answers instead of the active page only', () => {
+  const item = questionBatch();
+  item.snapshot = { ...item.snapshot, status: 'answered', answers: { answers: {
+    format: ['Brief'], surfaces: ['Desktop', 'Phone'], notes: ['Keep the confirmed plan.'],
+  } } };
+  const view = render(createElement(QuestionCard, { item, epoch: 'epoch', ready: true, refresh }), {
+    writing: { ...batchWriting(), activeQuestionId: 'surfaces' },
+  });
+  assert.equal(view.fieldsets.length, 3);
+  assert.match(view.markup, /How much detail should I include/);
+  assert.match(view.markup, /Which screens should I cover/);
+  assert.match(view.markup, /What should the proposal preserve/);
+  assert.match(view.markup, /Keep the confirmed plan/);
+  assert.equal(view.buttons.some(button => /^(?:Previous|Next)(?: question)?$/i.test(button.label)), false);
+  assert.equal(view.buttons.some(button => /^Send answers?$/.test(button.label)), false);
+});
+
+test('the active batch uses the compact tray even when the current question allows multiple selections', () => {
+  const controller = { approvals: { items: [], state: 'ready' }, questions: { items: [questionBatch()], state: 'ready' }, refresh, conversations: [], select: () => {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
+  const view = render(createElement(ApprovalTray, { controller, epoch: 'epoch', conversationId: 'conversation', working: true }), {
+    writing: { ...batchWriting(), activeQuestionId: 'surfaces' },
+  });
+  assert.match(view.markup, /compact-question-tray/);
+  assert.equal(view.fieldsets.length, 1);
+  assert.match(view.markup, /2 of 3/);
+  assert.doesNotMatch(view.markup, /Nova needs your answer/);
+  assert.equal(view.inputs.filter(input => input.type === 'checkbox' && 'checked' in input).length, 3);
 });

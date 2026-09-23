@@ -277,8 +277,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       localStorage.removeItem(key);
       journal.change(value => {
         if (canonical(value) !== canonical(pending.captured)) return value;
-        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256) };
-        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...(kept.workMode === 'goal' ? { workMode: 'chat' as const } : {}) };
+        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256), ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) };
+        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...((kept.workMode === 'goal' || kept.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
       });
       await controller.refresh();
     } catch (e) { if (rejectedInput(e)) localStorage.removeItem(key); keepError(e); }
@@ -290,7 +290,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     const pending = readLocal<{ request: object; captured: Draft }>(key) ?? { request: { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, targetOperationId: active.id, draftId, draftRevision: journal.revision, projectRevision: project?.revision ?? 0 }, captured: draft };
     if (!saveLocal(key, pending)) { setNotice('Free browser storage before sending direction.'); return; }
     setBusy(true); setNotice('');
-    try { await request('assistant/steer', pending.request); localStorage.removeItem(key); journal.change(value => canonical(value) === canonical(pending.captured) ? { ...value, text: '' } : value); await controller.refresh(); }
+    try { await request('assistant/steer', pending.request); localStorage.removeItem(key); journal.change(value => canonical(value) === canonical(pending.captured) ? { ...value, text: '', ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) } : value); await controller.refresh(); }
     catch (e) { if (rejectedInput(e)) localStorage.removeItem(key); keepError(e); } finally { setBusy(false); }
   };
   const enqueue = async () => {
@@ -306,8 +306,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       await request('assistant/queue', pending.request); localStorage.removeItem(key);
       journal.change(value => {
         if (canonical(value) !== canonical(pending.captured)) return value;
-        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256) };
-        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...(kept.workMode === 'goal' ? { workMode: 'chat' as const } : {}) };
+        if (conversation.refineSource) return { ...value, text: '', attachments: value.attachments.filter(file => file.sha256 === conversation.refineSource!.sha256), ...(value.workMode === 'plan' ? { workMode: 'chat' as const } : {}) };
+        const { refineSource, ...kept } = value; return { ...kept, text: '', attachments: [], ...((kept.workMode === 'goal' || kept.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
       });
       await controller.refresh();
     } catch (reason) {
@@ -321,7 +321,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   };
   const clearSubmittedDraft = async (entityId: string, expectedRevision: number, captured: Draft, submissionKey: string) => {
     const key = `${submissionKey}:clear`;
-    const payload = { ...captured, text: '', attachments: [], ...(captured.workMode === 'goal' ? { workMode: 'chat' as const } : {}) };
+    const payload = { ...captured, text: '', attachments: [], ...((captured.workMode === 'goal' || captured.workMode === 'plan') ? { workMode: 'chat' as const } : {}) };
     const command = readLocal<Command>(key) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, kind: 'draft' as const, entityId, expectedRevision, payload };
     if (!saveLocal(key, command)) throw Error('Your message was submitted. Reopen the conversation to reconcile its retained draft.');
     await commit(command); localStorage.removeItem(key); localStorage.removeItem(submissionKey);
@@ -358,7 +358,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
       if (!saveLocal(submitKey, { request: requestInput, captured: payload })) throw new Error('The new draft is saved. Free browser storage before sending.');
       await request<AssistantOperation>('assistant/submit', requestInput);
       await clearSubmittedDraft(branchId, copy.revision, payload, submitKey); localStorage.removeItem(key);
-      journal.change(value => canonical(value) === canonical(captured) ? { ...value, text: '', attachments: [], ...(value.workMode === 'goal' ? { workMode: 'chat' as const } : {}) } : value);
+      journal.change(value => canonical(value) === canonical(captured) ? { ...value, text: '', attachments: [], ...((value.workMode === 'goal' || value.workMode === 'plan') ? { workMode: 'chat' as const } : {}) } : value);
       await refreshWorkspace(); await controller.refresh(); if (editorAlive.current) { controller.select(created.id, assistantSpace(created)); rail.closeMobile(); }
     } catch (e) { if (!created) releaseRejectedProjectRequest(key, intent.requestId, e); if (created && rejectedInput(e)) { localStorage.removeItem(`e3:submit:draft:${snapshot.deviceId}:${created.id}`); localStorage.removeItem(key); } if (editorAlive.current) keepError(e); if (created) { await refreshWorkspace(); await controller.refresh(); if (editorAlive.current) controller.select(created.id, assistantSpace(created)); } }
     finally { setBusy(false); }
