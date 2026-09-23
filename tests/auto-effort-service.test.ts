@@ -45,7 +45,7 @@ async function fixture(t: import('node:test').TestContext, thinking: string | nu
   const wait = async (id: string) => { for (let attempt = 0; attempt < 100 && ['prepared', 'dispatching'].includes(operation(id).state); attempt++) await new Promise(resolve => setTimeout(resolve, 5)); return operation(id); };
   const finish = (op: AssistantOperation) => { for (const listener of listeners) listener({ type: 'event', event: 'chat', payload: { runId: op.nativeRunId, sessionKey: op.nativeKey, state: 'final', message: { role: 'assistant', content: 'Finished fixture reply.' } } }); behavior.activeRun = ''; };
   t.after(() => { service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); });
-  return { store, device, gateway, calls, behavior, conversation, current, draft, operation, wait, finish, service: () => service, setCatalog: (value: AssistantModel[]) => { catalog = value; }, restart: () => { service.close(); service = new AssistantService(store, gateway); } };
+  return { store, device, gateway, calls, behavior, conversation, current, draft, operation, wait, finish, service: () => service, setCatalog: (value: AssistantModel[]) => { catalog = value; }, saveLegacyPreference: (value: string | null) => store.internalWrite(`assistant:conversation:${conversation.id}`, { ...current(), thinking: value }), restart: () => { service.close(); service = new AssistantService(store, gateway); } };
 }
 
 test('Auto is a retained local preference with a supported per-task level and no native auto value', async t => {
@@ -69,13 +69,90 @@ test('Auto settings clear native manual effort, reconcile an uncertain edit and 
   assert.equal((await f.service().edit(f.device, input)).thinking, 'auto');
   assert.equal(f.calls.filter(call => call.method === 'sessions.patch').length, 1);
 });
-test('Default and manual choices keep their original native behavior without classification', async t => {
-  for (const thinking of [null, 'high']) await t.test(String(thinking), async t => {
-    const f = await fixture(t, thinking), op = await f.wait(f.service().submit(f.device, f.draft('Define a byte.')).id);
-    assert.equal(op.autoEffort, undefined); assert.equal(op.effortDemand, undefined);
-    assert.equal(f.calls.find(call => call.method === 'chat.send')!.params.thinking, thinking ?? undefined);
-    assert.equal(f.calls.filter(call => call.method === 'models').length, 0);
+test('new conversations use Auto for omitted or legacy Default preferences', async t => {
+  for (const thinking of [null, 'default']) await t.test(String(thinking), async t => {
+    const f = await fixture(t, thinking);
+    assert.equal(f.current().thinking, 'auto');
+    assert.equal(f.calls.find(call => call.method === 'sessions.create')!.params.thinkingLevel, undefined);
+    const op = await f.wait(f.service().submit(f.device, f.draft('Define a byte.')).id);
+    assert.equal(op.thinking, 'auto'); assert.equal(op.autoEffort?.level, 'low');
+    assert.equal(f.calls.find(call => call.method === 'chat.send')!.params.thinking, 'low');
   });
+});
+
+test('manual choices keep their original native behavior without classification', async t => {
+  const f = await fixture(t, 'high'), op = await f.wait(f.service().submit(f.device, f.draft('Define a byte.')).id);
+  assert.equal(op.thinking, 'high'); assert.equal(op.autoEffort, undefined); assert.equal(op.effortDemand, undefined);
+  assert.equal(f.calls.find(call => call.method === 'chat.send')!.params.thinking, 'high');
+  assert.equal(f.calls.filter(call => call.method === 'models').length, 0);
+});
+
+test('saved Default conversations capture real Auto for future sends and queues without rewriting the conversation', async t => {
+  for (const thinking of [null, 'default']) await t.test(String(thinking), async t => {
+    const f = await fixture(t); f.saveLegacyPreference(thinking);
+    const first = await f.wait(f.service().submit(f.device, f.draft('Define a byte.')).id);
+    assert.equal(first.thinking, 'auto'); assert.equal(first.autoEffort?.level, 'low');
+    assert.equal(f.current().thinking, thinking); f.finish(first);
+    const queued = f.service().enqueue(f.device, f.draft('Audit and debug the failure.'));
+    assert.equal(queued.thinking, 'auto'); assert.equal(queued.effortDemand, 'high');
+    const input = { requestId: randomUUID(), epoch: f.store.epoch, queueId: queued.id, expectedRevision: queued.revision };
+    const op = await f.wait(f.service().runQueued(f.device, input).id);
+    assert.equal(op.state, 'accepted'); assert.equal(op.autoEffort?.level, 'high');
+    assert.equal(f.service().runQueued(f.device, input).id, op.id);
+    assert.equal(f.current().thinking, thinking);
+    assert.deepEqual(f.calls.filter(call => call.method === 'chat.send').map(call => call.params.thinking), ['low', 'high']);
+  });
+});
+
+test('captured legacy queues and directions retain their original effort instead of adopting new defaults', async t => {
+  const f = await fixture(t); f.saveLegacyPreference(null);
+  const queued = f.service().enqueue(f.device, f.draft('Define a byte.'));
+  const legacy = { ...queued, thinking: null, effortDemand: undefined };
+  f.store.internalWrite(`assistant:queue:${legacy.id}`, legacy);
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, queueId: legacy.id, expectedRevision: legacy.revision };
+  const op = await f.wait(f.service().runQueued(f.device, input).id);
+  assert.equal(op.thinking, null); assert.equal(op.autoEffort, undefined); assert.equal(op.effortDemand, undefined);
+  f.behavior.activeRun = op.nativeRunId!;
+  const direction = await f.wait(f.service().submit(f.device, { ...f.draft('Keep the explanation short.'), targetOperationId: op.id }, true).id);
+  assert.equal(direction.thinking, null); assert.equal(direction.autoEffort, undefined);
+  assert.equal(f.calls.filter(call => call.method === 'models').length, 0);
+  assert.deepEqual(f.calls.filter(call => call.method === 'chat.send').map(call => call.params.thinking), [undefined, undefined]);
+});
+
+test('a legacy unknown submission receipt replays unchanged after restart without resolving Auto or sending again', async t => {
+  const f = await fixture(t); f.saveLegacyPreference(null);
+  const input = f.draft('Keep the original attempt.'), conversation = f.current(), at = new Date().toISOString();
+  const original: AssistantOperation = { id: randomUUID(), requestId: input.requestId, deviceId: f.device, epoch: f.store.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId!, nativeRunId: null, state: 'unknown', input: 'Keep the original attempt.', context: { project: null, attachments: [], draftId: input.draftId, draftRevision: input.draftRevision, digest: 'a'.repeat(64) }, model: conversation.model, thinking: null, createdAt: at, updatedAt: at, text: '', lastSequence: 0 };
+  f.store.admit(f.device, input, { type: 'assistant.submit', ...input }, () => f.store.internalWrite(`assistant:operation:${original.id}`, original));
+  f.restart(); const before = f.calls.length;
+  const { updatedAt: _updatedAt, error, ...captured } = f.service().submit(f.device, input);
+  const { updatedAt: _originalUpdatedAt, ...originalCapture } = original;
+  assert.deepEqual(captured, originalCapture); assert.match(error!, /restarted/);
+  assert.equal(f.calls.length, before); assert.equal(f.operation(original.id).thinking, null);
+});
+
+test('a lost legacy conversation creation receipt keeps its original preference and identity on retry', async t => {
+  const f = await fixture(t), id = randomUUID();
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, title: 'Retained creation', projectId: null };
+  const original: Conversation = { ...f.current(), id, title: input.title, nativeKey: `agent:main:e3:${id}`, nativeId: null, state: 'unknown', thinking: null };
+  f.store.admit(f.device, input, { type: 'conversation.create', ...input }, () => f.store.internalWrite(`assistant:conversation:${id}`, original));
+  f.restart(); const before = f.calls.length;
+  assert.deepEqual(await f.service().create(f.device, input), original);
+  assert.equal(f.calls.length, before);
+});
+
+test('an uncertain legacy reset retains its exact settings receipt while the next new task uses Auto', async t => {
+  const f = await fixture(t, 'high'); f.behavior.loseEdit = true;
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, thinking: null };
+  await assert.rejects(f.service().edit(f.device, input), { code: 'edit_unknown' });
+  assert.equal(f.current().pendingSettings?.thinking, null);
+  assert.equal(f.calls.find(call => call.method === 'sessions.patch')!.params.thinkingLevel, null);
+  f.restart(); await f.service().reconcile(f.conversation.id);
+  assert.equal(f.current().thinking, null); assert.equal(f.current().pendingSettings, undefined);
+  assert.equal((await f.service().edit(f.device, input)).thinking, null);
+  assert.equal(f.calls.filter(call => call.method === 'sessions.patch').length, 1);
+  const op = await f.wait(f.service().submit(f.device, f.draft('Define a byte.')).id);
+  assert.equal(op.thinking, 'auto'); assert.equal(op.autoEffort?.level, 'low');
 });
 test('queued edits recapture task demand and resolve once against the supported model at first dispatch', async t => {
   const f = await fixture(t), queued = f.service().enqueue(f.device, f.draft('Rewrite this sentence.'));

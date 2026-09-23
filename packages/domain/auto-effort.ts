@@ -7,12 +7,14 @@ export type AutoEffortDecision = {
 };
 
 const ranks = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+/** Normalize a preference for new work without rewriting captured operations. */
+export const effortPreference = (value: string | null | undefined): string => !value || value === 'default' ? 'auto' : value;
 /** Auto is a Nova preference, never a native session setting. */
 export const nativeThinking = (preference: string | null | undefined) => preference === 'auto' ? null : preference;
 export const autoEffortAvailable = (levels: string[] | undefined) => !!levels?.some(level => ranks.includes(level));
-export function responseEffortLevels(levels: string[] | undefined): (string | null)[] {
+export function responseEffortLevels(levels: string[] | undefined): string[] {
   const manual = [...new Set(levels ?? [])].filter(level => level !== 'auto' && level !== 'default');
-  return [null, ...(autoEffortAvailable(manual) ? ['auto'] : []), ...manual];
+  return ['auto', ...manual];
 }
 
 /** A bounded, local task policy: no model switch or classification request. */

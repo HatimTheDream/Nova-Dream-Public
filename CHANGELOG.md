@@ -1,3 +1,8 @@
+## [1.10.4] — 2026-09-23
+
+- Make Auto the single automatic effort choice; remove Default from the existing effort slider. Reset and model changes select Auto.
+- Use task-aware Auto for new work with legacy Default preferences while preserving manual choices and already captured work.
+
 ## [1.10.3] — 2026-09-23
 
 - Keep plan proposals inside the conversation with expansion in place, earlier versions and an optional desktop reading panel.

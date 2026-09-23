@@ -65,6 +65,7 @@ import { VirtualTranscript, type TranscriptHandle } from './VirtualTranscript';
 import { MessageActions } from './MessageActions';
 import { ComposerMenu } from './ComposerMenu';
 import { AccessDetails, ResponseControls, responseModel, type ResponsePreferences, accessLabels, effortLabel } from './AssistantControls';
+import { effortPreference } from '../../../packages/domain/auto-effort';
 import './assistant-restoration.css';
 import { useAssistantRail, useMediaQuery, type AssistantRailState } from './assistant-rail-state';
 import { AssistantOrganizationRailFrame } from './dreamclaw/components/Chat/AssistantOrganizationRailFrame';
@@ -181,7 +182,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   const editorAlive = useRef(true);
   useEffect(() => { editorAlive.current = true; return () => { editorAlive.current = false; }; }, []);
   const preferencesKey = `e3:response-preferences:${snapshot.deviceId}`;
-  const [preferences, setPreferences] = useState<ResponsePreferences>(() => readLocal<ResponsePreferences>(preferencesKey) ?? { model: null, thinking: null, fastMode: null });
+  const [preferences, setPreferences] = useState<ResponsePreferences>(() => { const saved = readLocal<ResponsePreferences>(preferencesKey) ?? { model: null, thinking: 'auto', fastMode: null }; return { ...saved, thinking: effortPreference(saved.thinking) }; });
   const accessKey = `e3:access-preferences:${snapshot.deviceId}`;
   const [accessPreference, setAccessPreference] = useState<PermissionMode>(() => readLocal<PermissionMode>(accessKey) ?? 'read-only');
   const attachments = useAttachments(snapshot, journal.value, journal.change, draftId, 'draft', { assistant: true });
@@ -197,7 +198,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
   };
   useLayoutEffect(() => registerAssistantDraftNavigation(() => retainBeforeLeaving.current()), []);
   const draft = journal.value, conversation = controller.conversation;
-  const response = conversation ? { model: conversation.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null } : preferences;
+  const response = conversation ? { model: conversation.model, thinking: effortPreference(conversation.thinking), fastMode: conversation.fastMode ?? null } : preferences;
   const responseName = responseModel(controller.models, response.model)?.name ?? response.model ?? 'Default model';
   const [compactComposer, setCompactComposer] = useState(false);
   const actualAccess = conversation ? controller.history?.nativeSettings?.permissionMode ?? conversation.permissionMode : accessPreference;

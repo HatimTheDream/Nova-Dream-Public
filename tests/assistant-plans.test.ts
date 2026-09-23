@@ -10,14 +10,14 @@ import type { AssistantOperation, Conversation } from '../packages/domain/assist
 import type { AssistantQuestion } from '../packages/domain/questions.js';
 
 const proposal = { title: 'Improve the inbox', summary: 'Keep the list and put actions on the right.', steps: ['Move the controls', 'Check the narrow screen'], assumptions: ['Keep the current design'], verification: ['Delete, flag and pin all work'] };
-function fixture(t: TestContext) {
+function fixture(t: TestContext, thinking: string | null = 'auto') {
   const directory = mkdtempSync(join(tmpdir(), 'nova-plans-')), store = new Store(directory), device = store.session().deviceId, at = new Date().toISOString();
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
-  const conversation: Conversation = { id: randomUUID(), nativeId: randomUUID(), nativeKey: 'agent:main:e3:fixture', revision: 1, connectionGeneration: randomUUID(), state: 'ready', title: 'Planning', projectId: null, permissionMode: 'workspace', archived: false, model: 'openai/test', thinking: 'auto', createdAt: at, updatedAt: at };
+  const conversation: Conversation = { id: randomUUID(), nativeId: randomUUID(), nativeKey: 'agent:main:e3:fixture', revision: 1, connectionGeneration: randomUUID(), state: 'ready', title: 'Planning', projectId: null, permissionMode: 'workspace', archived: false, model: 'openai/test', thinking, createdAt: at, updatedAt: at };
   const operations = new Map<string, AssistantOperation>(), dispatched: string[] = [];
   const host = { conversation: () => conversation, operation: (id: string) => operations.get(id)!, operations: () => [...operations.values()], assertReady: () => {}, save: (operation: AssistantOperation) => { operations.set(operation.id, operation); plans.observe(operation); return operation; }, dispatch: (id: string) => { dispatched.push(id); } };
   let plans = new AssistantPlans(store, host);
-  const raw: AssistantOperation = { id: randomUUID(), requestId: randomUUID(), deviceId: device, epoch: store.epoch, conversationId: conversation.id, conversationRevision: 1, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId!, nativeRunId: randomUUID(), state: 'running', input: 'Plan the inbox changes.', context: { project: null, attachments: [], draftId: 'draft', draftRevision: 1, digest: 'a'.repeat(64), workMode: 'plan' }, model: conversation.model, thinking: conversation.thinking, autoEffort: { policy: 'task-v1', demand: 'high', level: 'high', model: conversation.model, reason: 'task' }, createdAt: at, updatedAt: at, text: '', lastSequence: 0 };
+  const raw: AssistantOperation = { id: randomUUID(), requestId: randomUUID(), deviceId: device, epoch: store.epoch, conversationId: conversation.id, conversationRevision: 1, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId!, nativeRunId: randomUUID(), state: 'running', input: 'Plan the inbox changes.', context: { project: null, attachments: [], draftId: 'draft', draftRevision: 1, digest: 'a'.repeat(64), workMode: 'plan' }, model: conversation.model, thinking: conversation.thinking, ...(thinking === 'auto' ? { autoEffort: { policy: 'task-v1' as const, demand: 'high' as const, level: 'high', model: conversation.model, reason: 'task' as const } } : {}), createdAt: at, updatedAt: at, text: '', lastSequence: 0 };
   let operation = plans.capture(raw, conversation); host.save(operation);
   const finish = (op = operation, state: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed') => { operation = { ...op, state, settledAt: new Date().toISOString() }; host.save(operation); return operation; };
   const propose = (next = proposal, op = operation) => plans.propose({ epoch: store.epoch, nativeKey: op.nativeKey, nativeId: op.nativeId, runId: op.nativeRunId, toolCallId: randomUUID(), proposal: next });
@@ -70,6 +70,17 @@ test('an uncertain planning run cannot be approved or amended, and completed pro
   assert.throws(() => f.plans.decide(f.device, f.decision()), /changed/); assert.throws(() => f.plans.decide(f.device, { ...f.decision(), text: 'Retry' }, true), /changed/);
   f.finish(); assert.equal(f.plans.list()[0].state, 'failed'); assert.equal(f.plans.list()[0].approval, undefined);
   const revised = f.plans.decide(f.device, { ...f.decision(), text: 'Prepare a saved proposal.' }, true); assert.equal(revised.context.planReview?.version, 2);
+});
+
+for (const thinking of [null, 'default', 'high']) for (const amend of [false, true]) test(`${amend ? 'amending' : 'approving'} a saved ${thinking ?? 'Default'} plan captures the new preference and keeps its source and replay immutable`, t => {
+  const f = fixture(t, thinking); f.propose(); f.finish();
+  const source = structuredClone(f.operation), decision = { ...f.decision(), ...(amend ? { text: 'Audit the narrow layout before changing it.' } : {}) };
+  const operation = f.plans.decide(f.device, decision, amend);
+  assert.equal(operation.thinking, thinking === 'high' ? 'high' : 'auto');
+  assert.equal(!!operation.effortDemand, thinking !== 'high'); assert.equal(operation.autoEffort, undefined);
+  assert.deepEqual(f.operations.get(source.id), source); assert.equal(f.conversation.thinking, thinking);
+  f.conversation.thinking = 'low'; f.restart();
+  assert.deepEqual(f.plans.decide(f.device, decision, amend), operation); assert.equal(f.dispatched.length, 1);
 });
 
 test('a plain yes retains the unapproved plan boundary, while unrelated main sessions keep their own policy', t => {

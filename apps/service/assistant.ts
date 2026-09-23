@@ -29,7 +29,7 @@ import { SavedHistory } from './saved-history.js';
 import { matchesMessageSource } from '../../packages/domain/conversation-source.js';
 import { conversationAccountSchema } from '../../packages/domain/assistant.js';
 import { ConversationContinuation } from './conversation-continuation.js';
-import { nativeThinking, resolveAutoEffort, taskEffortDemand, type EffortDemand } from '../../packages/domain/auto-effort.js';
+import { effortPreference, nativeThinking, resolveAutoEffort, taskEffortDemand, type EffortDemand } from '../../packages/domain/auto-effort.js';
 
 const conversationKey = (id: string) => `assistant:conversation:${id}`;
 const operationKey = (id: string) => `assistant:operation:${id}`;
@@ -363,7 +363,7 @@ export class AssistantService {
       const titles = new Set(this.conversations().filter(c => assistantSpace(c) === assistantSpace(input)).map(c => c.title));
       let title = input.title;
       for (let number = 2; titles.has(title); number++) { const suffix = ` (${number})`; title = input.title.slice(0, 150 - suffix.length) + suffix; }
-      return this.saveConversation({ id, revision: 1, space: assistantSpace(input), ...(project?.value.workspace ? { workspace: structuredClone(project.value.workspace) } : {}), title, ...(input.autoTitle ? { autoTitle: true } : {}), projectId: input.projectId, archived: false, model: input.model ?? null, thinking: input.thinking ?? null, fastMode: input.fastMode ?? null, permissionMode: input.permissionMode ?? 'read-only', ...(input.refineSource ? { refineSource: input.refineSource } : {}), createdAt: now(), updatedAt: now(), connectionGeneration: status.generation!, nativeKey: input.autoTitle ? `agent:main:dashboard:e3-${id}` : `agent:main:e3:${id}`, nativeId: null, state: 'creating' });
+      return this.saveConversation({ id, revision: 1, space: assistantSpace(input), ...(project?.value.workspace ? { workspace: structuredClone(project.value.workspace) } : {}), title, ...(input.autoTitle ? { autoTitle: true } : {}), projectId: input.projectId, archived: false, model: input.model ?? null, thinking: effortPreference(input.thinking), fastMode: input.fastMode ?? null, permissionMode: input.permissionMode ?? 'read-only', ...(input.refineSource ? { refineSource: input.refineSource } : {}), createdAt: now(), updatedAt: now(), connectionGeneration: status.generation!, nativeKey: input.autoTitle ? `agent:main:dashboard:e3-${id}` : `agent:main:e3:${id}`, nativeId: null, state: 'creating' });
     });
     const original = this.conversation(admitted.value.id);
     if (!admitted.fresh) return original;
@@ -720,7 +720,10 @@ export class AssistantService {
       if (target && canonical(context.manifest.project) !== canonical(target.context.project)) throw new Fault(409, 'steer_project_changed', 'Project context changed since this reply started. Queue your message to use the updated sources. Your draft is kept.');
       if (target && ['plan', 'research'].includes(context.manifest.workMode ?? '') && context.manifest.workMode !== target.context.workMode) throw new Fault(409, 'mode_steering', 'Queue this Plan or Research request so its tool boundary applies to the whole turn.');
       if (target && context.manifest.attachments.length) throw new Fault(409, 'steer_attachments', 'Queue messages with files so their attachments stay intact.');
-      const operation: AssistantOperation = { id: randomUUID(), requestId: input.requestId, deviceId: device, epoch: input.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId, nativeRunId: null, state: 'prepared', ...(target ? { steerTarget: target.id } : {}), input: context.input, context: context.manifest, ...(conversation.thinking === 'auto' ? { effortDemand: target?.effortDemand ?? this.capturedEffortDemand(conversation, context.input, context.manifest) } : {}), model: conversation.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null, createdAt: now(), updatedAt: now(), text: '', lastSequence: 0 };
+      // Normalize only newly captured work. A direction keeps the running
+      // attempt's preference; retained receipts never pass through this branch.
+      const thinking = target ? target.thinking : effortPreference(conversation.thinking);
+      const operation: AssistantOperation = { id: randomUUID(), requestId: input.requestId, deviceId: device, epoch: input.epoch, conversationId: conversation.id, conversationRevision: conversation.revision, connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId, nativeRunId: null, state: 'prepared', ...(target ? { steerTarget: target.id } : {}), input: context.input, context: context.manifest, ...(thinking === 'auto' ? { effortDemand: target?.effortDemand ?? this.capturedEffortDemand(conversation, context.input, context.manifest) } : {}), model: conversation.model, thinking, fastMode: conversation.fastMode ?? null, createdAt: now(), updatedAt: now(), text: '', lastSequence: 0 };
       return this.saveOperation(this.plans.capture(operation, conversation));
     });
     if (admitted.fresh) void this.dispatch(admitted.value.id);
@@ -740,7 +743,8 @@ export class AssistantService {
       if (conversation.revision !== input.conversationRevision || conversation.archived || conversation.state !== 'ready' || !conversation.nativeId || conversation.pendingSettings) throw new Fault(409, 'conversation_changed', 'Review this conversation before queuing its message.');
       if (this.queue().filter(item => item.state === 'paused').length >= 50) throw new Fault(409, 'queue_full', 'The queue holds 50 paused messages. Keep or run an existing message before adding another.');
       const captured = this.context(device, input.draftId, input.draftRevision, input.projectRevision, conversation);
-      const item: QueuedMessage = { id: input.requestId, revision: 1, deviceId: device, epoch: input.epoch, conversationId: conversation.id, nativeId: conversation.nativeId, connectionGeneration: conversation.connectionGeneration, input: captured.input, context: captured.manifest, ...(conversation.thinking === 'auto' ? { effortDemand: this.capturedEffortDemand(conversation, captured.input, captured.manifest) } : {}), model: conversation.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null, state: 'paused', ...(input.automatic ? { automatic: true, autoRequestId: randomUUID() } : {}), position: Math.max(Date.now(), ...this.queue().map(q => (q.position ?? Date.parse(q.createdAt)) + 1)), createdAt: now(), updatedAt: now() };
+      const thinking = effortPreference(conversation.thinking);
+      const item: QueuedMessage = { id: input.requestId, revision: 1, deviceId: device, epoch: input.epoch, conversationId: conversation.id, nativeId: conversation.nativeId, connectionGeneration: conversation.connectionGeneration, input: captured.input, context: captured.manifest, ...(thinking === 'auto' ? { effortDemand: this.capturedEffortDemand(conversation, captured.input, captured.manifest) } : {}), model: conversation.model, thinking, fastMode: conversation.fastMode ?? null, state: 'paused', ...(input.automatic ? { automatic: true, autoRequestId: randomUUID() } : {}), position: Math.max(Date.now(), ...this.queue().map(q => (q.position ?? Date.parse(q.createdAt)) + 1)), createdAt: now(), updatedAt: now() };
       return this.store.internalWrite(`assistant:queue:${item.id}`, item);
     });
     return this.queued(admitted.value.id);
@@ -791,7 +795,10 @@ export class AssistantService {
       const item = this.queued(input.queueId), conversation = this.conversation(item.conversationId);
       this.assertConnection(conversation);
       if (item.state !== 'paused' || item.revision !== input.expectedRevision) throw new Fault(409, 'queue_changed', 'This message already changed or has a submission. Check its original outcome.');
-      if (item.epoch !== input.epoch || item.nativeId !== conversation.nativeId || item.connectionGeneration !== conversation.connectionGeneration || conversation.archived || conversation.pendingSettings || conversation.state !== 'ready' || conversation.model !== item.model || conversation.thinking !== item.thinking || (conversation.fastMode ?? null) !== (item.fastMode ?? null)) throw new Fault(409, 'queue_target_changed', 'The queued conversation or model changed. Copy the message to your draft to review it.');
+      // A new Auto capture is compatible with an older saved Default preference.
+      // Previously captured Default items still dispatch with their exact value.
+      const sameEffort = conversation.thinking === item.thinking || item.thinking === 'auto' && effortPreference(conversation.thinking) === 'auto';
+      if (item.epoch !== input.epoch || item.nativeId !== conversation.nativeId || item.connectionGeneration !== conversation.connectionGeneration || conversation.archived || conversation.pendingSettings || conversation.state !== 'ready' || conversation.model !== item.model || !sameEffort || (conversation.fastMode ?? null) !== (item.fastMode ?? null)) throw new Fault(409, 'queue_target_changed', 'The queued conversation or model changed. Copy the message to your draft to review it.');
       if (this.voiceBusy(conversation.id)) throw new Fault(409, 'voice_active', 'End the voice call before running this queued message.');
       if (this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Finish or reconcile the existing run first. This message stays paused.');
       const project = item.context.project;

@@ -2,15 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AssistantModel, ContextManifest } from '../packages/domain/assistant.js';
 import type { Attachment } from '../packages/domain/contracts.js';
-import { nativeThinking, responseEffortLevels, taskEffortDemand, resolveAutoEffort } from '../packages/domain/auto-effort.js';
+import { effortPreference, nativeThinking, responseEffortLevels, taskEffortDemand, resolveAutoEffort } from '../packages/domain/auto-effort.js';
 
 const context: Pick<ContextManifest, 'attachments' | 'project' | 'workMode'> = { attachments: [], project: null };
 const model: AssistantModel = { id: 'test/model', name: 'Test', provider: 'test', available: true, isDefault: true, reasoning: ['low', 'medium', 'high'] };
-test('the existing slider adds Auto after Default and never invents effort capabilities', () => {
-  assert.deepEqual(responseEffortLevels(model.reasoning), [null, 'auto', 'low', 'medium', 'high']);
-  assert.deepEqual(responseEffortLevels(undefined), [null]);
-  assert.deepEqual(responseEffortLevels(['experimental']), [null, 'experimental']);
+test('Auto is the sole automatic effort choice without inventing manual capabilities', () => {
+  assert.deepEqual(responseEffortLevels(model.reasoning), ['auto', 'low', 'medium', 'high']);
+  assert.deepEqual(responseEffortLevels(undefined), ['auto']);
+  assert.deepEqual(responseEffortLevels(['default', 'auto', 'low', 'low']), ['auto', 'low']);
+  assert.deepEqual(responseEffortLevels(['experimental']), ['auto', 'experimental']);
   assert.equal(nativeThinking('auto'), null); assert.equal(nativeThinking('high'), 'high'); assert.equal(nativeThinking(null), null);
+});
+
+test('legacy default preferences become Auto while explicit effort and native receipts retain their meaning', () => {
+  for (const value of [null, undefined, '', 'default', 'auto']) assert.equal(effortPreference(value), 'auto');
+  assert.equal(effortPreference('high'), 'high');
+  assert.equal(effortPreference('experimental'), 'experimental');
+  assert.equal(nativeThinking(null), null);
+  assert.equal(nativeThinking(undefined), undefined);
 });
 test('task-aware effort distinguishes straightforward requests, ordinary planning and demanding work', () => {
   assert.equal(taskEffortDemand('Rewrite this sentence more clearly: We will do the thing tomorrow.', context), 'low');
