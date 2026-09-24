@@ -1,3 +1,7 @@
+## [1.12.3] — 2026-09-23
+
+- Fix voice calls incorrectly stopping with “The conversation or Project changed” when selecting the connected account updates the chat timestamp. Keep checks for genuine conversation, Project and permission changes.
+
 ## [1.12.2] — 2026-09-23
 
 - Show the current search, source read or reported research subtask beneath a stable approved outline, with activity details available inline.

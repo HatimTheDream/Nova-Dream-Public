@@ -46,12 +46,13 @@ export class VoiceCalls {
     this.connection(attempt);
     const original = attempt.target, c = original.conversation;
     const current = this.assistant.captureVoiceTarget(c.id, c.revision, original.project?.revision ?? 0);
-    // Saved memory is captured at call start; edits apply to the next call.
-    const { memory: currentMemory, ...currentScope } = current, { memory: originalMemory, ...originalScope } = original;
-    // Account attribution is metadata, not a change to the call's captured authority.
-    currentScope.conversation = { ...currentScope.conversation, accountSelection: undefined };
-    originalScope.conversation = { ...originalScope.conversation, accountSelection: undefined };
-    if (canonical(currentScope) !== canonical(originalScope)) throw new Fault(409, 'voice_context_changed', 'The conversation or Project changed. End this call and review its context.');
+    const scope = ({ memory, conversation, ...context }: VoiceTarget) => {
+      // Memory edits apply to the next call. Account attribution and its save
+      // timestamp are metadata; revisions and captured authority still match.
+      const { accountSelection, updatedAt, ...conversationScope } = conversation;
+      return { ...context, conversation: conversationScope };
+    };
+    if (canonical(scope(current)) !== canonical(scope(original))) throw new Fault(409, 'voice_context_changed', 'The conversation or Project changed. End this call and review its context.');
   }
   private async preflight(attempt: VoiceAttempt, idle = true) {
     this.currentTarget(attempt);

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventFrame } from '@openclaw/gateway-protocol/frame-guards';
-import type { AssistantConnection } from '../packages/domain/assistant.js';
+import type { AssistantConnection, Conversation } from '../packages/domain/assistant.js';
 import type { AssistantTransport } from '../apps/service/gateway.js';
 import { Store } from '../apps/service/store.js';
 import { AssistantService } from '../apps/service/assistant.js';
@@ -20,14 +20,15 @@ class Transport implements AssistantTransport {
   listeners = new Set<(event: EventFrame) => void>();
   holdHistory?: Promise<void>; holdCreate?: Promise<void>; holdSource?: Promise<void>; nativeSources = false; wrongSourceTarget = false;
   offerUrl = '/plugins/openai/realtime/calls'; failTranscript = false; failConsult = false; maxPayload?: number;
-  historyTitle?: string;
+  historyTitle?: string; historyModel?: string;
   status(): AssistantConnection { return { state: 'ready', url: 'ws://127.0.0.1:19999', generation: this.generation, message: 'Fixture', methods: this.nativeSources ? ['e3.sources.stage'] : [], grantedScopes: ['operator.read', 'operator.write'], modelAuthReady: true }; }
   models() { return Promise.resolve([]); } attachmentPolicy() { return { maxPayload: this.maxPayload }; }
   subscribe(fn: (event: EventFrame) => void) { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; }
   async request<T>(method: string, params: any): Promise<T> {
     this.calls.push({ method, params });
     if (method === 'sessions.create') return { key: params.key, sessionId: this.nativeId } as T;
-    if (method === 'chat.history') { await this.holdHistory; return { sessionId: this.nativeId, messages: [], sessionInfo: { activeRunIds: [], ...(this.historyTitle ? { label: this.historyTitle } : {}) } } as T; }
+    if (method === 'chat.history') { await this.holdHistory; return { sessionId: this.nativeId, messages: [], sessionInfo: { activeRunIds: [], ...(this.historyTitle ? { label: this.historyTitle } : {}), ...(this.historyModel ? { model: this.historyModel } : {}) } } as T; }
+    if (method === 'sessions.patch') return { entry: { sessionId: this.nativeId, authProfileOverride: params.model?.split('@')[1] } } as T;
     if (method === 'talk.catalog') return { realtime: { ready: true, providers: [{ id: 'openai', label: 'OpenAI', configured: true, models: ['gpt-realtime-2.1'], voices: ['marin'], modes: ['realtime'], brains: ['agent-consult'], transports: ['webrtc'], supportsBrowserSession: true }] } } as T;
     if (method === 'talk.client.create') { await this.holdCreate; return { provider: 'openai', transport: 'webrtc', voiceSessionId: params.voiceSessionId, clientSecret: 'fixture-private-one-use-secret', offerUrl: this.offerUrl } as T; }
     if (method === 'e3.sources.stage') { await this.holdSource; return { epoch: params.epoch, nativeKey: params.nativeKey, nativeId: this.wrongSourceTarget ? randomUUID() : params.nativeId, file: params.file, mimeType: sourceMime(params.file.name), mediaId: `source-${params.file.id}.pdf`, path: `/fixture/native/source-${params.file.id}.pdf` } as T; }
@@ -69,6 +70,52 @@ test('one owned call captures the full Project and exchanges one-use SDP without
   assert.ok(!persisted.includes('fixture-private-one-use-secret')); assert.ok(!persisted.includes('fixture-private-offer'));
   assert.equal((await f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest })).state, 'active');
   await assert.rejects(f.assistant.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.start.conversationId, expectedRevision: 1, title: 'Changed' }), /End the voice/);
+}));
+
+test('account routing can refresh conversation metadata without interrupting voice startup or its active pulse', () => fixture(async f => {
+  const conversation = f.assistant.conversations()[0];
+  f.gateway.historyModel = 'openai/voice-backing-model';
+  f.gateway.historyTitle = 'An automatically generated voice title';
+  f.store.internalWrite(`assistant:conversation:${conversation.id}`, { ...conversation, autoTitle: true, model: f.gateway.historyModel, updatedAt: '2000-01-01T00:00:00.000Z' });
+  const selection = { profileId: 'openai:voice-fixture', reason: 'preferred' as const, selectedAt: '2026-01-01T00:00:00.000Z' };
+  f.assistant.setAccountRouter(async () => selection, async () => {});
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  const current = f.assistant.conversations().find(c => c.id === conversation.id)!;
+  assert.deepEqual(current.accountSelection, selection);
+  assert.notEqual(current.updatedAt, attempt.target.conversation.updatedAt);
+  assert.equal(current.revision, attempt.target.conversation.revision);
+  assert.equal(current.title, attempt.target.conversation.title);
+  assert.equal(current.autoTitleSeeded, undefined);
+  assert.equal(f.voice.read(f.device, attempt.id).state, 'ready');
+  assert.equal(f.voice.read(f.device, attempt.id).contextDigest, attempt.contextDigest);
+  assert.equal(f.voice.read(f.device, attempt.id).target.conversation.accountSelection, undefined);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.create').length, 1);
+  assert.match((await f.voice.offer(f.device, { ...f.action(attempt.id), sdp: 'v=0\r\nfixture' })).sdp, /^v=0/);
+  assert.equal((await f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest })).state, 'active');
+  assert.equal((await f.voice.pulse(f.device, f.action(attempt.id))).state, 'active');
+  assert.equal(f.exchanges.length, 1);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.close').length, 0);
+  await assert.rejects(f.assistant.selectAccount(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: conversation.id, expectedRevision: current.revision, profileId: 'openai:another-fixture' }), { code: 'conversation_busy' });
+}));
+
+for (const [label, change] of [
+  ['permissions', { permissionMode: 'full' }],
+  ['captured title', { title: 'A different conversation context' }],
+] as [string, Partial<Conversation>][]) test(`metadata refresh cannot hide changed ${label} during a voice call`, () => fixture(async f => {
+  const attempt = f.voice.start(f.device, f.start); await tick();
+  await f.voice.offer(f.device, { ...f.action(attempt.id), sdp: 'v=0\r\nfixture' });
+  await f.voice.pulse(f.device, { ...f.action(attempt.id), contextDigest: attempt.contextDigest });
+  const conversation = f.assistant.conversations().find(c => c.id === attempt.target.conversation.id)!;
+  // Simulate an external write with the same revision: content checks must still
+  // protect the original call even when metadata changes at the same time.
+  f.store.internalWrite(`assistant:conversation:${conversation.id}`, { ...conversation, ...change, updatedAt: '2099-01-01T00:00:00.000Z', accountSelection: { profileId: 'openai:voice-fixture', selectedAt: '2099-01-01T00:00:00.000Z' } });
+  await assert.rejects(f.voice.pulse(f.device, f.action(attempt.id)), { code: 'voice_context_changed' });
+  await tick();
+  const ended = f.voice.read(f.device, attempt.id);
+  assert.equal(ended.state, 'ended');
+  assert.deepEqual(ended.target, attempt.target);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.close').length, 1);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'talk.client.toolCall').length, 0);
 }));
 
 test('the first spoken title waits until End without interrupting the captured call', () => fixture(async f => {
