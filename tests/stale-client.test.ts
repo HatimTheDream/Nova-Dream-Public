@@ -39,7 +39,7 @@ test('an exact document candidate gates snapshots and writes before admission, k
     assert.equal(unauthenticated.status, 401);
     const native = await fetch(service.origin + '/workspace', { method: 'POST', body: '{}' });
     assert.equal((await native.json()).code, 'workspace_tool_auth');
-    for (const path of ['/workspace/research-progress/authorize', '/workspace/research-progress']) {
+    for (const path of ['/workspace/research-progress']) {
       assert.equal(phoneRouteAllowed(path, 'POST'), false);
       const cookieOnly = await fetch(service.origin + path, { method: 'POST', headers: matching, body: '{}' });
       assert.equal(cookieOnly.status, 403); assert.equal((await cookieOnly.json()).code, 'workspace_tool_auth');

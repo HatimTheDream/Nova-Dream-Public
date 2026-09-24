@@ -1,3 +1,7 @@
+## [1.12.7] — 2026-09-24
+
+- Connect Chat Research workload estimates to the original run’s native tool activity, including cached runtime tools. Handle updates arriving before their activity event, preserve exact retry identity, and reject late progress after Stop, disconnection or completion.
+
 ## [1.12.6] — 2026-09-24
 
 - Admit Research progress through the runtime’s awaited tool-preparation callback, using its exact native task and call identity before execution. Preserve cancellation and approval checks while allowing workload updates through the connected model’s prepared tool set.

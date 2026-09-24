@@ -149,7 +149,7 @@ export class AssistantService {
     this.stopListening = gateway.subscribe(event => { void this.event(event).catch(() => undefined); });
     this.queueTimer = setInterval(() => this.runAutomaticQueues(), 750); this.queueTimer.unref?.();
   }
-  close() { this.continuations.close(); this.removals.close(); this.closed = true; clearInterval(this.queueTimer); this.stopListening(); this.artifactReader.close(); void this.officeReader.close(); }
+  close() { this.continuations.close(); this.removals.close(); this.closed = true; this.researchProgress.close(); clearInterval(this.queueTimer); this.stopListening(); this.artifactReader.close(); void this.officeReader.close(); }
   private runAutomaticQueues() {
     if (this.closed) return;
     if (this.gateway.status().state !== 'ready') { this.plans.pauseAutomatic(); return; }
@@ -333,6 +333,7 @@ export class AssistantService {
     if (current && terminal.has(current.state) && canonical(value) === canonical(current)) return current;
     const saved = this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: observedAt });
     this.plans.observe(saved);
+    this.researchProgress?.changed();
     const conversation = this.store.internalRead<Conversation>(conversationKey(value.conversationId));
     if (conversation && !conversation.deleted && this.savedHistory().observeOperation(conversation, saved)) this.historyVersions[value.conversationId] = (this.historyVersions[value.conversationId] ?? 0) + 1;
     return saved;
@@ -1081,7 +1082,9 @@ export class AssistantService {
     return history;
   }
   private async event(event: EventFrame) {
+    if (event.event === 'e3.disconnected') { this.researchProgress.changed(); return; }
     if (event.event === 'e3.connected' || event.event === 'e3.history-gap') {
+      this.researchProgress.changed();
       this.subscribed.clear();
       for (const conversation of this.conversations().filter(c => !c.archived && c.state !== 'failed')) void this.reconcile(conversation.id).catch(() => undefined);
       return;
@@ -1111,7 +1114,10 @@ export class AssistantService {
         if (detail.phase === 'end' && this.awaitCompletionReceipt(updated)) return;
         this.saveOperation({ ...updated, state: detail.phase === 'end' ? 'completed' : detail.phase === 'aborted' ? 'cancelled' : 'failed', ...(detail.phase === 'error' ? { error: 'OpenClaw reported a run failure. Inspect the retained conversation.' } : {}) });
         void this.reconcile(operation.conversationId).catch(() => undefined);
-      } else this.saveOperation(updated);
+      } else {
+        const saved = this.saveOperation(updated);
+        if (data.stream === 'tool') this.researchProgress.observeNativeTool(saved, data);
+      }
     } else if (event.event === 'chat' && ['final', 'error', 'aborted'].includes(data.state)) {
       if (data.state === 'final' && this.awaitCompletionReceipt({ ...operation, text: textOf(data.message) || operation.text })) return;
       this.saveOperation({ ...operation, state: data.state === 'final' ? 'completed' : data.state === 'aborted' ? 'cancelled' : 'failed', text: textOf(data.message) || operation.text, ...(data.state === 'error' ? { error: 'OpenClaw reported a run failure.' } : {}) });

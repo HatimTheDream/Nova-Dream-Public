@@ -105,20 +105,25 @@ test('permanent conversation removal also removes its progress receipts while pr
   assert.equal(f.store.internalList('assistant:research-progress:').length,1);assert.ok(f.store.internalRead(foreign));
 });
 
-test('native tool preparation admits exact research calls independently of full policy registration', async t => {
+function nativeEvent(f: ReturnType<typeof fixture>, call: string, phase = 'start', sequence?: number, patch: Record<string, unknown> = {}) {
+  const operation = f.get(), seq = sequence ?? operation.lastSequence + 1;
+  const saved = f.save({ ...operation, lastSequence: Math.max(seq, operation.lastSequence) });
+  f.progress.observeNativeTool(saved, { runId: operation.nativeRunId, sessionKey: operation.nativeKey, seq, data: { name: 'nova_research_progress', phase, toolCallId: call }, ...patch });
+}
+const executionOf = (f: ReturnType<typeof fixture>, call: string, value: unknown = estimate) => ({ epoch: f.store.epoch, nativeKey: f.operation.nativeKey, nativeId: f.operation.nativeId, toolCallId: call, estimate: value });
+
+test('native execute reports through the original service even when descriptor caching omits preparation', async t => {
   const f = fixture(t), requests: { path: string; body: any }[] = [];
-  let abortDuringAdmission: AbortController | undefined;
   const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer ' + 'b'.repeat(64));
     let raw = ''; for await (const part of req) raw += part;
     const body = JSON.parse(raw); requests.push({ path: req.url!, body });
     res.setHeader('Content-Type', 'application/json');
     try {
-      const result = req.url === '/workspace/policy' ? f.plans.toolPolicy(body)
-        : req.url === '/workspace/research-progress/authorize' ? f.progress.authorizeTool(body)
-        : req.url === '/workspace/research-progress' ? f.progress.reportTool(body) : assert.fail('Unexpected bridge path');
-      if (req.url === '/workspace/research-progress/authorize' && body.toolCallId === 'cancel-during-admission') abortDuringAdmission?.abort();
-      res.end(JSON.stringify(result));
+      assert.equal(req.url, '/workspace/research-progress');
+      const waiting = f.progress.reportTool(body);
+      nativeEvent(f, body.toolCallId);
+      res.end(JSON.stringify(await waiting));
     } catch (reason) {
       assert.ok(reason instanceof Error); res.statusCode = reason instanceof Fault ? reason.status : 400;
       res.end(JSON.stringify({ message: reason.message, ...(reason instanceof Fault ? { code: reason.code, current: reason.current } : {}) }));
@@ -127,87 +132,89 @@ test('native tool preparation admits exact research calls independently of full 
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
   const session: any = { sessionId: f.operation.nativeId, permissionMode: 'read-only' };
-  let policy: any, discoveryFactory: any, protectSession: any;
-  const api: ModulePluginApi = { registrationMode: 'full', pluginConfig: { epoch: f.store.epoch, bundlePath: '/owned/plugin', url: `http://127.0.0.1:${(server.address() as any).port}/workspace`, token: 'b'.repeat(64) }, runtime: { version: '2026.9.2', agent: { session: { getSessionEntry: () => session } } }, registerTool: () => {}, registerTrustedToolPolicy: value => policy = value, registerGatewayMethod: (name, handler) => { assert.equal(name, 'e3.workspace.policy'); protectSession = handler; } };
+  let factory: any;
+  const api: ModulePluginApi = { registrationMode: 'tool-discovery', pluginConfig: { epoch: f.store.epoch, bundlePath: '/owned/plugin', url: `http://127.0.0.1:${(server.address() as any).port}/workspace`, token: 'b'.repeat(64) }, runtime: { version: '2026.9.2', agent: { session: { getSessionEntry: () => session } } }, registerTool: (value, options) => { if (options.names.includes('nova_research_progress')) factory = value; } };
   registerModuleTools(api);
-  registerModuleTools({ ...api, registrationMode: 'tool-discovery', registerTrustedToolPolicy: () => assert.fail('Discovery must not register policies'), registerGatewayMethod: () => assert.fail('Discovery must not register gateway methods'), registerTool: (factory, options) => { if (options.names.includes('nova_research_progress')) discoveryFactory = factory; } });
-  const native = { agentId: 'main', sessionKey: f.operation.nativeKey, sessionId: f.operation.nativeId, runId: f.operation.nativeRunId! };
-  const tool = discoveryFactory({ agentId: native.agentId, sessionKey: native.sessionKey, sessionId: native.sessionId });
-  assert.equal(tool.parameters.additionalProperties, false); assert.equal(discoveryFactory({ ...native, agentId: 'other' }), null);
-  const admit = (toolCallId: string, hookContext: unknown = native, signal?: AbortSignal, raw: unknown = estimate) => tool.prepareBeforeToolCallParams(raw, { toolCallId, hookContext, signal });
-  const actualCall = `exec-${randomUUID()}`;
-  await assert.rejects(tool.execute(actualCall, estimate), /run could not be verified/);
-  // A prepared runtime generation may contain no full-registration policy.
-  // Native preparation must still capture its exact IDs, without asking the model.
-  assert.equal(await admit(actualCall), estimate);
-  const first = await tool.execute(actualCall, estimate); assert.deepEqual(first.details, { saved: true, revision: 1 });
+  const native = { agentId: 'main', sessionKey: f.operation.nativeKey, sessionId: f.operation.nativeId };
+  const tool = factory(native), call = `exec-${randomUUID()}`;
+  assert.equal(tool.prepareBeforeToolCallParams, undefined);
+  assert.equal(factory({ ...native, agentId: 'other' }), null);
+  const cached = { name: tool.name, parameters: tool.parameters, execute: (...args: any[]) => tool.execute(...args) };
+  const result = await cached.execute(call, estimate);
+  assert.deepEqual(result.details, { saved: true, revision: 1 });
   assert.equal(f.get().researchEstimate!.binding.nativeRunId, f.operation.nativeRunId);
-  let protection: any;
-  protectSession({ params: { nativeKey: native.sessionKey, nativeId: native.sessionId }, respond: (ok: boolean, result: unknown) => protection = { ok, result } });
-  assert.deepEqual(protection, { ok: true, result: { version: 1, protected: true, researchWorkflow: 'chat-research-v1', nativeKey: native.sessionKey, nativeId: native.sessionId } });
-  assert.equal((await policy.evaluate({ toolName: tool.name }, native)).block, true);
-  assert.equal((await policy.evaluate({ toolName: tool.name, runId: randomUUID(), toolCallId: actualCall }, { ...native, toolCallId: actualCall })).block, true);
-  const authorizations = requests.filter(request => request.path === '/workspace/research-progress/authorize').length;
-  assert.equal((await policy.evaluate({ toolName: tool.name, runId: native.runId, toolCallId: actualCall }, { ...native, toolCallId: actualCall })).block, false);
-  assert.equal(requests.filter(request => request.path === '/workspace/research-progress/authorize').length, authorizations, 'policy must not duplicate preparation admission');
-  const submitted = requests.filter(request => request.path === '/workspace/research-progress').at(-1)!;
-  assert.equal('runId' in submitted.body, false); assert.deepEqual(submitted.body.estimate, estimate);
-  await assert.rejects(tool.execute(actualCall, estimate), /run could not be verified/);
-  assert.equal(await admit(actualCall), estimate);
-  assert.deepEqual((await tool.execute(actualCall, estimate)).details, { saved: true, revision: 1 });
-  assert.equal(f.get().researchEstimate!.revision, 1);
-  assert.equal(await admit('overlap'), estimate); await assert.rejects(admit('overlap'), /conflicts/);
-  await assert.rejects(tool.execute('overlap', estimate), /run could not be verified/);
-  const signal = new AbortController();
-  assert.equal(await admit('cancelled-native', native, signal.signal), estimate); signal.abort();
-  const count = requests.length; await assert.rejects(tool.execute('cancelled-native', estimate, signal.signal), { name: 'AbortError' }); assert.equal(requests.length, count);
-  await assert.rejects(admit('cancelled-before-preparation', native, signal.signal), { name: 'AbortError' }); assert.equal(requests.length, count);
-  for (const hookContext of [undefined, { ...native, agentId: 'other' }, { ...native, sessionKey: 'agent:main:other' }, { ...native, sessionId: randomUUID() }, { ...native, runId: '' }]) {
-    await assert.rejects(tool.prepareBeforeToolCallParams(estimate, { toolCallId: 'wrong-identity', hookContext }));
-  }
-  await assert.rejects(admit('model-supplied-id', native, undefined, { ...estimate, runId: native.runId }));
-  assert.equal(requests.length, count, 'invalid native identities and model-supplied IDs never reach the bridge');
-  await assert.rejects(admit('wrong-native-run', { ...native, runId: randomUUID() }), /unavailable/);
-  assert.equal(await admit('stop-between'), estimate); f.save({ ...f.get(), cancelRequested: true });
-  await assert.rejects(tool.execute('stop-between', estimate), /active/); f.save({ ...f.get(), cancelRequested: false });
-  assert.equal(await admit('revision-conflict'), estimate);
-  const conflict = await tool.execute('revision-conflict', estimate); assert.equal(conflict.isError, true); assert.equal(conflict.details.current.revision, 1);
+  assert.equal(requests.length, 1); assert.equal('runId' in requests[0].body, false);
+  const count = requests.length;
+  await assert.rejects(cached.execute('model-supplied-id', { ...estimate, runId: f.operation.nativeRunId }));
+  const cancelled = new AbortController(); cancelled.abort();
+  await assert.rejects(cached.execute('cancelled', estimate, cancelled.signal), { name: 'AbortError' });
+  assert.equal(requests.length, count);
+  const conflict = await cached.execute('revision-conflict', estimate);
+  assert.equal(conflict.isError, true); assert.equal(conflict.details.current.revision, 1);
   assert.deepEqual(conflict.details.current.estimate.items, estimate.items);
-  assert.equal(await admit('concurrent-execute'), estimate);
-  const next = { ...estimate, expectedRevision: 1, items: estimate.items.map(item => item.id === 'study' ? { ...item, status: 'complete' } : item) };
-  // The native wrapper may adjust estimate arguments after preparation, but
-  // execution validates them again and never accepts a model-supplied run ID.
-  const beforeRewrite = requests.length;
-  await assert.rejects(tool.execute('concurrent-execute', { ...next, runId: native.runId }));
-  assert.equal(requests.length, beforeRewrite);
-  const concurrent = await Promise.allSettled([tool.execute('concurrent-execute', next), tool.execute('concurrent-execute', next)]);
-  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1); assert.equal(f.get().researchEstimate!.revision, 2);
-  abortDuringAdmission = new AbortController();
-  await assert.rejects(admit('cancel-during-admission', native, abortDuringAdmission.signal), { name: 'AbortError' });
-  const afterAbort = requests.length;
-  await assert.rejects(tool.execute('cancel-during-admission', estimate, abortDuringAdmission.signal), { name: 'AbortError' });
-  assert.equal(requests.length, afterAbort); assert.equal(f.get().researchEstimate!.revision, 2);
-  assert.equal(await admit('session-change'), estimate); session.sessionId = randomUUID();
-  await assert.rejects(tool.execute('session-change', estimate), /conversation changed/);
-  await assert.rejects(admit('stale-preparation'), /conversation changed/);
+  session.sessionId = randomUUID();
+  await assert.rejects(cached.execute('changed-session', estimate), /conversation changed/);
 });
 
-test('service native-call handoff rejects wrong binding, expiry and conflicts without evicting admitted calls', t => {
-  const f = fixture(t), { estimate: _estimate, ...binding } = f.request();
-  const execution = { epoch: binding.epoch, nativeKey: binding.nativeKey, nativeId: binding.nativeId, toolCallId: binding.toolCallId, estimate };
-  f.progress.authorizeTool(binding);
-  for (const patch of [{ epoch: randomUUID() }, { nativeKey: 'agent:main:other' }, { nativeId: randomUUID() }, { toolCallId: randomUUID() }, { runId: randomUUID() }]) assert.throws(() => f.progress.reportTool({ ...execution, ...patch }));
-  assert.throws(() => f.progress.authorizeTool({ ...binding, runId: randomUUID() }), /conflicts/);
-  assert.throws(() => f.progress.reportTool(execution), /could not be verified/);
-  const expired = { ...binding, toolCallId: 'expired' }; f.progress.authorizeTool(expired);
-  const now = Date.now(), clock = t.mock.method(Date, 'now', () => now + 60001);
-  assert.throws(() => f.progress.reportTool({ ...execution, toolCallId: 'expired' }), /could not be verified/); clock.mock.restore();
-  for (let index = 0; index < 254; index++) f.progress.authorizeTool({ ...binding, toolCallId: `bounded-${index}` });
-  assert.throws(() => f.progress.authorizeTool({ ...binding, toolCallId: 'overflow' }), /outstanding/);
-  assert.throws(() => f.progress.reportTool(execution), /could not be verified/);
-  assert.deepEqual(f.progress.reportTool({ ...execution, toolCallId: 'bounded-0' }), { saved: true, revision: 1 });
-  const advanced = t.mock.method(Date, 'now', () => now + 60001);
-  assert.deepEqual(f.progress.authorizeTool({ ...binding, toolCallId: 'fresh-after-expiry' }), { authorized: true });
-  assert.throws(() => f.progress.reportTool({ ...execution, toolCallId: 'expired' }), /could not be verified/);
-  advanced.mock.restore();
+test('exact native starts admit report-first delivery and duplicate/concurrent calls apply one revision', async t => {
+  const f = fixture(t), input = executionOf(f, 'native-call');
+  const first = f.progress.reportTool(input), concurrent = f.progress.reportTool(input);
+  nativeEvent(f, input.toolCallId); nativeEvent(f, input.toolCallId);
+  assert.deepEqual(await Promise.all([first, concurrent]), [{ saved: true, revision: 1 }, { saved: true, revision: 1 }]);
+  nativeEvent(f, input.toolCallId, 'result');
+  assert.deepEqual(await f.progress.reportTool(input), { saved: true, revision: 1 });
+  nativeEvent(f, input.toolCallId, 'start');
+  await assert.rejects(f.progress.reportTool({ ...input, estimate: { ...estimate, expectedRevision: 1 } }));
+  assert.equal(f.get().researchEstimate!.revision, 1);
+});
+
+test('result-before-start and conflicting run reuse remain closed despite newer duplicate starts', async t => {
+  const f = fixture(t), input = executionOf(f, 'out-of-order');
+  nativeEvent(f, input.toolCallId, 'result', 9); nativeEvent(f, input.toolCallId, 'start', 8); nativeEvent(f, input.toolCallId, 'start', 10);
+  await assert.rejects(f.progress.reportTool(input), /could not be verified/);
+  const second = executionOf(f, 'conflicting-run'); nativeEvent(f, second.toolCallId);
+  f.save({ ...f.get(), nativeRunId: randomUUID() }); nativeEvent(f, second.toolCallId);
+  await assert.rejects(f.progress.reportTool(second), /could not be verified/);
+  assert.equal(f.get().researchEstimate, undefined);
+});
+
+test('invalid identities and caller-supplied runs never establish native admission', async t => {
+  const f = fixture(t), input = executionOf(f, 'unverified');
+  for (const patch of [{ runId: randomUUID() }, { sessionKey: 'agent:main:other' }, { sessionId: randomUUID() }, { seq: 0 }, { data: { name: 'another_tool', phase: 'start', toolCallId: input.toolCallId } }]) nativeEvent(f, input.toolCallId, 'start', undefined, patch);
+  const controller = new AbortController(), waiting = f.progress.reportTool(input, controller.signal); controller.abort();
+  await assert.rejects(waiting, { name: 'AbortError' });
+  for (const patch of [{ epoch: randomUUID() }, { nativeKey: 'agent:main:other' }, { nativeId: randomUUID() }, { runId: randomUUID() }]) await assert.rejects(f.progress.reportTool({ ...input, ...patch }));
+  assert.equal(f.get().researchEstimate, undefined);
+});
+
+for (const state of ['unknown', 'completed', 'cancelled', 'failed', 'stop', 'disconnect', 'close'] as const) test(`waiting reports wake and reject on ${state}`, async t => {
+  const f = fixture(t), waiting = f.progress.reportTool(executionOf(f, `waiting-${state}`));
+  if (state === 'close') f.progress.close();
+  else {
+    if (state === 'disconnect') f.disconnect();
+    else f.save({ ...f.get(), ...(state === 'stop' ? { cancelRequested: true } : { state }) });
+    f.progress.changed();
+  }
+  await assert.rejects(waiting, /could not be verified/);
+  assert.equal(f.get().researchEstimate, undefined);
+});
+
+test('capacity and expired active-run tombstones fail closed without evicting valid native calls', async t => {
+  const f = fixture(t);
+  for (let index = 0; index < 256; index++) nativeEvent(f, `bounded-${index}`);
+  nativeEvent(f, 'overflow');
+  const controller = new AbortController(), waiting = f.progress.reportTool(executionOf(f, 'overflow'), controller.signal); controller.abort();
+  await assert.rejects(waiting, { name: 'AbortError' });
+  assert.deepEqual(await f.progress.reportTool(executionOf(f, 'bounded-0')), { saved: true, revision: 1 });
+  const afterAdmission = Date.now(), clock = t.mock.method(Date, 'now', () => afterAdmission + 60001);
+  nativeEvent(f, 'bounded-1');
+  await assert.rejects(f.progress.reportTool(executionOf(f, 'bounded-1')), /could not be verified/);
+  assert.deepEqual(await f.progress.reportTool(executionOf(f, 'bounded-0')), { saved: true, revision: 1 });
+  clock.mock.restore();
+});
+
+test('missing native evidence reaches a bounded timeout without inventing progress', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.progress.reportTool(executionOf(f, 'never-observed')), /could not be verified/);
+  assert.equal(f.get().researchEstimate, undefined);
 });
