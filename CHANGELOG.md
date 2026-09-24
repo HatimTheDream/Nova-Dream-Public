@@ -1,3 +1,9 @@
+## [1.12.4] — 2026-09-24
+
+- Make Assistant reading more compact with a system-font default, smaller message text and quieter headings. Add Font and Assistant text size choices with an immediate preview in Settings, saved on this device.
+- Give Chat Research short action titles while retaining the full approved instructions in expandable details. Replace the looping activity animation with a linear, explicitly estimated progress bar based on task-specific completed and remaining research work, including subtasks within broad actions.
+- Save research workload estimates with the exact approved run, reconcile updates and preserve completed work. Update the specific activity line as the investigation develops, hold retained progress during interruptions and confirm completion only when the actual report finishes.
+
 ## [1.12.3] — 2026-09-23
 
 - Fix voice calls incorrectly stopping with “The conversation or Project changed” when selecting the connected account updates the chat timestamp. Keep checks for genuine conversation, Project and permission changes.

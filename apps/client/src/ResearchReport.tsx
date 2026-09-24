@@ -12,7 +12,7 @@ export function ResearchReport({ text, children, operation, title }: { text: str
   const [expanded, setExpanded] = useState(false), [view, setView] = useState<ReaderView>('report');
   const [sources, setSources] = useState<ReturnType<typeof researchSources>>([]), [error, setError] = useState('');
   const reportTitle = researchReportTitle(text, title), elapsed = researchReportElapsed(operation);
-  const tools = operation?.tools?.filter(tool => !['progress_card', 'update_plan'].includes(tool.name)) ?? [];
+  const tools = operation?.tools?.filter(tool => !['progress_card', 'update_plan', 'nova_research_progress'].includes(tool.name.split(/__|\./).at(-1) ?? tool.name)) ?? [];
   useEffect(() => {
     const element = body.current;
     if (!element) return;

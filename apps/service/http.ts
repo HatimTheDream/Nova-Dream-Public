@@ -239,10 +239,11 @@ export async function startServer(options: { directory: string; port: number; pr
       if (request.headers['sec-fetch-site'] === 'cross-site' && !ownerLanding) throw new Fault(403, 'origin_rejected', 'Cross-site access is not allowed.');
       if (store.recoveryHeld && request.method === 'POST' && url.pathname !== '/api/session') throw new Fault(409, 'recovery_held', 'This is a recovered copy for review. Changes and connected services are paused; your current workspace is separate.');
       if (!store.recoveryHeld && store.recoveryEffectsPaused && request.method === 'POST' && !recoveredLocalRoutes.has(url.pathname)) throw new Fault(409, 'recovery_connections_paused', 'Connected services and automated work remain paused in this recovered workspace. Local records can be edited.');
-      if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
+      if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy', '/workspace/research-progress'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
         const supplied=Buffer.from(request.headers.authorization??''),expected=Buffer.from('Bearer '+moduleToken);
         if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected))throw new Fault(403,'workspace_tool_auth','Use the connected Assistant for workspace tools.');
         if (url.pathname === '/workspace/plan') return json(200, assistant.plans.propose(await commandBody(request, 150000)));
+        if (url.pathname === '/workspace/research-progress') return json(200, assistant.researchProgress.report(await commandBody(request, 50000)));
         if (url.pathname === '/workspace/policy') return json(200, assistant.plans.toolPolicy(await commandBody(request, 4096)));
         if (url.pathname === '/workspace/observation') { await observations.accept(await commandBody(request, 13*1024*1024)); return json(200, { accepted: true }); }
         const result=await moduleActions.invoke(await commandBody(request,2*1024*1024));

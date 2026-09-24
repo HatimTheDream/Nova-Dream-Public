@@ -145,7 +145,10 @@ import assert from 'node:assert/strict';
 // reader, deferred generated outputs and Office file recognition. Measured 642,937 total gzip bytes
 // (+2,635 / 0.41% over 1.10.10). Bound total at 643 KB; keep startup and
 // individual deferred-chunk ceilings unchanged. Office parsing stays server-side.
-export const clientLimits = { startup: 180000, total: 652000, deferredChunk: 80000 };
+// 1.12.4 adds saved typography choices and a task-aware Research estimate.
+// Measured total 652,683 gzip bytes; the estimate replaces fixed milestone fill.
+// Bound this slice at653 KB, retaining the startup and deferred-chunk ceilings.
+export const clientLimits = { startup: 180000, total: 653000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

@@ -1,0 +1,51 @@
+/* Reading preferences change text, not the size of navigation or touch targets. */
+:root {
+  --app-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --assistant-text-size: 15px;
+  font-family: var(--app-font);
+}
+:root[data-font="sora"] { --app-font: 'Sora Variable', ui-sans-serif, system-ui, sans-serif; }
+:root[data-font="serif"] { --app-font: Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif; }
+:root[data-text-size="small"] { --assistant-text-size: 14px; }
+:root[data-text-size="large"] { --assistant-text-size: 17px; }
+:root[data-text-size="extra-large"] { --assistant-text-size: 20px; }
+
+:root .assistant-workspace .message-text,
+:root .nova-plan-review,
+:root .nova-plan-document,
+:root .research-report-body,
+:root .typography-preview {
+  font-size: var(--assistant-text-size);
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+:root .assistant-workspace .composer > textarea { font-size: var(--assistant-text-size); line-height: 1.6; }
+:root .assistant-workspace .dc-reply-markdown :is(p, li),
+:root .nova-plan-document :is(p, li),
+:root .settings-page .typography-preview p { font-size: inherit; line-height: inherit; }
+:root .assistant-workspace .dc-reply-markdown :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.35;
+  letter-spacing: -.01em;
+  font-weight: 650;
+  margin-top: 1.3em;
+}
+:root .assistant-workspace .dc-reply-markdown :is(h1, .dc-markdown-document-title) { font-size: 1.5em; font-weight: 650; }
+:root .assistant-workspace .dc-reply-markdown h2 { font-size: 1.25em; }
+:root .assistant-workspace .dc-reply-markdown h3 { font-size: 1.125em; }
+:root .assistant-workspace .dc-reply-markdown h4 { font-size: 1em; }
+:root .assistant-workspace .dc-reply-markdown > :first-child { margin-top: 0; }
+:root .assistant-workspace .dc-reply-markdown strong { font-weight: 650; }
+:root .nova-plan-review > h3,
+:root .nova-plan-document > h3 { font-size: 1.125em; line-height: 1.4; }
+:root .question-receipt :is(.question-receipt-answer, .question-receipt-question > summary) { font-size: var(--assistant-text-size); line-height: 1.6; }
+
+.typography-preview { padding: 16px; margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); overflow-wrap: anywhere; }
+.typography-preview strong { display: block; margin-bottom: 6px; font-weight: 650; }
+.typography-preview p { color: var(--text); margin: 0; }
+.typography-setting { min-width: 0; }
+.typography-setting select { flex-shrink: 0; }
+
+/* iOS magnifies focused inputs below 16px. Keep writing comfortable on touch screens. */
+@media (max-width: 650px) {
+  :root .assistant-workspace .composer > textarea { font-size: max(16px, var(--assistant-text-size)); }
+}

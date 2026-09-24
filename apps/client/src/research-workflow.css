@@ -27,7 +27,12 @@
 .research-progress { flex:1; min-width:0; height:4px; overflow:hidden; border-radius:2px; background:var(--line); }
 :root button.research-update { flex-shrink:0; border:1px solid var(--line); border-radius:999px; }
 :root button.research-stop { flex:0 0 40px; width:40px; height:40px; padding:0; border-radius:50%; background:var(--line); }
-.research-progress--running::after { content:''; display:block; width:28%; height:100%; background:var(--muted); animation:research-sweep 2.5s ease-in-out infinite alternate; }
+.research-progress-fill { display:block; height:100%; background:var(--text); transition:width .2s linear; }
+.research-plan-details { margin:-8px 0 14px; color:var(--muted); }
+.research-plan-details > summary { cursor:pointer; width:fit-content; border-radius:4px; }
+.research-plan-details > summary:focus-visible { outline:2px solid var(--text); outline-offset:4px; }
+.research-plan-details ol { padding-left:22px; margin:10px 0; }
+.research-plan-details li { margin:6px 0; overflow-wrap:anywhere; }
 .research-edit { display:grid; gap:10px; margin:14px 0; }
 .research-edit label { font-size:12px; color:var(--muted); }
 .research-edit textarea { width:100%; min-height:80px; resize:vertical; }
@@ -35,6 +40,5 @@
 .research-error { font-size:12px; overflow-wrap:anywhere; }
 .research-recovery { display:flex; flex-wrap:wrap; gap:8px; }
 @keyframes research-turn { to { transform:rotate(360deg); } }
-@keyframes research-sweep { from { transform:translateX(-100%); } to { transform:translateX(360%); } }
-@media(prefers-reduced-motion:reduce) { .research-steps [data-state="active"] .research-step-mark,.research-progress--running::after { animation:none; } }
+@media(prefers-reduced-motion:reduce) { .research-steps [data-state="active"] .research-step-mark { animation:none; } .research-progress-fill { transition:none; } }
 @media(max-width:600px) { .research-workflow { padding:15px 13px; border-radius:14px; } .research-workflow h3 { font-size:14px; } .research-steps { gap:12px; margin:18px 0; } :root button.research-control { min-height:40px; padding:8px; } }

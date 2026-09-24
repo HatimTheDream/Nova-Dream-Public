@@ -50,14 +50,16 @@ const labelledButton = (tree: any, label: string) => nodes(tree).find(node => no
 const byClass = (tree: any, name: string) => nodes(tree).filter(node => node.props?.className?.split(' ').includes(name));
 const progress = (tree: any) => nodes(tree).find(node => node.props.role === 'progressbar');
 const statusText = (tree: any) => nodes(tree).filter(node => node.props.role === 'status').map(text).join(' ');
-const rows = (tree: any) => nodes(tree).filter(node => node.type === 'li');
+const rows = (tree: any) => nodes(byClass(tree, 'research-steps')).filter(node => node.type === 'li');
 const assertProgress = (tree: any) => {
   const bar = progress(tree); assert.ok(bar, 'Research activity needs an accessible progress indicator');
-  assert.equal(bar.props['aria-valuemin'], undefined); assert.equal(bar.props['aria-valuemax'], undefined); assert.equal(bar.props['aria-valuenow'], undefined);
+  assert.equal(bar.props['aria-valuemin'], 0); assert.equal(bar.props['aria-valuemax'], 100); assert.ok(bar.props['aria-valuenow'] === undefined || bar.props['aria-valuenow'] >= 0 && bar.props['aria-valuenow'] < 100);
   assert.equal(typeof bar.props['aria-valuetext'], 'string'); assert.ok(bar.props['aria-valuetext'].length > 0);
   assert.notEqual(bar.props['aria-hidden'], true);
-  assert.doesNotMatch(text(tree) + bar.props['aria-valuetext'], /\d+ of \d+ research steps complete|\d+%/i, 'A changing checklist is not an overall-work denominator');
-  assert.equal(byClass(bar, 'research-progress-fill').length, 0, 'Checklist completion must not invent an overall completed segment');
+  assert.doesNotMatch(text(tree), /\d+ of \d+ research steps complete|\d+%/i, 'No visible step counter or time estimate');
+  assert.equal(bar.props['aria-label'], 'Estimated research progress');
+  assert.match(bar.props['aria-valuetext'], /estimate/i);
+  assert.equal(Math.floor(Number.parseFloat(byClass(bar, 'research-progress-fill')[0].props.style.width) * 10) / 10, bar.props['aria-valuenow'] ?? 0);
   return bar;
 };
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { resolve, promise }; };
@@ -65,7 +67,36 @@ const item = (extra: any = {}) => ({ id: 'research-a', epoch: 'epoch', kind: 're
 const operation = (extra: any = {}) => ({ id: 'research-operation', epoch: 'epoch', conversationId: 'chat-a', nativeId: 'native-session', nativeKey: 'agent:main:e3:research-fixture', connectionGeneration: 'generation', nativeRunId: 'native-run', state: 'running', context: { workMode: 'research', researchWorkflow: 'chat-research-v1', approvedPlan: { id: 'research-a', version: 1, digest: 'a'.repeat(64), proposal: item().versions[0].proposal } }, createdAt: '2026-09-23T11:59:00Z', updatedAt: '2026-09-23T11:59:30Z', plan: [{ id: 'source', label: 'Proposed search', detail: '', status: 'complete' }, { id: 'verify', label: 'Proposed comparison', detail: 'Comparing measurements from primary sources', status: 'active' }, { id: 'report', label: 'New runtime-only milestone', detail: '', status: 'waiting' }], planSequence: 1, tools: [{ id: 'search', name: 'web_search', title: 'Search', state: 'running', input: 'Earth seasons axial tilt', sequence: 2 }], ...extra });
 const active = (extra: any = {}) => item({ state: 'implementing', autoStartAt: undefined, approval: { requestId: 'approved', operationId: 'research-operation', version: 1, digest: 'a'.repeat(64) }, ...extra });
 const question = (extra: any = {}) => ({ id: 'a'.repeat(64), epoch: 'epoch', revision: 1, conversationId: 'chat-a', nativeId: 'native-session', nativeKey: 'agent:main:e3:research-fixture', connectionGeneration: 'generation', availability: 'live', fingerprint: 'fingerprint', snapshot: { id: 'question-a', sessionKey: 'agent:main:e3:research-fixture', runId: 'native-run', status: 'pending', questions: [{ questionId: 'scope', header: 'Scope', question: 'Which region should I compare?', options: [] }], createdAtMs: 1790164700000, expiresAtMs: 1790165900000 }, ...extra });
+const estimate = (extra: any = {}) => ({ revision: 1, updatedAt: '2026-09-23T12:00:00Z', observedSequence: 3,
+  binding: { operationId: 'research-operation', epoch: 'epoch', nativeRunId: 'native-run', planId: 'research-a', planVersion: 1, planDigest: 'a'.repeat(64) },
+  activity: 'Checking NOAA’s daylight explanation', basis: 'A short NASA check is finished; deeper source comparison and the report remain.',
+  items: [{ id: 'nasa', title: 'Check NASA daylight evidence', effort: 2, status: 'complete' }, { id: 'noaa', title: 'Check NOAA daylight evidence', effort: 3, status: 'active' }, { id: 'distance', title: 'Resolve the distance misconception', effort: 5, status: 'pending' }, { id: 'compare', title: 'Compare the source claims', effort: 3, status: 'pending' }, { id: 'report', title: 'Write and verify the report', effort: 5, status: 'pending' }], ...extra });
 const props = (research = item(), extra: any = {}) => ({ item: research, operations: [], epoch: 'epoch', ready: true, connected: true, connectionGeneration: 'generation', questions: [], refresh: async () => {}, ...extra });
+
+test('the workload estimate advances within a broad action and never advances with time alone', async () => {
+  const observed = operation({ plan: [{ id: 'source', label: 'Proposed search', detail: '', status: 'active' }], tools: [], researchEstimate: estimate() });
+  const app = host(props(active(), { operations: [observed] }));
+  try {
+    await app.flush(); assert.equal(assertProgress(app.tree).props['aria-valuenow'], 11.1);
+    assert.equal(rows(app.tree)[0].props['data-state'], 'active');
+    await app.advance(60000); assert.equal(progress(app.tree).props['aria-valuenow'], 11.1);
+    const revised = estimate({ revision: 2, items: estimate().items.map((item: any) => item.id === 'noaa' ? { ...item, status: 'complete' } : item) });
+    await app.update({ operations: [{ ...observed, researchEstimate: revised }] });
+    assert.equal(assertProgress(app.tree).props['aria-valuenow'], 27.7); assert.equal(rows(app.tree)[0].props['data-state'], 'active');
+    await app.update({ connected: false }); assert.equal(progress(app.tree).props['aria-valuenow'], 27.7); assert.match(statusText(app.tree), /paused/i);
+  } finally { app.close(); }
+});
+
+test('completed headings cannot manufacture a progress estimate or replace its actual workload', async () => {
+  const observed = operation({ tools: [], plan: item().versions[0].proposal.steps.map((label: string, id: number) => ({ id: String(id), label, detail: '', status: 'complete' })) });
+  const app = host(props(active(), { operations: [observed] }));
+  try {
+    await app.flush(); assert.equal(assertProgress(app.tree).props['aria-valuenow'], undefined);
+    await app.update({ operations: [{ ...observed, researchEstimate: estimate() }] });
+    assert.equal(assertProgress(app.tree).props['aria-valuenow'], 11.1);
+    assert.equal(rows(app.tree).every(row => row.props['data-state'] === 'complete'), true);
+  } finally { app.close(); }
+});
 
 test('the inline ready card counts down to the server deadline without dispatching research itself', async () => {
   const app = host(props());
@@ -284,11 +315,11 @@ test('runtime checklist changes never replace approved rows or invent an overall
   } finally { app.close(); }
 });
 
-for (const plan of [undefined, []]) test(`research with ${plan ? 'an empty' : 'no'} observed step list stays indeterminate despite proposal steps`, async () => {
+for (const plan of [undefined, []]) test(`research with ${plan ? 'an empty' : 'no'} observed step list does not invent a workload estimate`, async () => {
   const app = host(props(active(), { operations: [operation({ plan })] }));
   try {
     await app.flush(); const bar = progress(app.tree); assert.ok(bar);
-    assert.equal(bar.props['aria-valuenow'], undefined); assert.equal(bar.props['aria-valuemax'], undefined);
+    assert.equal(bar.props['aria-valuenow'], undefined); assert.equal(bar.props['aria-valuemax'], 100);
     assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
     assert.deepEqual(nodes(app.tree).filter(node => node.type === 'li').map(node => node.props['data-state']), ['waiting', 'waiting']);
     assert.doesNotMatch(text(app.tree), /\d+ of \d+ research steps complete/i);
@@ -319,8 +350,8 @@ test('unknown research without observed steps has no invented percentage or movi
   const app = host(props(active({ state: 'unknown' }), { operations: [operation({ state: 'unknown', plan: undefined })] }));
   try {
     await app.flush(); const bar = progress(app.tree); assert.ok(bar);
-    assert.equal(bar.props['aria-valuenow'], undefined); assert.equal(bar.props['aria-valuemax'], undefined);
-    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(byClass(app.tree, 'research-progress-fill').length, 0);
+    assert.equal(bar.props['aria-valuenow'], undefined); assert.equal(bar.props['aria-valuemax'], 100);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(byClass(app.tree, 'research-progress-fill')[0].props.style.width, '0%');
     assert.match(bar.props['aria-valuetext'], /unconfirmed/i); assert.equal(app.timers, 0);
   } finally { app.close(); }
 });
@@ -341,7 +372,7 @@ test('observed activity opens in a native inline disclosure for only its bound o
   } finally { app.close(); }
 });
 
-for (const name of ['update_plan', 'functions.update_plan', 'mcp__progress_card']) test(`${name}-only activity does not create an empty research activity disclosure`, async () => {
+for (const name of ['update_plan', 'functions.update_plan', 'mcp__progress_card', 'nova_research_progress']) test(`${name}-only activity does not create an empty research activity disclosure`, async () => {
   const app = host(props(active(), { operations: [operation({ tools: [{ id: 'plan-tool', name, state: 'completed', sequence: 3 }] })] }));
   try {
     await app.flush(); assert.equal(nodes(app.tree).some(node => node.type === 'details'), false);
@@ -434,9 +465,20 @@ test('long proposal text stays readable text while the live subtask remains boun
   const source = operation(), observed = { ...source, context: { ...source.context, approvedPlan: { ...source.context.approvedPlan, proposal } }, plan: [{ id: 'long', label: longLabel, detail: 'Comparing primary source measurements '.repeat(80), status: 'active' }], tools: [] };
   const app = host(props(record, { operations: [observed] }));
   try {
-    await app.flush(); assert.ok(text(rows(app.tree)[0]).includes(longLabel));
+    await app.flush(); assert.ok(text(rows(app.tree)[0]).length < 120); assert.ok(text(byClass(app.tree, 'research-plan-details')[0]).includes(longLabel));
     assert.equal(nodes(app.tree).some(node => node.type === 'script' || node.props.dangerouslySetInnerHTML), false);
     assert.match(statusText(app.tree), /Comparing primary source measurements/); assert.ok(statusText(app.tree).length < 1000, 'The narrow activity summary must remain bounded');
     assertProgress(app.tree);
+  } finally { app.close(); }
+});
+
+test('structured action titles stay compact and full research instructions remain in a closed inline disclosure', async () => {
+  const source = item().versions[0].proposal, proposal = { ...source, steps: ['Read primary sources including the full technical report, review the original measurements, and check their limitations.', 'Compare the evidence and explain any contradictory findings in a final cited report.'], stepTitles: ['Read primary sources', 'Compare the evidence'] };
+  const original = item({ versions: [{ ...item().versions[0], proposal }] }), app = host(props(original));
+  try {
+    await app.flush(); assert.deepEqual(rows(app.tree).map(row => text(row)), proposal.stepTitles);
+    const details = byClass(app.tree, 'research-plan-details')[0]; assert.ok(details); assert.equal(details.type, 'details'); assert.equal(details.props.open, undefined);
+    assert.ok(text(details).includes(proposal.steps[0])); assert.ok(text(details).includes(proposal.steps[1]));
+    assert.equal(nodes(app.tree).some(node => node.props.role === 'dialog'), false);
   } finally { app.close(); }
 });

@@ -8,6 +8,7 @@ import './work-phase.css';
 const activityNames: Record<string, [string, string, string]> = {
   nova_read: ['Reading your workspace', 'Read your workspace', 'Workspace read'],
   nova_write: ['Requesting a workspace change', 'Requested a workspace change', 'Workspace change'],
+  nova_research_progress: ['Updating research progress', 'Updated research progress', 'Research progress'],
   browser: ['Using the browser', 'Used the browser', 'Browser action'],
   computer: ['Using the computer', 'Used the computer', 'Computer action'],
   web_search: ['Searching the web', 'Searched the web', 'Web search'],
@@ -60,7 +61,7 @@ export function StepsPill({ plan, operation }: { plan?: RunStep[]; operation?: A
   </section>;
 }
 export function ToolActivity({ operation, paused = false }: { operation: AssistantOperation; paused?: boolean }) {
-  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan'].includes(activityName(tool.name)));
+  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan', 'nova_research_progress'].includes(activityName(tool.name)));
   if (!tools.length) return null;
   return <div className="work-activity" aria-label={paused || operation.state === 'unknown' ? 'Last reported activity' : 'Tool activity'}>
     {tools.length === 100 && <p className="work-activity-note">Showing the latest 100 actions.</p>}

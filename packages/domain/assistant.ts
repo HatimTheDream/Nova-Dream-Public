@@ -92,6 +92,7 @@ export type ContextManifest = {
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;
 };
 export type AssistantOperation = {
+  researchEstimate?: import('./research-estimate.js').ResearchEstimate;
   effortDemand?: import('./auto-effort.js').EffortDemand;
   autoEffort?: import('./auto-effort.js').AutoEffortDecision;
   accountSelection?: Conversation['accountSelection'];

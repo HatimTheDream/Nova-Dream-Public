@@ -1,20 +1,23 @@
 import type { AssistantOperation } from './assistant.js';
-import type { AssistantPlan } from './assistant-plan.js';
+import type { AssistantPlan, PlanProposal } from './assistant-plan.js';
 import type { AssistantQuestion } from './questions.js';
 import type { RunStep } from './run-plan.js';
 import { toolDisplayInput, type ToolActivity } from './tool-activity.js';
+import { researchEstimateFraction, researchEstimateSchema, type ResearchEstimate } from './research-estimate.js';
 
 export type ResearchProgressState = 'idle' | 'live' | 'waiting' | 'paused' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'unknown';
 export type ResearchProgress = {
-  steps: { id: string; label: string; status: RunStep['status']; reported: boolean }[];
-  status: string; statusSource: 'lifecycle' | 'question' | 'detail' | 'tool' | 'milestone' | 'fallback';
+  steps: { id: string; label: string; detail: string; status: RunStep['status']; reported: boolean }[];
+  /** Broad milestone rows are independent from the task-specific effort estimate. */
+  completedMilestones: number; totalMilestones: number; fraction: number | null; estimateBasis?: string;
+  status: string; statusSource: 'lifecycle' | 'question' | 'detail' | 'tool' | 'estimate' | 'milestone' | 'fallback';
   state: ResearchProgressState; live: boolean;
 };
 type Input = { item: AssistantPlan; operation?: AssistantOperation; connected: boolean; questions?: AssistantQuestion[]; now?: number };
 const normalized = (label: string) => label.trim().replace(/\s+/g, ' ');
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const nativeName = (name: string) => name.split(/__|\./).at(-1) ?? name;
-const progressTool = (name: string) => ['update_plan', 'progress_card'].includes(nativeName(name));
+const progressTool = (name: string) => ['update_plan', 'progress_card', 'nova_research_progress'].includes(nativeName(name));
 const shorten = (value: string, limit = 180) => value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
 /** Public progress text only; never scrape tool results or assistant reasoning. */
 function publicDetail(value?: string) {
@@ -35,19 +38,54 @@ export function matchingResearchOperation(item: AssistantPlan, operation?: Assis
   return operation;
 }
 
-function reportedSteps(labels: string[], plan: RunStep[] = []) {
-  const matches = labels.map(() => [] as RunStep[]), labelsNormalized = labels.map(normalized);
+function matchingEstimate(operation?: AssistantOperation): ResearchEstimate | undefined {
+  const parsed = researchEstimateSchema.safeParse(operation?.researchEstimate), ref = operation?.context.approvedPlan;
+  if (!operation || !ref || !operation.nativeRunId || !parsed.success) return;
+  const binding = parsed.data.binding;
+  if (binding.operationId !== operation.id || binding.epoch !== operation.epoch || binding.nativeRunId !== operation.nativeRunId
+    || binding.planId !== ref.id || binding.planVersion !== ref.version || binding.planDigest !== ref.digest) return;
+  return parsed.data;
+}
+
+const stepAliases = (proposal: PlanProposal) => proposal.steps.map((label, index) => [normalized(label), ...(proposal.stepTitles?.[index] ? [normalized(proposal.stepTitles[index])] : [])]);
+function matchedIndex(aliases: string[][], step: RunStep) {
+  const label = normalized(step.label), explicit = /^research-step-([1-9]\d*)$/.exec(step.sourceId ?? '');
+  if (explicit) { const index = Number(explicit[1]) - 1; return aliases[index]?.includes(label) ? index : -1; }
+  const indexes = aliases.flatMap((values, index) => values.includes(label) ? [index] : []);
+  return indexes.length === 1 ? indexes[0] : -1;
+}
+function reportedSteps(proposal?: PlanProposal, plan: RunStep[] = []) {
+  if (!proposal) return [];
+  const aliases = stepAliases(proposal), matches = aliases.map(() => [] as RunStep[]);
   for (const step of plan) {
-    const label = normalized(step.label), explicit = /^research-step-([1-9]\d*)$/.exec(step.sourceId ?? '');
-    if (explicit) {
-      const index = Number(explicit[1]) - 1;
-      if (labelsNormalized[index] === label) matches[index].push(step);
-      continue;
-    }
-    const index = labelsNormalized.indexOf(label);
-    if (index >= 0 && labelsNormalized.lastIndexOf(label) === index) matches[index].push(step);
+    const index = matchedIndex(aliases, step);
+    if (index >= 0) matches[index].push(step);
   }
   return matches.map(values => values.length === 1 ? values[0] : undefined);
+}
+
+/** A granular runtime update cannot erase already reported approved milestones.
+ * Explicit reopened or conflicting rows still supersede earlier completion. */
+export function retainResearchMilestones(operation: AssistantOperation, incoming: RunStep[]): RunStep[] {
+  const proposal = operation.context.approvedPlan?.proposal;
+  if (!proposal || operation.context.researchWorkflow !== 'chat-research-v1' || operation.context.workMode !== 'research' || operation.context.space === 'work' || operation.context.planReview || operation.steerTarget) return incoming;
+  const aliases = stepAliases(proposal), prior = reportedSteps(proposal, operation.plan);
+  const retained = prior.flatMap((step, index) => step?.status === 'complete' && !incoming.some(next => aliases[index].includes(normalized(next.label)) || matchedIndex(aliases, next) === index) ? [{ ...step, id: `research-retained-${index + 1}` }] : []);
+  return retained.length ? [...incoming, ...retained] : incoming;
+}
+
+/** Old proposals remain intact; prefer a complete action phrase before falling
+ * back to a bounded, explicitly abbreviated label with the full text in details. */
+export function researchStepTitle(detail: string, title?: string): string {
+  if (title?.trim()) return normalized(title);
+  const full = normalized(detail).replace(/^[-*]\s+|^\d+[.)]\s+/, '');
+  if (full.length <= 80 && full.split(' ').length <= 10) return full;
+  const clause = full.split(/(?:[.!?;](?:\s|$)|\s[—–]\s|:\s)/, 1)[0];
+  const action = clause.split(/\s(?:including|covering|focusing on|so that|in order to|with attention to)\s/i, 1)[0].trim();
+  if (action.length <= 80 && action.split(' ').length <= 10) return action;
+  const words = action.split(' '); let short = '';
+  for (const word of words.slice(0, 8)) { if (short.length + word.length + 1 > 76) break; short += `${short ? ' ' : ''}${word}`; }
+  return short ? `${short}…` : 'Review research requirements';
 }
 
 function toolStatus(tool: ToolActivity): string | undefined {
@@ -69,12 +107,14 @@ function toolStatus(tool: ToolActivity): string | undefined {
   return undefined;
 }
 
-/** Stable approved rows plus one observed activity; deliberately no percentage or ETA. */
+/** Approved milestone rows plus a separately admitted task-specific effort estimate. */
 export function researchProgress({ item, operation: supplied, connected, questions = [], now = Date.now() }: Input): ResearchProgress {
   const proposal = item.versions.find(value => value.version === item.version)?.proposal;
-  const operation = matchingResearchOperation(item, supplied), reported = reportedSteps(proposal?.steps ?? [], operation?.plan);
-  const steps: ResearchProgress['steps'] = (proposal?.steps ?? []).map((label, index) => ({ id: `${item.id}:${item.version}:research-step-${index + 1}`, label, status: reported[index]?.status ?? 'waiting', reported: !!reported[index] }));
-  const result = (state: ResearchProgressState, status: string, statusSource: ResearchProgress['statusSource'] = 'lifecycle'): ResearchProgress => ({ steps, state, status, statusSource, live: state === 'live' });
+  const operation = matchingResearchOperation(item, supplied), reported = reportedSteps(proposal, operation?.plan);
+  const steps: ResearchProgress['steps'] = (proposal?.steps ?? []).map((detail, index) => ({ id: `${item.id}:${item.version}:research-step-${index + 1}`, label: researchStepTitle(detail, proposal?.stepTitles?.[index]), detail, status: reported[index]?.status ?? 'waiting', reported: !!reported[index] }));
+  const completedMilestones = steps.filter(step => step.status === 'complete').length, totalMilestones = steps.length;
+  const estimate = matchingEstimate(operation), estimateBasis = publicDetail(estimate?.basis);
+  const result = (state: ResearchProgressState, status: string, statusSource: ResearchProgress['statusSource'] = 'lifecycle'): ResearchProgress => ({ steps, state, status, statusSource, live: state === 'live', completedMilestones, totalMilestones, fraction: state === 'completed' ? 1 : researchEstimateFraction(estimate), ...(estimateBasis ? { estimateBasis } : {}) });
   if (!item.approval) return result(item.state === 'failed' ? 'failed' : item.state === 'cancelled' ? 'cancelled' : item.state === 'unknown' ? 'unknown' : 'idle', item.state === 'ready' ? 'Ready to research' : item.state === 'failed' ? 'Research needs attention' : item.state === 'cancelled' ? 'Research cancelled' : item.state === 'unknown' ? 'Progress unconfirmed' : 'Preparing your research plan');
   const outcome = operation && terminal.has(operation.state) ? operation.state : terminal.has(item.state) ? item.state : undefined;
   if (outcome === 'completed') return result('completed', 'Research complete');
@@ -93,13 +133,18 @@ export function researchProgress({ item, operation: supplied, connected, questio
   const tools = (operation.tools ?? []).filter(tool => !progressTool(tool.name)), newestToolSequence = Math.max(-1, ...tools.map(tool => tool.sequence));
   const running = tools.filter(tool => tool.state === 'running').sort((a, b) => b.sequence - a.sequence);
   for (const tool of running) { const status = toolStatus(tool); if (status) return result('live', status, 'tool'); }
+  const estimateActivity = publicDetail(estimate?.activity);
+  if (estimateActivity && estimate!.observedSequence >= newestToolSequence && estimate!.observedSequence >= (operation.planSequence ?? -1)) return result('live', estimateActivity, 'estimate');
   // An older plan explanation must not return as "current" after a newer tool
   // completed. There is no trustworthy private reasoning/activity fallback.
-  const active = reported.filter((step): step is RunStep => step?.status === 'active');
-  if (active.length === 1 && (operation.planSequence ?? -1) >= newestToolSequence) {
-    const detail = publicDetail(active[0].detail) ?? publicDetail(active[0].explanation);
+  // Current public activity can be finer grained than the approved milestones.
+  // Its detail does not establish or change milestone completion.
+  const currentActive = (operation.plan ?? []).filter(step => step.status === 'active');
+  if (currentActive.length === 1 && (operation.planSequence ?? -1) >= newestToolSequence) {
+    const detail = publicDetail(currentActive[0].detail) ?? publicDetail(currentActive[0].explanation);
     if (detail) return result('live', detail, 'detail');
   }
+  const active = reported.filter((step): step is RunStep => step?.status === 'active');
   if (active.length === 1) return result('live', publicDetail(active[0].label) ?? 'Researching…', 'milestone');
-  return result('live', operation.state === 'prepared' || operation.state === 'dispatching' ? 'Starting research…' : 'Researching…', 'fallback');
+  return result('live', operation.state === 'prepared' || operation.state === 'dispatching' ? 'Starting research…' : totalMilestones > 0 && completedMilestones === totalMilestones ? 'Waiting for the finished report…' : 'Researching…', 'fallback');
 }

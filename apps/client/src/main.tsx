@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import './install';
 import { applyDocumentAppIcon, readCachedAppIcon } from './app-icon';
+import { initializeTypography } from './typography';
 import '@fontsource-variable/sora';
 import { App } from './App';
 import './styles.css';
@@ -16,6 +17,8 @@ import './buttons.css';
 import './home-widget-controls.css';
 import './app-icon.css';
 import './voice-panel.css';
+import './typography.css';
 
 applyDocumentAppIcon(readCachedAppIcon());
+initializeTypography();
 createRoot(document.getElementById('root')!).render(<App/>);

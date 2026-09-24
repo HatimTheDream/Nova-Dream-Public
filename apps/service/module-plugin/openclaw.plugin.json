@@ -9,7 +9,8 @@
     "tools": [
       "nova_read",
       "nova_write",
-      "nova_plan"
+      "nova_plan",
+      "nova_research_progress"
     ],
     "trustedToolPolicies": [
       "nova-plan-read-only"

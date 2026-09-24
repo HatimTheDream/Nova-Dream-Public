@@ -23,7 +23,7 @@ export function workPhaseLabel(operation: AssistantOperation | undefined, active
 
 function activitySummary(operation?: AssistantOperation): string | undefined {
   if (!operation) return undefined;
-  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan'].includes(tool.name));
+  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan', 'nova_research_progress'].includes(tool.name.split(/__|\./).at(-1) ?? tool.name));
   if (!tools.length) return undefined;
   const completed = [...new Set(tools.filter(tool => tool.state === 'completed').map(tool => activityLabel(tool.name)))];
   const attention = tools.some(tool => tool.state === 'failed' || tool.state === 'blocked') ? 'Some actions need attention.' : tools.some(tool => tool.state === 'unknown' || tool.state === 'running') ? 'Some outcomes are unconfirmed.' : '';

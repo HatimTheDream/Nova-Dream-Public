@@ -34,7 +34,7 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
   // A generated result may arrive before the runtime's final text message.
   // Keep that source-bearing result visible when completed activity collapses.
   const outputs = parts.filter(part => part.role === 'assistant' && !part.toolInfo && part.attachments.length > 0);
-  const entries = workEntries(parts.filter(part => !outputs.includes(part)), operation, { includeUnseen: !fragment }).filter(entry => entry.kind !== 'tool' || !['progress_card', 'update_plan'].includes(entry.tool.name));
+  const entries = workEntries(parts.filter(part => !outputs.includes(part)), operation, { includeUnseen: !fragment }).filter(entry => entry.kind !== 'tool' || !['progress_card', 'update_plan', 'nova_research_progress'].includes(entry.tool.name.split(/__|\./).at(-1) ?? entry.tool.name));
   const tools = entries.filter(entry => entry.kind === 'tool').map(entry => entry.tool);
   const labels = [...new Set(tools.filter(tool => tool.state === 'completed').map(tool => activityLabel(tool.name)))];
   const issues = tools.filter(tool => ['failed', 'blocked', 'unknown'].includes(tool.state)).length;

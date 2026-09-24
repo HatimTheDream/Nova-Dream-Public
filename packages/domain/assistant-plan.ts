@@ -5,9 +5,10 @@ export const planProposalSchema = z.object({
   title: z.string().trim().min(1).max(200),
   summary: z.string().trim().min(1).max(12000),
   steps: z.array(z.string().trim().min(1).max(4000)).min(1).max(20),
+  stepTitles: z.array(z.string().trim().min(1).max(80)).min(1).max(20).optional().describe('For Chat Research, one short action title per step in the same order, usually 3–7 words. Keep the full investigation detail in steps.'),
   assumptions: z.array(z.string().trim().min(1).max(2000)).max(12),
   verification: z.array(z.string().trim().min(1).max(2000)).min(1).max(12),
-}).strict();
+}).strict().refine(proposal => !proposal.stepTitles || proposal.stepTitles.length === proposal.steps.length, { message: 'Provide one action title for every research step.', path: ['stepTitles'] });
 export type PlanProposal = z.infer<typeof planProposalSchema>;
 export type PlanReference = { id: string; version: number };
 export type PlanVersion = {

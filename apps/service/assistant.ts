@@ -1,4 +1,5 @@
 import { AssistantPlans } from './assistant-plans.js';
+import { AssistantResearchProgress } from './assistant-research-progress.js';
 import { workProjectDiffSchema } from '../../packages/domain/work-project.js';
 import { assistantSpace, spaceDraftId, spaceInstructions } from '../../packages/domain/assistant-space.js';
 import { initialConversationTitle } from '../../packages/domain/conversation-title.js';
@@ -7,6 +8,7 @@ import { officeAttachmentKind } from '../../packages/domain/office-attachments.j
 import { OfficeReader } from './office-reader.js';
 import { officeDocumentText } from './office-document.js';
 import { planningGuidance, readRunPlan } from '../../packages/domain/run-plan.js';
+import { retainResearchMilestones } from '../../packages/domain/research-progress.js';
 import { chatGoalSchema, chatGoalActionSchema } from '../../packages/domain/chat-goal.js';
 import { ConversationRemovals } from './conversation-removal.js';
 import { AssistantMemory } from './memory.js';
@@ -125,12 +127,14 @@ export class AssistantService {
   private voiceBusy: (conversationId: string) => boolean = () => false;
   private artifactReader: ArtifactReader;
   readonly plans: AssistantPlans;
+  readonly researchProgress: AssistantResearchProgress;
   readonly pins: MessagePins;
   readonly memory: AssistantMemory;
   readonly removals: ConversationRemovals;
   readonly continuations: ConversationContinuation;
   private historyVersions: Record<string, number> = {};
   constructor(private store: Store, private gateway: AssistantTransport, artifactExchange?: typeof fetch, private accessControl?: Pick<SessionSettingsControl, 'request'>, private responseControl?: Pick<SessionSettingsControl, 'request'>) {
+    this.researchProgress = new AssistantResearchProgress(store, { conversation: id => this.conversation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (this.closed || this.voiceBusy(conversation.id)) throw new Fault(409, 'research_unavailable', 'Reconnect the original research conversation.'); }, save: operation => this.saveOperation(operation) });
     this.plans = new AssistantPlans(store, { conversation: id => this.conversation(id), operation: id => this.operation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (conversation.archived || conversation.deleted || conversation.pendingSettings || this.voiceBusy(conversation.id)) throw new Fault(409, 'plan_unavailable', 'Restore and reconnect this chat before continuing its plan.'); }, save: operation => this.saveOperation(operation), dispatch: id => { void this.dispatch(id); } });
     this.removals = new ConversationRemovals(store, gateway, id => this.voiceBusy(id));
     this.artifactReader = new ArtifactReader(gateway, artifactExchange);
@@ -1101,7 +1105,7 @@ export class AssistantService {
       if (!Number.isInteger(data.seq) || data.seq <= operation.lastSequence && !['tool', 'plan'].includes(data.stream)) return;
       const detail = object(data.data);
       const plan = (data.stream === 'plan' || data.stream === 'tool' && ['progress_card', 'update_plan'].includes(detail.name)) && data.seq > (operation.planSequence ?? -1) ? readRunPlan(detail) : undefined;
-      const updated = { ...operation, ...(plan ? { plan, planSequence: data.seq } : {}), ...(data.stream === 'tool' ? { tools: toolActivity(operation.tools, detail, data.seq) } : {}), lastSequence: Math.max(data.seq, operation.lastSequence), state: terminal.has(operation.state) ? operation.state : 'running' as const, ...(typeof detail.text === 'string' && data.stream === 'assistant' ? { text: detail.text } : {}) };
+      const updated = { ...operation, ...(plan ? { plan: retainResearchMilestones(operation, plan), planSequence: data.seq } : {}), ...(data.stream === 'tool' ? { tools: toolActivity(operation.tools, detail, data.seq) } : {}), lastSequence: Math.max(data.seq, operation.lastSequence), state: terminal.has(operation.state) ? operation.state : 'running' as const, ...(typeof detail.text === 'string' && data.stream === 'assistant' ? { text: detail.text } : {}) };
       if (data.seq > operation.lastSequence + 1 && operation.lastSequence > 0) void this.reconcile(operation.conversationId).catch(() => undefined);
       if (data.stream === 'lifecycle' && ['end', 'error', 'aborted'].includes(detail.phase)) {
         if (detail.phase === 'end' && this.awaitCompletionReceipt(updated)) return;
