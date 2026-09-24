@@ -21,6 +21,8 @@ const loader = registerHooks({
   },
 });
 const { ChatGoalControl } = await import('../apps/client/src/ChatGoal');
+const { QuestionCard } = await import('../apps/client/src/QuestionCard');
+const { retainedWindowId } = await import('../apps/client/src/useWorkspace');
 const { GeneratedOutput } = await import('../apps/client/src/GeneratedOutput');
 const { PlanReviewCard, PlanReviewDecision, PlanReviewDocument } = await import('../apps/client/src/PlanReviewCard');
 const { usePlanReview } = await import('../apps/client/src/plan-review-state');
@@ -95,11 +97,98 @@ test('late Goal mutation receipts clear only their original recovery intent and 
   const result = deferred<any>();
   const app = host(ChatGoalControl, { conversation, epoch: 'epoch', refresh: async () => {} }, (path, init) => init.method === 'POST' ? result.promise : { goal: path.endsWith('chat-a') ? goal : null });
   try {
-    await app.flush(); find(app.tree, node => node.type === 'button' && node.props.children === 'Pause goal').props.onClick(); await app.flush();
+    await app.flush(); find(app.tree, node => node.type === 'button' && node.props['aria-label'] === 'Pause goal').props.onClick(); await app.flush();
     assert.equal(app.storage.size, 1);
     await app.update({ conversation: { ...conversation, id: 'chat-b', nativeId: 'native-b' } });
     result.resolve({ goal: { ...goal, status: 'paused' } }); await app.flush();
     assert.equal(app.storage.size, 0); assert.equal(find(app.tree, node => node.props?.className === 'chat-goal'), undefined);
+  } finally { app.close(); }
+});
+test('the Goal row pauses and resumes the exact objective, then removes active controls and freezes confirmed completion', async () => {
+  let result = { ...goal, createdAt: 0, updatedAt: 0 };
+  const app = host(ChatGoalControl, { conversation, epoch: 'epoch', refresh: async () => {} }, (_path, init) => {
+    if (init.method === 'POST') {
+      const intent = JSON.parse(String(init.body));
+      assert.equal(intent.goalId, goal.id); assert.equal(intent.conversationId, conversation.id); assert.equal(intent.nativeId, conversation.nativeId);
+      result = { ...result, status: intent.action === 'pause' ? 'paused' : 'active', updatedAt: Date.now() };
+    }
+    return { goal: result };
+  });
+  const action = (name: string) => find(app.tree, node => node.type === 'button' && node.props['aria-label'] === name);
+  try {
+    await app.flush(); await app.advance(5000);
+    assert.ok(action('Pause goal')); assert.equal(action('Resume goal'), undefined);
+    action('Pause goal').props.onClick(); await app.flush();
+    assert.equal(action('Pause goal'), undefined); assert.ok(action('Resume goal'));
+    action('Resume goal').props.onClick(); await app.flush(); assert.ok(action('Pause goal'));
+    result = { ...result, status: 'complete', updatedAt: 5000 }; await app.update({ activityKey: 'goal-completed' });
+    assert.equal(action('Pause goal'), undefined); assert.equal(action('Resume goal'), undefined);
+    assert.equal(find(app.tree, node => node.props?.['data-goal-status'])?.props['data-goal-status'], 'complete');
+    assert.equal(find(app.tree, node => node.props?.className === 'goal-elapsed').props.children, '5s');
+    const calls = app.calls.length; await app.advance(60000);
+    assert.equal(app.calls.length, calls); assert.equal(app.activeTimers, 0);
+    assert.equal(find(app.tree, node => node.props?.className === 'goal-elapsed').props.children, '5s');
+  } finally { app.close(); }
+});
+test('an unconfirmed Goal change keeps visible recovery and retries its saved request instead of offering another action', async () => {
+  let fail = true, result = goal;
+  const app = host(ChatGoalControl, { conversation, epoch: 'epoch', refresh: async () => {} }, (_path, init) => {
+    if (init.method === 'POST' && fail) throw Error('Connection lost after submitting the pause.');
+    if (init.method === 'POST') result = { ...goal, status: 'paused' };
+    return { goal: result };
+  });
+  try {
+    await app.flush(); find(app.tree, node => node.props?.['aria-label'] === 'Pause goal').props.onClick(); await app.flush();
+    assert.equal(find(app.tree, node => node.props?.['data-goal-status'])?.props['data-goal-status'], 'unconfirmed');
+    assert.equal(find(app.tree, node => node.props?.['aria-label'] === 'Pause goal' || node.props?.['aria-label'] === 'Resume goal'), undefined);
+    assert.ok(find(app.tree, node => node.props?.className === 'goal-recovery'));
+    assert.equal(find(app.tree, node => node.props?.className === 'goal-elapsed').props['aria-label'], 'Goal elapsed time unavailable');
+    const original = JSON.parse(String(app.calls.find(call => call.init.method === 'POST')!.init.body));
+    fail = false; find(app.tree, node => node.type === 'button' && node.props.children === 'Retry goal change').props.onClick(); await app.flush();
+    const posts = app.calls.filter(call => call.init.method === 'POST');
+    assert.equal(posts.length, 2); assert.deepEqual(JSON.parse(String(posts[1].init.body)), original);
+    assert.equal(app.storage.size, 0); assert.ok(find(app.tree, node => node.props?.['aria-label'] === 'Resume goal'));
+  } finally { app.close(); }
+});
+test('a failed Goal status read does not present stale action controls or an invented elapsed time', async () => {
+  let fail = false;
+  const app = host(ChatGoalControl, { conversation, epoch: 'epoch', refresh: async () => {} }, () => { if (fail) throw Error('Goal status cannot be reached.'); return { goal }; });
+  try {
+    await app.flush();
+    assert.equal(find(app.tree, node => node.props?.className === 'goal-elapsed').props['aria-label'], 'Goal elapsed time unavailable');
+    fail = true; await app.update({ activityKey: 'unconfirmed-goal' });
+    assert.equal(find(app.tree, node => node.props?.['data-goal-status'])?.props['data-goal-status'], 'unknown');
+    assert.equal(find(app.tree, node => node.props?.['aria-label'] === 'Pause goal'), undefined);
+    assert.ok(find(app.tree, node => node.props?.className === 'goal-recovery'));
+    fail = false; find(app.tree, node => node.type === 'button' && node.props.children === 'Check status').props.onClick(); await app.flush();
+    assert.ok(find(app.tree, node => node.props?.['aria-label'] === 'Pause goal'));
+    assert.equal(app.calls.filter(call => call.init.method === 'POST').length, 0);
+  } finally { app.close(); }
+});
+test('question header paging keeps each answer local and a rapid final Send submits the batch once', async () => {
+  const receipt = deferred<any>();
+  const item = { id: 'batch', revision: 4, availability: 'live', snapshot: { status: 'pending', expiresAtMs: 60000, questions: [
+    { questionId: 'format', question: 'Which format?', options: [{ label: 'Brief' }, { label: 'Detailed' }] },
+    { questionId: 'notes', question: 'What should stay?', options: [] },
+  ] } };
+  const props = { item, epoch: 'epoch', ready: true, refresh: async () => {}, compact: true };
+  const wrapper = QuestionCard(props as any), app = host(wrapper.type as any, wrapper.props, () => receipt.promise);
+  const writingKey = `e3:question:epoch:${retainedWindowId}:batch`;
+  app.storage.set(writingKey, JSON.stringify({ choices: { format: ['Brief'] }, text: { notes: 'Keep the original title.' } }));
+  const pageButton = (name: string) => find(app.tree, node => node.type === 'button' && node.props['aria-label'] === name);
+  try {
+    await app.flush(); pageButton('Next').props.onClick({ preventDefault() {} }); await app.flush();
+    assert.equal(JSON.parse(app.storage.get(writingKey)!).activeQuestionId, 'notes'); assert.equal(app.calls.length, 0);
+    pageButton('Previous').props.onClick({ preventDefault() {} }); await app.flush();
+    assert.equal(JSON.parse(app.storage.get(writingKey)!).choices.format[0], 'Brief');
+    pageButton('Next').props.onClick({ preventDefault() {} }); await app.flush();
+    const form = find(app.tree, node => node.type === 'form');
+    form.props.onSubmit({ preventDefault() {} }); form.props.onSubmit({ preventDefault() {} }); await app.flush();
+    assert.equal(app.calls.length, 1);
+    const sent = JSON.parse(String(app.calls[0].init.body));
+    assert.equal(sent.id, 'batch'); assert.equal(sent.expectedRevision, 4); assert.equal(sent.epoch, 'epoch');
+    assert.deepEqual(sent.answers, { format: ['Brief'], notes: ['Keep the original title.'] });
+    receipt.resolve({}); await app.flush();
   } finally { app.close(); }
 });
 for (const action of ['View image', 'Download', 'Refine']) test(`a late image save cannot ${action.toLowerCase()} after leaving its message`, async () => {

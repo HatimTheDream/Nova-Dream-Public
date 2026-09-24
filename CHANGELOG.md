@@ -1,3 +1,10 @@
+## [1.11.0] — 2026-09-23
+
+- Show a rounded, animated dot placeholder for observed image-generation calls; freeze it when stopping or unconfirmed, and remove it when the call ends. Give returned images a quieter, image-first layout with direct viewing, download and refinement. Keep image results visible outside collapsed work details, including after reopening a conversation.
+- Read Word, Excel and PowerPoint attachments through bounded text extraction, retaining original files and hashes, spreadsheet formulas/cached values, and slide notes. Reject unsafe or unreadable documents before sending.
+- Compact numbered question paging and Goal controls while preserving saved answers, exact approval identities and visible recovery for uncertain outcomes.
+- Give completed Research replies an expanded reading view and a compact list of their actual source links, including when reopening saved conversations.
+
 ## [1.10.10] — 2026-09-23
 
 - Clear every Assistant feature chip as soon as Send, Queue or Steer is pressed, including failed and unconfirmed attempts, while preserving the submitted feature and exact retry identity.

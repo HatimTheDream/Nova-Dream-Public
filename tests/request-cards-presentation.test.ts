@@ -334,3 +334,20 @@ test('the active batch uses the compact tray even when the current question allo
   assert.doesNotMatch(view.markup, /Nova needs your answer/);
   assert.equal(view.inputs.filter(input => input.type === 'checkbox' && 'checked' in input).length, 3);
 });
+
+test('a compact question tray keeps unknown receipt recovery and saved answers visible without a second request heading', () => {
+  const item = questionBatch();
+  item.action = { requestId: 'kept-answer', kind: 'answer', state: 'unknown', message: 'Your answer receipt is unconfirmed.' };
+  const controller = { approvals: { items: [], state: 'ready' }, questions: { items: [item], state: 'ready' }, refresh, conversations: [], select: () => {} } as unknown as ComponentProps<typeof ApprovalTray>['controller'];
+  const view = render(createElement(ApprovalTray, { controller, epoch: 'epoch', conversationId: 'conversation', working: true }), {
+    writing: { ...batchWriting(), activeQuestionId: 'surfaces' },
+  });
+  assert.match(view.markup, /Your answer receipt is unconfirmed/);
+  assert.doesNotMatch(view.markup, /Review request status|Nova needs your answer/);
+  assert.equal(view.button('Check status').disabled, false);
+  assert.ok('disabled' in view.fieldsets[0]);
+  assert.equal(navigation(view, 'Previous').disabled, false);
+  assert.equal(navigation(view, 'Next').disabled, false);
+  assert.match(view.markup, /Also check the tablet/);
+  assert.equal(view.buttons.some(button => /Send answer|Cancel question/.test(button.label)), false);
+});

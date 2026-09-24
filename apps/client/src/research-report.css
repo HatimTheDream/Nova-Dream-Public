@@ -1,0 +1,13 @@
+.research-report { min-width: 0; }
+.research-report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 18px; font-size: 13px; }
+.research-report-toolbar > span { display: inline-flex; align-items: center; gap: 6px; }
+.research-report-toolbar .text-button { min-height: 32px; color: inherit; font-size: inherit; }
+.research-report-sources { margin: 18px 0 8px; font-size: 13px; }
+.research-report-sources summary { width: fit-content; cursor: pointer; color: var(--muted); padding: 8px 0; }
+.research-report-sources ul { padding: 0; margin: 8px 0; list-style: none; display: grid; gap: 14px; }
+.research-report-sources li { display: grid; gap: 3px; min-width: 0; }
+.research-report-sources a { overflow-wrap: anywhere; }
+.research-report-sources li > span { color: var(--muted); font-size: 12px; }
+.dialog:has(.research-report-reader) { width: min(860px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
+.research-report-reader { max-width: 720px; margin-inline: auto; }
+@media (max-width: 600px) { .research-report-toolbar { margin-bottom: 12px; } }

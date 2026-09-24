@@ -1,0 +1,35 @@
+/* Questions and goal status share the composer's quiet, compact rhythm. */
+:root .question-card .question-page-header { display:flex; align-items:flex-start; gap:8px; margin-bottom:4px; }
+:root .question-card .question-page-title { flex:1; min-width:0; margin:4px 0; font-size:13px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; }
+:root .question-card .question-page-controls { display:flex; flex:none; align-items:center; gap:0; }
+:root .question-card .question-page-count { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; padding-inline:3px; }
+:root .assistant-workspace .question-card button.question-page-control { --button-depth:0px; --button-shadow-depth:0px; display:inline-flex; align-items:center; justify-content:center; width:32px; min-width:32px; height:32px; min-height:32px; padding:0; border:0; border-radius:8px; color:var(--muted); background:transparent; box-shadow:none; transform:none; }
+:root .assistant-workspace .question-card button.question-page-control:hover:not(:disabled) { color:var(--text); background:var(--raised); }
+:root .question-card .question-page-control.previous .e3-icon { transform:rotate(180deg); }
+:root .question-card legend.question-page-legend { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+:root .question-card .question-page-actions { justify-content:flex-end; }
+:root .question-card.paged-question fieldset { margin-bottom:0; }
+:root .question-card.paged-question .question-choice { padding-block:4px; margin-block:0; }
+:root .question-card.paged-question .question-choice small { font-size:11px; color:var(--muted); }
+
+:root .composer-progress .goal-inline { position:relative; min-width:0; margin:0; color:var(--muted); font-size:12px; }
+:root .composer-progress .goal-inline-row { display:flex; align-items:center; gap:2px; min-height:40px; padding-right:6px; border:1px solid var(--line); border-radius:14px 14px 0 0; background:var(--surface); }
+:root .composer-progress .goal-details { flex:1; min-width:0; }
+:root .composer-progress .goal-details>summary { min-height:38px; padding:6px 8px; gap:6px; border:0; background:transparent; border-radius:12px; }
+:root .composer-progress .goal-details .goal-status { font-size:12px; font-weight:400; }
+:root .composer-progress .goal-details .goal-objective { font-size:12px; }
+:root .composer-progress .goal-details .goal-elapsed { font-size:11px; }
+:root .composer-progress .goal-details-content { position:absolute; z-index:12; bottom:calc(100% + 6px); left:0; width:min(460px,100%); max-height:min(36vh,320px); overflow:auto; overscroll-behavior:contain; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 4px 16px #0001; }
+:root .composer-progress .goal-details-content>p { margin:0; line-height:1.5; overflow-wrap:anywhere; }
+:root .assistant-workspace .goal-inline button.goal-quiet-action { --button-depth:0px; --button-shadow-depth:0px; flex:none; min-height:36px; padding:6px 8px; border:0; border-radius:8px; background:transparent; color:var(--muted); box-shadow:none; transform:none; font-size:12px; font-weight:400; text-transform:none; }
+:root .assistant-workspace .goal-inline button.goal-quiet-action:hover:not(:disabled) { color:var(--text); background:var(--raised); }
+:root .assistant-workspace .goal-inline button.goal-quiet-action:focus-visible { outline:2px solid var(--violet); outline-offset:1px; }
+:root .composer-progress .goal-recovery { padding:6px 10px; border-inline:1px solid var(--line); background:var(--surface); }
+:root .composer-progress .goal-recovery p { margin:0; line-height:1.5; overflow-wrap:anywhere; }
+:root .composer-progress .goal-inline[data-goal-status=complete] .goal-inline-row { border-color:transparent; background:transparent; }
+@media (max-width:480px) {
+  :root .question-card .question-page-header { gap:4px; }
+  :root .composer-progress .goal-inline-row { padding-right:3px; }
+  :root .composer-progress .goal-details>summary { gap:5px; padding-inline:6px; }
+  :root .composer-progress .goal-details .goal-status { max-width:110px; white-space:normal; line-height:1.3; }
+}

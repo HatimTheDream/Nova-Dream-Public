@@ -42,8 +42,8 @@ function renderComposer(files: FileState, existing = false, active = false, text
   try {
     const time = '2026-09-19T12:00:00Z';
     const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: options.projectFile ? 'source-project' : null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
-    const sourceFile = { id: 'project-file', name: 'brief.docx', size: 12, sha256: 'b'.repeat(64), mimeType: 'application/octet-stream' };
-    const draft = { ...emptyDraft, text, projectId: options.projectFile ? 'source-project' : null, attachments: options.attachment ? [{ id: 'kept-file', name: options.invalidFile ? 'brief.docx' : 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
+    const sourceFile = { id: 'project-file', name: 'brief.docm', size: 12, sha256: 'b'.repeat(64), mimeType: 'application/octet-stream' };
+    const draft = { ...emptyDraft, text, projectId: options.projectFile ? 'source-project' : null, attachments: options.attachment ? [{ id: 'kept-file', name: options.invalidFile ? 'brief.docm' : 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
     const props = {
       appIcon: 'red',
       snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
@@ -120,7 +120,7 @@ test('invalid draft and Project sources block a new dispatch while keeping writi
       const view = renderComposer('ready', existing, false, 'Keep my original writing', source);
       assert.equal(view.button('Send message').disabled, true);
       assert.match(view.markup, /Keep my original writing/);
-      assert.match(view.markup, /brief.docx cannot be sent/);
+      assert.match(view.markup, /brief.docm cannot be sent/);
       assert.match(view.markup, /aria-describedby="assistant-source-issue"/);
       const reconcile = renderComposer('ready', existing, false, 'Keep my original writing', { ...source, receipt: true });
       assert.equal(reconcile.button('Send message').disabled, false, 'Existing request identity remains reconcilable');

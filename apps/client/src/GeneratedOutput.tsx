@@ -5,12 +5,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, File } from './icons';
 import type { AssistantOutput, Conversation, ConversationMessage, MessageAttachment } from '../../../packages/domain/assistant';
 import type { AssistantController } from './useAssistant';
+import './image-generation.css';
 
-export function savedMessageOutput(outputs: AssistantOutput[], conversation: Conversation, message: ConversationMessage, artifactId?: string) {
-  const nativeId = message.source?.nativeId ?? conversation.nativeId;
-  const ids = new Set([message.id, message.source?.nativeMessageId, ...(message.aliases ?? [])]);
-  return outputs.find(output => output.conversationId === conversation.id && output.nativeId === nativeId && ids.has(output.messageId) && output.messageHash === message.textHash && output.artifactId === artifactId && output.state === 'ready');
-}
+export { savedMessageOutput } from './saved-message-output';
+import { savedMessageOutput } from './saved-message-output';
 
 export function GeneratedOutput({ open, attachment, message, conversation, controller, epoch, blocked, refine, contentActions }: { open?: (file: Attachment, output?: AssistantOutput) => void; contentActions: ContentOutputActions; attachment: MessageAttachment; message: ConversationMessage; conversation: Conversation; controller: AssistantController; epoch: string; blocked: boolean; refine: (output: AssistantOutput) => Promise<void> }) {
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(false), [error, setError] = useState(''), [preview, setPreview] = useState('');
@@ -76,13 +74,14 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
     finally { scope.busy = false; if (scope.live) setBusy(false); }
   };
   return <section ref={container} className={`generated-output ${image ? 'generated-image' : ''}`} aria-label={`Generated output: ${attachment.name}`}>
-    <div className="generated-output-title"><File size={20}/><strong title={attachment.name}>{attachment.name}</strong>{output && <span className="metadata">v{output.version}</span>}</div>
+    <div className={image ? 'sr-only' : 'generated-output-title'}>{!image && <File size={20}/>}<strong title={attachment.name}>{attachment.name}</strong>{!image && output && <span className="metadata">v{output.version}</span>}</div>
     {image && loading && <p className="metadata" role="status">Loading image…</p>}
-    {preview && <img className="generated-output-image" src={preview} alt={attachment.name} onError={() => { setError('The image could not be displayed. Its original remains available to download.'); setPreview(''); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; }}/>}
+    {preview && <button type="button" className="generated-image-open" aria-label={`View image: ${attachment.name}`} disabled={!open || busy} onClick={() => void useImage('view')}><img className="generated-output-image" src={preview} alt={attachment.name} onError={() => { setError('The image could not be displayed. Its original remains available to download.'); setPreview(''); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; }}/></button>}
     {image ? <div className="generated-output-actions">
       {open && <button className="text-button" disabled={busy || !file && attachment.availability === 'unavailable'} onClick={() => void useImage('view')}>View image</button>}
       {file ? <a className="output-download text-button" download={file.name} href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a> : <button className="text-button" disabled={busy || attachment.availability === 'unavailable'} onClick={() => void useImage('download')}><Download size={16}/>Download</button>}
       {(output || attachment.artifactId) && <button className="text-button" disabled={busy || blocked || conversation.archived || !file && attachment.availability === 'unavailable'} onClick={() => void useImage('refine')}>Refine</button>}
+      {output && output.version > 1 && <span className="generated-image-version">v{output.version}</span>}
       {output?.file && <details className="output-action-disclosure"><summary>More</summary><div className="output-action-menu"><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/></div></details>}
       {!preview && !loading && <button className="text-button" disabled={!file && attachment.availability === 'unavailable'} onClick={() => void loadImage()}>Retry preview</button>}
     </div> : <div className="generated-output-actions">

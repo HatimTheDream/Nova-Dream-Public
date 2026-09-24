@@ -1,0 +1,16 @@
+.image-generation { margin: 14px 0 20px; max-width: 100%; }
+.image-generation-tile { width: min(180px, 100%); aspect-ratio: 1; border-radius: 18px; overflow: hidden; background: color-mix(in srgb, var(--text) 4%, var(--canvas)); position: relative; }
+.image-generation-dots { position: absolute; inset: 12px; color: color-mix(in srgb, var(--text) 24%, transparent); background: radial-gradient(circle, currentColor 1px, transparent 1.3px) 0 0 / 10px 10px; mask-image: radial-gradient(ellipse at 50% 35%, #000, transparent 72%); }
+.image-generation--generating .image-generation-dots { animation: image-generation-breathe 2.4s ease-in-out infinite; }
+.image-generation-label { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
+@keyframes image-generation-breathe { 0%, 100% { opacity: .38; transform: translateY(2px); } 50% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .image-generation--generating .image-generation-dots { animation: none; } }
+
+.generated-output.generated-image { border: 0; padding: 0; background: transparent; border-radius: 0; width: fit-content; max-width: 100%; }
+:root .assistant-workspace .generated-image button.generated-image-open { --button-depth: 0px; --button-shadow-depth: 0px; --button-fill: transparent; --button-border: transparent; --button-border-hover: transparent; display: block; min-height: 0; max-width: 100%; padding: 0; border: 0; border-radius: 16px; background: transparent; box-shadow: none; transform: none; overflow: hidden; cursor: zoom-in; }
+.generated-image .generated-image-open:disabled { cursor: default; opacity: 1; }
+.generated-image .generated-output-image { margin: 0; border-radius: 16px; max-width: 100%; max-height: 520px; object-fit: contain; }
+.generated-image .generated-output-actions { margin-top: 6px; gap: 12px; }
+.assistant-workspace .generated-image .generated-output-actions .text-button { --button-depth: 0px; --button-shadow-depth: 0px; min-height: 36px; padding: 6px 2px; border: 0; background: transparent; box-shadow: none; transform: none; font-size: 13px; font-weight: 400; text-transform: none; color: var(--muted); }
+.generated-image .generated-output-actions .text-button:hover { color: var(--text); }
+.generated-image .generated-image-version { color: var(--muted); font-size: 12px; }

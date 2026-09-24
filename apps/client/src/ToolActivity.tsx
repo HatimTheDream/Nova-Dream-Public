@@ -19,7 +19,7 @@ const activityNames: Record<string, [string, string, string]> = {
   imagegen: ['Creating an image', 'Created an image', 'Image creation'],
   github_identity_status: ['Checking GitHub identity', 'Checked GitHub identity', 'GitHub identity check'],
 };
-const aliases: Record<string, string> = { exec_command: 'exec', run_command: 'exec', read_file: 'read', write_file: 'write', edit_file: 'edit', image_generate: 'imagegen' };
+const aliases: Record<string, string> = { exec_command: 'exec', run_command: 'exec', read_file: 'read', write_file: 'write', edit_file: 'edit', image_generate: 'imagegen', generate_image: 'imagegen' };
 function activityName(name: string) { const leaf = name.split(/__|\./).at(-1) ?? name; return aliases[leaf] ?? leaf; }
 function readableName(name: string) { const label = activityName(name).replace(/[_-]+/g, ' ').replace(/\bgithub\b/gi, 'GitHub'); return label.charAt(0).toUpperCase() + label.slice(1); }
 export function activityLabel(name: string, running = false) { return activityNames[activityName(name)]?.[running ? 0 : 1] ?? readableName(name); }

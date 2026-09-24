@@ -4,7 +4,8 @@ import { readLocal, request, saveLocal } from './api';
 import { retainedWindowId } from './useWorkspace';
 import { useDeadline } from './useDeadline';
 import './approval-requests.css';
-import { ArrowUp, X } from './icons';
+import './assistant-guidance.css';
+import { ArrowRight, ArrowUp, X } from './icons';
 
 type Writing = { activeQuestionId?: string; other?: Record<string, boolean>; choices: Record<string, string[]>; text: Record<string, string> };
 const blank = (): Writing => ({ choices: {}, text: {} });
@@ -17,7 +18,7 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
   const [writing, setWriting] = useState<Writing>(() => secret ? blank() : readLocal<Writing>(key) ?? blank());
   const [secretValue, setSecretValue] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notSaved, setNotSaved] = useState(false);
   const [errorAction, setErrorAction] = useState('');
-  const activeField = useRef<HTMLFieldSetElement>(null), focusQuestion = useRef(false);
+  const activeField = useRef<HTMLFieldSetElement>(null), focusQuestion = useRef(false), actionBusy = useRef(false);
   const pending = item.snapshot.status === 'pending', missing = item.availability === 'missing', uncertain = item.action?.state === 'unknown', sending = item.action?.state === 'sending';
   const live = pending && !missing, clock = useDeadline(item.snapshot.expiresAtMs, live && !readOnly);
   const editable = live && !uncertain && !sending && !busy && !readOnly && !clock.expired;
@@ -43,14 +44,15 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
   useEffect(() => { if (focusQuestion.current) { activeField.current?.focus(); focusQuestion.current = false; } }, [current.questionId]);
   const hasDraft = !secret && Object.values(answers).some(values => values.some(Boolean));
   const act = async (action: 'resolve' | 'cancel' | 'check' | 'dismiss') => {
+    if (actionBusy.current) return;
     if ((action === 'resolve' || action === 'cancel') && (!editable || !ready || Date.now() >= item.snapshot.expiresAtMs)) return;
     if (action === 'resolve' && (!complete || paged && !last)) return;
-    setBusy(true); setError(''); setErrorAction(action);
+    actionBusy.current = true; setBusy(true); setError(''); setErrorAction(action);
     const input = { requestId: crypto.randomUUID(), epoch, id: item.id, ...(action !== 'check' ? { expectedRevision: item.revision } : {}), ...(action === 'resolve' ? { answers } : action === 'cancel' ? { cancel: true } : {}) };
     if (secret) setSecretValue('');
     try { await request(`assistant/question/${action === 'cancel' ? 'resolve' : action}`, input, undefined, 30000); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'The response could not be confirmed. Check this question’s status.'); }
-    finally { try { await refresh(); } catch { setError('The latest request status could not load. Check its status before continuing.'); } finally { setBusy(false); } }
+    finally { try { await refresh(); } catch { setError('The latest request status could not load. Check its status before continuing.'); } finally { actionBusy.current = false; setBusy(false); } }
   };
   const copy = async () => {
     try { await navigator.clipboard.writeText(item.snapshot.questions.map(q => `${q.question}\n${answers[q.questionId].join(', ')}`).join('\n\n')); }
@@ -73,8 +75,17 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
       event.preventDefault();
       if (!last) move(1); else if (complete && editable && ready) void act('resolve');
     }}>
+      {paged && <div className="question-page-header">
+        <p className="question-page-title" aria-hidden="true">{current.question}</p>
+        <div className="question-page-controls" aria-label="Question navigation">
+          <button key="previous-question" type="button" className="question-page-control previous" aria-label="Previous" title="Previous question" disabled={!page || busy || sending} onClick={event => { event.preventDefault(); move(-1); }}><ArrowRight size={14}/></button>
+          <span className="question-page-count" aria-live="polite" aria-atomic="true">{page + 1} of {item.snapshot.questions.length}</span>
+          {!last && <button key="next-question" type="button" className="question-page-control" aria-label="Next" title="Next question" disabled={!canNext} onClick={event => { event.preventDefault(); move(1); }}><ArrowRight size={14}/></button>}
+          {!uncertain && !sending && !clock.expired && !readOnly && <button type="button" className="question-page-control" aria-label="Cancel question" title="Cancel question" disabled={!editable || !ready} onClick={() => void act('cancel')}><X size={14}/></button>}
+        </div>
+      </div>}
       {(paged ? [current] : item.snapshot.questions).map((q, index) => <fieldset key={q.questionId} ref={paged ? activeField : undefined} tabIndex={paged ? -1 : undefined} disabled={!editable}>
-        <legend>{item.snapshot.questions.length > 1 && <span className="question-number" aria-live={paged ? 'polite' : undefined} aria-atomic={paged ? true : undefined}>Question {(paged ? page : index) + 1} of {item.snapshot.questions.length}</span>}{q.question}</legend>
+        <legend className={paged ? 'question-page-legend' : undefined}>{!paged && item.snapshot.questions.length > 1 && <span className="question-number">Question {index + 1} of {item.snapshot.questions.length}</span>}{q.question}</legend>
         {live ? <>{q.options.map((option, choiceIndex) => <label className="question-choice" key={option.label}><input type={q.multiSelect ? 'checkbox' : 'radio'} name={`${item.id}:${q.questionId}`} checked={(writing.choices[q.questionId] ?? []).includes(option.label)} onChange={event => change({ ...writing, other: { ...writing.other, [q.questionId]: q.multiSelect ? !!writing.other?.[q.questionId] : false }, choices: { ...writing.choices, [q.questionId]: q.multiSelect ? event.target.checked ? [...(writing.choices[q.questionId] ?? []), option.label] : (writing.choices[q.questionId] ?? []).filter(v => v !== option.label) : [option.label] } })}/><span className="question-choice-number" aria-hidden="true">{choiceIndex + 1}</span><span>{option.label}{option.description && <small>{option.description}</small>}</span></label>)}
           {!!q.options.length && q.isOther && q.multiSelect && <label className="question-choice"><input type={q.multiSelect ? 'checkbox' : 'radio'} name={`${item.id}:${q.questionId}`} checked={!!writing.other?.[q.questionId]} onChange={event => change({ ...writing, other: { ...writing.other, [q.questionId]: event.target.checked }, choices: { ...writing.choices, [q.questionId]: q.multiSelect ? writing.choices[q.questionId] ?? [] : [] } })}/><span>Write an answer</span></label>}
           {q.isSecret ? <><p className="metadata">Save {q.secretStore!.name} in OpenClaw’s secret store{q.secretStoreExisting ? ', replacing the saved value' : ''}. {q.secretStore!.reason}</p><p className="metadata">{q.secretStore!.allowedHosts?.length ? `Allowed hosts: ${q.secretStore!.allowedHosts.join(', ')}` : 'Allowed hosts not specified.'}</p><input type="password" aria-label={q.question} autoComplete="off" spellCheck={false} maxLength={65536} value={secretValue} onChange={event => setSecretValue(event.target.value)}/><p className="metadata">This value is sent only when you save. It is not kept in your chat or draft answers.</p></> : (!q.options.length || q.isOther || writing.other?.[q.questionId]) && <textarea aria-label={`Answer: ${q.question}`} rows={1} placeholder="Or write your own answer…" maxLength={65536} value={writing.text[q.questionId] ?? ''} onChange={event => change({ ...writing, ...(q.options.length && q.isOther && !q.multiSelect ? { other: { ...writing.other, [q.questionId]: !!event.target.value.trim() }, choices: { ...writing.choices, [q.questionId]: [] } } : {}), text: { ...writing.text, [q.questionId]: event.target.value } })}/>}</> : !uncertain && !sending && item.snapshot.answers && <p className="preserve-lines">{q.isSecret ? 'Secret stored. Its value is hidden.' : item.snapshot.answers.answers[q.questionId]?.join(', ')}</p>}
@@ -85,12 +96,7 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
           : uncertain ? <p className="request-state" role="status">{item.action?.message ?? 'Your answer is unconfirmed. Check its status before answering again.'}</p>
           : clock.expired ? <p className="request-state" role="status">The answer window ended.{hasDraft ? ' Your draft answer is kept.' : ''} Check the outcome.</p>
           : !ready && <p className="request-context">Reconnect to submit your answer.</p>}
-        {paged && <div className="question-navigation" aria-label="Question navigation">
-          <button key="previous-question" type="button" className="request-secondary" disabled={!page || busy || sending} onClick={event => { event.preventDefault(); move(-1); }}>Previous</button>
-          {!last ? <button key="next-question" type="button" className="primary request-primary" disabled={!canNext} onClick={event => { event.preventDefault(); move(1); }}>Next</button>
-            : !uncertain && !sending && !clock.expired && !readOnly && <button key="send-answers" type="submit" className="primary request-primary" disabled={!editable || !ready || !complete}>Send answers</button>}
-        </div>}
-        <div className="request-actions">{!uncertain && !sending && !clock.expired && !readOnly && <>{!paged && <button type="submit" className="primary request-primary" disabled={!editable || !ready || !complete}>{secret ? item.snapshot.questions[0].secretStoreExisting ? 'Replace saved secret' : 'Save secret' : 'Send answer'}</button>}<button type="button" className="request-secondary" disabled={!editable || !ready} onClick={() => void act('cancel')}>Cancel question</button></>}
+        <div className={`request-actions${paged ? ' question-page-actions' : ''}`}>{!uncertain && !sending && !clock.expired && !readOnly && <>{(!paged || last) && <button key={paged ? 'send-answers' : 'send-answer'} type="submit" className="primary request-primary" disabled={!editable || !ready || !complete}>{secret ? item.snapshot.questions[0].secretStoreExisting ? 'Replace saved secret' : 'Save secret' : paged ? 'Send answers' : 'Send answer'}</button>}{!paged && <button type="button" className="request-secondary" disabled={!editable || !ready} onClick={() => void act('cancel')}>Cancel question</button>}</>}
           {(uncertain || clock.expired || !!error) && !sending && <button type="button" className={uncertain || clock.expired ? 'primary request-primary' : 'request-secondary'} disabled={busy || !ready} onClick={() => void act('check')}>Check status</button>}
           {clock.expired && hasDraft && <button type="button" className="request-secondary" onClick={() => void copy()}>Copy draft answer</button>}
         </div>

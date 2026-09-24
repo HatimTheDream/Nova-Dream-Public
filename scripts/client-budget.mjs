@@ -141,7 +141,11 @@ import assert from 'node:assert/strict';
 // 1.10.9 repairs dictation connection, cancellation, retries and transcript order.
 // Measured total 640,060 (+940 / 0.15% over 1.10.8); bound at 641 KB while
 // preserving the startup and individual deferred-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 641000, deferredChunk: 80000 };
+// 1.11.0 adds observed image progress, compact guidance and a deferred Research
+// reader, deferred generated outputs and Office file recognition. Measured 642,937 total gzip bytes
+// (+2,635 / 0.41% over 1.10.10). Bound total at 643 KB; keep startup and
+// individual deferred-chunk ceilings unchanged. Office parsing stays server-side.
+export const clientLimits = { startup: 180000, total: 643000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

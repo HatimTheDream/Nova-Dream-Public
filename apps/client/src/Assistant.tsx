@@ -40,7 +40,10 @@ import { registerAssistantDraftNavigation } from './assistant-draft-navigation';
 import type { AssistantController } from './useAssistant';
 import type { VoiceController } from './voice-controller';
 import { ApiError, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
-import { GeneratedOutput, savedMessageOutput } from './GeneratedOutput';
+import { savedMessageOutput } from './saved-message-output';
+const GeneratedOutput = lazy(() => import('./GeneratedOutput').then(module => ({ default: module.GeneratedOutput })));
+const ResearchReport = lazy(() => import('./ResearchReport').then(module => ({ default: module.ResearchReport })));
+import { isResearchReport } from './research-report';
 import { ConversationAccountPanel, useConversationAccount } from './ConversationAccount';
 import { UserRound } from './icons';
 import type { MessagePin } from '../../../packages/domain/message-pins';
@@ -439,7 +442,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
     const delivery = message.role === 'user' ? message.delivery === 'unknown' ? 'Delivery Unconfirmed' : message.delivery === 'failed' ? 'Reply Failed · Input Saved' : message.delivery === 'cancelled' ? 'Stopped · Input Saved' : ['prepared', 'dispatching'].includes(message.delivery ?? '') ? 'Sending…' : undefined : undefined;
     return <article aria-label={`${message.role} message`} className={`chat-message message-${message.role} ${progressing ? 'message-progress' : ''} ${message.toolInfo && (message.role === 'tool' || !message.text.trim()) ? 'message-tool-compact' : ''}`} id={`message-${message.novaId ?? message.id}`} key={message.novaId ?? `${message.role}:${message.id}`}>
       {(message.role === 'tool' && !message.toolInfo || message.role === 'system') && <div className="message-author">{message.role === 'tool' ? 'Tool activity' : 'Conversation note'}</div>}
-      {!options?.hideTool && <HistoryTool message={message}/>}<SavedMessageText message={message}/>
+      {!options?.hideTool && <HistoryTool message={message}/>}{isResearchReport(message, operations, conversation!.id, controller.history?.nativeId) ? <Suspense fallback={<SavedMessageText message={message}/>}><ResearchReport key={`${snapshot.epoch}:${conversation!.id}:${message.id}:${message.textHash}`} text={message.authoredText ?? message.text}><SavedMessageText message={message}/></ResearchReport></Suspense> : <SavedMessageText message={message}/>}
       {delivery && <p className="metadata" role="status">{delivery}</p>}
       {(message.role === 'user' || message.role === 'assistant' && !!message.text.trim() && !progressing) && <MessageActions
         sources={source.operation ? () => setContextDialog({ kind: 'sources', operationId: source.operation!.id }) : undefined}
@@ -450,7 +453,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, openSe
         reading={readingAloud.messageId === (message.novaId ?? message.id) && ['preparing', 'speaking', 'paused'].includes(readingAloud.phase)} readAloud={() => readingAloud.messageId === (message.novaId ?? message.id) ? aloud.stop() : aloud.start(message.novaId ?? message.id, message.authoredText ?? message.text)}
         extras={message.role === 'assistant' && message.text.trim() ? <ReplyOutput open={openFile} message={message} conversation={conversation!} controller={controller} blocked={!!active || busy} refine={refine} contentActions={contentActions}/> : null}/>
       }
-      {message.attachments.map((file, index) => message.role === 'assistant' && (file.artifactId || file.localFile) ? <GeneratedOutput key={`${file.artifactId ?? file.localFile?.id}:${message.textHash}`} open={openFile} attachment={file} message={message} conversation={conversation!} controller={controller} epoch={snapshot.epoch} blocked={!!active || busy} refine={refine} contentActions={contentActions}/> : file.localFile && file.availability !== 'unavailable' ? <button className="source-link" key={file.localFile.id} onClick={() => openFile(file.localFile!)}>{file.name}</button> : <span className="source-link" key={file.artifactId ?? `${file.name}:${index}`}>{file.name}</span>)}
+      {message.attachments.map((file, index) => message.role === 'assistant' && (file.artifactId || file.localFile) ? <Suspense key={`${file.artifactId ?? file.localFile?.id}:${message.textHash}`} fallback={<LoadingRing label="Opening output…"/>}><GeneratedOutput open={openFile} attachment={file} message={message} conversation={conversation!} controller={controller} epoch={snapshot.epoch} blocked={!!active || busy} refine={refine} contentActions={contentActions}/></Suspense> : file.localFile && file.availability !== 'unavailable' ? <button className="source-link" key={file.localFile.id} onClick={() => openFile(file.localFile!)}>{file.name}</button> : <span className="source-link" key={file.artifactId ?? `${file.name}:${index}`}>{file.name}</span>)}
     </article>;
   };
   const transcriptRows = withQuestionReceipts(groupWorkMessages(groupVoiceMessages(voiceMessages), { operations, conversationId: conversation?.id ?? '', nativeId: controller.history?.nativeId, active: controller.history?.hasNewer ? undefined : active }), { epoch: snapshot.epoch, conversationId: conversation?.id ?? '', operations, questions: controller.questions?.items, plans: controller.plans, history: controller.history });

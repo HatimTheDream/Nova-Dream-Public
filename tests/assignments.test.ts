@@ -10,6 +10,7 @@ import { WorkerTransport } from './fixtures/assignment-worker.js';
 import { blankRecord, type Assignment, type AgentDesign, type Content } from '../packages/domain/workspace-records.js';
 import type { AssignmentAttempt } from '../packages/domain/assignments.js';
 import { sourcePdf } from './fixtures/source-files.js';
+import { officeEntries, officeZip } from './fixtures/office-files.js';
 
 const tick = () => new Promise<void>(ok => setTimeout(ok, 5));
 async function fixture(run: (f: { store: Store; service: AssignmentService; gateway: WorkerTransport; device: string; input: any; directory: string; plan: any; agent: any; source: any; update: (kind: any, record: any, patch: any) => any; replaceService: () => Promise<AssignmentService>; advance: (ms: number) => void }) => Promise<void>) {
@@ -99,15 +100,16 @@ test('assignment source files are captured in full once, with exact bytes retain
 }));
 test('unsupported, oversized and non-UTF-8 assignment files fail before a native run or durable attempt', () => fixture(async f => {
   let source = f.source, plan = f.plan;
-  for (const [name, bytes] of [['brief.docx', Buffer.from('unsupported document')], ['large.txt', Buffer.alloc(65537, 65)], ['binary.txt', Buffer.from([0xff, 0xfe, 0])]] as const) {
+  for (const [name, bytes] of [['brief.docm', Buffer.from('unsupported document')], ['large.txt', Buffer.alloc(65537, 65)], ['binary.txt', Buffer.from([0xff, 0xfe, 0])]] as const) {
     const file = f.store.upload(f.device, randomUUID(), f.store.epoch, name, bytes.toString('base64'));
     source = f.update('content', source, { assets: [file] }); plan = f.update('assignment', plan, { sources: [{ kind: 'content', id: source.id, revision: source.revision }] });
     assert.throws(() => f.service.start(f.device, { ...f.input, requestId: randomUUID(), revision: plan.revision }), /supported text source|Nothing was truncated|complete UTF-8/);
     assert.equal(f.gateway.nativeCalls.length, 0); assert.equal(f.service.state().attempts.length, 0);
   }
 }));
-test('binary assignment sources keep exact captured identities and remain subject to live source grants',()=>fixture(async f=>{
-  const file=f.store.upload(f.device,randomUUID(),f.store.epoch,'source.pdf',sourcePdf().toString('base64'));
+for (const format of ['pdf', 'docx'] as const) test(`${format} assignment sources keep exact captured identities and remain subject to live source grants`,()=>fixture(async f=>{
+  const bytes = format === 'pdf' ? sourcePdf() : officeZip(officeEntries('docx'));
+  const file=f.store.upload(f.device,randomUUID(),f.store.epoch,'source.' + format,bytes.toString('base64'));
   const source=f.update('content',f.source,{assets:[file]});
   let plan=f.update('assignment',f.plan,{sources:[{kind:'content',id:source.id,revision:source.revision}]});
   assert.throws(()=>f.service.start(f.device,{...f.input,revision:plan.revision}),/read access/);assert.equal(f.service.state().attempts.length,0);
@@ -117,7 +119,8 @@ test('binary assignment sources keep exact captured identities and remain subjec
   const started=f.service.start(f.device,{...f.input,requestId:randomUUID(),revision:plan.revision});await settle(f.service,started.id,'running');
   f.update('content',source,{assets:[]});
   assert.deepEqual(f.service.detail(started.id).capture.binaryFiles?.[0].file,file);assert.deepEqual(f.service.sourceFiles(started.id)[0].file,file);
-  assert.doesNotMatch(f.gateway.nativeCalls[0].message,/ORCHID 27/);assert.match(f.gateway.nativeCalls[0].message,/sources.read/);
+  assert.doesNotMatch(f.gateway.nativeCalls[0].message,/ORCHID 27|Alpha quantity: 4/);assert.match(f.gateway.nativeCalls[0].message,/sources.read/);
+  if (format === 'docx') assert.match(f.gateway.nativeCalls[0].message, /DOCX, XLSX and PPTX support text view/);
   f.update('agent',agent,{access:{}});assert.deepEqual(f.service.sourceFiles(started.id),[]);
 }));
 test('stale plan/Project, archived sources and foreign kinds fail before dispatch', () => fixture(async f => {

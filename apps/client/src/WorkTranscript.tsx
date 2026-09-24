@@ -8,6 +8,7 @@ import { workEntries, type WorkEntry } from './work-transcript';
 import { groupWorkActions } from './work-action-groups';
 import { ChevronDown, Device } from './icons';
 import { QuestionReceipts } from './QuestionReceipts';
+import { ImageGeneration } from './ImageGeneration';
 
 function ActionGroup({ summary, forceOpen, revealKey, children }: { summary: string; forceOpen: boolean; revealKey?: string; children: ReactNode }) {
   const [open, setOpen] = useState(forceOpen);
@@ -30,7 +31,10 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
   const fragment = !!message.workActivityOperation && !message.workOperation;
   const active = !!operation && !['completed', 'failed', 'cancelled'].includes(operation.state);
   const parts = (message.workParts ?? []).filter(part => part !== message.workFinal);
-  const entries = workEntries(parts, operation, { includeUnseen: !fragment }).filter(entry => entry.kind !== 'tool' || !['progress_card', 'update_plan'].includes(entry.tool.name));
+  // A generated result may arrive before the runtime's final text message.
+  // Keep that source-bearing result visible when completed activity collapses.
+  const outputs = parts.filter(part => part.role === 'assistant' && !part.toolInfo && part.attachments.length > 0);
+  const entries = workEntries(parts.filter(part => !outputs.includes(part)), operation, { includeUnseen: !fragment }).filter(entry => entry.kind !== 'tool' || !['progress_card', 'update_plan'].includes(entry.tool.name));
   const tools = entries.filter(entry => entry.kind === 'tool').map(entry => entry.tool);
   const labels = [...new Set(tools.filter(tool => tool.state === 'completed').map(tool => activityLabel(tool.name)))];
   const issues = tools.filter(tool => ['failed', 'blocked', 'unknown'].includes(tool.state)).length;
@@ -44,6 +48,7 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
     ? <Fragment key={`message:${entry.message.novaId ?? entry.message.id}`}>{renderMessage(entry.message)}</Fragment>
     : <div key={`tool:${entry.tool.id}:${index}`} tabIndex={entry.sources.some(matches) ? -1 : undefined} ref={entry.sources.some(matches) ? onMatch : undefined} className={entry.sources.some(matches) ? 'work-action matched-message' : 'work-action'}>
       <ActivityRow tool={entry.tool} unconfirmed={operation?.state === 'unknown' || !!operation && !active} forceOpen={entry.sources.some(matches)} revealKey={revealKey}/>
+      <ImageGeneration tool={entry.tool} operation={operation}/>
       {entry.sources.filter(source => {
         const identity = `${source.role}:${source.novaId ?? source.id}`;
         if (!source.attachments.length || source.role === 'assistant' && source.text.trim() || renderedSources.has(identity)) return false;
@@ -75,6 +80,7 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
     {fragment ? <>{activity(true)}<QuestionReceipts items={message.questionReceipts}/></> : <WorkPhase operation={operation} active={active} forceOpen={containsMatch} revealKey={revealKey} summary={summary}>
       {persistentAnswers ? content : content(true)}
     </WorkPhase>}
+    {outputs.map(part => <div key={`output:${part.novaId ?? part.id}`} tabIndex={matches(part) ? -1 : undefined} ref={matches(part) ? onMatch : undefined} className={matches(part) ? 'matched-message' : undefined}><QuestionReceipts items={part.questionReceipts}/>{renderMessage(part)}<QuestionReceipts items={part.questionReceiptsAfter}/></div>)}
     <QuestionReceipts items={message.workFinal?.questionReceipts}/>
     {message.workFinal && renderMessage(message.workFinal)}
     <QuestionReceipts items={message.workFinal?.questionReceiptsAfter}/>

@@ -9,4 +9,4 @@ export type SourceReading = {
   image?: { mimeType: 'image/jpeg'; data: string; width: number; height: number };
   truncated: boolean; notes: string[];
 };
-export const isBinarySource = (name: string) => /\.(pdf|png|jpe?g|webp)$/i.test(name);
+export const isBinarySource = (name: string) => /\.(pdf|png|jpe?g|webp|docx|xlsx|pptx)$/i.test(name);

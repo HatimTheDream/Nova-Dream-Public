@@ -4,6 +4,7 @@ import type { Conversation } from '../../../packages/domain/assistant';
 import { goalElapsedMs, goalElapsedLabel, type ChatGoal } from '../../../packages/domain/chat-goal';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { startPolling } from './polling';
+import './assistant-guidance.css';
 export function ChatGoalControl({ conversation, epoch, refresh, activityKey }: { conversation: Conversation; epoch: string; refresh(): Promise<void>; activityKey?: string }) {
   const key = `e3:chat-goal:${epoch}:${conversation.id}`;
   const [goal, setGoal] = useState<ChatGoal | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -64,8 +65,18 @@ export function ChatGoalControl({ conversation, epoch, refresh, activityKey }: {
     } finally { view.busy = false; if (view.live) setBusy(false); }
   };
   if (!goal && !pending) return readError ? <div className="metadata goal-read-status" role="status"><span>Goal status unavailable.</span><button className="text-button" disabled={checking} onClick={() => setRetry(n => n + 1)}>{checking ? 'Checking…' : 'Retry'}</button></div> : checking && activityKey ? <p className="metadata" role="status">Checking goal…</p> : null;
-  const elapsed = goal ? goalElapsedMs(goal, now) : undefined;
+  const elapsed = goal && !pending && !readError ? goalElapsedMs(goal, now) : undefined;
   const objective = goal?.displayObjective ?? goal?.objective ?? '';
-  const status = readError ? 'Goal status unconfirmed' : goal?.status === 'active' ? 'Pursuing goal' : goal?.status === 'complete' ? 'Goal complete' : goal?.status === 'paused' ? 'Goal paused' : goal ? `Goal · ${goal.status.replace(/_/g, ' ')}` : 'Checking goal';
-  return <details className="chat-goal"><summary><Target size={16}/><span className="goal-status">{status}</span><span className="goal-objective" title={objective}>{objective}</span><span className="goal-elapsed" aria-label="Goal elapsed time" title={elapsed === undefined ? "Elapsed time unavailable" : "Elapsed time"}>{elapsed === undefined ? "—" : goalElapsedLabel(elapsed)}</span><ChevronDown size={14}/></summary><div className="chat-goal-content">{goal && <p className="preserve-lines">{goal.displayObjective ?? goal.objective}</p>}{readError && <p role="status">{readError} <button className="text-button" disabled={checking || busy} onClick={() => setRetry(n => n + 1)}>Check status</button></p>}{error && <p role="status">{error}</p>}<div className="button-row">{pending ? <button disabled={busy || checking} onClick={() => void act(pending.action)}>Retry goal change</button> : goal?.status === 'active' ? <button disabled={busy || checking} onClick={() => void act('pause')}>Pause goal</button> : goal?.status !== 'complete' ? <button disabled={busy || checking} onClick={() => void act('resume')}>Resume goal</button> : null}{goal && !pending && goal.status !== 'active' && <button disabled={busy || checking} onClick={() => void act('clear')}>Clear goal</button>}</div></div></details>;
+  const status = pending ? busy ? 'Updating goal…' : 'Goal change unconfirmed' : readError ? 'Goal status unconfirmed' : goal?.status === 'active' ? 'Goal active' : goal?.status === 'complete' ? 'Goal complete' : goal?.status === 'paused' ? 'Goal paused' : goal ? `Goal · ${goal.status.replace(/_/g, ' ')}` : 'Checking goal';
+  const control = !readError && goal ? goal.status === 'active' ? 'pause' : goal.status !== 'complete' ? 'resume' : undefined : undefined;
+  return <section className="chat-goal goal-inline" aria-label="Chat goal" data-goal-status={pending ? 'unconfirmed' : readError ? 'unknown' : goal?.status}>
+    <div className="goal-inline-row">
+      <details className="goal-details">
+        <summary><Target size={16}/><span className="goal-status">{status}</span><span className="goal-objective" title={objective}>{objective}</span><span className="goal-elapsed" aria-label={elapsed === undefined ? 'Goal elapsed time unavailable' : 'Goal elapsed time'} title={elapsed === undefined ? 'Elapsed time unavailable' : 'Elapsed time'}>{elapsed === undefined ? '—' : goalElapsedLabel(elapsed)}</span><ChevronDown size={14}/></summary>
+        <div className="goal-details-content">{goal && <p className="preserve-lines">{objective}</p>}{goal && !pending && !readError && goal.status !== 'active' && <button type="button" className="goal-quiet-action" disabled={busy || checking} onClick={() => void act('clear')}>Clear goal</button>}</div>
+      </details>
+      {pending ? <button type="button" className="goal-quiet-action" disabled={busy || checking} onClick={() => void act(pending.action)}>Retry goal change</button> : control && <button type="button" className="goal-quiet-action" aria-label={control === 'pause' ? 'Pause goal' : 'Resume goal'} disabled={busy || checking} onClick={() => void act(control)}>{control === 'pause' ? 'Pause' : 'Resume'}</button>}
+    </div>
+    {(readError || error) && <div className="goal-recovery">{readError && <p role="status">{readError} <button type="button" className="goal-quiet-action" disabled={checking || busy} onClick={() => setRetry(n => n + 1)}>Check status</button></p>}{error && <p role="status">{error}</p>}</div>}
+  </section>;
 }

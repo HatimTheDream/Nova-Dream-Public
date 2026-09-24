@@ -5,14 +5,16 @@ import type { Attachment, Snapshot } from '../packages/domain/contracts';
 import type { PendingFile } from '../apps/client/src/api';
 import { assistantAttachmentAccept, assistantAttachmentIssue, assistantAttachmentLimit, assistantAttachmentMime } from '../packages/domain/assistant-attachments';
 import { sourceMimeTypes } from '../packages/domain/source-transfer';
+import { officeAttachmentMimeTypes } from '../packages/domain/office-attachments';
 
-test('Assistant readiness matches the existing runtime MIME formats and rejects unsupported originals', () => {
-  assert.deepEqual(assistantAttachmentAccept.split(',').sort(), Object.keys(sourceMimeTypes).map(extension => `.${extension}`).sort());
-  for (const [extension, mime] of Object.entries(sourceMimeTypes)) {
+test('Assistant readiness includes native formats and verified Office readings while rejecting unsupported originals', () => {
+  const formats = { ...sourceMimeTypes, ...officeAttachmentMimeTypes };
+  assert.deepEqual(assistantAttachmentAccept.split(',').sort(), Object.keys(formats).map(extension => `.${extension}`).sort());
+  for (const [extension, mime] of Object.entries(formats)) {
     assert.equal(assistantAttachmentMime(`source.${extension.toUpperCase()}`), mime);
     assert.equal(assistantAttachmentIssue({ name: `source.${extension}`, size: assistantAttachmentLimit }), undefined);
   }
-  for (const name of ['document.docx', 'workbook.xlsx', 'slides.pptx', 'source.ts', 'archive.zip', 'photo.heic', 'README', 'pdf', 'txt', 'source.__proto__', 'source.constructor']) {
+  for (const name of ['document.docm', 'workbook.xlsm', 'slides.pptm', 'legacy.doc', 'legacy.xls', 'legacy.ppt', 'source.ts', 'archive.zip', 'photo.heic', 'README', 'pdf', 'txt', 'source.__proto__', 'source.constructor']) {
     assert.equal(assistantAttachmentMime(name), undefined);
     assert.ok(assistantAttachmentIssue({ name })?.includes(name));
     assert.match(assistantAttachmentIssue({ name })!, /Your draft and saved files are kept/);
@@ -91,19 +93,19 @@ const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test('composer rejects an unsupported selection before reading, staging or linking any files', async t => {
   const f = fixture(t), original = f.draft();
-  await f.render().add(files('supported.txt', 'quarterly-report.docx'));
-  assert.match(f.render().notice, /quarterly-report\.docx cannot be sent to Assistant yet/);
+  await f.render().add(files('supported.txt', 'quarterly-report.docm'));
+  assert.match(f.render().notice, /quarterly-report\.docm cannot be sent to Assistant yet/);
   assert.equal(f.reads(), 0); assert.equal(f.changes(), 0);
   assert.deepEqual(f.writes, []); assert.deepEqual(f.requests, []); assert.deepEqual(f.draft(), original);
 });
 
 test('retained unsupported staging stays recoverable and never silently uploads or deletes', async t => {
-  const oldFile = { id: 'staged-original', draftId: 'draft:device', epoch: 'epoch', deviceId: 'device', name: 'original.xlsx', base64: 'a2VwdA==' };
+  const oldFile = { id: 'staged-original', draftId: 'draft:device', epoch: 'epoch', deviceId: 'device', name: 'original.xlsm', base64: 'a2VwdA==' };
   const f = fixture(t, true, [oldFile]);
   f.render(); for (const effect of f.state.effects) effect(); await settle();
   const recovered = f.render();
   assert.deepEqual(recovered.pending, [oldFile]);
-  assert.match(recovered.errors[oldFile.id], /original\.xlsx cannot be sent/);
+  assert.match(recovered.errors[oldFile.id], /original\.xlsm cannot be sent/);
   await recovered.retry(oldFile);
   assert.deepEqual(f.staged.get(oldFile.id), oldFile);
   assert.deepEqual(f.writes, []); assert.deepEqual(f.requests, []); assert.equal(f.changes(), 0);

@@ -14,6 +14,18 @@ const op = { id: 'op', conversationId: 'chat', nativeId: 'native', nativeRunId: 
 const message = (id: string, changes: Partial<TranscriptMessage> = {}): TranscriptMessage => ({ id, role: 'assistant', operationId: 'op', text: '', textHash: id, attachments: [], ...changes });
 const renderMessage = (part: ConversationMessage) => createElement('article', { 'data-message': part.id }, part.text, ...part.attachments.map(file => createElement('a', { key: file.name }, file.name)));
 
+test('a generated result received before final text remains visible outside completed activity, once and with its original identity', () => {
+  const output = message('generated', { text: 'Here is the image.', attachments: [{ artifactId: 'artifact-original', name: 'boat.png', type: 'image' }] });
+  const parts = [message('call', { toolInfo: { id: 'image', name: 'imagegen', state: 'called' } }), output, message('final', { text: op.text })];
+  const grouped = groupWorkMessages(parts, { operations: [op], conversationId: 'chat', nativeId: 'native' });
+  const html = renderToStaticMarkup(createElement(WorkTranscript, { message: grouped[0], renderMessage, match: { id: output.id } }));
+  assert.equal((html.match(/data-message="generated"/g) ?? []).length, 1);
+  assert.ok(html.indexOf('data-message="generated"') > html.lastIndexOf('</section>'));
+  assert.ok(html.indexOf('data-message="generated"') < html.indexOf('data-message="final"'));
+  assert.match(html, /tabindex="-1" class="matched-message"/);
+  assert.equal(output.attachments[0].artifactId, 'artifact-original');
+});
+
 test('the final answer stays outside the collapsed work phase and paired actions render once', () => {
   const parts = [message('commentary', { text: 'Looking into it.' }), message('call', { toolInfo: { id: 'read', name: 'read', state: 'called', entries: [{ id: 'read', name: 'read' }] } }), message('result', { role: 'tool', text: 'File contents', toolInfo: { id: 'read', name: 'read', state: 'completed' } }), message('final', { text: op.text })];
   const grouped = groupWorkMessages(parts, { operations: [op], conversationId: 'chat', nativeId: 'native' });

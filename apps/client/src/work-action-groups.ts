@@ -6,7 +6,7 @@ export type WorkActionDisplayEntry = WorkEntry | WorkActionGroup;
 
 const aliases: Record<string, string> = {
   exec_command: 'exec', run_command: 'exec', read_file: 'read', write_file: 'write',
-  edit_file: 'edit', image_generate: 'imagegen',
+  edit_file: 'edit', image_generate: 'imagegen', generate_image: 'imagegen',
 };
 const families: Record<string, [singular: string, plural: string]> = {
   read: ['Read a file', 'Read files'],

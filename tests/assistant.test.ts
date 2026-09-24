@@ -1132,14 +1132,14 @@ test('combined Project and draft files honor the message limit without discardin
 
 for (const source of ['draft', 'Project'] as const) {
   test(`unsupported ${source} files reject send and queue before admission while keeping exact originals`, () => fixture(async f => {
-    const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'original.docx', Buffer.from('Kept original bytes').toString('base64'));
+    const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'original.docm', Buffer.from('Kept original bytes').toString('base64'));
     const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
     const input = submission(f);
     if (source === 'draft') input.draftRevision = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, attachments: [...draft.value.attachments, file] } }).revision;
     else input.projectRevision = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'project', entityId: f.projectId, expectedRevision: 1, payload: { name: 'Project A', purpose: '', attachments: [file] } }).revision;
     const originalDraft = f.store.readEntity('draft', draft.id), originalProject = f.store.readEntity('project', f.projectId);
     for (const send of [() => f.service.submit(f.device, input), () => f.service.enqueue(f.device, { ...input, requestId: randomUUID() })]) {
-      assert.throws(send, error => error instanceof Fault && error.code === 'unsupported_attachment' && /original\.docx.*cannot be sent.*Your draft and saved files are kept/.test(error.message));
+      assert.throws(send, error => error instanceof Fault && error.code === 'unsupported_attachment' && /original\.docm.*cannot be sent.*Your draft and saved files are kept/.test(error.message));
     }
     assert.deepEqual(f.store.readEntity('draft', draft.id), originalDraft); assert.deepEqual(f.store.readEntity('project', f.projectId), originalProject);
     assert.equal(f.store.download(file.id).bytes.toString(), 'Kept original bytes');
@@ -1165,7 +1165,7 @@ test('all supported Assistant formats preserve their exact bytes and native MIME
 
 test('an older queued unsupported original stays paused when run readiness rejects it', () => fixture(async f => {
   const queued = queueDraft(f);
-  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'kept.xlsx', Buffer.from('Original workbook bytes').toString('base64'));
+  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'kept.xlsm', Buffer.from('Original workbook bytes').toString('base64'));
   const legacy = { ...queued, context: { ...queued.context, attachments: [file] } };
   f.store.internalWrite(`assistant:queue:${queued.id}`, legacy);
   assert.throws(() => f.service.runQueued(f.device, { requestId: randomUUID(), epoch: f.store.epoch, queueId: queued.id, expectedRevision: queued.revision }), error => error instanceof Fault && error.code === 'unsupported_attachment');
@@ -1176,10 +1176,10 @@ test('an older queued unsupported original stays paused when run readiness rejec
 
 test('a continued conversation checks its captured source files before admitting the first message', () => fixture(async f => {
   const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
-  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'historical-source.docx', Buffer.from('Kept historical source').toString('base64'));
+  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'historical-source.docm', Buffer.from('Kept historical source').toString('base64'));
   const resumed = { ...f.conversation, resumeContext: { transcript: draft.value.attachments[0], files: [file], digest: 'captured-resume-digest', sourceNativeId: randomUUID(), complete: true } };
   f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, resumed);
-  assert.throws(() => f.service.submit(f.device, submission(f)), error => error instanceof Fault && error.code === 'unsupported_attachment' && /historical-source\.docx/.test(error.message));
+  assert.throws(() => f.service.submit(f.device, submission(f)), error => error instanceof Fault && error.code === 'unsupported_attachment' && /historical-source\.docm/.test(error.message));
   assert.deepEqual(f.store.readEntity('draft', draft.id), draft);
   assert.equal(f.store.download(file.id).bytes.toString(), 'Kept historical source');
   assert.equal(f.service.operations().length, 0); assert.equal(f.gateway.calls.some(call => call.method === 'chat.send'), false);
@@ -1190,7 +1190,7 @@ test('unsupported later sources cannot obstruct reconciliation or resend an unkn
   const input = submission(f);
   f.service.submit(f.device, input); await tick();
   const unknown = f.service.operations()[0]; assert.equal(unknown.state, 'unknown');
-  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'later.docx', Buffer.from('Later original').toString('base64'));
+  const file = f.store.upload(f.device, randomUUID(), f.store.epoch, 'later.docm', Buffer.from('Later original').toString('base64'));
   f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'project', entityId: f.projectId, expectedRevision: 1, payload: { name: 'Project A', purpose: '', attachments: [file] } });
   const draft = f.store.readEntity('draft', `draft:${f.device}`)!;
   f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, text: 'Later kept writing', attachments: [file] } });
