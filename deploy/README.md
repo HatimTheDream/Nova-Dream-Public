@@ -31,6 +31,37 @@ Google/Microsoft server OAuth uses the exact web callback shown in Settings, `ht
 
 ChatGPT server setup offers the supported device-code flow. Accounts that disable device-code sign-in still need a separately prepared temporary host connection for OpenAI's localhost browser callback. Do not rewrite that provider callback, copy browser cookies or treat that limitation as solved. Signing in does not activate a microphone.
 
+## Optional Assistant web search
+
+The pinned **OpenClaw 2026.9.2** runtime supports Codex Hosted Search through an existing OpenAI/Codex sign-in. A separate search API key or account is not required for this route. It is an explicit operator choice: key-free managed providers are not selected automatically, and signing in for model replies alone does not prove that managed web search is configured.
+
+For a host that should use that route, merge this patch into its existing owned runtime configuration:
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "codex",
+        "openaiCodex": {
+          "enabled": true,
+          "mode": "live"
+        }
+      }
+    }
+  }
+}
+```
+
+Keep any existing domain restrictions and other settings. The Codex plugin must already be enabled and permitted, and the selected agent must have supported OpenAI authentication. Do not replace credentials or import an unrelated desktop account to make a search test pass.
+
+Back up the configuration, then use the service account and the **same isolated runtime environment/configuration path** as the running Assistant. Save the patch as a local JSON file and validate it with `openclaw config patch --file <patch-file> --dry-run --json`. Apply the reviewed patch with `openclaw config patch --file <patch-file>`; authenticated native `config.patch` is also supported and accepts the fresh revision from `config.get`. Do not point an ambient personal OpenClaw profile at this operation.
+
+Under the runtime's normal `hybrid` reload mode, these tool settings apply without restarting the Gateway. Confirm the accepted configuration and actual running state; a saved file or a successful validation alone is not acceptance. Run a fresh Research task that discovers a source through `web_search`, reads a returned page and produces usable citations. A successful direct page fetch does not establish that search works.
+
+See the [version-pinned web search guidance](https://github.com/openclaw/openclaw/blob/v2026.9.2/docs/tools/web.md#native-codex-web-search). This configures Nova's existing Research workflow; it does not provide or certify ChatGPT's proprietary Deep research engine.
+
 ## Backup, update and return
 
 Keep an encrypted app export, a closed database/attachment snapshot, the separate server credential and the previous verified release before changing the selected release. Preserve the absolute workspace/native-history paths. Stop one dispatcher before starting its replacement. Verify candidate health, saved record/link/blob identity, account state and one browser/phone journey after restart. Return to the previous release only with a schema-compatible paired snapshot; never run older code against a newer migrated database by assumption.
