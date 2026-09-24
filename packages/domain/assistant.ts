@@ -77,6 +77,8 @@ export type ConversationChanges = Partial<Pick<Conversation, 'title' | 'archived
 export type ContextManifest = {
   /** Captured only for new Chat Research requests. Historical and Work research stay direct. */
   researchWorkflow?: 'chat-research-v1';
+  /** Immutable public progress instructions, absent on historical captures. */
+  researchProgressGuidance?: string;
   planReview?: import('./assistant-plan.js').PlanReference & { previousProposal?: import('./assistant-plan.js').PlanProposal };
   approvedPlan?: import('./assistant-plan.js').PlanReference & { digest: string; proposal: import('./assistant-plan.js').PlanProposal };
   resumeDigest?: string;

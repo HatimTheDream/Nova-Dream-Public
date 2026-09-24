@@ -12,10 +12,17 @@
 :root button.research-control:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
 .research-controls-end { margin-left:auto; display:flex; align-items:center; gap:5px; }
 .research-countdown { opacity:.65; font-variant-numeric:tabular-nums; min-width:16px; }
-.research-status { color:var(--muted); font-size:12px; margin:12px 0 0; }
+.research-status { color:var(--muted); font-size:12px; margin:12px 0 0; overflow-wrap:anywhere; }
 .research-workflow footer .research-status { margin:0; }
 .research-progress-region { margin-top:22px; }
 .research-progress-region .research-status { margin:0 0 4px; }
+.research-current-activity > summary { display:flex; align-items:center; gap:7px; cursor:pointer; list-style:none; width:fit-content; max-width:100%; border-radius:4px; }
+.research-current-activity > summary::-webkit-details-marker { display:none; }
+.research-current-activity > summary .research-status { margin:0; }
+.research-current-activity > summary > svg { flex-shrink:0; color:var(--muted); }
+.research-current-activity[open] > summary > svg { transform:rotate(180deg); }
+.research-current-activity > summary:focus-visible { outline:2px solid var(--text); outline-offset:4px; }
+.research-activity-details { margin:12px 0; max-height:260px; overflow:auto; overscroll-behavior:contain; }
 .research-progress-row { display:flex; align-items:center; gap:12px; min-height:36px; }
 .research-progress { flex:1; min-width:0; height:4px; overflow:hidden; border-radius:2px; background:var(--line); }
 :root button.research-update { flex-shrink:0; border:1px solid var(--line); border-radius:999px; }
@@ -31,6 +38,3 @@
 @keyframes research-sweep { from { transform:translateX(-100%); } to { transform:translateX(360%); } }
 @media(prefers-reduced-motion:reduce) { .research-steps [data-state="active"] .research-step-mark,.research-progress--running::after { animation:none; } }
 @media(max-width:600px) { .research-workflow { padding:15px 13px; border-radius:14px; } .research-workflow h3 { font-size:14px; } .research-steps { gap:12px; margin:18px 0; } :root button.research-control { min-height:40px; padding:8px; } }
-
-.research-progress-fill { display:block; height:100%; border-radius:inherit; background:var(--text); transition:width .25s ease; }
-@media(prefers-reduced-motion:reduce) { .research-progress-fill { transition:none; } }

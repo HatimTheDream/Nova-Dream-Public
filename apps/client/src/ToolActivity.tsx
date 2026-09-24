@@ -59,12 +59,12 @@ export function StepsPill({ plan, operation }: { plan?: RunStep[]; operation?: A
     <button ref={trigger} className={`run-plan-pill${interrupted ? ' run-plan-pill--interrupted' : ''}`} type="button" aria-label={`${unconfirmed ? 'Last reported: ' : ''}${counter}, ${complete} complete`} title={`${complete} of ${plan.length} steps complete`} aria-expanded={expanded} aria-controls={expanded ? panelId : undefined} onClick={() => { if (pinned) close(); else setPinned(true); }}><span className="steps-pill-face">{interrupted ? <Interrupted size={13}/> : unconfirmed ? <span className="run-step-ring"/> : complete === plan.length ? <Check size={15}/> : settled ? <span className="run-step-ring"/> : <span className="run-pulse"/>}<strong>{unconfirmed ? 'Last reported · ' : ''}{counter}</strong></span></button>
   </section>;
 }
-export function ToolActivity({ operation }: { operation: AssistantOperation }) {
-  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan'].includes(tool.name));
+export function ToolActivity({ operation, paused = false }: { operation: AssistantOperation; paused?: boolean }) {
+  const tools = (operation.tools ?? []).filter(tool => !['progress_card', 'update_plan'].includes(activityName(tool.name)));
   if (!tools.length) return null;
-  return <div className="work-activity" aria-label={operation.state === 'unknown' ? 'Last reported activity' : 'Tool activity'}>
+  return <div className="work-activity" aria-label={paused || operation.state === 'unknown' ? 'Last reported activity' : 'Tool activity'}>
     {tools.length === 100 && <p className="work-activity-note">Showing the latest 100 actions.</p>}
-    <ol className="work-activity-list">{tools.map(tool => <li key={tool.id}><ActivityRow tool={tool} unconfirmed={operation.state === 'unknown' || ['completed', 'failed', 'cancelled'].includes(operation.state)}/></li>)}</ol>
+    <ol className="work-activity-list">{tools.map(tool => <li key={tool.id}><ActivityRow tool={tool} unconfirmed={paused || operation.state === 'unknown' || ['completed', 'failed', 'cancelled'].includes(operation.state)}/></li>)}</ol>
   </div>;
 }
 

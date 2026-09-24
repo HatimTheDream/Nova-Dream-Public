@@ -1,3 +1,9 @@
+## [1.12.2] — 2026-09-23
+
+- Show the current search, source read or reported research subtask beneath a stable approved outline, with activity details available inline.
+- Use an activity bar when remaining research work is unknown instead of treating completed checklist rows as an overall percentage. Keep completion tied to the actual finished run.
+- Pause live indicators when updates are unavailable or research needs an answer, and preserve clear stopping and interruption states without borrowing activity from another run.
+
 ## [1.12.1] — 2026-09-23
 
 - Simplify the active Chat Research card: keep the activity list, show a quiet Researching status above a slim progress bar, and place a circular Stop control beside the bar.

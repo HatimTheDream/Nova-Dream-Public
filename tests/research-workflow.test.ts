@@ -49,21 +49,23 @@ const button = (tree: any, label: string) => nodes(tree).find(node => node.type 
 const labelledButton = (tree: any, label: string) => nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === label);
 const byClass = (tree: any, name: string) => nodes(tree).filter(node => node.props?.className?.split(' ').includes(name));
 const progress = (tree: any) => nodes(tree).find(node => node.props.role === 'progressbar');
-const assertProgress = (tree: any, complete: number, total: number) => {
-  const bar = progress(tree); assert.ok(bar, 'Observed research steps need an accessible progress bar');
-  assert.equal(bar.props['aria-valuemin'], 0); assert.equal(bar.props['aria-valuemax'], total); assert.equal(bar.props['aria-valuenow'], complete);
-  assert.match(bar.props['aria-valuetext'], new RegExp(`${complete} of ${total} research steps complete`, 'i'));
+const statusText = (tree: any) => nodes(tree).filter(node => node.props.role === 'status').map(text).join(' ');
+const rows = (tree: any) => nodes(tree).filter(node => node.type === 'li');
+const assertProgress = (tree: any) => {
+  const bar = progress(tree); assert.ok(bar, 'Research activity needs an accessible progress indicator');
+  assert.equal(bar.props['aria-valuemin'], undefined); assert.equal(bar.props['aria-valuemax'], undefined); assert.equal(bar.props['aria-valuenow'], undefined);
+  assert.equal(typeof bar.props['aria-valuetext'], 'string'); assert.ok(bar.props['aria-valuetext'].length > 0);
   assert.notEqual(bar.props['aria-hidden'], true);
-  assert.doesNotMatch(text(tree), /\d+ of \d+ research steps complete/i, 'Measured counts belong to the accessible bar, not a duplicate visible row');
-  const fill = byClass(bar, 'research-progress-fill')[0]; assert.ok(fill, 'Determinate progress needs a visible completed segment');
-  assert.ok(Math.abs(parseFloat(fill.props.style.width) - complete / total * 100) < 0.000001, 'The visible completed segment must match observed step counts');
+  assert.doesNotMatch(text(tree) + bar.props['aria-valuetext'], /\d+ of \d+ research steps complete|\d+%/i, 'A changing checklist is not an overall-work denominator');
+  assert.equal(byClass(bar, 'research-progress-fill').length, 0, 'Checklist completion must not invent an overall completed segment');
   return bar;
 };
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { resolve, promise }; };
 const item = (extra: any = {}) => ({ id: 'research-a', epoch: 'epoch', kind: 'research', conversationId: 'chat-a', revision: 3, version: 1, state: 'ready', reviewDigest: 'a'.repeat(64), autoStartAt: '2026-09-23T12:00:45Z', versions: [{ version: 1, operationId: 'plan-operation', digest: 'a'.repeat(64), proposal: { title: 'How seasons work', summary: 'Compare primary sources.', steps: ['Proposed search', 'Proposed comparison'], assumptions: [], verification: ['Cite sources'] } }], ...extra });
-const operation = (extra: any = {}) => ({ id: 'research-operation', conversationId: 'chat-a', nativeRunId: 'native-run', state: 'running', context: { researchWorkflow: 'chat-research-v1' }, createdAt: '2026-09-23T11:59:00Z', updatedAt: '2026-09-23T11:59:30Z', plan: [{ id: 'source', label: 'Found primary sources', status: 'complete' }, { id: 'verify', label: 'Compare the evidence', status: 'active' }, { id: 'report', label: 'Write the report', status: 'waiting' }], tools: [{ id: 'read', name: 'web_fetch', title: 'Reading NASA', state: 'running', input: 'Earth seasons' }], ...extra });
-const active = (extra: any = {}) => item({ state: 'implementing', autoStartAt: undefined, approval: { requestId: 'approved', operationId: 'research-operation' }, ...extra });
-const props = (research = item(), extra: any = {}) => ({ item: research, operations: [], epoch: 'epoch', ready: true, refresh: async () => {}, ...extra });
+const operation = (extra: any = {}) => ({ id: 'research-operation', epoch: 'epoch', conversationId: 'chat-a', nativeId: 'native-session', nativeKey: 'agent:main:e3:research-fixture', connectionGeneration: 'generation', nativeRunId: 'native-run', state: 'running', context: { workMode: 'research', researchWorkflow: 'chat-research-v1', approvedPlan: { id: 'research-a', version: 1, digest: 'a'.repeat(64), proposal: item().versions[0].proposal } }, createdAt: '2026-09-23T11:59:00Z', updatedAt: '2026-09-23T11:59:30Z', plan: [{ id: 'source', label: 'Proposed search', detail: '', status: 'complete' }, { id: 'verify', label: 'Proposed comparison', detail: 'Comparing measurements from primary sources', status: 'active' }, { id: 'report', label: 'New runtime-only milestone', detail: '', status: 'waiting' }], planSequence: 1, tools: [{ id: 'search', name: 'web_search', title: 'Search', state: 'running', input: 'Earth seasons axial tilt', sequence: 2 }], ...extra });
+const active = (extra: any = {}) => item({ state: 'implementing', autoStartAt: undefined, approval: { requestId: 'approved', operationId: 'research-operation', version: 1, digest: 'a'.repeat(64) }, ...extra });
+const question = (extra: any = {}) => ({ id: 'a'.repeat(64), epoch: 'epoch', revision: 1, conversationId: 'chat-a', nativeId: 'native-session', nativeKey: 'agent:main:e3:research-fixture', connectionGeneration: 'generation', availability: 'live', fingerprint: 'fingerprint', snapshot: { id: 'question-a', sessionKey: 'agent:main:e3:research-fixture', runId: 'native-run', status: 'pending', questions: [{ questionId: 'scope', header: 'Scope', question: 'Which region should I compare?', options: [] }], createdAtMs: 1790164700000, expiresAtMs: 1790165900000 }, ...extra });
+const props = (research = item(), extra: any = {}) => ({ item: research, operations: [], epoch: 'epoch', ready: true, connected: true, connectionGeneration: 'generation', questions: [], refresh: async () => {}, ...extra });
 
 test('the inline ready card counts down to the server deadline without dispatching research itself', async () => {
   const app = host(props());
@@ -128,23 +130,24 @@ test('Cancel waits for server acknowledgement and retains the numbered proposal 
   } finally { app.close(); }
 });
 
-test('active research renders actual steps and actions for the exact approved operation', async () => {
+test('active research keeps approved proposal rows and shows a specific observed subtask for the exact operation', async () => {
   const stopped: string[] = [], updated: string[] = [];
   const app = host(props(active(), { operations: [operation()], stop: (id: string) => stopped.push(id), update: (id: string) => updated.push(id) }));
   try {
     await app.flush();
     const steps = nodes(app.tree).filter(node => node.type === 'li');
-    assert.deepEqual(steps.map(node => node.props['data-state']), ['complete', 'active', 'waiting']);
-    assert.match(text(steps[1]), /Compare the evidence/); assert.doesNotMatch(text(app.tree), /Proposed search/);
-    assert.match(text(app.tree), /Researching…/); assertProgress(app.tree, 1, 3);
-    assert.doesNotMatch(text(app.tree), /Researching for|1m 0s|1 of 3 research steps complete|Reading NASA|Earth seasons/);
+    assert.deepEqual(steps.map(node => node.props['data-state']), ['complete', 'active']);
+    assert.match(text(steps[0]), /Proposed search/); assert.match(text(steps[1]), /Proposed comparison/);
+    assert.doesNotMatch(text(app.tree), /New runtime-only milestone/);
+    assert.match(statusText(app.tree), /Earth seasons axial tilt/); assertProgress(app.tree);
+    assert.doesNotMatch(text(app.tree), /Researching for|1m 0s|1 of 3 research steps complete/);
     assert.equal(byClass(app.tree, 'research-current-tool').length, 0); assert.equal(app.timers, 0);
     const stopControl = labelledButton(app.tree, 'Stop research'); assert.ok(stopControl);
     assert.equal(text(stopControl), '', 'Stop is icon-only with an accessible action name');
     const row = byClass(app.tree, 'research-progress-row')[0], region = byClass(app.tree, 'research-progress-region')[0];
     assert.ok(row); assert.equal(nodes(row).includes(stopControl), true); assert.equal(nodes(row).includes(progress(app.tree)), true);
     assert.ok(nodes(row).indexOf(progress(app.tree)) < nodes(row).indexOf(stopControl), 'Stop follows the bar in its row');
-    const status = nodes(region).find(node => node.props.role === 'status'); assert.equal(text(status), 'Researching…');
+    const status = nodes(region).find(node => node.props.role === 'status'); assert.match(text(status), /Earth seasons axial tilt/);
     assert.ok(nodes(region).indexOf(status) < nodes(region).indexOf(row), 'The research status sits above the progress row');
     button(app.tree, 'Update').props.onClick(); stopControl.props.onClick();
     assert.deepEqual(updated, ['research-operation']); assert.deepEqual(stopped, ['research-operation']); assert.equal(app.calls.length, 0);
@@ -155,7 +158,7 @@ test('active research renders actual steps and actions for the exact approved op
 test('a pending Stop keeps honest stopping status and removes animated progress and live tools', async () => {
   const app = host(props(active(), { operations: [operation({ cancelRequested: true })], stop() {}, update() {} }));
   try {
-    await app.flush(); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree, 1, 3);
+    await app.flush(); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree);
     assert.equal(nodes(app.tree).some(node => node.props['data-state'] === 'active'), false);
     assert.equal(byClass(app.tree, 'research-current-tool').length, 0); assert.equal(button(app.tree, 'Update'), undefined);
     const stopControl = labelledButton(app.tree, 'Stopping research'); assert.ok(stopControl);
@@ -175,7 +178,7 @@ test('unknown research freezes progress and offers a read-only status check', as
   let refreshed = 0;
   const app = host(props(active({ state: 'unknown' }), { operations: [operation({ state: 'unknown' })], refresh: async () => { refreshed++; }, stop() {}, update() {} }));
   try {
-    await app.flush(); assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree, 1, 3);
+    await app.flush(); assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree);
     assert.equal(nodes(app.tree).some(node => node.props['data-state'] === 'active'), false);
     assert.match(text(app.tree), /Checking|unconfirmed/); assert.equal(labelledButton(app.tree, 'Stop research'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
     button(app.tree, 'Check status').props.onClick(); await app.flush(); assert.equal(refreshed, 1); assert.equal(app.calls.length, 0);
@@ -188,8 +191,8 @@ test('an operation becoming unknown before the plan refresh also freezes and exp
     await app.flush(); assert.equal(app.timers, 0);
     await app.update({ operations: [operation({ state: 'unknown' })] });
     assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-progress--running').length, 0);
-    assert.match(text(app.tree), /Checking|unconfirmed/); assert.ok(button(app.tree, 'Check status')); assertProgress(app.tree, 1, 3);
-    await app.advance(120000); assertProgress(app.tree, 1, 3);
+    assert.match(text(app.tree), /Checking|unconfirmed/); assert.ok(button(app.tree, 'Check status')); assertProgress(app.tree);
+    await app.advance(120000); assertProgress(app.tree);
   } finally { app.close(); }
 });
 
@@ -228,8 +231,8 @@ test('starting research clears the ready countdown timer and does not add an inn
     await app.flush(); assert.equal(app.timers, 1);
     await app.update({ item: active(), operations: [operation()] });
     assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-countdown').length, 0);
-    await app.advance(300000); assert.equal(app.timers, 0); assertProgress(app.tree, 1, 3);
-    assert.match(text(app.tree), /Researching…/); assert.doesNotMatch(text(app.tree), /Researching for|\d+m \d+s/);
+    await app.advance(300000); assert.equal(app.timers, 0); assertProgress(app.tree);
+    assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.doesNotMatch(text(app.tree), /Researching for|\d+m \d+s/);
     assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });
@@ -260,17 +263,24 @@ test('read-only research presents an existing amendment as read-only and disable
   } finally { app.close(); }
 });
 
-test('linear research progress derives completed and remaining counts only from observed operation steps', async () => {
+test('runtime checklist changes never replace approved rows or invent an overall research percentage', async () => {
   const observed = operation(), app = host(props(active(), { operations: [observed] }));
   try {
-    await app.flush(); assertProgress(app.tree, 1, 3);
-    await app.advance(30000); assertProgress(app.tree, 1, 3);
+    await app.flush(); assertProgress(app.tree); const originalLabels = rows(app.tree).map(node => text(node.props.children[1]).replace(/ · .*/, ''));
+    await app.advance(30000); assertProgress(app.tree);
     const revised = { ...observed, plan: observed.plan.map((step: any) => step.id === 'verify' ? { ...step, status: 'complete' } : step) };
-    await app.update({ operations: [revised] }); assertProgress(app.tree, 2, 3);
-    assert.doesNotMatch(text(app.tree), /\d+ of \d+ research steps complete/i, 'Measured progress remains accessible without adding a visible count row');
+    await app.update({ operations: [revised] }); assertProgress(app.tree);
+    assert.deepEqual(rows(app.tree).map(node => node.props['data-state']), ['complete', 'complete']);
+    assert.doesNotMatch(text(app.tree), /\d+ of \d+ research steps complete/i);
     assert.doesNotMatch(text(app.tree), /\d+% (?:of (?:the )?)?(?:work|research|effort|time)/i);
     const extended = { ...revised, plan: [...revised.plan, { id: 'check', label: 'Check a newly discovered source', status: 'waiting' }] };
-    await app.update({ operations: [extended] }); assertProgress(app.tree, 2, 4);
+    await app.update({ operations: [extended] }); assertProgress(app.tree);
+    assert.deepEqual(rows(app.tree).map(node => text(node.props.children[1]).replace(/ · .*/, '')), originalLabels);
+    assert.doesNotMatch(text(app.tree), /Check a newly discovered source/);
+    await app.update({ operations: [operation({ plan: [{ id: 'replacement', label: 'A different runtime checklist', detail: '', status: 'complete' }] })] });
+    assert.deepEqual(rows(app.tree).map(node => text(node.props.children[1]).replace(/ · .*/, '')), originalLabels);
+    assert.deepEqual(rows(app.tree).map(node => node.props['data-state']), ['waiting', 'waiting']);
+    assertProgress(app.tree);
   } finally { app.close(); }
 });
 
@@ -286,12 +296,13 @@ for (const plan of [undefined, []]) test(`research with ${plan ? 'an empty' : 'n
   } finally { app.close(); }
 });
 
-for (const state of ['unknown', 'cancelled', 'failed'] as const) test(`${state} research retains its last observed linear count without animating or advancing`, async () => {
+for (const state of ['unknown', 'cancelled', 'failed'] as const) test(`${state} research preserves its proposal and observed completion without animating or inventing a fraction`, async () => {
   const observed = operation({ state }), app = host(props(active({ state }), { operations: [observed] }));
   try {
-    await app.flush(); assertProgress(app.tree, 1, 3); assert.equal(app.timers, 0);
+    await app.flush(); assertProgress(app.tree); assert.equal(app.timers, 0);
     assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(nodes(app.tree).some(node => node.props['data-state'] === 'active'), false);
-    await app.advance(300000); assertProgress(app.tree, 1, 3); assert.equal(app.calls.length, 0);
+    assert.equal(rows(app.tree)[0].props['data-state'], 'complete');
+    await app.advance(300000); assertProgress(app.tree); assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });
 
@@ -311,5 +322,121 @@ test('unknown research without observed steps has no invented percentage or movi
     assert.equal(bar.props['aria-valuenow'], undefined); assert.equal(bar.props['aria-valuemax'], undefined);
     assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(byClass(app.tree, 'research-progress-fill').length, 0);
     assert.match(bar.props['aria-valuetext'], /unconfirmed/i); assert.equal(app.timers, 0);
+  } finally { app.close(); }
+});
+
+test('observed activity opens in a native inline disclosure for only its bound operation', async () => {
+  const observed = operation(), unrelated = operation({ id: 'other-operation', tools: [{ id: 'other-tool', name: 'web_search', input: 'Private unrelated query', state: 'running', sequence: 99 }] });
+  const app = host(props(active(), { operations: [unrelated, observed] }));
+  try {
+    await app.flush(); const disclosure = nodes(app.tree).find(node => node.type === 'details'); assert.ok(disclosure);
+    assert.ok(nodes(disclosure).find(node => node.type === 'summary'));
+    const activity = nodes(disclosure).find(node => node.type?.name === 'ToolActivity'); assert.ok(activity);
+    assert.equal(activity.props.operation.id, observed.id); assert.equal(activity.props.paused, false);
+    assert.doesNotMatch(text(app.tree), /Private unrelated query/);
+    assert.equal(nodes(app.tree).some(node => node.props.role === 'dialog' || node.props['aria-modal']), false);
+    await app.update({ connected: false });
+    const paused = nodes(app.tree).find(node => node.type?.name === 'ToolActivity'); assert.ok(paused); assert.equal(paused.props.paused, true);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0);
+  } finally { app.close(); }
+});
+
+for (const name of ['update_plan', 'functions.update_plan', 'mcp__progress_card']) test(`${name}-only activity does not create an empty research activity disclosure`, async () => {
+  const app = host(props(active(), { operations: [operation({ tools: [{ id: 'plan-tool', name, state: 'completed', sequence: 3 }] })] }));
+  try {
+    await app.flush(); assert.equal(nodes(app.tree).some(node => node.type === 'details'), false);
+    assert.ok(statusText(app.tree)); assertProgress(app.tree);
+  } finally { app.close(); }
+});
+
+test('a question bound to the current research run pauses live activity until the answer settles', async () => {
+  const app = host(props(active(), { operations: [operation()], questions: [question()], stop() {}, update() {} }));
+  try {
+    await app.flush(); assert.match(statusText(app.tree), /answer|question/i); assert.doesNotMatch(statusText(app.tree), /Earth seasons axial tilt/);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(rows(app.tree).some(row => row.props['data-state'] === 'active'), false);
+    assert.equal(button(app.tree, 'Update'), undefined); assertProgress(app.tree);
+    await app.update({ questions: [question({ action: { requestId: 'answering', kind: 'answer', state: 'unknown' } })] });
+    assert.match(statusText(app.tree), /Checking.*answer/i); assert.equal(byClass(app.tree, 'research-progress--running').length, 0);
+    await app.update({ questions: [question({ action: { requestId: 'answering', kind: 'answer', state: 'confirmed' } })] });
+    assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
+  } finally { app.close(); }
+});
+
+test('another run or connection question cannot pause the current research activity', async () => {
+  const source = question();
+  const app = host(props(active(), { operations: [operation()], questions: [question({ snapshot: { ...source.snapshot, runId: 'different-run' } }), question({ connectionGeneration: 'different-generation' }), question({ nativeId: 'different-native' })] }));
+  try {
+    await app.flush(); assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
+    assertProgress(app.tree);
+  } finally { app.close(); }
+});
+
+test('connection loss pauses observed activity while button readiness alone does not invent a disconnect', async () => {
+  const app = host(props(active(), { operations: [operation()], ready: false, connected: true }));
+  try {
+    await app.flush(); assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
+    await app.update({ ready: true, connected: false });
+    assert.match(statusText(app.tree), /connect|paused|unconfirmed/i); assert.doesNotMatch(statusText(app.tree), /Earth seasons axial tilt/);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(app.timers, 0);
+    await app.update({ connected: true });
+    assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
+  } finally { app.close(); }
+});
+
+test('a newly connected runtime generation cannot animate the original research run as current', async () => {
+  const app = host(props(active(), { operations: [operation()] }));
+  try {
+    await app.flush(); assert.match(statusText(app.tree), /Earth seasons axial tilt/); assert.equal(byClass(app.tree, 'research-progress--running').length, 1);
+    await app.update({ connectionGeneration: 'new-generation', connected: true });
+    assert.match(statusText(app.tree), /paused|unconfirmed/i); assert.doesNotMatch(statusText(app.tree), /Earth seasons axial tilt/);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(rows(app.tree)[0].props['data-state'], 'complete');
+    const retained = nodes(app.tree).find(node => node.type?.name === 'ToolActivity'); assert.ok(retained);
+    assert.equal(retained.props.operation.connectionGeneration, 'generation'); assert.equal(retained.props.paused, true);
+    assertProgress(app.tree);
+  } finally { app.close(); }
+});
+
+test('requested cancellation takes precedence over a question and lost connection', async () => {
+  const app = host(props(active(), { operations: [operation({ cancelRequested: true })], connected: false, questions: [question()], stop() {} }));
+  try {
+    await app.flush(); assert.match(statusText(app.tree), /Stopping/i); assert.doesNotMatch(statusText(app.tree), /answer|Earth seasons axial tilt/i);
+    assert.equal(labelledButton(app.tree, 'Stopping research').props.disabled, true); assert.equal(byClass(app.tree, 'research-progress--running').length, 0);
+  } finally { app.close(); }
+});
+
+for (const terminal of ['failed', 'cancelled', 'completed'] as const) test(`confirmed ${terminal} takes precedence over pending cancellation, questions and disconnection`, async () => {
+  const app = host(props(active(), { operations: [operation({ state: terminal, cancelRequested: true })], connected: false, questions: [question()], stop() {}, update() {} }));
+  try {
+    await app.flush();
+    if (terminal === 'completed') { assert.equal(app.tree, null); return; }
+    assert.match(statusText(app.tree), terminal === 'failed' ? /failed|interrupted|attention/i : /cancelled|stopped/i);
+    assert.doesNotMatch(statusText(app.tree), /Stopping|answer|Earth seasons axial tilt/i);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(labelledButton(app.tree, 'Stop research'), undefined);
+  } finally { app.close(); }
+});
+
+for (const mismatch of ['id', 'epoch', 'captured-plan', 'captured-version', 'captured-digest', 'work-space'] as const) test(`${mismatch} activity cannot supply research status, disclosure or controls`, async () => {
+  const source = operation(), approvedPlan = source.context.approvedPlan;
+  const other = mismatch === 'id' ? { ...source, id: 'other-operation' } : mismatch === 'epoch' ? { ...source, epoch: 'other-epoch' } : { ...source, context: { ...source.context, ...(mismatch === 'work-space' ? { space: 'work' } : { approvedPlan: { ...approvedPlan, ...(mismatch === 'captured-plan' ? { id: 'other-plan' } : mismatch === 'captured-version' ? { version: 2 } : { digest: 'b'.repeat(64) }) } }) } };
+  const app = host(props(active(), { operations: [other], stop() {}, update() {} }));
+  try {
+    await app.flush(); assert.doesNotMatch(text(app.tree), /Earth seasons axial tilt|Comparing measurements/);
+    assert.equal(nodes(app.tree).some(node => node.type === 'details' || node.type?.name === 'ToolActivity'), false);
+    assert.equal(labelledButton(app.tree, 'Stop research'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
+    assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.deepEqual(rows(app.tree).map(row => row.props['data-state']), ['waiting', 'waiting']);
+  } finally { app.close(); }
+});
+
+test('long proposal text stays readable text while the live subtask remains bounded', async () => {
+  const longLabel = 'Review the full research scope including accessibility and source quality. '.repeat(30) + '<script>not executable</script>';
+  const proposal = { ...item().versions[0].proposal, steps: [longLabel, 'Compare primary sources'] };
+  const record = active({ versions: [{ ...item().versions[0], proposal }] });
+  const source = operation(), observed = { ...source, context: { ...source.context, approvedPlan: { ...source.context.approvedPlan, proposal } }, plan: [{ id: 'long', label: longLabel, detail: 'Comparing primary source measurements '.repeat(80), status: 'active' }], tools: [] };
+  const app = host(props(record, { operations: [observed] }));
+  try {
+    await app.flush(); assert.ok(text(rows(app.tree)[0]).includes(longLabel));
+    assert.equal(nodes(app.tree).some(node => node.type === 'script' || node.props.dangerouslySetInnerHTML), false);
+    assert.match(statusText(app.tree), /Comparing primary source measurements/); assert.ok(statusText(app.tree).length < 1000, 'The narrow activity summary must remain bounded');
+    assertProgress(app.tree);
   } finally { app.close(); }
 });

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 export const workModeSchema = z.enum(['chat', 'plan', 'research', 'image', 'goal']);
 export type WorkMode = z.infer<typeof workModeSchema>;
+/** Captured verbatim on new Chat research turns so saved envelopes stay stable. */
+export const researchProgressGuidance = 'Keep the approved research plan as broad milestones throughout the investigation. When using update_plan or progress_card, retain those exact step labels and their original order; update only their reported status. Do not replace the milestones with individual searches, websites or small subtasks. Give one short public description of the concrete current action through the planning tool explanation field, or the active step detail field when supported. For example, describe the evidence you are comparing or the particular report section you are drafting. Update that description when the action changes, and never leave a completed action described as current. This is a concise activity summary, not private reasoning or a transcript of internal deliberation. Report only actions actually underway, including writing the final report only when that is happening. Do not invent percentages, estimates of remaining time, source counts or proof that a milestone is complete.';
 /** Versioned by its captured researchWorkflow; never used to reconstruct older research turns. */
 export function chatResearchInstructions(approved: boolean): string {
   return approved
