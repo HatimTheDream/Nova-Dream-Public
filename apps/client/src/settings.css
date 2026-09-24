@@ -128,4 +128,7 @@
 .usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
 
 .settings-tabs [role=tab] > span { display: block; width: 100%; text-align: inherit; }
-.settings-about > p { font-size:12px; }
+.settings-versions { margin: 8px 0 0; }
+.settings-versions > div { display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:7px 0; }
+.settings-versions dt, .settings-versions dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+.settings-versions dd { text-align:right; font-variant-numeric:tabular-nums; }

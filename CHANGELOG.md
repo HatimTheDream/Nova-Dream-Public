@@ -1,3 +1,7 @@
+## [1.12.11] — 2026-09-24
+
+- Show Nova Dream and the connected agent service's reported version in About, replacing the redundant build number. Keep the display accurate through connection changes and avoid background reads when About is closed.
+
 ## [1.12.10] — 2026-09-24
 
 - Dictation writes directly into the composer as words arrive, with recording state shown on the microphone button. Keep surrounding writing and edits, avoid duplicate insertion on Stop, and retain interrupted transcripts for recovery.

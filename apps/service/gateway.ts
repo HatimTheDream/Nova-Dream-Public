@@ -2,6 +2,7 @@ import { createHash, createPublicKey, generateKeyPairSync, randomUUID, sign } fr
 import { GatewayClient, type DeviceIdentity, type GatewayClientOptions } from '@openclaw/gateway-client';
 import type { EventFrame, HelloOk } from '@openclaw/gateway-protocol/frame-guards';
 import type { AssistantConnection, AssistantModel } from '../../packages/domain/assistant.js';
+import { agentServiceInfo, type AgentServiceInfo } from '../../packages/domain/agent-service.js';
 import { Fault, Store } from './store.js';
 import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
 
@@ -12,6 +13,7 @@ type ModelCatalog = { models?: { id: string; name?: string; provider?: string; a
 const catalogSignature = (catalog: ModelCatalog) => JSON.stringify((catalog.models ?? []).map(({ id, provider, available, reasoning, thinkingLevels }) => ({ id, provider, available, reasoning, thinkingLevels })).sort((a, b) => `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`)));
 export interface AssistantTransport {
   status(): AssistantConnection;
+  serviceInfo?(): AgentServiceInfo;
   request<T = Record<string, unknown>>(method: string, params: unknown): Promise<T>;
   subscribe(listener: (event: EventFrame) => void): () => void;
   models(): Promise<AssistantModel[]>;
@@ -38,6 +40,7 @@ export class Gateway implements AssistantTransport {
   private resetModels() { ++this.catalogEpoch; this.catalogRequest = undefined; this.discoveredCatalog = undefined; }
   constructor(private store: Store, private version = 'development', private createClient: (options: GatewayClientOptions) => Client = options => new GatewayClient(options), private purpose: 'assistant' | 'skill-management' | 'permission-control' | 'response-control' | 'approval-review' | 'question-review' | 'browser-control' | 'account-control' | 'speech-playback' = 'assistant') {}
   status(): AssistantConnection { return structuredClone(this.connection); }
+  serviceInfo(): AgentServiceInfo { return agentServiceInfo({ id: 'openclaw', name: 'OpenClaw', state: this.connection.state, version: this.hello?.server?.version }); }
   subscribe(listener: (event: EventFrame) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   attachmentPolicy() { return { ...this.hello?.policy.attachments, maxPayload: this.hello?.policy.maxPayload }; }
   async configure(url: string, token?: string) {
@@ -96,9 +99,10 @@ export class Gateway implements AssistantTransport {
       },
       onEvent: event => { if (live()) for (const listener of this.listeners) listener(event); },
       onGap: () => { if (live()) for (const listener of this.listeners) listener({ type: 'event', event: 'e3.history-gap', payload: { generation } }); },
-      onClose: () => { if (live()) { this.resetModels(); this.connection = { ...this.connection, state: 'disconnected', modelAuthReady: false, message: 'OpenClaw disconnected. Saved work is kept; admitted runs will be reconciled.' }; for (const listener of this.listeners) listener({ type: 'event', event: 'e3.disconnected', payload: { generation } }); } },
+      onClose: () => { if (live()) { this.hello = undefined; this.resetModels(); this.connection = { ...this.connection, state: 'disconnected', modelAuthReady: false, message: 'OpenClaw disconnected. Saved work is kept; admitted runs will be reconciled.' }; for (const listener of this.listeners) listener({ type: 'event', event: 'e3.disconnected', payload: { generation } }); } },
       onConnectError: error => {
         if (!live()) return;
+        this.hello = undefined;
         this.resetModels();
         const details = (error as Error & { details?: Record<string, unknown> }).details;
         const pairing = typeof details?.requestId === 'string';

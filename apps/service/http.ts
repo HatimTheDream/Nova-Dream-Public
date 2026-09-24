@@ -61,6 +61,7 @@ import { SkillManagement, type SkillManagementTransport } from './skill-manageme
 import { connectionSchema, assistantRequestSchema } from '../../packages/domain/assistant.js';
 import { z } from 'zod';
 import { ManagedRuntime } from './runtime.js';
+import { agentServiceInfo } from '../../packages/domain/agent-service.js';
 import { ChatGptSignIn } from './sign-in.js';
 import { ChatGptAccount } from './chatgpt-account.js';
 import { ChatGptAccountControl } from './account-control.js';
@@ -589,6 +590,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/mail/index/read' && request.method === 'POST') return json(200, await mailIndex.read(device, await commandBody(request)));
         if (url.pathname === '/api/mail/index/command' && request.method === 'POST') return json(200, await mailIndex.command(device, await commandBody(request)));
         if (url.pathname === '/api/accounts/probe' && request.method === 'POST') return json(200, await accounts.probe(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/service' && request.method === 'GET') return json(200, agentServiceInfo(gateway.serviceInfo?.()));
         if (url.pathname === '/api/assistant/runtime' && request.method === 'GET') return json(200, runtime?.status() ?? { state: 'unavailable', message: 'This test transport has no managed runtime.' });
         if (url.pathname === '/api/assistant/voice/catalog' && request.method === 'GET') return json(200, await voice.read());
         const voiceMatch = /^\/api\/assistant\/voice\/([a-f0-9-]{36})$/.exec(url.pathname);

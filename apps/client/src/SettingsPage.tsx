@@ -5,6 +5,7 @@ import type { AppIconChoice, Snapshot } from '../../../packages/domain/contracts
 import type { AccessContext } from '../../../packages/domain/phone';
 import { Connections } from './Connections';
 import { ProviderAccounts } from './ProviderAccounts';
+import { AboutSettings } from './AboutSettings';
 import { ArrowLeft } from './icons';
 import './settings.css';
 
@@ -72,7 +73,7 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
       </div>
     </div>
     <div className="settings-content">
-    <SettingsPanel id="general" active={current.id === 'general'}>{general}</SettingsPanel>
+    <SettingsPanel id="general" active={current.id === 'general'}>{general}<AboutSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} active={current.id === 'general'} online={online}/></SettingsPanel>
     {!phone && <SettingsPanel id="accounts" active={current.id === 'accounts'}><section className="card settings-card settings-accounts">
       <h2>Connected accounts</h2>
       {recoveryPaused && <p className="notice">Connections are paused in this copy. Open Data to review recovery.</p>}
