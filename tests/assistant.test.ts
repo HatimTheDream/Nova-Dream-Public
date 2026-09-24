@@ -38,7 +38,7 @@ class Transport implements AssistantTransport {
   emit(payload: unknown) { for (const fn of this.listeners) fn({ type: 'event', event: 'agent', payload }); }
   async request<T>(method: string, raw: unknown): Promise<T> {
     const params = raw as any; this.calls.push({ method, params });
-    if (method === 'e3.workspace.policy') return { version: 1, protected: true, ...params } as T;
+    if (method === 'e3.workspace.policy') return { version: 1, protected: true, researchWorkflow: 'chat-research-v1', ...params } as T;
     if (method === 'artifacts.download') return this.artifactReply as T;
     if (method === 'sessions.create') { if (!/^agent:main:/.test(params.key)) throw new GatewayClientRequestError({ code: 'INVALID_REQUEST', message: 'Multiple agents are configured; session creation needs an explicit owner.' }); if (this.rejectCreate) throw new GatewayClientRequestError({ code: 'INVALID_REQUEST', message: 'label already in use' }); const sessionId = randomUUID(); this.sessions.set(params.key, sessionId); if (params.fork && params.parentSessionKey) this.forkHistories.set(params.key, [...this.messages]); return { key: params.key, sessionId, entry: { sessionId, permissionMode: params.permissionMode } } as T; }
     if (method === 'sessions.fork') { const key = `fixture:fork:${randomUUID()}`; this.sessions.set(key, randomUUID()); this.forkHistories.set(key, this.messages.slice(0, this.messages.findIndex(m => m.__openclaw?.id === params.entryId))); return { sessionKey: key } as T; }
@@ -766,7 +766,7 @@ test('Plan and Research are retained with exact submitted inputs and affect runn
     await tick();
     assert.equal(op.context.workMode, mode); assert.equal(op.input, draft.value.text);
     const sent = f.gateway.calls.filter(c => c.method === 'chat.send').at(-1)!;
-    assert.match(sent.params.message, mode === 'plan' ? /selected Plan mode.*Produce a concrete plan/s : /selected Research mode.*cite direct source links/s);
+    assert.match(sent.params.message, mode === 'plan' ? /selected Plan mode.*Produce a concrete plan/s : /selected Deep research in Chat.*nova_plan.*Do not begin web searches/s);
     assert.ok(sent.params.message.endsWith(draft.value.text));
     const live = f.service.operations().find(o => o.id === op.id)!;
     f.gateway.emit({ runId: live.nativeRunId, sessionKey: live.nativeKey, seq: 10, stream: 'lifecycle', data: { phase: 'end' } }); await tick();

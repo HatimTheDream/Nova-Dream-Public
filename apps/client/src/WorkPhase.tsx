@@ -31,17 +31,18 @@ function activitySummary(operation?: AssistantOperation): string | undefined {
   return [actions && `${actions}${completed.length > 3 ? ' · More activity below' : ''}.`, attention].filter(Boolean).join(' ') || undefined;
 }
 
-export function WorkPhase({ operation, active = !!operation && !isSettled(operation), children, forceOpen = false, revealKey, summary }: {
+export function WorkPhase({ operation, active = !!operation && !isSettled(operation), children, forceOpen = false, revealKey, summary, initiallyCollapsed = false }: {
   operation?: AssistantOperation;
   active?: boolean;
   children: ReactNode | ((expanded: boolean) => ReactNode);
   forceOpen?: boolean;
   revealKey?: string;
   summary?: string;
+  initiallyCollapsed?: boolean;
 }) {
-  const [open, setOpen] = useState(active || forceOpen), [now, setNow] = useState(Date.now), panelId = useId();
+  const [open, setOpen] = useState(active && !initiallyCollapsed || forceOpen), [now, setNow] = useState(Date.now), panelId = useId();
   const ticking = active && !!operation && !isSettled(operation) && operation.state !== 'unknown';
-  useEffect(() => { setOpen(active || forceOpen); }, [active, operation?.id]);
+  useEffect(() => { setOpen(active && !initiallyCollapsed || forceOpen); }, [active, operation?.id, initiallyCollapsed]);
   useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen, revealKey]);
   useEffect(() => {
     if (!ticking) return;

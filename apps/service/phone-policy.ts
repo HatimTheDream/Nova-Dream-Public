@@ -93,6 +93,8 @@ POST /api/assistant/module-actions
 POST /api/assistant/module-action
 POST /api/assistant/plan/approve
 POST /api/assistant/plan/amend
+POST /api/assistant/plan/hold
+POST /api/assistant/plan/cancel
 POST /api/assistant/submit
 POST /api/assistant/voice/consult
 POST /api/assistant/voice/end

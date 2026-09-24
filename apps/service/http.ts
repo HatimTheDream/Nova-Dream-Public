@@ -673,6 +673,8 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/conversations' && request.method === 'POST') return json(200, await assistant.create(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/plan/approve' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/plan/amend' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request), true));
+        if (url.pathname === '/api/assistant/plan/hold' && request.method === 'POST') return json(200, assistant.plans.hold(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/plan/cancel' && request.method === 'POST') return json(200, assistant.plans.hold(device, await commandBody(request), true));
         if (url.pathname === '/api/assistant/submit' && request.method === 'POST') {
           if (gateway.status().state === 'unconfigured') throw new Fault(503, 'assistant_unverified', 'Assistant execution is not configured. The draft remains saved; nothing was dispatched.');
           return json(200, assistant.submit(device, await commandBody(request)));

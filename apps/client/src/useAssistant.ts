@@ -60,7 +60,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
     void refresh();
     return () => { mounted.current = false; readers.forEach(reader => reader.cancel()); historyReader.current?.cancel(); };
   }, [readers, refresh, snapshot.epoch, snapshot.deviceId]);
-  const active = state.operations.some(op => ['prepared', 'dispatching', 'accepted', 'running'].includes(op.state));
+  const active = state.operations.some(op => ['prepared', 'dispatching', 'accepted', 'running'].includes(op.state)) || state.plans?.some(plan => plan.kind === 'research' && plan.state === 'ready' && !!plan.autoStartAt);
   useEffect(() => {
     const stops = readers.map(reader => pollReader(reader, () => active ? 1500 : visible ? 15000 : 60000, 60000));
     return () => stops.forEach(stop => stop());

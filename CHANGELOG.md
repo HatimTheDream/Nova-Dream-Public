@@ -1,3 +1,10 @@
+## [1.12.0] — 2026-09-23
+
+- Give Chat Research a saved research plan, edit/start/cancel controls, a service-owned start countdown, read-only investigation progress, and interruption recovery. Keep Work Research in the normal Codex-style conversation flow.
+- Show completed-versus-total observed research steps in a linear bar and distinguish research cards from the conversation background.
+- Keep completed Chat research reports inside the conversation, with in-place expansion, actual citation links, observed activity and Markdown export; remove the floating document viewer.
+- Preserve exact research decisions across retries, pause automatic starts after disconnect or restart, and prevent stale edits or approvals from starting duplicate work.
+
 ## [1.11.0] — 2026-09-23
 
 - Show a rounded, animated dot placeholder for observed image-generation calls; freeze it when stopping or unconfirmed, and remove it when the call ends. Give returned images a quieter, image-first layout with direct viewing, download and refinement. Keep image results visible outside collapsed work details, including after reopening a conversation.

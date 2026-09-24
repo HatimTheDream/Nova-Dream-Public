@@ -77,7 +77,7 @@ export function WorkTranscript({ message, renderMessage, match, onMatch, checkSt
     </div>
   </>;
   return <div className="work-transcript">
-    {fragment ? <>{activity(true)}<QuestionReceipts items={message.questionReceipts}/></> : <WorkPhase operation={operation} active={active} forceOpen={containsMatch} revealKey={revealKey} summary={summary}>
+    {fragment ? <>{activity(true)}<QuestionReceipts items={message.questionReceipts}/></> : <WorkPhase operation={operation} active={active} forceOpen={containsMatch} revealKey={revealKey} summary={summary} initiallyCollapsed={operation?.context?.researchWorkflow === 'chat-research-v1'}>
       {persistentAnswers ? content : content(true)}
     </WorkPhase>}
     {outputs.map(part => <div key={`output:${part.novaId ?? part.id}`} tabIndex={matches(part) ? -1 : undefined} ref={matches(part) ? onMatch : undefined} className={matches(part) ? 'matched-message' : undefined}><QuestionReceipts items={part.questionReceipts}/>{renderMessage(part)}<QuestionReceipts items={part.questionReceiptsAfter}/></div>)}

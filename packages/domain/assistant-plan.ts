@@ -15,12 +15,17 @@ export type PlanVersion = {
   proposal?: PlanProposal; digest?: string; questionIds?: string[];
 };
 export type AssistantPlan = {
+  /** Missing on legacy records and ordinary implementation plans. */
+  kind?: 'research';
   id: string; epoch: string; conversationId: string; revision: number; version: number;
   state: 'drafting' | 'ready' | 'implementing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
   versions: PlanVersion[]; createdAt: string; updatedAt: string;
   permissionMode: PermissionMode; sourceContext: ContextManifest;
   approval?: { requestId: string; version: number; digest: string; operationId: string; approvedAt: string };
   error?: string; reviewDigest?: string;
+  /** Service-owned research countdown; a client countdown never admits work. */
+  autoStartAt?: string; autoStartRequestId?: string;
+  autoStartHeld?: 'editing' | 'restarted' | 'needs-review'; autoStartError?: string;
 };
 export const planDecisionSchema = z.object({
   requestId: z.uuid(), epoch: z.uuid(), id: z.uuid(), expectedRevision: z.number().int().positive(),
@@ -33,6 +38,8 @@ export const planToolSchema = z.object({
   proposal: planProposalSchema,
 }).strict();
 export const planningReadTools = new Set(['nova_read', 'nova_plan', 'read', 'read_file', 'list_dir', 'grep', 'glob', 'web_search', 'web_fetch', 'request_user_input', 'update_plan', 'progress_card', 'session_status']);
+/** Preparation may inspect supplied context and clarify scope, but not begin web research. */
+export const researchPreparationTools = new Set(['nova_read', 'nova_plan', 'read', 'read_file', 'list_dir', 'grep', 'glob', 'request_user_input', 'update_plan', 'progress_card', 'session_status']);
 /** Explicit reads only. Shell/Code Mode, browser actions, delegation and unknown tools are not read-only. */
 export function planningToolAllowed(name: string) { return planningReadTools.has(name); }
 export const planTerminal = new Set<AssistantOperation['state']>(['completed', 'failed', 'cancelled']);

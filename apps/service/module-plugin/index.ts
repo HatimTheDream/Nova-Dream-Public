@@ -38,12 +38,12 @@ export function registerModuleTools(api:ModulePluginApi){
    const input=z.object({nativeKey:z.string().min(1),nativeId:z.uuid()}).strict().safeParse(params);
    if(!input.success||api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:input.data.nativeKey,readConsistency:'latest'})?.sessionId!==input.data.nativeId)return respond(false,undefined,{code:'INVALID_REQUEST',message:'The original Nova session is unavailable.'});
    protectedSessions.add(JSON.stringify([input.data.nativeKey,input.data.nativeId]));
-   respond(true,{version:1,protected:true,...input.data});
+   respond(true,{version:1,protected:true,researchWorkflow:'chat-research-v1',...input.data});
   },{scope:'operator.read'});
  }
  api.registerTool(context=>{
   if(context.agentId!=='main'||!context.sessionKey||!context.sessionId||api.runtime.version!=='2026.9.2')return null;
-  return {name:'nova_plan',label:'Save plan for review',description:'Save the concrete Plan proposal after necessary questions are answered. The owner reviews the saved version and explicitly approves implementation. This tool does not perform or approve implementation. Call once, then finish this planning turn.',parameters:z.toJSONSchema(planProposalSchema),async execute(toolCallId:string,raw:unknown){
+  return {name:'nova_plan',label:'Save plan for review',description:'Save a concrete Plan or Chat Deep research proposal after necessary questions are answered. For research include the research question, investigation steps, source approach, assumptions and evidence criteria. Nova reviews and admits the exact saved version before implementation or investigation begins. This tool does not approve or perform that work. Call once, then finish this preparation turn.',parameters:z.toJSONSchema(planProposalSchema),async execute(toolCallId:string,raw:unknown){
    const proposal=planProposalSchema.parse(raw),session=api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey!,readConsistency:'latest'});
    if(!session||session.sessionId!==context.sessionId||session.permissionModePending)throw new Error('The planning conversation changed.');
    const result=await bridge('/plan',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,toolCallId,proposal});

@@ -50,7 +50,7 @@ test('trusted native policy checks exact session and blocks failed bridge checks
  const epoch=randomUUID(),sessionId=randomUUID();let policy:any,method:any;
  const api:ModulePluginApi={registrationMode:'full',pluginConfig:{epoch,bundlePath:'/owned/plugin',url:`http://127.0.0.1:${(server.address() as any).port}/workspace`,token:'b'.repeat(64)},runtime:{version:'2026.9.2',agent:{session:{getSessionEntry:()=>({sessionId})}}},registerTool:()=>{},registerTrustedToolPolicy:value=>policy=value,registerGatewayMethod:(name,value)=>{assert.equal(name,'e3.workspace.policy');method=value;}};
  registerModuleTools(api);assert.equal(policy.id,'nova-plan-read-only');
- let handshake:any;method({params:{nativeKey:'agent:main:e3:fixture',nativeId:sessionId},respond:(...args:any[])=>handshake=args});assert.equal(handshake[0],true);
+ let handshake:any;method({params:{nativeKey:'agent:main:e3:fixture',nativeId:sessionId},respond:(...args:any[])=>handshake=args});assert.equal(handshake[0],true);assert.equal(handshake[1].researchWorkflow,'chat-research-v1');
  const context={agentId:'main',sessionId,sessionKey:'agent:main:e3:fixture',runId:randomUUID()};
  assert.equal((await policy.evaluate({toolName:'exec'},context)).block,true);assert.equal((await policy.evaluate({toolName:'read'},context)).block,false);
  assert.equal(received[0].path,'/workspace/policy');assert.equal(received[0].body.nativeId,sessionId);assert.equal(received[0].body.runId,context.runId);

@@ -21,3 +21,12 @@ test('source disclosure preserves actual distinct links and excludes unsafe URLs
   const sources = researchSources([{ href: 'https://science.nasa.gov/earth/', title: ' NASA Earth ' }, { href: 'https://science.nasa.gov/earth/', title: 'Repeated citation' }, { href: 'https://www.noaa.gov/', title: '' }, ...['#footnote', 'javascript:alert(1)', 'file:///private', 'https://user:password@example.com'].map(href => ({ href, title: 'Unsafe' }))]);
   assert.deepEqual(sources, [{ href: 'https://science.nasa.gov/earth/', title: 'NASA Earth', host: 'science.nasa.gov' }, { href: 'https://www.noaa.gov/', title: 'www.noaa.gov', host: 'noaa.gov' }]);
 });
+
+test('Chat reports use captured space and completed execution, never a Work answer or research preparation', () => {
+  const research = { ...operation, context: { ...operation.context, space: 'chat' as const, researchWorkflow: 'chat-research-v1' as const, approvedPlan: { id: 'plan', version: 1, digest: 'a'.repeat(64), proposal: { title: 'Seasons', summary: 'Explain seasons', steps: ['Compare'], assumptions: [], verification: ['Check citations'] } } } };
+  assert.ok(isResearchReport(message, [research], 'chat-a', 'session-a', 'work'), 'captured Chat remains Chat when another space is selected');
+  assert.equal(isResearchReport(message, [{ ...research, context: { ...research.context, space: 'work' } }], 'chat-a', 'session-a'), false);
+  assert.equal(isResearchReport(message, [{ ...research, context: { ...research.context, approvedPlan: undefined, planReview: { id: 'plan', version: 1 } } }], 'chat-a', 'session-a'), false);
+  assert.equal(isResearchReport(message, [operation], 'chat-a', 'session-a', 'work'), false, 'legacy Work reports stay ordinary answers');
+  assert.equal(isResearchReport(message, [{ ...research, steerTarget: 'other' } as AssistantOperation], 'chat-a', 'session-a'), false);
+});
