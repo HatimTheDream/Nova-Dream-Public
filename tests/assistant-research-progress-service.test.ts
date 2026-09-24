@@ -105,8 +105,9 @@ test('permanent conversation removal also removes its progress receipts while pr
   assert.equal(f.store.internalList('assistant:research-progress:').length,1);assert.ok(f.store.internalRead(foreign));
 });
 
-test('independent native full policy and tool-discovery factories share only service-admitted exact calls', async t => {
+test('native tool preparation admits exact research calls independently of full policy registration', async t => {
   const f = fixture(t), requests: { path: string; body: any }[] = [];
+  let abortDuringAdmission: AbortController | undefined;
   const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer ' + 'b'.repeat(64));
     let raw = ''; for await (const part of req) raw += part;
@@ -116,6 +117,7 @@ test('independent native full policy and tool-discovery factories share only ser
       const result = req.url === '/workspace/policy' ? f.plans.toolPolicy(body)
         : req.url === '/workspace/research-progress/authorize' ? f.progress.authorizeTool(body)
         : req.url === '/workspace/research-progress' ? f.progress.reportTool(body) : assert.fail('Unexpected bridge path');
+      if (req.url === '/workspace/research-progress/authorize' && body.toolCallId === 'cancel-during-admission') abortDuringAdmission?.abort();
       res.end(JSON.stringify(result));
     } catch (reason) {
       assert.ok(reason instanceof Error); res.statusCode = reason instanceof Fault ? reason.status : 400;
@@ -132,41 +134,62 @@ test('independent native full policy and tool-discovery factories share only ser
   const native = { agentId: 'main', sessionKey: f.operation.nativeKey, sessionId: f.operation.nativeId, runId: f.operation.nativeRunId! };
   const tool = discoveryFactory({ agentId: native.agentId, sessionKey: native.sessionKey, sessionId: native.sessionId });
   assert.equal(tool.parameters.additionalProperties, false); assert.equal(discoveryFactory({ ...native, agentId: 'other' }), null);
-  const admit = (toolCallId: string, context = native) => policy.evaluate({ toolName: 'nova_research_progress', runId: context.runId, toolCallId }, { ...context, toolCallId });
+  const admit = (toolCallId: string, hookContext: unknown = native, signal?: AbortSignal, raw: unknown = estimate) => tool.prepareBeforeToolCallParams(raw, { toolCallId, hookContext, signal });
   const actualCall = `exec-${randomUUID()}`;
   await assert.rejects(tool.execute(actualCall, estimate), /run could not be verified/);
-  assert.equal(await admit('before-session-handshake'), undefined);
+  // A prepared runtime generation may contain no full-registration policy.
+  // Native preparation must still capture its exact IDs, without asking the model.
+  assert.equal(await admit(actualCall), estimate);
+  const first = await tool.execute(actualCall, estimate); assert.deepEqual(first.details, { saved: true, revision: 1 });
+  assert.equal(f.get().researchEstimate!.binding.nativeRunId, f.operation.nativeRunId);
   let protection: any;
   protectSession({ params: { nativeKey: native.sessionKey, nativeId: native.sessionId }, respond: (ok: boolean, result: unknown) => protection = { ok, result } });
   assert.deepEqual(protection, { ok: true, result: { version: 1, protected: true, researchWorkflow: 'chat-research-v1', nativeKey: native.sessionKey, nativeId: native.sessionId } });
   assert.equal((await policy.evaluate({ toolName: tool.name }, native)).block, true);
   assert.equal((await policy.evaluate({ toolName: tool.name, runId: randomUUID(), toolCallId: actualCall }, { ...native, toolCallId: actualCall })).block, true);
-  assert.equal((await admit(actualCall)).block, false);
-  const first = await tool.execute(actualCall, estimate); assert.deepEqual(first.details, { saved: true, revision: 1 });
-  assert.equal(f.get().researchEstimate!.binding.nativeRunId, f.operation.nativeRunId);
+  const authorizations = requests.filter(request => request.path === '/workspace/research-progress/authorize').length;
+  assert.equal((await policy.evaluate({ toolName: tool.name, runId: native.runId, toolCallId: actualCall }, { ...native, toolCallId: actualCall })).block, false);
+  assert.equal(requests.filter(request => request.path === '/workspace/research-progress/authorize').length, authorizations, 'policy must not duplicate preparation admission');
   const submitted = requests.filter(request => request.path === '/workspace/research-progress').at(-1)!;
   assert.equal('runId' in submitted.body, false); assert.deepEqual(submitted.body.estimate, estimate);
   await assert.rejects(tool.execute(actualCall, estimate), /run could not be verified/);
-  assert.equal((await admit(actualCall)).block, false);
+  assert.equal(await admit(actualCall), estimate);
   assert.deepEqual((await tool.execute(actualCall, estimate)).details, { saved: true, revision: 1 });
   assert.equal(f.get().researchEstimate!.revision, 1);
-  assert.equal((await admit('overlap')).block, false); assert.equal((await admit('overlap')).block, true);
+  assert.equal(await admit('overlap'), estimate); await assert.rejects(admit('overlap'), /conflicts/);
   await assert.rejects(tool.execute('overlap', estimate), /run could not be verified/);
-  const signal = new AbortController(), nativeWithSignal = { ...native, abortSignal: signal.signal };
-  assert.equal((await admit('cancelled-native', nativeWithSignal)).block, false); signal.abort();
+  const signal = new AbortController();
+  assert.equal(await admit('cancelled-native', native, signal.signal), estimate); signal.abort();
   const count = requests.length; await assert.rejects(tool.execute('cancelled-native', estimate, signal.signal), { name: 'AbortError' }); assert.equal(requests.length, count);
-  assert.equal((await admit('cancelled-before-policy', nativeWithSignal)).block, true); assert.equal(requests.length, count);
-  assert.equal((await admit('stop-between')).block, false); f.save({ ...f.get(), cancelRequested: true });
+  await assert.rejects(admit('cancelled-before-preparation', native, signal.signal), { name: 'AbortError' }); assert.equal(requests.length, count);
+  for (const hookContext of [undefined, { ...native, agentId: 'other' }, { ...native, sessionKey: 'agent:main:other' }, { ...native, sessionId: randomUUID() }, { ...native, runId: '' }]) {
+    await assert.rejects(tool.prepareBeforeToolCallParams(estimate, { toolCallId: 'wrong-identity', hookContext }));
+  }
+  await assert.rejects(admit('model-supplied-id', native, undefined, { ...estimate, runId: native.runId }));
+  assert.equal(requests.length, count, 'invalid native identities and model-supplied IDs never reach the bridge');
+  await assert.rejects(admit('wrong-native-run', { ...native, runId: randomUUID() }), /unavailable/);
+  assert.equal(await admit('stop-between'), estimate); f.save({ ...f.get(), cancelRequested: true });
   await assert.rejects(tool.execute('stop-between', estimate), /active/); f.save({ ...f.get(), cancelRequested: false });
-  assert.equal((await admit('revision-conflict')).block, false);
+  assert.equal(await admit('revision-conflict'), estimate);
   const conflict = await tool.execute('revision-conflict', estimate); assert.equal(conflict.isError, true); assert.equal(conflict.details.current.revision, 1);
   assert.deepEqual(conflict.details.current.estimate.items, estimate.items);
-  assert.equal((await admit('concurrent-execute')).block, false);
+  assert.equal(await admit('concurrent-execute'), estimate);
   const next = { ...estimate, expectedRevision: 1, items: estimate.items.map(item => item.id === 'study' ? { ...item, status: 'complete' } : item) };
+  // The native wrapper may adjust estimate arguments after preparation, but
+  // execution validates them again and never accepts a model-supplied run ID.
+  const beforeRewrite = requests.length;
+  await assert.rejects(tool.execute('concurrent-execute', { ...next, runId: native.runId }));
+  assert.equal(requests.length, beforeRewrite);
   const concurrent = await Promise.allSettled([tool.execute('concurrent-execute', next), tool.execute('concurrent-execute', next)]);
   assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1); assert.equal(f.get().researchEstimate!.revision, 2);
-  assert.equal((await admit('session-change')).block, false); session.sessionId = randomUUID();
+  abortDuringAdmission = new AbortController();
+  await assert.rejects(admit('cancel-during-admission', native, abortDuringAdmission.signal), { name: 'AbortError' });
+  const afterAbort = requests.length;
+  await assert.rejects(tool.execute('cancel-during-admission', estimate, abortDuringAdmission.signal), { name: 'AbortError' });
+  assert.equal(requests.length, afterAbort); assert.equal(f.get().researchEstimate!.revision, 2);
+  assert.equal(await admit('session-change'), estimate); session.sessionId = randomUUID();
   await assert.rejects(tool.execute('session-change', estimate), /conversation changed/);
+  await assert.rejects(admit('stale-preparation'), /conversation changed/);
 });
 
 test('service native-call handoff rejects wrong binding, expiry and conflicts without evicting admitted calls', t => {

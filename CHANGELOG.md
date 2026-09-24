@@ -1,3 +1,7 @@
+## [1.12.6] — 2026-09-24
+
+- Admit Research progress through the runtime’s awaited tool-preparation callback, using its exact native task and call identity before execution. Preserve cancellation and approval checks while allowing workload updates through the connected model’s prepared tool set.
+
 ## [1.12.5] — 2026-09-24
 
 - Fix live Chat Research workload reports being rejected when the runtime discovers tools separately from its policy hooks. Keep progress tied to the exact approved research run and native tool call, so the linear estimate can advance with reported completed work.

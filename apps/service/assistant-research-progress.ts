@@ -62,8 +62,8 @@ export function activeResearchOperation(store: Store, host: ResearchHost, input:
 
 /** A bounded report on the existing operation, not a separate work dispatcher. */
 export class AssistantResearchProgress {
-  // Full plugin policies and discovered tool factories are separate native
-  // registrations. The owning service holds their exact, short-lived handoff.
+  // Native tool preparation captures the exact call before execution. Keep
+  // its short-lived handoff in the owning service across plugin registrations.
   private calls = new Map<string, ResearchCall>();
   constructor(private store: Store, private host: ResearchHost & { save(operation: AssistantOperation): AssistantOperation }) {}
   private callKey(input: { epoch: string; nativeKey: string; nativeId: string; toolCallId: string }) {
@@ -88,7 +88,7 @@ export class AssistantResearchProgress {
       throw new Fault(409, 'research_call_unverified', 'The original research run could not be verified. Report from its active approved turn.');
     }
     call.consumed = true;
-    // The run ID comes only from the trusted policy admission, never tool
+    // The run ID comes only from native preparation admission, never tool
     // arguments or the latest conversation. report rechecks the live context.
     return this.report({ ...input, runId: call.runId });
   }

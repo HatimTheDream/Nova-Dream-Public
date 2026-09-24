@@ -36,14 +36,7 @@ export function registerModuleTools(api:ModulePluginApi){
    if(reporting && (!context.runId || !context.toolCallId || event.runId && event.runId!==context.runId || event.toolCallId && event.toolCallId!==context.toolCallId)) return {block:true,blockReason:'The original research tool call could not be verified.'};
    try {
     const result = await bridge('/policy',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,...(context.runId?{runId:context.runId}:{}),toolName:event.toolName},context.abortSignal);
-    const decision = z.object({block:z.boolean(),blockReason:z.string().optional()}).strict().parse(result);
-    if(reporting && !decision.block) {
-     // Native discovery builds a separate tool registration from the full
-     // policy. Keep their one-call handoff in the owning service, not a closure.
-     const admitted = await bridge('/research-progress/authorize',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,runId:context.runId,toolCallId:context.toolCallId},context.abortSignal);
-     z.object({authorized:z.literal(true)}).strict().parse(admitted);
-    }
-    return decision;
+    return z.object({block:z.boolean(),blockReason:z.string().optional()}).strict().parse(result);
    } catch { return {block:true,blockReason:'The Nova tool policy could not be checked. Reconnect before continuing.'}; }
   }});
   api.registerGatewayMethod('e3.workspace.policy',({params,respond})=>{
@@ -64,7 +57,21 @@ export function registerModuleTools(api:ModulePluginApi){
  },{names:['nova_plan']});
  api.registerTool(context=>{
   if(context.agentId!=='main'||!context.sessionKey||!context.sessionId||api.runtime.version!=='2026.9.2')return null;
-  return {name:'nova_research_progress',label:'Update research progress',description:'Report a task-specific effort estimate and the current public activity for the original approved Chat research run. Before investigating, break the concrete remaining work into stable fine-grained items with relative expected effort; include final verification/report work. Do not assign equal weights to broad section headings. Report again when real work changes. Use expectedRevision 0 initially, then the returned revision. Keep completed items unchanged; revise remaining scope when evidence changes it and explain why in basis. Keep at least one unfinished item until the native reply actually finishes. This reports progress only and grants no actions.',parameters:z.toJSONSchema(researchEstimateInputSchema),async execute(toolCallId:string,raw:unknown,signal?:AbortSignal){
+  return {name:'nova_research_progress',label:'Update research progress',description:'Report a task-specific effort estimate and the current public activity for the original approved Chat research run. Before investigating, break the concrete remaining work into stable fine-grained items with relative expected effort; include final verification/report work. Do not assign equal weights to broad section headings. Report again when real work changes. Use expectedRevision 0 initially, then the returned revision. Keep completed items unchanged; revise remaining scope when evidence changes it and explain why in basis. Keep at least one unfinished item until the native reply actually finishes. This reports progress only and grants no actions.',parameters:z.toJSONSchema(researchEstimateInputSchema),
+  async prepareBeforeToolCallParams(raw:unknown,preparation:{toolCallId?:string;hookContext?:unknown;signal?:AbortSignal}){
+   preparation.signal?.throwIfAborted();
+   researchEstimateInputSchema.parse(raw);
+   // This supported native wrapper seam is awaited before policy and execute.
+   // Its run identity is host-owned, independent of plugin registry generations.
+   const native=z.object({agentId:z.literal('main'),sessionKey:z.string().min(1).max(300),sessionId:z.uuid(),runId:z.string().min(1).max(500)}).parse(preparation.hookContext);
+   const toolCallId=z.string().min(1).max(500).parse(preparation.toolCallId);
+   const session=api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey!,readConsistency:'latest'});
+   if(native.sessionKey!==context.sessionKey||native.sessionId!==context.sessionId||!session||session.sessionId!==context.sessionId||session.permissionModePending)throw new Error('The original research conversation changed.');
+   const admitted=await bridge('/research-progress/authorize',{epoch:config.epoch,nativeKey:native.sessionKey,nativeId:native.sessionId,runId:native.runId,toolCallId},preparation.signal);
+   z.object({authorized:z.literal(true)}).strict().parse(admitted);
+   preparation.signal?.throwIfAborted();
+   return raw;
+  },async execute(toolCallId:string,raw:unknown,signal?:AbortSignal){
    signal?.throwIfAborted();
    const estimate=researchEstimateInputSchema.parse(raw),session=api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey!,readConsistency:'latest'});
    if(!session||session.sessionId!==context.sessionId||session.permissionModePending)throw new Error('The original research conversation changed.');
