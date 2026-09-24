@@ -18,6 +18,9 @@ const researchProgressToolSchema = z.object({
   runId: z.string().min(1).max(500), toolCallId: z.string().min(1).max(500),
   estimate: researchEstimateInputSchema,
 }).strict();
+const researchCallSchema = researchProgressToolSchema.omit({ estimate: true });
+const researchExecutionSchema = researchProgressToolSchema.omit({ runId: true });
+type ResearchCall = z.infer<typeof researchCallSchema> & { expiresAt: number; consumed: boolean; conflicted: boolean };
 
 /** Resolve the reported native run itself. Never infer it from the latest chat. */
 export function activeResearchOperation(store: Store, host: ResearchHost, input: NativeBinding) {
@@ -59,7 +62,36 @@ export function activeResearchOperation(store: Store, host: ResearchHost, input:
 
 /** A bounded report on the existing operation, not a separate work dispatcher. */
 export class AssistantResearchProgress {
+  // Full plugin policies and discovered tool factories are separate native
+  // registrations. The owning service holds their exact, short-lived handoff.
+  private calls = new Map<string, ResearchCall>();
   constructor(private store: Store, private host: ResearchHost & { save(operation: AssistantOperation): AssistantOperation }) {}
+  private callKey(input: { epoch: string; nativeKey: string; nativeId: string; toolCallId: string }) {
+    return hash([input.epoch, input.nativeKey, input.nativeId, input.toolCallId]);
+  }
+  authorizeTool(raw: unknown) {
+    const input = researchCallSchema.parse(raw), now = Date.now();
+    for (const [key, call] of this.calls) if (call.expiresAt <= now) this.calls.delete(key);
+    const key = this.callKey(input), prior = this.calls.get(key);
+    if (prior && (prior.runId !== input.runId || !prior.consumed || prior.conflicted)) {
+      prior.conflicted = true;
+      throw new Fault(409, 'research_call_conflict', 'The research call identity conflicts with another execution.');
+    }
+    activeResearchOperation(this.store, this.host, input);
+    if (!prior && this.calls.size >= 256) throw new Fault(409, 'research_call_capacity', 'Wait for the outstanding research reports before requesting another.');
+    this.calls.set(key, { ...input, expiresAt: now + 60000, consumed: false, conflicted: false });
+    return { authorized: true as const };
+  }
+  reportTool(raw: unknown) {
+    const input = researchExecutionSchema.parse(raw), call = this.calls.get(this.callKey(input));
+    if (!call || call.consumed || call.conflicted || call.expiresAt <= Date.now()) {
+      throw new Fault(409, 'research_call_unverified', 'The original research run could not be verified. Report from its active approved turn.');
+    }
+    call.consumed = true;
+    // The run ID comes only from the trusted policy admission, never tool
+    // arguments or the latest conversation. report rechecks the live context.
+    return this.report({ ...input, runId: call.runId });
+  }
   report(raw: unknown) {
     const input = researchProgressToolSchema.parse(raw);
     return this.store.internalAtomic(() => {

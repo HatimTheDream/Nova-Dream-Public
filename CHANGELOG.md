@@ -1,3 +1,7 @@
+## [1.12.5] — 2026-09-24
+
+- Fix live Chat Research workload reports being rejected when the runtime discovers tools separately from its policy hooks. Keep progress tied to the exact approved research run and native tool call, so the linear estimate can advance with reported completed work.
+
 ## [1.12.4] — 2026-09-24
 
 - Make Assistant reading more compact with a system-font default, smaller message text and quieter headings. Add Font and Assistant text size choices with an immediate preview in Settings, saved on this device.

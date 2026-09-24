@@ -5,7 +5,6 @@ import { planProposalSchema } from '../../../packages/domain/assistant-plan.js';
 import { researchEstimateInputSchema } from '../../../packages/domain/research-estimate.js';
 type Session = { sessionId?:string; permissionMode?:string; permissionModePending?:boolean };
 class WorkspaceBridgeError extends Error { constructor(message:string,readonly code?:string,readonly current?:unknown){super(message);} }
-type ResearchCall = {runId:string;expiresAt:number;authorized:boolean;consumed:boolean;conflicted:boolean;signal?:AbortSignal};
 export type ModulePluginApi = {
  registerTrustedToolPolicy?(policy: {id:string;description:string;evaluate:(event:{toolName:string;runId?:string;toolCallId?:string},context:{agentId?:string;sessionKey?:string;sessionId?:string;runId?:string;toolCallId?:string;abortSignal?:AbortSignal})=>Promise<{block:boolean;blockReason?:string}|void>}):void;
  registerGatewayMethod?(name:string,handler:(context:{params:Record<string,unknown>;respond:(ok:boolean,result?:unknown,error?:unknown)=>void})=>void,options:{scope:'operator.read'}):void;
@@ -18,10 +17,6 @@ export function registerModuleTools(api:ModulePluginApi){
  if(!['full','tool-discovery'].includes(api.registrationMode))return;
  const config=z.object({epoch:z.uuid(),bundlePath:z.string().min(1),url:z.url(),token:z.string().regex(/^[a-f0-9]{64}$/),sessionBindings:z.array(z.object({nativeKey:z.string().min(1).max(300),nativeId:z.uuid()}).strict()).optional()}).strict().parse(api.pluginConfig);
  const protectedSessions = new Set((config.sessionBindings ?? []).map(item => JSON.stringify([item.nativeKey,item.nativeId])));
- // The native factory has no runId. The trusted pre-tool policy supplies the
- // actual run/call identity; consume it for this one execution, never a chat's latest run.
- const researchCalls = new Map<string,ResearchCall>();
- const callKey = (sessionKey:string,sessionId:string,toolCallId:string) => JSON.stringify([sessionKey,sessionId,toolCallId]);
  const url=new URL(config.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.pathname!=='/workspace'||url.search||url.hash||url.username||url.password)throw new Error('Workspace tools require the owning loopback service.');
  const bridge = async (path:string,body:unknown,signal?:AbortSignal) => {
   signal?.throwIfAborted();
@@ -39,24 +34,17 @@ export function registerModuleTools(api:ModulePluginApi){
    if(!context.sessionKey||!context.sessionId)return {block:true,blockReason:'The Nova conversation identity is unavailable.'};
    const reporting = event.toolName === 'nova_research_progress';
    if(reporting && (!context.runId || !context.toolCallId || event.runId && event.runId!==context.runId || event.toolCallId && event.toolCallId!==context.toolCallId)) return {block:true,blockReason:'The original research tool call could not be verified.'};
-   let claim:ResearchCall|undefined,claimKey:string|undefined;
-   if(reporting) {
-    for(const [key,binding] of researchCalls) if(binding.expiresAt<=Date.now())researchCalls.delete(key);
-    claimKey=callKey(context.sessionKey,context.sessionId,context.toolCallId!);const prior=researchCalls.get(claimKey);
-    if(prior && (prior.runId!==context.runId || !prior.consumed || prior.conflicted)){prior.conflicted=true;prior.authorized=false;return {block:true,blockReason:'The research call identity conflicts with another execution.'};}
-    while(researchCalls.size>=256)researchCalls.delete(researchCalls.keys().next().value!);
-    claim={runId:context.runId!,expiresAt:Date.now()+60000,authorized:false,consumed:false,conflicted:false,signal:context.abortSignal};
-    researchCalls.set(claimKey,claim);
-   }
    try {
     const result = await bridge('/policy',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,...(context.runId?{runId:context.runId}:{}),toolName:event.toolName},context.abortSignal);
     const decision = z.object({block:z.boolean(),blockReason:z.string().optional()}).strict().parse(result);
-    if(claim) {
-     if(decision.block || researchCalls.get(claimKey!)!==claim || claim.conflicted || claim.expiresAt<=Date.now() || claim.signal?.aborted){claim.conflicted=true;return {block:true,blockReason:decision.blockReason??'The original research call is no longer active.'};}
-     claim.authorized=true;
+    if(reporting && !decision.block) {
+     // Native discovery builds a separate tool registration from the full
+     // policy. Keep their one-call handoff in the owning service, not a closure.
+     const admitted = await bridge('/research-progress/authorize',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,runId:context.runId,toolCallId:context.toolCallId},context.abortSignal);
+     z.object({authorized:z.literal(true)}).strict().parse(admitted);
     }
     return decision;
-   } catch { if(claim)claim.conflicted=true;return {block:true,blockReason:'The Nova tool policy could not be checked. Reconnect before continuing.'}; }
+   } catch { return {block:true,blockReason:'The Nova tool policy could not be checked. Reconnect before continuing.'}; }
   }});
   api.registerGatewayMethod('e3.workspace.policy',({params,respond})=>{
    const input=z.object({nativeKey:z.string().min(1),nativeId:z.uuid()}).strict().safeParse(params);
@@ -80,12 +68,8 @@ export function registerModuleTools(api:ModulePluginApi){
    signal?.throwIfAborted();
    const estimate=researchEstimateInputSchema.parse(raw),session=api.runtime.agent.session.getSessionEntry({agentId:'main',sessionKey:context.sessionKey!,readConsistency:'latest'});
    if(!session||session.sessionId!==context.sessionId||session.permissionModePending)throw new Error('The original research conversation changed.');
-   const key=callKey(context.sessionKey!,context.sessionId!,toolCallId),binding=researchCalls.get(key);
-   if(!binding||!binding.authorized||binding.consumed||binding.conflicted||binding.expiresAt<=Date.now())throw new Error('The original research run could not be verified. Report from its active approved turn.');
-   binding.signal?.throwIfAborted();binding.consumed=true;
    try {
-    const combined=AbortSignal.any([...(signal?[signal]:[]),...(binding.signal?[binding.signal]:[])]);
-    const result=await bridge('/research-progress',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,runId:binding.runId,toolCallId,estimate},combined);
+    const result=await bridge('/research-progress',{epoch:config.epoch,nativeKey:context.sessionKey,nativeId:context.sessionId,toolCallId,estimate},signal);
     return {content:[{type:'text',text:JSON.stringify(result)}],details:result,isError:false};
    } catch(error) {
     if(!(error instanceof WorkspaceBridgeError)||error.code!=='research_progress_revision')throw error;

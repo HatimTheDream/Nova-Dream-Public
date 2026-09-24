@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../apps/service/http';
+import { phoneRouteAllowed } from '../apps/service/phone-policy';
 
 const identity = { version: '0.70.1', buildVersion: '1.0.124', candidateId: 'a'.repeat(64) };
 test('an exact document candidate gates snapshots and writes before admission, keeping the original retry identity', async () => {
@@ -38,6 +39,15 @@ test('an exact document candidate gates snapshots and writes before admission, k
     assert.equal(unauthenticated.status, 401);
     const native = await fetch(service.origin + '/workspace', { method: 'POST', body: '{}' });
     assert.equal((await native.json()).code, 'workspace_tool_auth');
+    for (const path of ['/workspace/research-progress/authorize', '/workspace/research-progress']) {
+      assert.equal(phoneRouteAllowed(path, 'POST'), false);
+      const cookieOnly = await fetch(service.origin + path, { method: 'POST', headers: matching, body: '{}' });
+      assert.equal(cookieOnly.status, 403); assert.equal((await cookieOnly.json()).code, 'workspace_tool_auth');
+      const crossOrigin = await fetch(service.origin + path, { method: 'POST', headers: { ...matching, Origin: 'https://unrelated.example', 'Sec-Fetch-Site': 'cross-site' }, body: '{}' });
+      assert.equal(crossOrigin.status, 403); assert.equal((await crossOrigin.json()).code, 'origin_rejected');
+      const wrongToken = await fetch(service.origin + path, { method: 'POST', headers: { ...matching, Authorization: 'Bearer ' + 'a'.repeat(64) }, body: '{}' });
+      assert.equal(wrongToken.status, 403); assert.equal((await wrongToken.json()).code, 'workspace_tool_auth');
+    }
   } finally { await service.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
