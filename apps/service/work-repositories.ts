@@ -20,6 +20,7 @@ export class WorkRepositories {
   private jobs = new Map<string,Promise<void>>();
   private controllers = new Set<AbortController>();
   private closed = false;
+  get updateMaintenanceBusy() { return this.jobs.size; }
   readonly root:string;
   constructor(private store:Store, private github:GitHubConnection, private run:HostCommand=hostCommand, private now=Date.now) {
     this.root=join(store.directory,'work-repositories');
@@ -45,7 +46,9 @@ export class WorkRepositories {
     return hostEnvironment({HOME:home,USERPROFILE:home,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_ASKPASS:ask,GIT_LFS_SKIP_SMUDGE:'1',...(token?{NOVA_GIT_TOKEN:token}:{}),...extra});
   }
   private async git(folder:string,args:string[],options:{extra?:NodeJS.ProcessEnv;token?:string;input?:string;timeoutMs?:number;signal?:AbortSignal;maxBytes?:number}={}){
-    return this.run('git',['-c',`core.hooksPath=${join(this.root,'.host','no-hooks')}`,'-c','credential.helper=','-c','http.followRedirects=false','-c','core.fsmonitor=false','-c','protocol.file.allow=never','-c','protocol.ext.allow=never','-c','diff.external=','-c','commit.gpgSign=false','-c','core.pager=cat',...args],{cwd:folder,env:await this.environment(options.extra,options.token),input:options.input,timeoutMs:options.timeoutMs,signal:options.signal,maxBytes:options.maxBytes});
+    const env=await this.environment(options.extra,options.token);
+    const execute=()=>this.run('git',['-c',`core.hooksPath=${join(this.root,'.host','no-hooks')}`,'-c','credential.helper=','-c','http.followRedirects=false','-c','core.fsmonitor=false','-c','protocol.file.allow=never','-c','protocol.ext.allow=never','-c','diff.external=','-c','commit.gpgSign=false','-c','core.pager=cat',...args],{cwd:folder,env,input:options.input,timeoutMs:options.timeoutMs,signal:options.signal,maxBytes:options.maxBytes});
+    return ['rev-parse','status','diff','show','log','ls-remote','check-ref-format','for-each-ref'].includes(args[0])?execute():this.store.trackUpdateEffect('git-writes',execute);
   }
   private background(key:string,job:(signal:AbortSignal)=>Promise<void>){
     if(this.jobs.has(key))return;const controller=new AbortController();this.controllers.add(controller);

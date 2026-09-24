@@ -64,6 +64,7 @@ export class ChatGptSignIn {
   private exited?: Promise<void>;
   private closed = false;
   private stopping = false;
+  get updateMaintenanceBusy() { return !!this.terminal || this.stopping; }
   private stopMessage?: string;
   constructor(private store: Store, private runtime: Pick<ManagedRuntime, 'signInCommand'>, private createTerminal: TerminalFactory = command => spawn(command.file, command.args, { cwd: command.cwd, env: { ...command.env, TERM: 'xterm', NO_COLOR: '1', FORCE_COLOR: '0' } as Record<string, string>, name: 'xterm', cols: 120, rows: 32 }), private accounts?: { validateReconnect(profileId: string): Promise<void>; invalidate(): void }) {
     const old = this.current();
@@ -78,6 +79,7 @@ export class ChatGptSignIn {
     return { ...status, ...(current.id === this.current()?.id && current.state === 'waiting' && current.expiresAt! > Date.now() ? this.code : {}) };
   }
   async start(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     const input = startSchema.parse(raw);
     if (this.closed) throw new Fault(503, 'signin_closed', 'Sign-in is unavailable while the host is closing.');
     let command: ReturnType<ManagedRuntime['signInCommand']> | undefined;
@@ -101,6 +103,7 @@ export class ChatGptSignIn {
       }
       if (this.closed || this.current()?.id !== attempt.id || !active(this.current()!.state)) return this.status(attempt.id);
       if (JSON.stringify(command) !== JSON.stringify(this.runtime.signInCommand(input.method ?? 'device-code', attempt.profileId))) throw Error('The account host changed.');
+      this.store.assertUpdateAdmission();
       const terminal = this.createTerminal(command!);
       this.terminal = terminal; this.stopping = false; this.stopMessage = undefined; this.output = ''; this.code = undefined;
       this.save({ ...attempt, pid: terminal.pid });

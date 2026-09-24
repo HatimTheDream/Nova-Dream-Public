@@ -14,6 +14,7 @@ const PhoneSettings = lazy(() => import('./Phone').then(module => ({ default: mo
 const StorageSettings = lazy(() => import('./StorageSettings').then(module => ({ default: module.StorageSettings })));
 const InstallSettings = lazy(() => import('./InstallSettings').then(module => ({ default: module.InstallSettings })));
 const UsageSettings = lazy(() => import('./UsageSettings').then(module => ({ default: module.UsageSettings })));
+const SoftwareUpdateSettings = lazy(() => import('./SoftwareUpdateSettings').then(module => ({ default: module.SoftwareUpdateSettings })));
 const categories = [
   { id: 'general', label: 'General' },
   { id: 'accounts', label: 'Accounts' },
@@ -73,7 +74,7 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
       </div>
     </div>
     <div className="settings-content">
-    <SettingsPanel id="general" active={current.id === 'general'}>{general}<AboutSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} active={current.id === 'general'} online={online}/></SettingsPanel>
+    <SettingsPanel id="general" active={current.id === 'general'}>{general}<SoftwareUpdateSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} epoch={snapshot.epoch} active={current.id === 'general'} online={online} restricted={phone ? 'Use the owner’s signed-in web session to manage host updates.' : recoveryPaused ? 'Updates are paused while this copy is in recovery.' : undefined}/><AboutSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} active={current.id === 'general'} online={online}/></SettingsPanel>
     {!phone && <SettingsPanel id="accounts" active={current.id === 'accounts'}><section className="card settings-card settings-accounts">
       <h2>Connected accounts</h2>
       {recoveryPaused && <p className="notice">Connections are paused in this copy. Open Data to review recovery.</p>}

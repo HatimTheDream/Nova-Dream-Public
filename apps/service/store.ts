@@ -36,6 +36,8 @@ const schemas = { layout: layoutSchema, task: taskSchema, draft: draftSchema, pr
 export class Store {
   private db: DatabaseSync;
   private key: Buffer;
+  private updateHold = false;
+  private updateEffects = new Map<string, number>();
   readonly directory: string;
   constructor(directory: string, private now: () => number = Date.now, protectedKey?: Buffer, private reviewOnly = false) {
     this.directory = directory;
@@ -147,6 +149,16 @@ export class Store {
     return row.device_id;
   }
   matchesKey(candidate: Buffer) { return candidate.length === this.key.length && timingSafeEqual(candidate, this.key); }
+  get updateMaintenanceHeld() { return this.updateHold; }
+  setUpdateMaintenanceHeld(held: boolean) { this.updateHold = held; }
+  assertUpdateAdmission() { if (this.updateHold) throw new Fault(409, 'update_maintenance', 'An update is preparing. Existing work is kept; finish or cancel it before updating.'); }
+  updateEffectsInFlight() { return Object.fromEntries(this.updateEffects); }
+  async trackUpdateEffect<T>(kind: string, run: () => Promise<T>, settling = false): Promise<T> {
+    if (!settling) this.assertUpdateAdmission();
+    this.updateEffects.set(kind, (this.updateEffects.get(kind) ?? 0) + 1);
+    try { return await run(); }
+    finally { const count = (this.updateEffects.get(kind) ?? 1) - 1; if (count) this.updateEffects.set(kind, count); else this.updateEffects.delete(kind); }
+  }
   get recoveryHeld() { return this.reviewOnly || this.internalRead<{ held: boolean }>('recovery:state')?.held === true; }
   get recoveryEffectsPaused() { const state = this.internalRead<{ held: boolean; effectsPaused?: boolean }>('recovery:state'); return this.reviewOnly || state?.held === true || state?.effectsPaused === true; }
   activateRecoveredLocal() {
@@ -228,7 +240,7 @@ export class Store {
   }
   snapshot(deviceId: string): Snapshot {
     // One transaction gives a consistent cursor and all projections.
-    return this.transaction(() => { if (!this.recoveryEffectsPaused) { this.materializeRoutines(); this.sweepReminders(); } return { epoch: this.epoch, cursor: this.entityCursor, deviceId,
+    return this.transaction(() => { if (!this.recoveryEffectsPaused && !this.updateMaintenanceHeld) { this.materializeRoutines(); this.sweepReminders(); } return { epoch: this.epoch, cursor: this.entityCursor, deviceId,
       layout: this.get('layout', 'layout')!, tasks: this.list('task').filter(t => !t.value.trashed), trashedTasks: this.list('task').filter(t => t.value.trashed), routines: this.list('routine'), calendarCompletions: this.internalList<import('../../packages/domain/calendar-completion.js').CalendarCompletion>('tasks:calendar-completion:'), taskState: this.taskState(), drafts: this.list('draft'), draftOrganization: this.internalList<DraftOrganization>('assistant:draft-organization:'), draftRemovals: this.internalList<DraftRemoval>('assistant:draft-removed:'), projects: this.list('project'),
       projectOrganization: this.internalList<ProjectOrganization>('assistant:project-organization:'),
       records: { contact: this.list('contact'), content: this.list('content'), agent: this.list('agent'), assignment: this.list('assignment'), profile: this.list('profile') },
@@ -712,7 +724,7 @@ export class Store {
     }
     for (const attempt of this.internalList<NotificationAttempt>('reminders:attempt:')) if (attempt.state === 'claimed' && now - attempt.at > 20000) this.internalWrite(`reminders:attempt:${attempt.attemptId}`, { ...attempt, state: 'unknown' });
   }
-  tickTasks() { this.transaction(() => { this.materializeRoutines(); this.sweepReminders(); }); }
+  tickTasks() { if(this.updateMaintenanceHeld)return;this.transaction(() => { this.materializeRoutines(); this.sweepReminders(); }); }
   actOnReminder(device: string, raw: unknown): Reminder {
     const cmd = reminderActionSchema.parse(raw);
     return this.admit(device, cmd, { type: 'reminder-action', ...cmd }, () => {

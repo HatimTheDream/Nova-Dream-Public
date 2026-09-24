@@ -49,6 +49,12 @@ export class Accounts {
   private writeAttempt(a: Attempt) { return this.store.internalWrite(`accounts:attempt:${a.id}`, a); }
   private writeAccount(a: ConnectedAccount) { return this.store.internalWrite(`accounts:item:${a.id}`, { ...a, updatedAt: stamp(this.now()) }); }
   private track<T>(job: Promise<T>) { this.jobs.add(job); void job.finally(() => this.jobs.delete(job)).catch(() => {}); return job; }
+  get updateMaintenanceBusy() { return this.jobs.size + this.live.size + this.refreshing.size; }
+  private updateRequest(request: MailRequest): MailRequest {
+    return (path, init, empty) => ['GET', 'HEAD'].includes((init?.method ?? 'GET').toUpperCase())
+      ? request(path, init, empty)
+      : this.store.trackUpdateEffect('provider-writes', () => request(path, init, empty));
+  }
   private stopLive(id: string) { const live = this.live.get(id); this.live.delete(id); live?.removeCallback?.(); live?.controller.abort(); live?.server?.close(); live?.server?.closeAllConnections(); }
   webCallback(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? '/', this.callbackOrigin);
@@ -95,6 +101,7 @@ export class Accounts {
     return receipt.result;
   }
   async start(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     this.ensureOpen();
     const cmd = connectAccountSchema.parse(raw); this.sweep();
     const receipt = this.store.admit(device, cmd, { type: 'account-signin', ...cmd }, () => {
@@ -222,6 +229,7 @@ export class Accounts {
       this.writeAccount({ ...account, revision: account.revision + 1, state: 'reconnect', message: 'This account session expired. Sign in again; saved work is kept.' });
       throw new Fault(409, 'account_reconnect', 'Sign in to this account again.');
     }
+    this.store.assertUpdateAdmission();
     const refreshing = this.writeAccount({ ...account, revision: account.revision + 1, state: 'refreshing', message: 'Refreshing the account connection…' });
     const controller = new AbortController(); this.controllers.add(controller);
     const job = this.track((async () => {
@@ -281,7 +289,7 @@ export class Accounts {
     return this.track((async () => {
       try {
         check(); const credential = await this.credential(account);credentialVersion=credential.version??credential.tokens.accessToken; check();
-        return await run(this.currentAccount(accountId, generation), this.providers.mailRequest(account.provider, credential.tokens.accessToken, abort), check);
+        return await run(this.currentAccount(accountId, generation), this.updateRequest(this.providers.mailRequest(account.provider, credential.tokens.accessToken, abort)), check);
       } finally { this.controllers.delete(controller); }
     })());
   }
@@ -302,7 +310,7 @@ export class Accounts {
     return this.track((async () => {
       try {
         check(); const credential = await this.credential(account);credentialVersion=credential.version??credential.tokens.accessToken; check();
-        return await run(this.currentAccount(accountId, generation), this.providers.calendarRequest(account.provider, credential.tokens.accessToken, abort), check);
+        return await run(this.currentAccount(accountId, generation), this.updateRequest(this.providers.calendarRequest(account.provider, credential.tokens.accessToken, abort)), check);
       } finally { this.controllers.delete(controller); }
     })());
   }
@@ -323,7 +331,7 @@ export class Accounts {
     return this.track((async () => {
       try {
         check(); const credential = await this.credential(account);credentialVersion=credential.version??credential.tokens.accessToken; check();
-        return await run(this.currentAccount(accountId, generation), this.providers.contactRequest(account.provider, credential.tokens.accessToken, abort), check);
+        return await run(this.currentAccount(accountId, generation), this.updateRequest(this.providers.contactRequest(account.provider, credential.tokens.accessToken, abort)), check);
       } finally { this.controllers.delete(controller); }
     })());
   }

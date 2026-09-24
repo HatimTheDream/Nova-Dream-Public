@@ -16,6 +16,7 @@ export class DictationService {
   private ending = new Map<string, Promise<void>>();
   private preparing = new Map<string, Promise<void>>();
   private cleaning = new Map<string, Promise<void>>();
+  get updateMaintenanceBusy() { return this.preparing.size + this.ending.size + this.cleaning.size; }
   constructor(private store: Store, private gateway: AssistantTransport) {
     this.browser = new BrowserDictation(gateway);
     for (const a of this.all()) if (!['ended', 'failed'].includes(a.state)) this.save({ ...a, state: 'failed', ...(a.route === 'browser' ? { cleanupPending: true } : {}), error: 'Dictation stopped when the app restarted. Available text is kept.' });
@@ -33,6 +34,7 @@ export class DictationService {
   read(device: string, id: string) { const a = this.get(id); if (a.deviceId !== device) throw new Fault(403, 'dictation_owner', 'This dictation belongs to another device.'); if (a.route === 'browser' && a.state === 'listening') { this.connected(a); return this.save({ ...a, updatedAt: Date.now() }); } return a; }
   private connected(a?: DictationAttempt) { const s = this.gateway.status(); if (this.closed || s.state !== 'ready' || !s.grantedScopes.includes('operator.write') || a && (a.epoch !== this.store.epoch || a.generation !== s.generation)) throw new Fault(409, 'dictation_disconnected', 'Dictation lost its original connection. Available text is kept.'); return s; }
   start(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     const input = dictationStartSchema.parse(raw), connection = this.connected();
     const receipt = this.store.admit(device, input, { type: 'dictation.start', ...input }, () => {
       const conversationId = input.draftId !== `draft:${device}:work` && input.draftId.startsWith(`draft:${device}:`) ? input.draftId.slice(`draft:${device}:`.length) : undefined;
@@ -59,6 +61,7 @@ export class DictationService {
       }
       if (!provider) throw new Fault(409, 'dictation_unconfigured', 'Connect ChatGPT voice in Settings to use dictation.');
       this.connected(original); if (this.get(id).state !== 'preparing') return;
+      this.store.assertUpdateAdmission();
       const result = await this.gateway.request<any>('talk.session.create', { provider: provider.id, mode: 'transcription', transport: 'gateway-relay', brain: 'none', ttlMs: 120000 });
       nativeId = typeof result.sessionId === 'string' ? result.sessionId : undefined;
       if (result.mode !== 'transcription' || result.brain !== 'none' || result.transport !== 'gateway-relay' || !nativeId || typeof result.transcriptionSessionId !== 'string' || !['g711_ulaw', 'pcm16'].includes(result.audio?.inputEncoding) || ![8000, 16000, 24000, 48000].includes(result.audio?.inputSampleRateHz)) throw new Fault(409, 'dictation_format', 'The transcription audio format is not supported.');

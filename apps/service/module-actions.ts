@@ -253,8 +253,9 @@ export class ModuleActions {
   return this.save({...a,state,result,error:state==='applied'||state==='cancelled'?undefined:result?.detail??result?.resultMessage??'This change is not fully confirmed. Check its original status.'});
  }
  private apply(action:ModuleAction,authorize:()=>void){
+  this.s.store.assertUpdateAdmission();
   return this.tracked(action.id,async()=>{
-   authorize();const a=this.save({...this.get(action.id),state:'applying',phase:'apply'});
+   authorize();this.s.store.assertUpdateAdmission();const a=this.save({...this.get(action.id),state:'applying',phase:'apply'});
    try{const op=this.def(a.operation),result=op.confirm?await op.confirm(a,uuid([a.id,'apply'])):await op.run!(a);return this.result(a,result);}catch(error){return this.failure(a,error);}
   });
  }
@@ -279,7 +280,7 @@ export class ModuleActions {
      if(current.phase==='cancel')return this.cancel(current);
      // Local services replay the original idempotency receipt. Provider checks
      // only observe their original operation; they never resend uncertain writes.
-     if(!def.check)authorize();
+     if(!def.check){authorize();this.s.store.assertUpdateAdmission();}
      const result=def.check?await def.check(current,uuid([a.id,'check',input.requestId])):await def.run!(current);
      return this.result(current,result);
     }catch(error){return this.failure(current,error);}

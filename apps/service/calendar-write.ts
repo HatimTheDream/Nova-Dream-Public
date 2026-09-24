@@ -146,7 +146,7 @@ export class CalendarWriteService {
             const fresh = await readProviderCalendarEvent(request, source.provider, source.calendarId, head.input.target);
             if (fresh.etag !== head.plan!.etag || !head.base || calendarFingerprint(fresh.raw) !== calendarFingerprint(head.base.raw)) throw new Fault(409, 'calendar_event_changed', 'The provider event changed after review. Your proposal is kept; review it alongside the current event.');
           }
-          check(); this.epoch(input.epoch); this.ensureOpen();
+          check(); this.store.assertUpdateAdmission(); this.epoch(input.epoch); this.ensureOpen();
           head = this.write(head, { detail: 'Applying the reviewed Calendar change.' }, { attempted: true });
           return applyProviderCalendarPlan(request, source.provider, head.plan!);
         });

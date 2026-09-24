@@ -81,6 +81,7 @@ export class ContactCrm {
   }
   /** Keep-in-touch reminders are ordinary shared Tasks, using the existing reminder and Calendar authority. */
   tick() {
+    if(this.store.updateMaintenanceHeld)return;
     const contacts = this.store.listEntities('contact'), activities = this.store.internalList<ContactActivity>('crm:activity:');
     this.store.internalAtomic(() => {
       for (const contact of contacts) {

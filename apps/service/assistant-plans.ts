@@ -141,7 +141,7 @@ export class AssistantPlans {
   }
   /** Called by the owning service's existing queue tick, with no new polling. */
   runAutomatic(now = Date.now()) {
-    if (this.store.recoveryHeld || this.store.recoveryEffectsPaused) return;
+    if (this.store.recoveryHeld || this.store.recoveryEffectsPaused || this.store.updateMaintenanceHeld) return;
     for (const item of this.list()) {
       if (item.kind !== 'research' || item.state !== 'ready' || item.approval || !item.autoStartAt || !item.autoStartRequestId || item.autoStartHeld || !Number.isFinite(Date.parse(item.autoStartAt)) || Date.parse(item.autoStartAt) > now) continue;
       try {
@@ -157,6 +157,7 @@ export class AssistantPlans {
     for (const item of this.list()) if (item.kind === 'research' && item.autoStartAt && !item.approval) this.save({ ...item, revision: item.revision + 1, autoStartAt: undefined, autoStartRequestId: undefined, autoStartHeld: 'needs-review', autoStartError: 'Automatic start paused while the Assistant was disconnected. Review the plan and start when ready.' });
   }
   decide(device: string, raw: unknown, amend = false) {
+    this.store.assertUpdateAdmission();
     const input = amend ? planAmendSchema.parse(raw) : planDecisionSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: amend ? 'plan.amend' : 'plan.approve', ...input }, () => {
       const item = this.get(input.id), version = item.versions.find(v => v.version === item.version)!;

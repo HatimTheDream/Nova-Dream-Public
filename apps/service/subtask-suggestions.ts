@@ -24,6 +24,7 @@ export class SubtaskSuggestions {
   private track<T>(value: Promise<T>) { this.pending.add(value); void value.catch(() => {}).finally(() => this.pending.delete(value)); return value; }
   startPolling() { this.timer ??= setInterval(() => { for (const value of this.all().filter(v => !suggestionTerminal(v.state))) this.track(this.check(value.id)); }, 3000); this.timer.unref(); }
   start(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     if (this.closing) throw new Fault(503, 'suggestion_closing', 'The service is restarting. Try again shortly.');
     const input = suggestionRequestSchema.parse(raw);
     const admission = this.store.admit(device, input, { type: 'subtask-suggestion', ...input }, () => {
@@ -57,6 +58,7 @@ export class SubtaskSuggestions {
       let value = this.read(id); if (this.closing || suggestionTerminal(value.state)) return;
       if (!caps.newRunsAvailable) throw Error('Assistant result storage is full. Existing results are kept.');
       const identity = { epoch: value.epoch, hostId: caps.hostId, attemptId: id, inputHash: value.inputHash };
+      this.store.assertUpdateAdmission();
       value = this.save({ ...value, ...workerNativeIdentity(identity), hostId: caps.hostId, generation, state: 'dispatching', message: 'Generating small, useful steps…' });
       const reply = await this.gateway.request('e3.assignments.run', { ...identity, message: value.prompt, deadlineAt: value.deadlineAt });
       if (this.closing) return;

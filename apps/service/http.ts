@@ -62,6 +62,10 @@ import { connectionSchema, assistantRequestSchema } from '../../packages/domain/
 import { z } from 'zod';
 import { ManagedRuntime } from './runtime.js';
 import { agentServiceInfo } from '../../packages/domain/agent-service.js';
+import { SoftwareUpdates } from './software-updates.js';
+import { UpdateHostClient, type UpdateHostView } from './update-host-client.js';
+import { updateMaintenanceBlockers } from './update-maintenance.js';
+import { NativeUpdateLease } from './update-native-idle.js';
 import { ChatGptSignIn } from './sign-in.js';
 import { ChatGptAccount } from './chatgpt-account.js';
 import { ChatGptAccountControl } from './account-control.js';
@@ -108,8 +112,9 @@ const staleClientCleanup = new Set([
   '/api/accounts/disconnect', '/api/phone/revoke', '/api/assistant/dictation/end',
   '/api/assistant/voice/end', '/api/assistant/sign-in/cancel', '/api/assistant/cancel',
 ]);
+const updateSettlingRoutes = new Set([...staleClientCleanup, '/api/software-update/cancel', '/api/software-update/install', '/api/session', '/api/assistant/dictation/caption', '/api/assistant/dictation/audio', '/workspace/observation', '/workspace/research-progress']);
 
-export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; gateway?: AssistantTransport; providers?: Providers; weatherFetch?: typeof fetch; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
+export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; updateSocket?: string; updateHostClient?: Pick<UpdateHostClient,'call'>; gateway?: AssistantTransport; providers?: Providers; weatherFetch?: typeof fetch; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
   if (options.privateWeb) validatePrivateWeb(options.privateWeb);
   if (options.candidateId !== undefined && !/^[a-f0-9]{64}$/.test(options.candidateId)) throw new Error('Use a verified candidate identity.');
   if (options.developmentOrigin && (!options.development || !/^http:\/\/127\.0\.0\.1:[0-9]{4,5}$/.test(options.developmentOrigin) || Number(new URL(options.developmentOrigin).port) < 1024 || Number(new URL(options.developmentOrigin).port) > 65535)) throw new Error('Use an explicit loopback development origin.');
@@ -117,6 +122,9 @@ export async function startServer(options: { directory: string; port: number; pr
   const protectedKey = await keys.readProtected();
   let store: Store;
   try { store = new Store(options.directory, undefined, protectedKey, options.recoveryPreview); } finally { protectedKey?.fill(0); }
+  const updateHost=options.updateHostClient ?? (options.updateSocket ? new UpdateHostClient(options.updateSocket) : undefined);
+  let updateHold:string|null=null;
+  if(updateHost){try{updateHold=(await updateHost.call<UpdateHostView>('status')).holdFor;store.setUpdateMaintenanceHeld(!!updateHold);}catch{store.setUpdateMaintenanceHeld(true);}}
   if (keys.status().provider === 'server-secret') {
     try { await keys.protect(key => store.matchesKey(key)); } catch { store.close(); throw new Error('The server credential could not protect this workspace. Saved data was kept; no listener or connected work was started.'); }
   }
@@ -187,6 +195,26 @@ export async function startServer(options: { directory: string; port: number; pr
   const voice = new VoiceSetup(gateway);
   const dictation = new DictationService(store, gateway);
   const calls = new VoiceCalls(store, gateway, assistant, voice);
+  let mutationRequests=0;
+  const nativeUpdateLease=runtime?new NativeUpdateLease(store,runtime,()=>new Gateway(store,options.version,undefined,'update-control')):undefined;
+  // Saved native admission may outlive a workspace process. Reconcile that
+  // original lease before allowing the replacement process to dispatch work.
+  if(updateHost&&nativeUpdateLease?.pendingJobIds().length)store.setUpdateMaintenanceHeld(true);
+  const localUpdateBlockers=()=>{
+    const extra={requests:mutationRequests,accounts:accounts.updateMaintenanceBusy,backups:backups.updateMaintenanceBusy,voice:calls.updateMaintenanceBusy,dictation:dictation.updateMaintenanceBusy,'sign-in':signIn?.updateMaintenanceBusy??0,github:github.updateMaintenanceBusy,repositories:workRepositories.updateMaintenanceBusy,skills:skillManagement.updateMaintenanceBusy,recovery:store.recoveryEffectsPaused||!!options.recoveryHost?.status().switching||recoveryOpening.size>0};
+    const labels:Record<string,string>={assistant:'Waiting for the current Assistant work.',teams:'Waiting for the team to finish.',voice:'Finish the current voice chat before updating.',dictation:'Finish dictation before updating.', 'sign-in':'Finish account sign-in before updating.',backups:'Waiting for backup or recovery to finish.',recovery:'Finish workspace recovery before updating.',requests:'Waiting for the current change to finish.'};
+    const blockers=updateMaintenanceBlockers(store,extra).map(item=>({code:item.kind,message:labels[item.kind]??'Waiting for current work and saved changes to settle.'}));
+    if(gateway.status().state!=='ready')blockers.push({code:'native_unknown',message:'Waiting for Assistant to reconnect.'});
+    return blockers.slice(0,30);
+  };
+  const softwareUpdates=new SoftwareUpdates({
+    epoch:()=>store.epoch,
+    installed:()=>({novaVersion:options.version??'development',candidateId:options.candidateId??'',agent:agentServiceInfo(gateway.serviceInfo?.())}),
+    heldFor:()=>updateHold,
+    hold:id=>{updateHold=id;store.setUpdateMaintenanceHeld(!!id);},
+    blockers:localUpdateBlockers,
+    native:nativeUpdateLease,
+  },updateHost);
   if (gateway instanceof Gateway && !store.recoveryEffectsPaused) gateway.start();
   let ownOrigin = '', closing = false;
   const requests = new Set<Promise<unknown>>();
@@ -194,6 +222,8 @@ export async function startServer(options: { directory: string; port: number; pr
     const input = await body(request, maximumBytes, bodySources.get(request));
     if (closing) throw new Fault(503, 'service_closing', 'The workspace is restarting. Reconcile the original change when it is ready.');
     reauthorize.get(request)?.();
+    const path=(request.url??'').split('?')[0];
+    if(store.updateMaintenanceHeld&&!updateSettlingRoutes.has(path))throw new Fault(409,'update_maintenance','Nova Dream is updating. Your writing is kept; retry after the update finishes.');
     return input;
   };
   const handle = async (request: IncomingMessage, response: ServerResponse, surface: 'desktop' | 'phone' | 'web' = 'desktop') => {
@@ -290,6 +320,21 @@ export async function startServer(options: { directory: string; port: number; pr
         const device = authenticate();
         reauthorize.set(request, () => { if (authenticate() !== device) throw new Fault(401, 'session_changed', 'Reconnect to your workspace.'); });
         if (remote && !phoneRouteAllowed(url.pathname, request.method ?? '')) throw new Fault(403, 'desktop_required', 'Manage host setup and connected devices in Settings on your computer.');
+        if(url.pathname==='/api/software-update/acceptance'&&request.method==='GET'){
+          if(surface!=='desktop'||store.recoveryEffectsPaused)throw new Fault(403,'local_only','Update acceptance is available only to the local host.');
+          return json(200,{candidateId:options.candidateId,epoch:store.epoch,heldFor:updateHold,maintenanceHeld:store.updateMaintenanceHeld,blockers:localUpdateBlockers(),agent:agentServiceInfo(gateway.serviceInfo?.()),nativeSuspended:nativeUpdateLease?.snapshot(updateHold).nativeSuspended??false});
+        }
+        if(url.pathname==='/api/software-update'&&request.method==='GET')return json(200,softwareUpdates.status(remote||store.recoveryEffectsPaused));
+        if(url.pathname.startsWith('/api/software-update/')&&request.method==='POST'){
+          if(remote||store.recoveryEffectsPaused)throw new Fault(403,'update_read_only','Manage software updates from the owner’s workspace.');
+          // Existing candidate and epoch guards also apply to update commands.
+          if(options.candidateId&&(request.headers['x-edition3-candidate']!==options.candidateId||request.headers['x-edition3-desktop']!==undefined&&request.headers['x-edition3-desktop']!==options.candidateId))throw new Fault(409,'client_update','Reload Nova Dream before managing updates.');
+          const input=await commandBody(request,4096);
+          if(url.pathname==='/api/software-update/check')return json(200,await softwareUpdates.check(input));
+          if(url.pathname==='/api/software-update/install')return json(200,await softwareUpdates.install(input));
+          if(url.pathname==='/api/software-update/cancel')return json(200,await softwareUpdates.cancel(input));
+          throw new Fault(404,'not_found','This update action is unavailable.');
+        }
         if (options.candidateId && (url.pathname === '/api/snapshot' || request.method === 'POST' && !staleClientCleanup.has(url.pathname)) && (request.headers['x-edition3-candidate'] !== options.candidateId || request.headers['x-edition3-desktop'] !== undefined && request.headers['x-edition3-desktop'] !== options.candidateId)) {
           throw new Fault(409, 'client_update', 'This window needs the latest app. Keep your writing and reopen the app to continue saving.');
         }
@@ -420,7 +465,8 @@ export async function startServer(options: { directory: string; port: number; pr
         }
         if (url.pathname === '/api/snapshot' && request.method === 'GET') {
           const connection = gateway.status();
-          return json(200, { ...store.snapshot(device), calendarReminders: calendar.reminders.state(), version: options.version, capabilities: { assistant: connection.state === 'ready' && connection.modelAuthReady && connection.grantedScopes.includes('operator.write'), voice: connection.state === 'ready' && connection.methods.includes('talk.client.create'), reason: connection.message } });
+          const update=softwareUpdates.status();
+          return json(200, { ...store.snapshot(device), ...(update.availability==='available'&&update.release?{softwareUpdate:{candidateId:update.release.candidateId}}:{}), calendarReminders: calendar.reminders.state(), version: options.version, capabilities: { assistant: connection.state === 'ready' && connection.modelAuthReady && connection.grantedScopes.includes('operator.write'), voice: connection.state === 'ready' && connection.methods.includes('talk.client.create'), reason: connection.message } });
         }
         if (url.pathname === '/api/calendar/state' && request.method === 'GET') return json(200, calendar.state(device, { from: url.searchParams.get('from'), to: url.searchParams.get('to'), timezone: url.searchParams.get('timezone') }));
         if (url.pathname === '/api/calendar/sources' && request.method === 'POST') return json(202, calendar.discover(device, await commandBody(request)));
@@ -735,8 +781,10 @@ export async function startServer(options: { directory: string; port: number; pr
     } finally { await transferred?.discard(); }
   };
   const dispatch = (surface: 'desktop' | 'phone' | 'web') => (request: IncomingMessage, response: ServerResponse) => {
+    const mutation=request.method==='POST'&&!((request.url??'').startsWith('/api/software-update'));
+    if(mutation)++mutationRequests;
     const job = handle(request, response, surface); requests.add(job);
-    void job.finally(() => requests.delete(job)).catch(() => { if (!response.destroyed) response.destroy(); });
+    void job.finally(() => {requests.delete(job);if(mutation)--mutationRequests;}).catch(() => { if (!response.destroyed) response.destroy(); });
   };
   const phoneHost = new PhoneHost(phoneAccess, dispatch('phone'), options.phonePort, options.phoneTransport);
   const server = createServer(dispatch('desktop'));
@@ -745,20 +793,21 @@ export async function startServer(options: { directory: string; port: number; pr
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
   await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
-  if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); contactCrm.tick();
+  if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); if(!store.updateMaintenanceHeld)contactCrm.tick();
     assignments.startPolling(); teamWork.start(); subtaskSuggestions.startPolling();
     agentRoutines.start(); hubMeetings.startPolling(); }
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Unexpected listening address');
   ownOrigin = `http://127.0.0.1:${address.port}`;
+  void softwareUpdates.start();
   // Resume only after the service owns its listening address. A competing
   // launch that failed to bind must not create another managed process.
   if (!store.recoveryEffectsPaused) { void runtime?.resume(); if (phoneAccess.enabled) void phoneHost.reconcile(); }
-  const taskTimer = setInterval(() => { if (store.recoveryEffectsPaused) return; try { store.tickTasks(); calendar.reminders.tick(); } catch { /* Persisted schedules remain retryable on the next tick or snapshot. */ } }, 1000); taskTimer.unref();
-  const crmTimer = setInterval(() => { if (store.recoveryEffectsPaused) return; try { contactCrm.tick(); } catch { /* Contact settings and existing Tasks remain available for retry. */ } }, 60000); crmTimer.unref();
+  const taskTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { store.tickTasks(); calendar.reminders.tick(); } catch { /* Persisted schedules remain retryable on the next tick or snapshot. */ } }, 1000); taskTimer.unref();
+  const crmTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { contactCrm.tick(); } catch { /* Contact settings and existing Tasks remain available for retry. */ } }, 60000); crmTimer.unref();
   let closePromise: Promise<void> | undefined;
   const close = () => {
     if (closePromise) return closePromise;
-    closing = true; homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
+    closing = true; softwareUpdates.close(); homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
     // Stop admission before closing any authority. Browsers may retain sockets
     // without a complete HTTP request, so idle-connection cleanup is insufficient.
     const httpClosed = new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));
@@ -768,7 +817,7 @@ export async function startServer(options: { directory: string; port: number; pr
       try {
         await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
         await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
-        await signIn?.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
+        await nativeUpdateLease?.close(); await signIn?.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
       } finally {
         try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }
         finally { clearTimeout(drainTimer); await transfers.close(); store.close(); }

@@ -24,6 +24,7 @@ export class WorkspaceBackups {
   private job?: Promise<void>;
   private closed = false;
   private uploading = false;
+  get updateMaintenanceBusy() { return !!this.job || this.uploading; }
   private root: string;
   constructor(private store: Store, private version: string, private native?: NativeBackup, private captureHistories?: () => Promise<void>) {
     this.root = join(store.directory, 'workspace-backups');

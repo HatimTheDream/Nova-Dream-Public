@@ -72,6 +72,7 @@ export class Companions {
       if (prior.ownerId !== ownerId || prior.epoch !== this.store.epoch || canonical(prior.call) !== canonical(parsed)) throw new Fault(409, 'computer_call_reused', 'This computer operation already belongs to different input.');
       return prior;
     }
+    this.store.assertUpdateAdmission();
     const device = this.device(parsed.deviceId);
     if (device.lastSeenAt <= this.now() - 15000 || !computerAccessActive(device.enabledUntil, this.now())) throw new Fault(409, 'computer_offline', 'Open the desktop companion and enable computer access on the selected computer. Host work can continue.');
     if (this.all().some(op => op.call.deviceId === device.id && ['queued', 'claimed'].includes(op.state))) throw new Fault(409, 'computer_busy', 'Wait for the selected computer’s current action to finish.');
@@ -114,6 +115,7 @@ export class Companions {
       if (!existing || existing.call.deviceId !== device.id || existing.epoch !== this.store.epoch) throw proofError();
       const op = this.result(id, existing.ownerId);
       if (input.action === 'claim') {
+        this.store.assertUpdateAdmission();
         if (op.state !== 'queued' || !computerAccessActive(device.enabledUntil, this.now()) || !this.checks.has(op.id)) throw new Fault(409, 'computer_claimed', 'This action is no longer available for execution.');
         this.checks.get(op.id)!(); this.save({ ...op, state: 'claimed' });
         return { claimed: true, operation: { ...op, state: 'claimed' } };

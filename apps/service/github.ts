@@ -15,6 +15,7 @@ export class GitHubConnection {
   private available?: boolean;
   private live?: { id: string; controller: AbortController; job: Promise<void> };
   private closed = false;
+  get updateMaintenanceBusy() { return !!this.live; }
   private cleanup: Promise<void>;
   constructor(private store: Store, private run: HostCommand = hostCommand, private exchange: typeof fetch = fetch, private now = Date.now) {
     const root=join(store.directory,'github-signin');
@@ -32,9 +33,11 @@ export class GitHubConnection {
   }
   async action(device:string, raw:unknown) {
     const cmd=githubActionSchema.parse(raw); this.check();
+    if(cmd.action==='connect')this.store.assertUpdateAdmission();
     if (cmd.action==='connect' && !(await this.state(device)).available) throw new Fault(409,'github_cli_missing','Install GitHub CLI on this host first.');
     const admitted=this.store.admit(device,cmd,{type:'github.action',...cmd},()=>{
       if(cmd.action==='connect'){
+        this.store.assertUpdateAdmission();
         if(this.live)throw new Fault(409,'github_connecting','Finish or cancel the current connection.');
         const a:Attempt={id:randomUUID(),device,state:'starting',expiresAt:this.now()+900000,message:'Preparing GitHub device sign-in…'};this.store.internalWrite(attemptKey,a);return a.id;
       }
@@ -58,6 +61,7 @@ export class GitHubConnection {
       const root=join(this.store.directory,'github-signin');await mkdir(root,{recursive:true,mode:0o700});directory=await mkdtemp(join(root,'attempt-'));
       const env=hostEnvironment({HOME:directory,USERPROFILE:directory,GH_CONFIG_DIR:directory,GH_BROWSER:'echo',GH_PROMPT_DISABLED:'1',NO_COLOR:'1'});
       let observed='';
+      this.store.assertUpdateAdmission();
       await this.run('gh',['auth','login','--hostname','github.com','--git-protocol','https','--web','--insecure-storage'],{env,input:'\n',signal,timeoutMs:900000,maxBytes:65536,output:chunk=>{
         observed=(observed+chunk).slice(-8192);const code=observed.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/)?.[0];
         if(code)update({state:'waiting',code,url:'https://github.com/login/device',message:'Enter this code on GitHub and review the requested access.'});
@@ -74,6 +78,9 @@ export class GitHubConnection {
     finally {if(directory)await rm(directory,{recursive:true,force:true}).catch(()=>{});}
   }
   async api(path:string, options:{method?:'GET'|'POST';body?:unknown;token?:string;signal?:AbortSignal}={}):Promise<any>{
+    return options.method === 'POST' ? this.store.trackUpdateEffect('github-writes', () => this.requestApi(path, options)) : this.requestApi(path, options);
+  }
+  private async requestApi(path:string, options:{method?:'GET'|'POST';body?:unknown;token?:string;signal?:AbortSignal}):Promise<any>{
     const c=this.credential(),token=options.token??c?.token;if(!token)throw new Fault(409,'github_disconnected','Connect GitHub in this workspace first.');
     this.check();
     const response=await this.exchange('https://api.github.com'+path,{method:options.method??'GET',headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${token}`,'X-GitHub-Api-Version':'2026-03-10','User-Agent':'Nova-Dream',...(options.body?{'Content-Type':'application/json'}:{})},body:options.body?JSON.stringify(options.body):undefined,redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(20000)]):AbortSignal.timeout(20000)});

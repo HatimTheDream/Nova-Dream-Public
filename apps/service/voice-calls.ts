@@ -19,6 +19,7 @@ const messageText = (value: any): string => typeof value?.content === 'string' ?
 /** One owned audio attempt. Credentials and SDP are never written to the store. */
 export class VoiceCalls {
   private live = new Map<string, Live>();
+  get updateMaintenanceBusy() { return this.live.size; }
   private early = new Map<string, EventFrame[]>();
   private closed = false;
   private stopListening: () => void;
@@ -63,6 +64,7 @@ export class VoiceCalls {
     return history;
   }
   start(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     const input = voiceStartSchema.parse(raw);
     const receipt = this.store.admit(device, input, { type: 'voice.start', ...input }, () => {
       if (this.all().some(a => liveStates.has(a.state))) throw new Fault(409, 'voice_busy', 'A voice call is already open. End it on its original device first.');
@@ -100,6 +102,7 @@ export class VoiceCalls {
       const context = voiceCallContext(attempt.target, prepared.sources);
       if (attempt.target.conversation.resumeContext && prepared.sources.some(source => source.origin === 'conversation' && !['included', 'native'].includes(source.state))) throw new Fault(409, 'voice_history_unavailable', 'This chat’s saved history or files could not be prepared for voice. Continue in text while these sources are unavailable.');
       attempt = this.save({ ...this.get(attempt.id), sources: prepared.sources, context, contextDigest: hash(context) });
+      this.store.assertUpdateAdmission();
       state.dispatched = true;
       const result = browserSession.parse(await this.gateway.request('talk.client.create', { sessionKey: attempt.target.conversation.nativeKey, voiceSessionId: attempt.id, provider: 'openai', model, voice, mode: 'realtime', transport: 'webrtc', brain: 'agent-consult', capabilities: ['voice-transcript'], silenceDurationMs: 450, prefixPaddingMs: 300 }));
       if (result.voiceSessionId !== attempt.id || result.clientControl) throw new Fault(409, 'voice_transport', 'The provider returned a different voice transport.');
@@ -216,6 +219,7 @@ export class VoiceCalls {
     try { await work; } finally { if (state) state.draining = undefined; }
   }
   async consult(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     const input = voiceConsultSchema.parse(raw), original = this.read(device, input.attemptId);
     const intentKey = `voice:consult-intent:${original.id}:${input.callId}`, digest = hash(canonical({ name: input.name, args: input.args }));
     const receipt = this.store.admit(device, input, { type: 'voice.consult', ...input }, () => {
@@ -243,6 +247,7 @@ export class VoiceCalls {
         const params = { sessionKey: original.target.conversation.nativeKey, voiceSessionId: original.id, callId: input.callId, name: input.name, args: { ...input.args, context: `${original.context}\n\nVoice conversation context:\n${input.args.context ?? ''}${voiceSourceContext(this.store, prepared.sources, prepared.references)}` } };
         const ceiling = this.gateway.attachmentPolicy().maxPayload;
         if (ceiling && Buffer.byteLength(JSON.stringify(params)) + 1024 > ceiling) throw new Fault(413, 'voice_context_limit', 'These sources exceed the current voice connection limit. Use text chat for this request.');
+        this.store.assertUpdateAdmission();
         dispatched = true;
         const result = z.object({ runId: z.string().min(1), agentSessionKey: z.string().min(1) }).parse(await this.gateway.request('talk.client.toolCall', params));
         this.connection(original);

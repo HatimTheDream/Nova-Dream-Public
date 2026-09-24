@@ -28,6 +28,7 @@ export class HubMeetings {
   state():HubMeetingState {const all=this.list().filter(m=>m.epoch===this.store.epoch);return {current:all.find(m=>m.state!=='ended')?publicMeeting(all.find(m=>m.state!=='ended')!):null,history:all.filter(m=>m.state==='ended').slice(0,12).map(publicMeeting)};}
   command(device:string,raw:unknown){
     const input=meetingCommandSchema.parse(raw);
+    if(input.type==='gather'||input.type==='start')this.store.assertUpdateAdmission();
     const result=this.store.admit(device,input,{operation:'hub.meeting',...input},()=>{
       if(input.type==='gather'){
         if(this.list().some(m=>m.epoch===this.store.epoch&&m.state!=='ended'))throw new Fault(409,'meeting_active','Close the current gathering before starting another.');
@@ -74,7 +75,7 @@ export class HubMeetings {
       if(plan&&!plan.value.archived)this.store.mutate(m.device,{requestId:m.requests[m.next-1].archive,epoch:m.epoch,kind:'assignment',entityId:plan.id,expectedRevision:plan.revision,payload:{...plan.value,archived:true}});
       this.save({...m,state:m.state==='ended'?'ended':m.state==='paused'?'paused':prior.state==='returned'?(m.next===m.turns.length?'complete':'running'):'paused',message:m.state==='ended'?'Meeting ended. The last speaker’s confirmed outcome is saved.':m.state==='paused'?'Discussion paused. The last speaker’s outcome is saved; continue with the next speaker when ready.':prior.state==='returned'?(m.next===m.turns.length?'Discussion complete. The summary is ready.':'Preparing the next speaker.'):`${turn.agentName} did not return a complete contribution. Review it before continuing with the next speaker.`});return;
     }
-    if(m.state!=='running'||!this.assignments.state().canStart)return;
+    if(m.state!=='running'||this.store.updateMaintenanceHeld||!this.assignments.state().canStart)return;
     const member=m.attendees.find(a=>a.id===turn.agentId)!,live=this.store.readEntity('agent',member.id);
     if(!live||live.value.archived)throw new Fault(409,'meeting_agent','A participant is no longer active. End this gathering and choose the current team.');
     const completed=m.turns.slice(0,m.next),limit=Math.floor(9000/Math.max(1,completed.length));

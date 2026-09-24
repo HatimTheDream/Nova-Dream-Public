@@ -12,6 +12,7 @@ import { withModulePlugin } from './module-runtime-config.js';
 import { withSourcePlugin } from './source-runtime-config.js';
 import { withAccountPlugin } from './account-runtime-config.js';
 import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
+import { qualifyNativeUpdateStartup } from './update-native-startup.js';
 import type { RuntimeStatus } from '../../packages/domain/runtime.js';
 import type { ChatGptSignInMethod } from '../../packages/domain/sign-in.js';
 export type { RuntimeStatus } from '../../packages/domain/runtime.js';
@@ -24,6 +25,7 @@ export function needsShortRuntimeTemporaryDirectory(root:string,platform:NodeJS.
 /** Owns only Nova Dream's foreground Gateway process. Never uses service install/restart or --force. */
 export class ManagedRuntime {
   private child?: ChildProcess;
+  private childStartedAt?:number;
   private browserNetwork=new BrowserNetwork();
   private shortTemporaryDirectory?:string;
   private launching?: Promise<RuntimeStatus>;
@@ -54,6 +56,17 @@ export class ManagedRuntime {
     const connection = this.gateway.status();
     const owned = !!config && !!this.child?.pid && !this.child.killed && this.child.exitCode === null && this.child.signalCode === null && connection.url === `ws://127.0.0.1:${config.port}`;
     return { ...this.current, ...(this.current.startedAt ? { elapsedSeconds: Math.max(0, Math.floor(((this.current.readyAt ?? Date.now()) - this.current.startedAt) / 1000)) } : {}), canSignIn: owned && !this.stopping };
+  }
+  updateIdentity() {
+    const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
+    const selected = this.store.internalRead<{url:string;token:string}>('gateway:configuration'), connection = this.gateway.status();
+    if (!config || !this.child?.pid || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.stopping || this.current.state !== 'running' || !this.childStartedAt || connection.state !== 'ready' || !connection.generation || connection.url !== `ws://127.0.0.1:${config.port}` || selected?.url !== connection.url || selected.token !== config.token) return;
+    try { if (!this.child.spawnargs.includes(this.entry())) return; } catch { return; }
+    return { epoch:this.store.epoch,pid:this.child.pid,url:connection.url,generation:connection.generation,startedAt:this.childStartedAt,version:'2026.9.2' as const };
+  }
+  updateStartupBlockers() {
+    try { this.entry(); const serviceDirectory=dirname(fileURLToPath(import.meta.url)); return qualifyNativeUpdateStartup(join(this.store.directory,'openclaw-runtime'),import.meta.url.endsWith('.ts')?resolve(serviceDirectory,'../../dist/service/apps/service'):serviceDirectory); }
+    catch { return [{code:'native_startup_policy',message:'Automatic Assistant startup needs review before this host can update. Existing settings and work are kept.'}]; }
   }
   signInCommand(method: ChatGptSignInMethod = 'device-code', profileId = 'openai:edition3-voice'): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
     chatGptProfileIdSchema.parse(profileId);
@@ -157,6 +170,10 @@ export class ManagedRuntime {
       const stagedConfig = withAccountPlugin(withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache')), this.store.epoch, join(dirname(bundlePath), 'account-plugin'), entry);
       const sessionBindings = this.store.internalList<import('../../packages/domain/assistant.js').Conversation>('assistant:conversation:').flatMap(conversation => conversation.nativeId && !conversation.deleted ? [{nativeKey:conversation.nativeKey,nativeId:conversation.nativeId}] : []);
       const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig,null,2);
+      if (this.store.updateMaintenanceHeld) {
+        const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig));
+        if(blockers.length)throw new Fault(409,blockers[0].code,blockers[0].message);
+      }
       if (JSON.stringify(JSON.parse(originalConfig)) !== JSON.stringify(JSON.parse(updatedConfig))) {
         // The old path and replacement are recorded in the same atomic config
         // write. A service crash cannot leave a forgotten duplicate plugin path.
@@ -173,7 +190,7 @@ export class ManagedRuntime {
       // detach its lifetime from that descriptor. Supply its Windows stack flag
       // here; disable ambient compile-cache respawns in this managed launch only.
       const child = spawn(process.execPath, [...(process.platform === 'win32' ? ['--stack-size=8192'] : []), ownerEntry, entry, '--profile', 'edition3', 'gateway', 'run', '--port', String(config.port), '--bind', 'loopback', '--auth', 'token', '--tailscale', 'off'], { cwd: root, env: { ...this.environment(config, root, configPath), OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, shell: false });
-      this.child = child;
+      this.child = child;this.childStartedAt=Date.now();
       const append = (buffer: Buffer) => { log = (log + buffer.toString()).slice(-500000); };
       child.stdout?.on('data', append); child.stderr?.on('data', append);
       child.on('error', () => { if (this.child === child) this.current = { ...this.current, state: 'error', phase: 'failed', message: 'The isolated OpenClaw process could not start.' }; });

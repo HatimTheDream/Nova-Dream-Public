@@ -152,7 +152,10 @@ import assert from 'node:assert/strict';
 // sign-in failures. Measured total654,547 (+1,572 / 0.24% over1.12.9).
 // Browser dictation loads on demand; startup148,905 and largest deferred78,209
 // preserve the existing startup/chunk ceilings. Bound this slice at655 KB.
-export const clientLimits = { startup: 180000, total: 655000, deferredChunk: 80000 };
+// 1.13 adds deferred Software Update with retained requests and observed stages.
+// Measured total658,061 (+3,304 / 0.50% over1.12.11), startup148,923 (+58).
+// Its own chunk is3,101 gzip bytes; bound total at660KB and retain startup/chunk limits.
+export const clientLimits = { startup: 180000, total: 660000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

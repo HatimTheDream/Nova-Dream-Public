@@ -72,6 +72,7 @@ export class CalendarReminders {
     for (const attempt of this.store.internalList<CalendarNotificationAttempt>(prefix + 'attempt:')) if (attempt.state === 'claimed' && now - attempt.at > 20000) this.store.internalWrite(prefix + 'attempt:' + attempt.attemptId, { ...attempt, state: 'unknown' });
   }
   tick() {
+    if(this.store.updateMaintenanceHeld)return;
     this.store.internalAtomic(() => {
       if (this.now() >= this.nextScan) {
         for (const master of this.store.internalList<LocalCalendarEvent>('calendar:local:')) this.synchronize(master);

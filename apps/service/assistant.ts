@@ -153,7 +153,7 @@ export class AssistantService {
   private runAutomaticQueues() {
     if (this.closed) return;
     if (this.gateway.status().state !== 'ready') { this.plans.pauseAutomatic(); return; }
-    this.plans.runAutomatic();
+    if (!this.store.updateMaintenanceHeld) this.plans.runAutomatic();
     if (!this.store.recoveryEffectsPaused && !this.transcriptMigration && Date.now() >= this.nextTranscriptMigration) {
       this.nextTranscriptMigration = Date.now() + 10000;
       const generation = this.gateway.status().generation;
@@ -176,6 +176,7 @@ export class AssistantService {
       }).catch(() => { const current = !this.closed && this.operations().find(item => item.id === id); if (current) this.unconfirmedCompletion(current); else this.pendingCompletions.delete(id); }).finally(() => this.completionReads.delete(operation.conversationId));
     }
     const seen = new Set<string>();
+    if (this.store.updateMaintenanceHeld) return;
     for (const item of this.queue().filter(q => q.state === 'paused')) {
       if (seen.has(item.conversationId)) continue;
       seen.add(item.conversationId);
@@ -362,6 +363,7 @@ export class AssistantService {
     if(folder && this.store.internalList<{id:string;folder:string;state:string;epoch:string}>('team:run:').some(team=>team.epoch===this.store.epoch && team.folder===folder && team.id!==teamId && ['running','stopping'].includes(team.state)))throw new Fault(409,'team_checkout_busy','The team is working in this checkout. Pause the workflow before starting another coding task there.');
   }
   async create(device: string, raw: unknown, teamId?:string): Promise<Conversation> {
+    this.store.assertUpdateAdmission();
     const input = createConversationSchema.parse(raw);
     const status = this.assertConnection();
     const admitted = this.store.admit(device, input, { type: 'conversation.create', ...input }, () => {
@@ -712,6 +714,7 @@ export class AssistantService {
     return taskEffortDemand(input, context, earlier ?? (retained ? taskEffortDemand(retained.authoredText ?? retained.text, context) : undefined));
   }
   submit(device: string, raw: unknown, steering = false, teamId?:string): AssistantOperation {
+    this.store.assertUpdateAdmission();
     const input = steering ? steerSchema.parse(raw) : submitSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: steering ? 'assistant.steer' : 'assistant.submit', ...input }, () => {
       const conversation = this.conversation(input.conversationId);
@@ -809,6 +812,7 @@ export class AssistantService {
     return { conversationId: id, nativeId: conversation.nativeId, mode: row.permissionMode as string, pending: row.permissionModePending === true };
   }
   runQueued(device: string, raw: unknown): AssistantOperation {
+    this.store.assertUpdateAdmission();
     const input = queueActionSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: 'assistant.queue-run', ...input }, () => {
       const item = this.queued(input.queueId), conversation = this.conversation(item.conversationId);
@@ -906,6 +910,7 @@ export class AssistantService {
       const params = { ...(goal ? { intent: { kind: 'session-goal-start', version: 1, issuedAtMs: Date.parse(operation.createdAt) } } : {}), sessionKey: operation.nativeKey, sessionId: operation.nativeId, message, ...(target ? { queueMode: 'steer' } : {}), idempotencyKey: operation.requestId, deliver: false, attachments, ...(!goal && !target && thinking ? { thinking } : {}), ...(!goal && operation.fastMode != null ? { fastMode: operation.fastMode } : {}), ...(history.routingContract ? { expectedSessionRoutingContract: history.routingContract } : {}), ...(history.leafEntryId !== undefined ? { expectedLeafEntryId: history.leafEntryId } : {}) };
       const ceiling = this.gateway.attachmentPolicy().maxPayload;
       if (ceiling && Buffer.byteLength(JSON.stringify(params)) + 1024 > ceiling) throw new Fault(413, 'gateway_payload_limit', 'This message exceeds the Gateway limit. Its input and files are kept.');
+      this.store.assertUpdateAdmission();
       operation = this.saveOperation({ ...operation, state: 'dispatching' });
       const receipt = await this.gateway.request<{ runId?: string; status?: string }>('chat.send', params);
       if (this.closed) return;

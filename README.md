@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-1.12.11-blue)
+![Version](https://img.shields.io/badge/Version-1.13.0-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 
@@ -128,3 +128,5 @@ Add a Weather widget and choose a city explicitly. Nova sends that city search a
 The default Open-Meteo endpoint is for personal and other non-commercial use within its published limits. A public source repository does not itself grant commercial API access. For commercial deployments, obtain an appropriate [Open-Meteo subscription](https://open-meteo.com/en/pricing), set `OPEN_METEO_API_KEY` in the host service environment, and restart the service. Nova then uses the customer forecast and geocoding endpoints. Keep this key out of client configuration, widget settings, and source control. See the current [service terms](https://open-meteo.com/en/terms) before deployment.
 
 Weather data uses [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Preserve the adjacent Open-Meteo attribution and licence links in weather widgets, and identify modifications when applicable. City-search data is credited to GeoNames. These data licences are distinct from access to the hosted API; see [Open-Meteo's attribution requirements](https://open-meteo.com/en/licence) and [geocoding documentation](https://open-meteo.com/en/docs/geocoding-api).
+
+[Software Update setup](docs/SOFTWARE-UPDATE-HOST.md) describes compact update settings, signed compatible releases and the separately provisioned Linux updater. Other hosts keep their existing manual deployment route.

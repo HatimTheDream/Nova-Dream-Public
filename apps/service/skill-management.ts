@@ -31,6 +31,7 @@ export class SkillManagement {
   private closed = false;
   private jobs = new Map<string, Promise<void>>();
   private checks = new Map<string, Promise<SkillOperation>>();
+  get updateMaintenanceBusy() { return this.jobs.size + this.checks.size; }
   private unsubscribe: () => void;
   constructor(private store: Store, private gateway: AssistantTransport, private workshop: SkillWorkshop, private factory?: () => SkillManagementTransport, private now = Date.now) {
     this.unsubscribe = gateway.subscribe(event => { if (event.event === 'e3.connection-stopped' || event.event === 'e3.disconnected') void this.stopConnection(); });
@@ -127,6 +128,7 @@ export class SkillManagement {
         params = { ...(cmd.action === 'create' ? { name: cmd.draft.name } : { skillName: op.skillName }), description: cmd.draft.description, content: cmd.draft.content, supportFiles: cmd.draft.supportFiles, goal: cmd.draft.goal, evidence: cmd.draft.evidence };
       }
       this.authorization(op.deviceId, op.epoch, op.generation, op.action, op.authorizationId);
+      this.store.assertUpdateAdmission();
       op = this.save({ ...op, state: 'dispatched', message: 'The exact request was dispatched. Its outcome is being checked.' }); dispatched = true;
       const raw = await this.manager!.request(`skills.proposals.${op.action}`, { agentId: 'main', ...params });
       const ack = proposalAcknowledgement(raw);

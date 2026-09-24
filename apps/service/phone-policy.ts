@@ -34,6 +34,7 @@ GET /api/assignments/state
 GET /api/assignments/approvals
 GET /api/assistant/models
 GET /api/assistant/service
+GET /api/software-update
 GET /api/assistant/outputs
 GET /api/assistant/state
 GET /api/assistant/voice/catalog

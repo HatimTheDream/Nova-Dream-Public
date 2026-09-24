@@ -5,6 +5,7 @@ import type { AssistantConnection, AssistantModel } from '../../packages/domain/
 import { agentServiceInfo, type AgentServiceInfo } from '../../packages/domain/agent-service.js';
 import { Fault, Store } from './store.js';
 import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
+import { maintenanceGatewayKind } from './update-maintenance.js';
 
 type Configuration = { url: string; token: string; generation: string };
 type DeviceToken = { token: string; scopes: string[] };
@@ -38,7 +39,7 @@ export class Gateway implements AssistantTransport {
   private catalogRequest?: Promise<AssistantModel[]>;
   private discoveredCatalog?: string;
   private resetModels() { ++this.catalogEpoch; this.catalogRequest = undefined; this.discoveredCatalog = undefined; }
-  constructor(private store: Store, private version = 'development', private createClient: (options: GatewayClientOptions) => Client = options => new GatewayClient(options), private purpose: 'assistant' | 'skill-management' | 'permission-control' | 'response-control' | 'approval-review' | 'question-review' | 'browser-control' | 'account-control' | 'speech-playback' = 'assistant') {}
+  constructor(private store: Store, private version = 'development', private createClient: (options: GatewayClientOptions) => Client = options => new GatewayClient(options), private purpose: 'assistant' | 'skill-management' | 'permission-control' | 'response-control' | 'approval-review' | 'question-review' | 'browser-control' | 'account-control' | 'speech-playback' | 'update-control' = 'assistant') {}
   status(): AssistantConnection { return structuredClone(this.connection); }
   serviceInfo(): AgentServiceInfo { return agentServiceInfo({ id: 'openclaw', name: 'OpenClaw', state: this.connection.state, version: this.hello?.server?.version }); }
   subscribe(listener: (event: EventFrame) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -52,7 +53,7 @@ export class Gateway implements AssistantTransport {
     const configuration = { url, token: token ?? old?.token ?? '', generation: old?.url === url ? old.generation : randomUUID() };
     if (!configuration.token) throw new Fault(400, 'gateway_credentials', 'Enter the Gateway connection token from its supported setup.');
     await this.stop();
-    this.store.internalWrite('gateway:configuration', configuration);
+    if (!old || old.url !== configuration.url || old.token !== configuration.token || old.generation !== configuration.generation) this.store.internalWrite('gateway:configuration', configuration);
     this.start();
     return this.status();
   }
@@ -81,7 +82,7 @@ export class Gateway implements AssistantTransport {
     const generation = config.generation, lifecycle = ++this.lifecycle;
     const live = () => !this.stopped && this.lifecycle === lifecycle && this.connection.generation === generation;
     this.client = this.createClient({
-      url: config.url, token: config.token, clientName: 'gateway-client', clientDisplayName: this.purpose === 'assistant' ? 'Nova Dream' : this.purpose === 'speech-playback' ? 'Nova Dream — Read aloud' : this.purpose === 'account-control' ? 'Nova Dream — Account selection' : this.purpose === 'browser-control' ? 'Nova Dream — Host browser' : this.purpose === 'question-review' ? 'Nova Dream — Question review' : this.purpose === 'approval-review' ? 'Nova Dream — Approval review' : this.purpose === 'response-control' ? 'Nova Dream — Response controls' : this.purpose === 'permission-control' ? 'Nova Dream — Access controls' : 'Nova Dream — Skill management', clientVersion: this.version, mode: 'backend', platform: process.platform, role: 'operator', scopes: this.purpose === 'question-review' ? ['operator.read', 'operator.questions'] : this.purpose === 'approval-review' ? ['operator.read', 'operator.approvals'] : this.purpose === 'speech-playback' ? ['operator.read', 'operator.talk'] : this.purpose === 'assistant' ? ['operator.read', 'operator.write'] : ['operator.read', 'operator.admin'], caps: this.purpose === 'approval-review' ? ['approvals'] : this.purpose === 'assistant' ? ['tool-events'] : [], minProtocol: 4, maxProtocol: 4, deviceIdentity: identity, requestTimeoutMs: this.purpose === 'browser-control' ? 45000 : 12000,
+      url: config.url, token: config.token, clientName: 'gateway-client', clientDisplayName: this.purpose === 'assistant' ? 'Nova Dream' : this.purpose === 'update-control' ? 'Nova Dream — Software Update' : this.purpose === 'speech-playback' ? 'Nova Dream — Read aloud' : this.purpose === 'account-control' ? 'Nova Dream — Account selection' : this.purpose === 'browser-control' ? 'Nova Dream — Host browser' : this.purpose === 'question-review' ? 'Nova Dream — Question review' : this.purpose === 'approval-review' ? 'Nova Dream — Approval review' : this.purpose === 'response-control' ? 'Nova Dream — Response controls' : this.purpose === 'permission-control' ? 'Nova Dream — Access controls' : 'Nova Dream — Skill management', clientVersion: this.version, mode: 'backend', platform: process.platform, role: 'operator', scopes: this.purpose === 'question-review' ? ['operator.read', 'operator.questions'] : this.purpose === 'approval-review' ? ['operator.read', 'operator.approvals'] : this.purpose === 'speech-playback' ? ['operator.read', 'operator.talk'] : this.purpose === 'assistant' ? ['operator.read', 'operator.write'] : ['operator.read', 'operator.admin'], caps: this.purpose === 'approval-review' ? ['approvals'] : this.purpose === 'assistant' ? ['tool-events'] : [], minProtocol: 4, maxProtocol: 4, deviceIdentity: identity, requestTimeoutMs: this.purpose === 'browser-control' ? 45000 : 12000,
       hostDeps: {
         signDevicePayload: (pem, payload) => sign(null, Buffer.from(payload), pem).toString('base64url'),
         publicKeyRawBase64UrlFromPem: pem => createPublicKey(pem).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url'),
@@ -113,10 +114,16 @@ export class Gateway implements AssistantTransport {
   }
   async request<T = Record<string, unknown>>(method: string, params: unknown): Promise<T> {
     if (this.store.recoveryEffectsPaused) throw new Fault(409, 'recovery_held', 'Assistant execution is paused in this recovered copy.');
-    if (!(this.purpose === 'assistant' ? allowedMethods.has(method) || skillReadMethods.has(method) : this.purpose === 'speech-playback' ? ['talk.catalog', 'talk.speak'].includes(method) : this.purpose === 'account-control' ? method === 'models.authOrderSet' : this.purpose === 'browser-control' ? method === 'browser.request' : this.purpose === 'question-review' ? questionMethods.has(method) : this.purpose === 'approval-review' ? reviewMethods.has(method) : this.purpose === 'response-control' ? method === 'sessions.patch' : this.purpose === 'permission-control' ? ['sessions.create', 'sessions.patch'].includes(method) : skillManagementMethods.has(method))) throw new Fault(403, 'gateway_method', 'This Gateway operation is not exposed by Nova Dream.');
+    if (!(this.purpose === 'assistant' ? allowedMethods.has(method) || skillReadMethods.has(method) : this.purpose === 'update-control' ? ['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'].includes(method) : this.purpose === 'speech-playback' ? ['talk.catalog', 'talk.speak'].includes(method) : this.purpose === 'account-control' ? method === 'models.authOrderSet' : this.purpose === 'browser-control' ? method === 'browser.request' : this.purpose === 'question-review' ? questionMethods.has(method) : this.purpose === 'approval-review' ? reviewMethods.has(method) : this.purpose === 'response-control' ? method === 'sessions.patch' : this.purpose === 'permission-control' ? ['sessions.create', 'sessions.patch'].includes(method) : skillManagementMethods.has(method))) throw new Fault(403, 'gateway_method', 'This Gateway operation is not exposed by Nova Dream.');
     if (this.purpose === 'account-control') {
       const input = params as Record<string, unknown> | null;
       if (!input || input.provider !== 'openai' || input.agentId !== 'main' || !Array.isArray(input.profileIds) || !input.profileIds.length || input.profileIds.length > 100 || new Set(input.profileIds).size !== input.profileIds.length || input.profileIds.some(id => !chatGptProfileIdSchema.safeParse(id).success) || Object.keys(input).some(key => !['provider', 'agentId', 'profileIds'].includes(key))) throw new Fault(403, 'gateway_method', 'Account controls accept only the complete ChatGPT profile order on this host.');
+    }
+    if (this.purpose === 'update-control') {
+      const input = params as Record<string, unknown> | null;
+      const fields = method === 'system.info' ? [] : method === 'gateway.suspend.prepare' ? ['requestId','terminalPolicy','drain'] : ['suspensionId'];
+      const value = input?.[method === 'gateway.suspend.prepare' ? 'requestId' : 'suspensionId'];
+      if (!input || Object.keys(input).some(key => !fields.includes(key)) || method !== 'system.info' && (typeof value !== 'string' || !/^\S{1,128}$/.test(value)) || method === 'gateway.suspend.prepare' && (input.terminalPolicy !== 'preserve' || input.drain !== false || !this.store.updateMaintenanceHeld)) throw new Fault(403,'gateway_method','Updates preserve terminals and inspect only their own suspension lease.');
     }
     if (this.purpose === 'browser-control') {
       const input=params as Record<string,any>;
@@ -136,11 +143,13 @@ export class Gateway implements AssistantTransport {
     if (this.purpose !== 'assistant') {
       const config = managementConfig;
       if (!config || config.generation !== this.connection.generation || config.url !== this.connection.url) throw new Fault(409, 'gateway_replaced', 'These controls belong to the original Assistant host. Reconnect for the current host.');
-      if (!this.connection.grantedScopes.includes(this.purpose === 'speech-playback' ? (method === 'talk.catalog' ? 'operator.read' : 'operator.talk') : this.purpose === 'question-review' ? (method === 'sessions.messages.subscribe' ? 'operator.read' : 'operator.questions') : this.purpose === 'approval-review' ? (method === 'sessions.messages.subscribe' ? 'operator.read' : 'operator.approvals') : skillReadMethods.has(method) ? 'operator.read' : 'operator.admin')) throw new Fault(403, 'gateway_scope', 'OpenClaw has not granted the required management permission.');
+      if (!this.connection.grantedScopes.includes(this.purpose === 'speech-playback' ? (method === 'talk.catalog' ? 'operator.read' : 'operator.talk') : this.purpose === 'question-review' ? (method === 'sessions.messages.subscribe' ? 'operator.read' : 'operator.questions') : this.purpose === 'approval-review' ? (method === 'sessions.messages.subscribe' ? 'operator.read' : 'operator.approvals') : skillReadMethods.has(method) || this.purpose === 'update-control' && ['system.info','gateway.suspend.status'].includes(method) ? 'operator.read' : 'operator.admin')) throw new Fault(403, 'gateway_scope', 'OpenClaw has not granted the required management permission.');
     }
     if (!this.connection.methods.includes(method)) throw new Fault(501, 'gateway_capability', 'This OpenClaw version does not expose the required operation.');
     const lifecycle = this.lifecycle;
-    const result = await this.client.request<T>(method, params, method === 'talk.speak' ? { timeoutMs: 45000 } : undefined);
+    const kind = maintenanceGatewayKind(method, params);
+    const send = () => this.client!.request<T>(method, params, method === 'talk.speak' ? { timeoutMs: 45000 } : undefined);
+    const result = kind === 'read' ? await send() : await this.store.trackUpdateEffect('native-requests', send, kind === 'settling');
     if (this.stopped || this.lifecycle !== lifecycle) throw new Fault(503, 'gateway_replaced', 'The OpenClaw connection changed before this result was confirmed. Check the original operation.');
     if (managementConfig && JSON.stringify(managementConfig) !== JSON.stringify(this.store.internalRead<Configuration>('gateway:configuration'))) throw new Fault(409, 'gateway_replaced', 'The Assistant host changed before this management result was confirmed. Check the original operation.');
     return result;

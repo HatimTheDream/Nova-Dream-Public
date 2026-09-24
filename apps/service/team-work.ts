@@ -116,6 +116,7 @@ export class TeamWorkService {
     this.assertIdle(team.folder, team.id);
   }
   create(device: string, raw: unknown) {
+    this.store.assertUpdateAdmission();
     if (this.closing) throw new Fault(503, 'team_closing', 'Team work is restarting.');
     const input = teamCreateSchema.parse(raw);
     const receipt = this.store.admit(device, input, { type: 'team.create', ...input }, () => {
@@ -133,6 +134,7 @@ export class TeamWorkService {
   control(device: string, raw: unknown) {
     if (this.closing) throw new Fault(503, 'team_closing', 'Team work is restarting.');
     const input = teamControlSchema.parse(raw);
+    if (['apply_findings', 'retry', 'resume'].includes(input.action)) this.store.assertUpdateAdmission();
     const receipt = this.store.admit(device, input, { type: 'team.control', ...input }, () => {
       let team = this.read(input.id);
       if (team.revision !== input.revision) throw new Fault(409, 'team_changed', 'The workflow advanced. Review its current stage.');
@@ -225,7 +227,7 @@ export class TeamWorkService {
     // operation disappeared. It may have crossed the dispatch boundary.
     if (step.operationId) throw new Fault(409, 'team_operation_missing', 'The original execution is unavailable. No new attempt was started.');
     if (team.state === 'stopping') { this.save({ ...team, state: 'cancelled', message: 'Team work stopped before another stage was submitted.' }); return; }
-    if (team.state !== 'running' || this.closing) return;
+    if (team.state !== 'running' || this.closing || this.store.updateMaintenanceHeld) return;
     this.assertContext(team, step);
     let conversation = step.conversationId ? this.assistant.conversations().find(c => c.id === step.conversationId) : undefined;
     if (!conversation) {
@@ -236,7 +238,7 @@ export class TeamWorkService {
     const prior = this.handoffInputs(team), handoffIds = prior.flatMap(p => p.value.handoff ? [p.value.handoff.id] : []);
     this.store.internalWrite('team:conversation:' + conversation.id, { epoch: team.epoch, teamId: team.id, agentId: step.agentId, agentRevision: step.agentRevision, access: team.agents[index].value.access ?? {}, role: step.role, handoffIds, ...(step.role === 'review' ? { review: { teamId: team.id, stage: index, attempt: step.attempt ?? 1, agentId: step.agentId, agentRevision: step.agentRevision, submitRequestId: request.submit } } : {}) } satisfies TeamConversationAccess);
     if (conversation.state !== 'ready') throw new Fault(409, 'team_session', 'The original Work session is not ready. Review it before continuing.');
-    if (this.read(id).state !== 'running' || this.closing) return;
+    if (this.read(id).state !== 'running' || this.closing || this.store.updateMaintenanceHeld) return;
     // Revalidate after the asynchronous native session creation as well.
     this.assertContext(team, step);
     const captured = team.agents[index].value, priorLimit = Math.floor(9000 / Math.max(1, prior.length));

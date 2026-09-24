@@ -18,6 +18,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix deploy/vercel
       - run: npm run quality
+      - name: Verify Linux update recovery
+        run: python3 -B tests/update-runner.test.py -v
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

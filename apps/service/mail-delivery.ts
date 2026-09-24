@@ -249,13 +249,13 @@ export class MailDeliveryService {
             if(!head.files){head={...head,files:{cursor:0,draft:content.draft!}};this.store.internalWrite(key(id),head);}
             while(head.files!.cursor<content.filePlan!.length){
               const progress=head.files!,change=content.filePlan![progress.cursor];
-              const after=await applyOutlookFileChange(request,current,progress.draft,change,content.message,()=>{this.open();check();this.epoch(head.review.epoch);this.assertDraftOwner(head);head=this.write(head,{phase},{attempted:phase,files:{...progress,pending:true}});});
+              const after=await applyOutlookFileChange(request,current,progress.draft,change,content.message,()=>{this.open();check();this.store.assertUpdateAdmission();this.epoch(head.review.epoch);this.assertDraftOwner(head);head=this.write(head,{phase},{attempted:phase,files:{...progress,pending:true}});});
               head=this.write(head,{providerChangeKey:after.changeKey},{attempted:undefined,files:{cursor:progress.cursor+1,draft:after}});
             }
             head=this.write(head,{}, {completed:[...head.completed,phase]});continue;
           }
 
-          const before=()=>{this.open();check();this.epoch(head.review.epoch);this.assertDraftOwner(head);head=this.write(head,{phase},{attempted:phase});};
+          const before=()=>{this.open();check();this.store.assertUpdateAdmission();this.epoch(head.review.epoch);this.assertDraftOwner(head);head=this.write(head,{phase},{attempted:phase});};
           const result=await applyDeliveryStage(request,current,{id,mode:head.review.mode,message:content.message,rawMime:content.rawMime!,phase,providerDraftId:head.review.providerDraftId,providerChangeKey:head.review.providerChangeKey,draft:head.files?.draft??content.draft,envelope:content.envelope},before);
           // Capture affirmative provider evidence even if the account disconnected
           // or shutdown began while that exact HTTP call was in flight.

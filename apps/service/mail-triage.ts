@@ -193,7 +193,7 @@ export class MailTriageService {
           // during a resumed undo. The conditional validator is the provider's.
           if(current.provider==='microsoft'&&step.expected.category)step=triageSteps(current,message,step.expected)[0];
           const returned=await applyTriageStep(request,current,message,step,()=>{
-            check();this.epoch(head.epoch);this.open();
+            check();this.store.assertUpdateAdmission();this.epoch(head.epoch);this.open();
             if(undo)item.outcome.undo='applying';else item.outcome.state='applying';
             item.attempted=step;this.saveItem(head,item);
           });

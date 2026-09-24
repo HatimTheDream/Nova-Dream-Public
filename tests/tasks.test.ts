@@ -15,6 +15,18 @@ function fixture() {
   return { get store() { return store; }, path, cmd, time(value: string | number) { now = typeof value === 'number' ? value : Date.parse(value); }, get now() { return now; }, restart() { store.close(); store = new Store(path, () => now); }, close() { store.close(); rmSync(path, { recursive: true, force: true }); } };
 }
 const template = (): Routine => ({ title: 'Walk outside', notes: 'Daily fixture', kind: 'habit', state: 'active', startsOn: '2026-03-07', timezone: 'America/Los_Angeles', cadence: 'daily', weekdays: [1, 2, 3, 4, 5], projectId: null, plannedTime: '09:00', priority: 'normal', estimateMinutes: 15 });
+test('maintenance snapshots preserve routines until work resumes and then catch up once', () => {
+  const f = fixture(); try {
+    f.store.mutate('a', f.cmd('routine', `routine:${randomUUID()}`, template()));
+    const before = f.store.snapshot('a'); f.store.setUpdateMaintenanceHeld(true);
+    f.time('2026-03-09T19:00:00Z'); f.store.tickTasks();
+    assert.deepEqual(f.store.snapshot('a').tasks, before.tasks);
+    f.store.setUpdateMaintenanceHeld(false); f.store.tickTasks();
+    const after = f.store.snapshot('a'); assert.equal(after.tasks.length, 3);
+    assert.deepEqual(after.taskState?.occurrences.map(o => o.date), ['2026-03-07', '2026-03-08', '2026-03-09']);
+    assert.deepEqual(f.store.snapshot('a').tasks, after.tasks);
+  } finally { f.close(); }
+});
 test('task lifecycle receipts and completion corrections survive restart without moving dates', () => {
   const f = fixture(); try {
     const id = `task:${randomUUID()}`; let task = f.store.mutate('a', f.cmd('task', id, { ...base, planned: '2026-03-06', due: '2026-03-10' })) as Entity<Task>;

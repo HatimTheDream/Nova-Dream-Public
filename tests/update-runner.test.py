@@ -1,0 +1,439 @@
+"""Synthetic runner checks. No host service, credentials or old helpers run.
+
+Linux adds real rsync/cp metadata and independent-inode coverage. Other systems
+exercise bounded admission, saved SQLite data, receipt and orchestration rules.
+"""
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import pathlib
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'deploy' / 'update-runner'))
+if sys.platform != 'linux':
+    sys.modules['fcntl'] = types.SimpleNamespace()
+import recovery
+spec = importlib.util.spec_from_file_location('update_driver', ROOT / 'deploy' / 'update-runner' / 'install.py')
+driver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(driver)
+
+
+def fixture_database(path, schema=55):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript('''
+            create table entities(id text primary key, revision integer, payload blob);
+            create table history(cursor integer primary key);
+            create table blobs(id text primary key, payload blob);
+            create table blob_refs(entity_id text, blob_id text);
+            create table service_records(id text primary key);
+            create table receipts(id text primary key,payload blob);
+            create table meta(key text primary key,value blob);
+            insert into meta values('epoch','96b84a4e-172a-4481-8038-74663d28a6fc');
+            insert into entities values('saved',1,x'010203');
+            insert into history values(1);
+            insert into blobs values('attachment',x'040506');
+            insert into blob_refs values('saved','attachment');
+            insert into service_records values('receipt');
+        ''')
+        connection.execute('pragma user_version=' + str(schema))
+    (path.parent / 'workspace.identity').write_bytes(b'synthetic identity')
+    (path.parent / 'workspace-key.json').write_bytes(b'synthetic key only')
+    (path.parent / 'edition3.identity').write_bytes(b'private.novadream.edition3.preview\n')
+
+
+def fixture_native(root):
+    fixture_database(root / 'workspace.sqlite')
+    native = root / 'openclaw-runtime'
+    native.mkdir()
+    (native / 'edition3-runtime.identity').write_bytes(b'edition3-owned-gateway\n')
+
+
+class RunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-runner-fixture-')
+        self.root = pathlib.Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_capacity_counts_candidate_snapshot_restore_reserve_and_rejects_shared_live_inode(self):
+        entry = {'kind': 'file', 'size': 100, 'sha256': 'a', 'mode': 0o600}
+        source = {'file': entry}
+        inodes = {'file': {'device': 1, 'inode': 1, 'allocated': 4096}}
+        old = {'file': {**entry, 'sha256': 'b'}}
+        old_inodes = {'file': {'device': 1, 'inode': 2, 'allocated': 4096}}
+        minimum = recovery.RESERVE + 2 * recovery.ALLOWANCE + 4096 + 4096 + 512
+        self.assertEqual(recovery.capacity(source, inodes, old, old_inodes, minimum, 512)['requiredFreeBytes'], minimum)
+        with self.assertRaises(recovery.InsufficientStorage):
+            recovery.capacity(source, inodes, old, old_inodes, minimum - 1, 512)
+        with self.assertRaises(RuntimeError):
+            recovery.capacity(source, inodes, old, inodes, minimum, 512)
+
+    def test_saved_sqlite_records_blobs_schemas_and_keys_survive(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_database(before / 'workspace.sqlite')
+        fixture_database(before / 'dormant' / 'workspace.sqlite', 53)
+        shutil.copytree(before, live)
+        self.assertEqual(len(recovery.saved_state(before, live, restored=True)), 2)
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update entities set revision=2,payload=x'070809'")
+            connection.execute('insert into history values(2)')
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update entities set revision=1,payload=x'010203'")
+            connection.execute('delete from history where cursor=2')
+        with contextlib.closing(sqlite3.connect(live / 'dormant' / 'workspace.sqlite')) as connection, connection:
+            connection.execute('pragma user_version=55')
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live, restored=True)
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update blobs set payload=x'00'")
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+
+    def test_closed_uncheckpointed_journal_and_missing_saved_history_fail(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_database(before / 'workspace.sqlite')
+        shutil.copytree(before, live)
+        journal = before / 'workspace.sqlite-wal'
+        journal.write_bytes(b'not checkpointed')
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+        journal.unlink()
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute('delete from history')
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+
+    def test_domain_service_records_stay_exact_while_owned_transport_receipts_can_change(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_database(before / 'workspace.sqlite')
+        with contextlib.closing(sqlite3.connect(before / 'workspace.sqlite')) as connection, connection:
+            connection.execute('drop table service_records')
+            connection.execute('create table service_records(id text primary key, revision integer, payload blob)')
+            connection.executemany('insert into service_records values(?,1,?)', [('accounts:item:saved', b'account bytes'), ('gateway:device-token:fixture-generation', b'token'), ('update:native-lease:job', b'lease')])
+        shutil.copytree(before, live)
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update service_records set revision=2,payload=x'00' where id like 'gateway:%' or id like 'update:native-lease:%'")
+        recovery.saved_state(before, live)
+        with contextlib.closing(sqlite3.connect(live / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update service_records set revision=2,payload=x'00' where id like 'accounts:%'")
+        with self.assertRaises(RuntimeError):
+            recovery.saved_state(before, live)
+
+    def test_native_sqlite_messages_and_session_payloads_cannot_be_rewritten(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_native(before)
+        relative = pathlib.Path('openclaw-runtime/state/agents/main/agent/openclaw-agent.sqlite')
+        old = before / relative
+        old.parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(old)) as connection, connection:
+            connection.executescript("pragma user_version=19; create table session_nodes(id text primary key,entry_json text); insert into session_nodes values('session','saved context'); create table transcript_events(id text primary key,payload blob); insert into transcript_events values('message',x'010203');")
+        shutil.copytree(before, live)
+        recovery.native_saved_state(before, live)
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update transcript_events set payload=x'00'")
+        with self.assertRaises(RuntimeError):
+            recovery.native_saved_state(before, live)
+
+    def test_native_explicit_coverage_preserves_project_content_and_rejects_unknown_tables_before_stop(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_native(before)
+        relative = pathlib.Path('openclaw-runtime/state/state/openclaw.sqlite')
+        old = before / relative
+        old.parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(old)) as connection, connection:
+            connection.executescript("pragma user_version=15; create table projects(id text primary key,payload text); insert into projects values('saved','original'); create table state_leases(id text primary key,pid integer); insert into state_leases values('lease',1);")
+        shutil.copytree(before, live)
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute('update state_leases set pid=2')
+        recovery.native_preflight(live)
+        recovery.native_saved_state(before, live)
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update projects set payload='changed'")
+        with self.assertRaises(RuntimeError):
+            recovery.native_saved_state(before, live)
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute('create table unreviewed_work(id text primary key)')
+        with self.assertRaises(RuntimeError):
+            recovery.native_preflight(live)
+
+    def test_native_reconnect_metadata_does_not_allow_account_or_scope_rewrites(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_native(before)
+        relative = pathlib.Path('openclaw-runtime/state/state/openclaw.sqlite')
+        old = before / relative
+        old.parent.mkdir(parents=True)
+        tokens = {'operator': {'role': 'operator', 'token': 'synthetic', 'scopes': ['read'], 'lastUsedAtMs': 1, 'unknownField': 'preserved'}}
+        with contextlib.closing(sqlite3.connect(old)) as connection, connection:
+            connection.executescript("pragma user_version=15; create table device_pairing_paired(id text primary key,scopes_json text,tokens_json text,last_seen_at_ms integer,last_seen_reason text,remote_ip text);")
+            connection.execute("insert into device_pairing_paired values('device','read',?,1,'connect','127.0.0.1')", (json.dumps(tokens),))
+        shutil.copytree(before, live)
+        tokens['operator']['lastUsedAtMs'] = 2
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update device_pairing_paired set last_seen_at_ms=2,last_seen_reason='device-token-auth',tokens_json=?", (json.dumps(tokens),))
+        recovery.native_saved_state(before, live)
+        tokens['operator']['unknownField'] = 'changed'
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update device_pairing_paired set tokens_json=?", (json.dumps(tokens),))
+        with self.assertRaises(RuntimeError):
+            recovery.native_saved_state(before, live)
+        tokens['operator']['unknownField'] = 'preserved'
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update device_pairing_paired set scopes_json='write',tokens_json=?", (json.dumps(tokens),))
+        with self.assertRaises(RuntimeError):
+            recovery.native_saved_state(before, live)
+
+    def test_native_selection_binds_actual_workspace_epoch_and_preserves_inactive_database_bytes(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_native(before)
+        recovery_id = 'bb1be57f-a0e3-4c40-b630-e187a3182b2c'
+        selected = before / 'recovered-workspaces' / recovery_id
+        fixture_native(selected)
+        (before / 'workspace-selection.json').write_text(json.dumps({'format': 1, 'recoveryId': recovery_id}))
+        (selected / 'recovery-complete.json').write_text(json.dumps({'jobId': recovery_id, 'sourceHash': 'c' * 64}))
+        inactive = before / 'openclaw-runtime' / 'fixture.sqlite'
+        inactive.write_bytes(b'unreadable archive fixture; preserve exact bytes')
+        current = selected / 'openclaw-runtime/state/state/openclaw.sqlite'
+        current.parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(current)) as connection, connection:
+            connection.executescript('pragma user_version=15; create table user_profiles(id text primary key,name text);')
+        epoch = '96b84a4e-172a-4481-8038-74663d28a6fc'
+        actual_selected, actual_epoch, paths = recovery.native_preflight(before, epoch)
+        self.assertEqual(actual_selected, selected.relative_to(before))
+        self.assertEqual(actual_epoch, epoch)
+        self.assertEqual(paths, {current.relative_to(before)})
+        with self.assertRaises(RuntimeError):
+            recovery.native_preflight(before, recovery_id)
+        shutil.copytree(before, live)
+        recovery.native_saved_state(before, live, epoch)
+        (live / inactive.relative_to(before)).write_bytes(b'changed inactive content')
+        with self.assertRaises(RuntimeError):
+            recovery.native_saved_state(before, live, epoch)
+
+    def archive(self, names):
+        path = self.root / 'app.tgz'
+        with tarfile.open(path, 'w:gz') as archive:
+            for name, kind in names:
+                info = tarfile.TarInfo(name)
+                info.type = kind
+                info.size = 1 if kind == tarfile.REGTYPE else 0
+                if kind == tarfile.SYMTYPE:
+                    info.linkname = '/untrusted'
+                archive.addfile(info, io.BytesIO(b'x') if info.size else None)
+        return path
+
+    def test_archive_rejects_traversal_links_duplicate_and_unreviewed_scripts(self):
+        instance = driver.Driver(self.root / 'request.json')
+        for names in [[('../escape', tarfile.REGTYPE)], [('dist/link', tarfile.SYMTYPE)], [('package.json', tarfile.REGTYPE)] * 2,
+                      [('scripts/arbitrary.mjs', tarfile.REGTYPE)], [('dist/./file', tarfile.REGTYPE)]]:
+            instance.archive = self.archive(names)
+            with self.assertRaises(RuntimeError):
+                instance.archive_members()
+        instance.archive = self.archive([('package.json', tarfile.REGTYPE), ('dist/client/index.html', tarfile.REGTYPE)])
+        self.assertEqual(len(instance.archive_members()), 2)
+
+    def instance(self):
+        instance = driver.Driver(self.root / 'request.json')
+        instance.job_id = '34104484-7465-4b71-acf8-0e390a17aa42'
+        instance.target_id, instance.prior_id = 'b' * 64, 'a' * 64
+        instance.prior = self.root / 'prior'
+        instance.current = types.SimpleNamespace(resolve=lambda strict: instance.prior)
+        instance.release = {'compatibility': {'fromNovaVersion': '1.12.11'}}
+        instance.acceptance = lambda *args: {'health': {'status': 'ready'}}
+        instance.verify_configuration = lambda: None
+        return instance
+
+    def test_unchanged_receipt_is_private_per_attempt_and_never_claims_restore(self):
+        instance = self.instance()
+        with patch.object(driver, 'candidate'), patch.object(driver, 'sync_dir'), patch.object(recovery, 'sync_dir'), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True):
+            instance.result('unchanged')
+        result = json.loads((self.root / 'result.json').read_bytes())
+        self.assertEqual(result['outcome'], 'unchanged')
+        self.assertTrue(result['unchangedVerified'])
+        self.assertTrue(result['healthVerified'])
+        self.assertEqual(result['reasonCode'], 'preflight_failed')
+        self.assertNotIn('savedWorkVerified', result)
+        self.assertNotIn('recoveryVerified', result)
+
+    def test_unchanged_requires_no_stop_switch_or_workspace_mutation_and_fresh_health(self):
+        for field in ('stop_attempted', 'switch_attempted', 'switched', 'workspace_mutated'):
+            instance = self.instance()
+            setattr(instance, field, True)
+            with self.assertRaises(RuntimeError):
+                instance.result('unchanged')
+        instance = self.instance()
+        instance.acceptance = lambda *args: (_ for _ in ()).throw(RuntimeError('unknown health'))
+        with patch.object(driver, 'candidate'), self.assertRaises(RuntimeError):
+            instance.result('unchanged')
+        self.assertFalse((self.root / 'result.json').exists())
+
+    def test_unresponsive_active_app_is_not_stopped_by_generic_recovery(self):
+        instance = self.instance()
+        instance.target = self.root / 'target'
+        instance.pair = {}
+        calls = []
+        instance.require_stopped = lambda: (_ for _ in ()).throw(RuntimeError('active'))
+        instance.acceptance = lambda *args: (_ for _ in ()).throw(RuntimeError('unknown native activity'))
+        instance.service = lambda action: calls.append(action)
+        with self.assertRaises(RuntimeError):
+            instance.guarded_stop()
+        self.assertEqual(calls, [])
+
+    def test_reviewed_unresponsive_startup_requires_exact_artifacts_process_and_socket(self):
+        instance = self.instance()
+        instance.target = self.root / 'target'
+        instance.node = self.root / 'node'
+        instance.settings = {'serviceName': 'synthetic.service'}
+        hashes = {name: 'c' * 64 for name in driver.STARTUP_FILES}
+        instance.pair = {'startupBarrier': {'format': 1, 'prior': hashes, 'target': hashes}}
+        instance.launched = {'candidateId': instance.prior_id, 'notBeforeTicks': 50}
+        instance.controller_hold = lambda: None
+        environ = b'E3_UPDATE_SOCKET=/run/nova-update/control.sock\0'
+        fields = [b'S'] + [b'0'] * 18 + [b'100']
+        process_stat = b'123 (synthetic) ' + b' '.join(fields)
+        class ProcessFile:
+            def __init__(self, name=''):
+                self.name = name
+            def __truediv__(self, name):
+                return ProcessFile(name)
+            def open(self, mode):
+                return io.BytesIO(process_stat if self.name == 'stat' else environ)
+            def resolve(self, strict=True):
+                return instance.node if self.name == 'exe' else instance.prior
+        manifest = {'artifacts': [{'path': name, 'sha256': value} for name, value in hashes.items()]}
+        with patch.object(driver, 'candidate', return_value=manifest), patch.object(driver, 'pathlib', types.SimpleNamespace(Path=lambda _: ProcessFile())), patch.object(driver.subprocess, 'check_output', return_value='123\n'):
+            instance.qualify_started_barrier(instance.prior, instance.prior_id, '1.13.0')
+            environ = b'E3_UPDATE_SOCKET=/tmp/untrusted.sock\0'
+            with self.assertRaises(RuntimeError):
+                instance.qualify_started_barrier(instance.prior, instance.prior_id, '1.13.0')
+
+    def test_retained_native_transcripts_may_append_but_cannot_lose_old_bytes(self):
+        instance = self.instance()
+        instance.recovery, instance.data = self.root / 'recovery', self.root / 'live'
+        fixture_native(instance.recovery / 'workspace')
+        fixture_native(instance.data)
+        native = pathlib.Path('openclaw-runtime/state/sessions')
+        original = instance.recovery / 'workspace' / native / 'session.jsonl'
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b'{"saved":true}\n')
+        current = instance.data / native / original.name
+        current.parent.mkdir(parents=True)
+        current.write_bytes(original.read_bytes() + b'{"new":true}\n')
+        instance.retained_native()
+        current.write_bytes(b'{"saved":false}\n')
+        with self.assertRaises(RuntimeError):
+            instance.retained_native()
+
+    def test_exact_app_and_native_barrier_are_required_by_acceptance(self):
+        instance = driver.Driver(self.root / 'request.json')
+        instance.job_id, instance.client_candidate = 'job', 'a' * 64
+        health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.0', 'schemaVersion': 55, 'apiVersion': 1}
+        guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
+        responses = {'health': health, 'software-update/acceptance': guard, 'assistant/service': {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.2'},
+                     'assistant/state': {'connection': {'state': 'ready', 'modelAuthReady': True, 'grantedScopes': ['operator.write']}}, 'accounts': {'accounts': []}}
+        instance.api = lambda path, session=False: responses[path]
+        instance.controller_hold = lambda: None
+        self.assertEqual(instance.acceptance('a' * 64, '1.13.0')['epoch'], 'epoch')
+        for key, value in [('nativeSuspended', False), ('heldFor', 'different-job'), ('maintenanceHeld', False), ('blockers', [{'code': 'voice'}])]:
+            before = guard[key]
+            guard[key] = value
+            with self.assertRaises(RuntimeError):
+                instance.acceptance('a' * 64, '1.13.0')
+            guard[key] = before
+
+    def test_driver_preflight_failure_does_not_stop_and_stop_failure_never_claims_unchanged(self):
+        def setup(fail):
+            instance = self.instance()
+            instance.recovery = self.root / ('recovery-' + fail)
+            instance.restore = self.root / ('restore-' + fail)
+            instance.release['manifestExpiresAt'] = 9999999999999
+            instance.validate = lambda: None
+            instance.stage = lambda value: None
+            actions = []
+            instance.result = lambda outcome: actions.append(outcome)
+            instance.stage_app = lambda: (_ for _ in ()).throw(RuntimeError('capacity')) if fail == 'preflight' else None
+            def service(action):
+                actions.append(action)
+                if action == 'stop':
+                    raise RuntimeError('stop uncertain')
+            instance.service = service
+            instance.wait_acceptance = lambda *args: None
+            return instance, actions
+        preflight, actions = setup('preflight')
+        preflight.run()
+        self.assertEqual(actions, ['unchanged'])
+        self.assertEqual(preflight.preflight_reason, 'preflight_failed')
+        storage, actions = setup('storage')
+        storage.stage_app = lambda: (_ for _ in ()).throw(recovery.InsufficientStorage('synthetic private detail'))
+        storage.run()
+        self.assertEqual(actions, ['unchanged'])
+        self.assertEqual(storage.preflight_reason, 'insufficient_storage')
+        stopping, actions = setup('stop')
+        with self.assertRaises(RuntimeError):
+            stopping.run()
+        self.assertEqual(actions, ['stop', 'start'])
+        self.assertTrue(stopping.stop_attempted)
+
+    def test_pointer_switch_uncertainty_uses_original_restore_and_never_repeats_activation(self):
+        instance = self.instance()
+        instance.recovery, instance.restore = self.root / 'recovery', self.root / 'restore'
+        instance.recovery_root = self.root
+        instance.data, instance.baseline, instance.target = self.root / 'data', self.root / 'baseline', self.root / 'target'
+        instance.config_files = []
+        instance.release.update(manifestExpiresAt=9999999999999, novaVersion='1.13.0')
+        instance.validate = instance.stage_app = instance.require_stopped = lambda: None
+        instance.stage = lambda value: None
+        actions = []
+        instance.service = lambda action: actions.append(action)
+        instance.switch = lambda path: (_ for _ in ()).throw(RuntimeError('pointer sync uncertain'))
+        instance.restore_prior = lambda: actions.append('paired-restore')
+        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
+            instance.run()
+        self.assertEqual(actions, ['stop', 'paired-restore'])
+        self.assertTrue(instance.switch_attempted)
+
+    @unittest.skipUnless(sys.platform == 'linux' and pathlib.Path('/usr/bin/rsync').exists(), 'Requires Linux rsync/cp metadata support; no host service is used.')
+    def test_linux_closed_snapshot_and_independent_restore_preserve_sparse_links_and_xattrs(self):
+        data, baseline, recovery_root = self.root / 'live', self.root / 'baseline', self.root / 'recovery'
+        data.mkdir()
+        fixture_database(data / 'workspace.sqlite')
+        (data / 'attachment').write_bytes(b'kept bytes')
+        os.link(data / 'attachment', data / 'hardlink')
+        (data / 'relative').symlink_to('attachment')
+        os.setxattr(data / 'attachment', 'user.nova-fixture', b'kept metadata')
+        with (data / 'sparse').open('wb') as output:
+            output.write(b'first')
+            output.seek(4 * 1024 ** 2)
+            output.write(b'last')
+        subprocess.run(['/usr/bin/cp', '-a', '--reflink=auto', '--', str(data), str(baseline)], check=True)
+        recovery_root.mkdir()
+        snapshot = recovery_root / 'workspace'
+        recovery.snapshot_closed(data, snapshot, baseline, lambda: None)
+        (data / 'failed-only').write_bytes(b'keep failed candidate evidence')
+        restored = self.root / 'restored'
+        recovery.prepare_independent(snapshot, restored, data, lambda: None)
+        self.assertEqual(recovery.inventory(snapshot)[0], recovery.inventory(restored)[0])
+        self.assertTrue(recovery.inode_ids(recovery.inventory(snapshot)[1]).isdisjoint(recovery.inode_ids(recovery.inventory(restored)[1])))
+        (restored / 'attachment').write_bytes(b'new live change')
+        self.assertEqual((snapshot / 'attachment').read_bytes(), b'kept bytes')
+        self.assertTrue((data / 'failed-only').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

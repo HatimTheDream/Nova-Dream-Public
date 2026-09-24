@@ -1,0 +1,23 @@
+[Unit]
+Description=Nova Dream restricted software update host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=nova
+UMask=0077
+RuntimeDirectory=nova-update
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/flock --nonblock --no-fork /run/nova-update/host.lock /usr/bin/node /opt/nova-updater/scripts/update-host.mjs /etc/nova-update/config.json
+Restart=on-failure
+RestartSec=10
+# Leave a running reviewed installer intact if only the controller restarts.
+KillMode=process
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

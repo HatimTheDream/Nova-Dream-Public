@@ -58,7 +58,7 @@ export class AgentRoutines {
     this.timer = setInterval(() => { try { this.tick(); } catch { /* No failed transaction advances its durable cursor. */ } }, 1000); this.timer.unref();
   }
   tick() {
-    if (this.closed) return;
+    if (this.closed || this.store.updateMaintenanceHeld) return;
     const at = this.now();
     for (const routine of this.list().filter(r => r.value.enabled && !r.value.archived && !r.attention && r.nextAt !== null && r.nextAt <= at).sort((a, b) => a.nextAt! - b.nextAt! || a.id.localeCompare(b.id))) {
       if (routine.epoch !== this.store.epoch) { this.store.internalWrite(routineKey(routine.id), { ...routine, nextAt: null, attention: 'The workspace was recovered. Review and enable this schedule again.' }); continue; }

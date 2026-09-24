@@ -115,6 +115,7 @@ export class AssignmentService {
     return !this.closing && !attempt.stopReason && this.now() < attempt.deadlineAt && this.canReviewModule(attemptId, operation, {}, true);
   }
   start(device: string, raw: unknown, scheduled?: { origin: AssignmentRoutineOrigin; admitted: (attempt: AssignmentAttempt) => void }) {
+    this.store.assertUpdateAdmission();
     const input = assignmentStartSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: 'assignment.start', ...input, ...(scheduled ? { routine: scheduled.origin } : {}) }, () => {
       if (!this.state().canStart) throw new Fault(409, 'assignment_unavailable', this.state().reason);
@@ -183,6 +184,7 @@ export class AssignmentService {
       if (assignmentTerminal(value.state) || value.stopReason || this.closing) return;
       if (Object.keys(value.capture.agent.value.access ?? {}).length && caps.tools !== 'workspace') throw new Fault(409, 'worker_policy_unavailable', 'The runtime has not confirmed this agent’s workspace tools. Nothing was dispatched. Reconnect the supported runtime before trying again.');
       const identity = { epoch: value.epoch, hostId: caps.hostId, attemptId: id, inputHash: value.inputHash, ...(Object.keys(value.capture.agent.value.access ?? {}).length ? { toolMode: 'workspace' as const, ...(caps.nativeTools?.length && !['proposal', 'discussion'].includes(value.capture.plan.value.executionMode ?? '') ? { nativeTools: caps.nativeTools } : {}) } : {}) };
+      this.store.assertUpdateAdmission();
       value = this.save({ ...value, ...workerNativeIdentity(identity), ...(identity.nativeTools ? { nativeTools: identity.nativeTools } : {}), hostId: caps.hostId, connectionGeneration: generation, state: 'dispatching', message: 'Starting the captured assignment.' });
       const reply = await this.gateway.request('e3.assignments.run', { ...identity, message: value.prompt, deadlineAt: value.deadlineAt });
       if (this.closing) return;

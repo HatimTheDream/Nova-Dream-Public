@@ -1,3 +1,9 @@
+## [1.13.0] — 2026-09-24
+
+- Add compact Software Update settings with installed Nova and agent versions, concise release notes, a quiet availability indicator, manual checks and shared daily checks of signed compatible releases.
+- Retain each update request through reconnects and restarts, verify downloaded packages before execution, and show observed installation stages and measured download progress.
+- Wait for active work and account changes, preserve owned agent admission during maintenance, and support a separately provisioned Linux host updater with retained recovery and exact outcome verification.
+
 ## [1.12.11] — 2026-09-24
 
 - Show Nova Dream and the connected agent service's reported version in About, replacing the redundant build number. Keep the display accurate through connection changes and avoid background reads when About is closed.
