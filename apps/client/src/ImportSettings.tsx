@@ -32,7 +32,7 @@ export function ImportSettings({ epoch, deviceId, onPrepared }: { epoch: string;
     if(!review||active.current)return;active.current=true;setBusy(true);setMessage('');
     try {
       await request('storage/imports/restore',{requestId:review.restoreId??crypto.randomUUID(),epoch,reviewId:review.id,sourceHash:review.sourceHash,targetHash:review.targetHash});
-      await load();onPrepared();setConfirm(false);setMessage('Preparing the separate workspace. Its verified copy will appear in Backup & recovery below.');
+      await load();onPrepared();setConfirm(false);setMessage('Preparing the separate workspace. Its verified copy will appear in Backup & recovery.');
     }catch(e){await load().catch(()=>{});setMessage(e instanceof Error?e.message:'Check the original import before retrying.');}
     finally{active.current=false;setBusy(false);}
   };

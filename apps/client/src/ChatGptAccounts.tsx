@@ -20,14 +20,13 @@ export function ChatGptAccountList({ status, disabled, reconnect, reorder }: { s
   return <div className="chatgpt-accounts">{order.map((id, index) => {
     const account = status.accounts!.find(value => value.profileId === id)!;
     const preferred = status.preferredProfileId === id;
-    return <section className="chatgpt-account" key={id} aria-label={account.label}>
-      <div className="chatgpt-account-heading"><div><strong>{account.label}</strong>{account.email && account.email !== account.label && <span className="metadata">{account.email}</span>}</div><span className={`status-pill ${preferred ? 'done' : ''}`}>{preferred ? 'Preferred' : status.preferredProfileId ? `Backup ${index || 1}` : 'Account'}</span></div>
-      <p className="metadata">{accountHealth(account.health)}{account.health === 'cooldown' && accountTime(account.cooldownUntil) ? ` · Until ${accountTime(account.cooldownUntil)}` : ''}{account.duplicateOf ? ' · Shares An Existing Account Allowance' : ''}</p>
+    return <details className="chatgpt-account settings-account-row" key={id} aria-label={account.label}>
+      <summary><span><strong>{account.label}</strong>{account.email && account.email !== account.label && <span className="metadata">{account.email}</span>}<span className="metadata">{accountHealth(account.health)} · {preferred ? 'Preferred' : status.preferredProfileId ? `Backup ${index || 1}` : 'Account'}{account.health === 'cooldown' && accountTime(account.cooldownUntil) ? ` · Until ${accountTime(account.cooldownUntil)}` : ''}{account.duplicateOf ? ' · Shared allowance' : ''}</span></span><span className="settings-manage-label">Manage</span></summary>
       <div className="setup-actions"><button disabled={disabled} onClick={() => reconnect(id)}>Reconnect</button>
         {!preferred && <button disabled={disabled || !status.canManage} onClick={() => reorder(moveAccount(order, id, 0))}>Make Preferred</button>}
         {order.length > 2 && index > 0 && <span className="chatgpt-order-controls"><button className="icon-button" aria-label={`Move ${account.label} Earlier`} title="Move Earlier" disabled={disabled || !status.canManage || index < 2} onClick={() => reorder(moveAccount(order, id, index - 1))}><ArrowUp size={16}/></button><button className="icon-button" aria-label={`Move ${account.label} Later`} title="Move Later" disabled={disabled || !status.canManage || index === order.length - 1} onClick={() => reorder(moveAccount(order, id, index + 1))}><ArrowDown size={16}/></button></span>}
       </div>
-    </section>;
+    </details>;
   })}</div>;
 }
 

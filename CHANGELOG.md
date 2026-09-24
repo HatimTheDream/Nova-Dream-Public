@@ -1,3 +1,9 @@
+## [1.12.9] — 2026-09-24
+
+- Simplify Settings into flat, compact rows and optional details. Keep separate font and size controls for the app interface and Assistant messages, with an expandable preview.
+- Give connected accounts contextual management controls and accurate partial-connection status. Keep unresolved sign-ins, recovery notices and active actions visible.
+- Put backup and recovery first, keep computer access controls accessible, and reduce unnecessary background status checks while preserving pending requests across navigation and workspace changes.
+
 ## [1.12.8] — 2026-09-24
 
 - Give App interface and Assistant messages separate font and text-size preferences, preserving existing device choices. Keep message reading independent of navigation, controls and the composer, with readable touch-screen input and monospace code.

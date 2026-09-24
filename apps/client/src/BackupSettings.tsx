@@ -92,10 +92,9 @@ export function BackupSettings({ epoch, deviceId, refreshRevision = 0, remoteHos
   };
   const review = jobs.find(j => j.id === reviewId && j.kind === 'inspect' && j.state === 'ready');
   const check = async () => { setError(''); try { const found = await load(); if (pending && !found.some(j => j.id === pending.id)) setError('The host has no saved operation for this request. Re-enter its password and retry the same action.'); } catch (e) { setError(e instanceof Error ? e.message : 'Reconnect to check the operation.'); } };
-  return <section className="card settings-card backup-settings"><div className="section-heading"><div><h2>Backup & recovery</h2><p>Keep an encrypted copy of your saved work.</p></div><button onClick={() => void check()}>Refresh</button></div>
-    <p>Save a protected copy of your workspace, character, progress and files. Finish saving in other open windows first.</p>
+  return <section className="card settings-card backup-settings"><div className="section-heading"><h2>Backup & recovery</h2><button onClick={() => void check()}>Refresh</button></div>
     {recovery && host?.active && <RecoveryConnections review={recovery} epoch={epoch} deviceId={deviceId} refresh={load} blocked={backupBusy} onBusy={setRecoveryBusy}/>}
-    <details><summary>Create a backup</summary><form className="backup-form" onSubmit={event => { event.preventDefault(); if (password !== confirm) { setError('The passwords must match.'); return; } void perform('export', password); }}>
+    <details><summary>Create a backup</summary><p>Save an encrypted copy of your workspace, character, progress and files. Finish saving in other windows first.</p><form className="backup-form" onSubmit={event => { event.preventDefault(); if (password !== confirm) { setError('The passwords must match.'); return; } void perform('export', password); }}>
       <label>Backup password<input type="password" autoComplete="new-password" minLength={12} maxLength={256} required value={password} onChange={e => setPassword(e.target.value)}/></label>
       <label>Confirm password<input type="password" autoComplete="new-password" minLength={12} maxLength={256} required value={confirm} onChange={e => setConfirm(e.target.value)}/></label>
       <p className="metadata">Use at least 12 characters and keep the password somewhere safe. It is never saved by Nova Dream and is required to recover this backup.</p>

@@ -18,9 +18,9 @@ test('initial Assistant setup is unknown and cannot start the host before status
     online: true,
     openAssistant: () => assert.fail('Rendering must not start a conversation'),
   }));
-  assert.match(html, /Checking Assistant connection/);
+  assert.match(html, /Checking connection/);
   assert.match(html, /Checking saved account/);
   assert.doesNotMatch(html, /Not connected|No account identity confirmed|Waiting for OpenClaw/);
   assert.match(html, /<button[^>]*disabled=""[^>]*>Checking this host/);
-  assert.match(html, /<button aria-label="Refresh Assistant connection">/);
+  assert.match(html, /<button aria-label="Refresh Assistant connection and accounts">/);
 });

@@ -87,9 +87,9 @@ test('stable Connections makes seven recurring reads per minute, sleeps hidden, 
     await app.visible(false); const hidden = app.calls.length;
     await app.advance(300000); assert.equal(app.calls.length, hidden);
     await app.visible(true); assert.equal(app.calls.length, hidden + 5);
-    const check = element(app.tree, node => node.props?.['aria-label'] === 'Refresh Assistant connection');
+    const check = element(app.tree, node => node.props?.['aria-label'] === 'Refresh Assistant connection and accounts');
     check.props.onClick(); await app.flush();
-    assert.equal(app.calls.length, hidden + 11, 'One models read and one fresh set of five statuses');
+    assert.equal(app.calls.length, hidden + 12, 'Explicit account and models refresh plus one fresh set of five statuses');
     assert.ok(app.calls.every(call => call.init.method === 'GET'), 'Automatic status checks never start or reconnect a runtime');
   } finally { app.close(); }
 });

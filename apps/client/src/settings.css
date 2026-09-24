@@ -1,7 +1,5 @@
 .settings-page { --button-compact-depth: 0px; --button-radius: 9px; container: nova-settings / inline-size; scroll-padding-block: 16px; }
-.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 948px; margin-inline: auto; }
-.settings-page > .page-intro { margin-bottom: 20px; }
-.settings-page .page-intro h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.025em; }
+.settings-layout, .settings-return { max-width: 948px; margin-inline: auto; }
 .settings-return { margin-bottom: 16px; }
 .settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
 .settings-navigation { min-width: 0; }
@@ -15,52 +13,55 @@
 .settings-content, .settings-panel { min-width: 0; }
 .settings-content { width: 100%; max-width: 760px; }
 .settings-panel[hidden] { display: none; }
-.settings-page .settings-card { padding: 18px 20px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 12px; box-shadow: none; }
+.settings-page .settings-card { padding: 0; margin-bottom: 28px; border: 0; border-radius: 0; box-shadow: none; background: none; }
 .settings-page .settings-card > h2, .settings-page .section-heading h2 { margin: 0 0 8px; padding: 0; border: 0; font-size: 17px; line-height: 1.4; }
 .settings-page .section-heading { gap: 16px; align-items: center; margin-bottom: 12px; }
 .settings-page .section-heading h3, .settings-page .section-heading h4 { margin: 0; font-size: 15px; }
+.settings-page .assistant-setup > h3 { margin: 0 0 8px; font-size: 15px; }
 .settings-page .settings-card p:not(.typography-preview) { font-size: 13px; line-height: 1.55; }
 .settings-page .settings-card > p { color: var(--muted); margin: 6px 0 14px; }
-.settings-page .setting-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; }
+.settings-page .setting-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; min-height: 66px; padding: 11px 0; }
 .settings-page .setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .settings-page .setting-row > div { min-width: 0; overflow-wrap: anywhere; }
 .settings-page .setting-row strong { font-size: 14px; }
 .settings-page .setting-row p { margin: 4px 0 0; color: var(--muted); }
 .settings-page .setting-row select { flex: 0 1 auto; width: auto; min-width: 0; max-width: min(55%, 260px); min-height: 44px; border-width: 1px; border-radius: 9px; }
 .settings-page .setting-row > button, .settings-page .section-heading > button { flex-shrink: 0; }
-.settings-page .typography-group { padding-top: 16px; }
-.settings-page .typography-group h3 { margin: 0 0 4px; font-size: 14px; line-height: 1.5; font-weight: 650; }
-.settings-page .typography-group .setting-row { padding-block: 6px; }
-.settings-page .typography-group .setting-row label { font-size: 14px; }
-.settings-page .typography-group .typography-preview { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; }
+.settings-page .typography-setting { font-size: 14px; }
+.typography-controls { display: flex; gap: 8px; flex: 0 0 274px; }
+.settings-page .typography-controls select { flex: 1; width: 0; max-width: none; }
+.settings-page .settings-preview .typography-preview { padding: 0; margin: 12px 0; border: 0; background: none; }
+.settings-page .settings-preview .settings-footnote { margin-bottom: 16px; }
+.settings-page .settings-timezone { margin-top: 20px; }
 .settings-page .app-icon-setting > div:first-child { flex: 1 1 auto; }
 .settings-page .app-icon-setting > .app-icon-options { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 0; }
-:root .settings-page .app-icon-setting .app-icon-options > button { flex: 0 0 auto; flex-direction: row; gap: 7px; min-width: 0; padding: 5px 8px; border-width: 1px; }
+:root .settings-page .app-icon-setting .app-icon-options > button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 0; padding: 5px; border-width: 1px; }
+.settings-page .app-icon-options button > span { display: none; }
 .settings-page .app-icon-options img { width: 32px; height: 32px; }
 .settings-page details > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 13px; font-weight: 600; padding-block: 10px; }
 .settings-page details > summary:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 6px; }
 .settings-page .settings-details { margin-top: 14px; border-top: 1px solid var(--line); }
-.settings-disclosure { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 16px; background: var(--surface); }
-.settings-disclosure > summary { padding: 14px 20px; }
-.settings-disclosure-body { padding: 0 20px 18px; font-size: 13px; line-height: 1.55; }
+.settings-page details { border-bottom: 1px solid var(--line); }
+.settings-disclosure { border: 0; margin-bottom: 16px; background: none; }
+.settings-disclosure > summary { padding: 12px 0; }
+.settings-disclosure-body { padding: 0 0 18px; font-size: 13px; line-height: 1.55; }
 .settings-disclosure-body > .settings-card { padding: 0; border: 0; margin-top: 8px; }
 .settings-page .settings-footnote { font-size: 12px; line-height: 1.55; color: var(--muted); margin: 16px 0 0; }
-.settings-page .settings-about { display: flex; align-items: center; gap: 12px; padding: 12px 2px; font-size: 13px; color: var(--muted); }
-.settings-about img { border-radius: 12px; }
-.settings-about strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 3px; }
+.settings-page .settings-about { font-size: 13px; color: var(--muted); }
+.settings-about summary > span { float: right; font-weight: 400; }
 .settings-page .settings-empty { padding-block: 12px; }
 .settings-accounts .provider-connections { border-top: 0; padding-top: 0; margin-top: 0; }
 .settings-accounts .provider-connections > p:not([class]), .settings-accounts .provider-connections .eyebrow { display: none; }
 .settings-accounts .provider-connections > .section-heading h3 { font-size: 13px; color: var(--muted); }
-.settings-accounts .provider-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 16px; }
-.settings-page .provider-card { padding: 16px; border-radius: 12px; box-shadow: none; }
+.settings-accounts .provider-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 24px; }
+.settings-page .provider-card { padding: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 .settings-page .provider-card .connected-account { padding-block: 12px; }
 .settings-page .provider-card .account-signin { margin-top: 10px; }
 .settings-page .account-registration { margin-top: 10px; }
 .settings-page .assistant-setup { padding: 16px 0 0; margin-top: 16px; border: 0; border-top: 1px solid var(--line); background: none; border-radius: 0; box-shadow: none; }
 .settings-page .assistant-setup:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
 .settings-page .connection-facts { margin-block: 12px; gap: 10px; }
-.settings-page .connection-facts > div { padding: 10px 12px; border-radius: 10px; }
+.settings-page .connection-facts > div { padding: 8px 0; border: 0; border-radius: 0; background: none; }
 .settings-page .connection-facts strong { font-size: 13px; }
 .settings-page .voice-readiness { padding: 12px 0 0; border-top: 1px solid var(--line); margin-top: 16px; }
 .settings-page .voice-readiness strong { font-size: 13px; }
@@ -69,6 +70,15 @@
 .install-summary img { flex: none; border-radius: 12px; width: 44px; height: 44px; }
 .settings-page .install-summary h2 { margin: 0 0 4px; font-size: 17px; }
 .settings-page .install-summary p { margin: 0; color: var(--muted); }
+.settings-page .settings-account-row { display: block; padding: 0; border-top: 0; min-width: 0; }
+.settings-page .settings-account-row > summary, .settings-connection-status { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-width: 0; }
+.settings-page .settings-account-row > summary { min-height: 66px; list-style: none; }
+.settings-account-row > summary::-webkit-details-marker { display: none; }
+.settings-account-row > summary > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.settings-account-row .metadata { display: block; margin: 4px 0 0; font-weight: 400; }
+.settings-manage-label { flex: none; font-weight: 400; color: var(--muted); }
+.settings-account-row .setup-actions { margin-block: 8px 16px; }
+.settings-page .settings-connection-status h2 { margin: 0; border: 0; padding: 0; }
 .install-downloads { display: flex; flex-wrap: wrap; gap: 18px; }
 .install-downloads > div { min-width: 0; flex: 1 1 240px; }
 .install-downloads p { overflow-wrap: anywhere; }
@@ -98,15 +108,16 @@
   :root .settings-page .settings-tabs [role="tab"] { justify-content: flex-start; text-align: left; }
 }
 @media (max-width: 650px) {
-  .settings-page > .page-intro { margin-bottom: 16px; }
-  .settings-page .settings-card { padding: 16px 14px; }
   .settings-page .setting-row { gap: 10px; }
   .settings-page .setting-row > button { flex-shrink: 1; }
   .settings-page .setting-row > div { flex: 1 1 auto; }
   .settings-page .setting-row select { max-width: 58%; }
-  .settings-page .typography-setting select { min-width: 132px; max-width: 70%; }
+  .settings-page .typography-setting, .settings-page .settings-timezone { flex-direction: column; align-items: stretch; gap: 9px; padding-block: 14px; }
+  .settings-page .setting-row > .typography-controls { flex: 0 0 auto; }
+  .settings-page .typography-controls select { min-width: 0; font-size: 13px; padding-inline: 8px; }
+  .settings-page .settings-timezone select { max-width: none; width: 100%; }
   .settings-page .section-heading { gap: 10px; }
-  .settings-page .provider-card { padding: 12px; }
+  .settings-page .settings-account-row > summary { gap: 8px; }
   .usage-windows { grid-template-columns: minmax(0,1fr); gap: 18px; }
   .usage-metrics { gap: 8px; }
   .usage-metrics > div + div { padding-left: 10px; }
@@ -117,5 +128,4 @@
 .usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
 
 .settings-tabs [role=tab] > span { display: block; width: 100%; text-align: inherit; }
-.settings-about details { margin-top:6px; }
-.settings-about details p { font-size:12px; }
+.settings-about > p { font-size:12px; }

@@ -12,9 +12,9 @@ export function NovaAppMark({ choice, className = '', alt = '', ...props }: Omit
 }
 export function AppIconPicker({ value, change }: { value: AppIconChoice; change: (choice: AppIconChoice) => void }) {
   return <div className="setting-row app-icon-setting">
-    <div><strong id="app-icon-label">App Icon</strong></div>
+    <div><strong id="app-icon-label">App icon</strong></div>
     <div className="app-icon-options" role="group" aria-labelledby="app-icon-label">
-      {(['red', 'cream'] as const).map(choice => <button key={choice} type="button" aria-pressed={value === choice} onClick={() => change(choice)}>
+      {(['red', 'cream'] as const).map(choice => <button key={choice} type="button" aria-label={choice === 'red' ? 'Red' : 'Cream'} title={choice === 'red' ? 'Red' : 'Cream'} aria-pressed={value === choice} onClick={() => change(choice)}>
         <NovaAppMark choice={choice} width="60" height="60"/><span>{choice === 'red' ? 'Red' : 'Cream'}</span>
       </button>)}
     </div>
