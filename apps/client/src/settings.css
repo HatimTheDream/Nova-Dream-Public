@@ -1,32 +1,42 @@
-.settings-page { scroll-padding-block: 16px; }
-.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 1000px; margin-inline: auto; }
-.settings-page > .page-intro { margin-bottom: 24px; }
-.settings-page .page-intro h1 { font-size: 28px; }
-.settings-page .page-intro p { font-size: 14px; margin-top: 6px; }
+.settings-page { --button-compact-depth: 0px; --button-radius: 9px; container: nova-settings / inline-size; scroll-padding-block: 16px; }
+.settings-page > .page-intro, .settings-layout, .settings-return { max-width: 948px; margin-inline: auto; }
+.settings-page > .page-intro { margin-bottom: 20px; }
+.settings-page .page-intro h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.025em; }
 .settings-return { margin-bottom: 16px; }
-.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
-.settings-navigation { min-width:0; }
-.settings-tabs { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; padding:6px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
-.settings-tabs [role="tab"] { justify-content: center; text-align:center; gap:0; min-width:0; min-height:48px; padding:10px 8px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--muted); box-shadow: none; white-space: nowrap; }
-.settings-tabs [role="tab"]:hover { background: var(--surface); color: var(--text); box-shadow: none; }
-.settings-tabs [role="tab"][aria-selected="true"] { color: var(--text); background: var(--selection); border-color: var(--control); }
-.settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.settings-navigation { min-width: 0; }
+:root .settings-page button, :root .settings-page .button-link { min-height: 44px; max-width: 100%; border-width: 1px; border-radius: 9px; box-shadow: none; transform: none; text-transform: none; }
+:root .settings-page button:is(:hover, :active, :disabled), :root .settings-page .button-link:is(:hover, :active) { box-shadow: none; transform: none; }
+.settings-tabs { display: flex; flex-direction: row; flex-wrap: nowrap; gap: 4px; padding: 3px 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
+:root .settings-page .settings-tabs [role="tab"] { --button-fill: transparent; --button-border: transparent; --button-border-hover: transparent; flex: 0 0 auto; justify-content: center; text-align: center; gap: 0; min-width: 0; padding: 10px 12px; border: 1px solid transparent; background: transparent; color: var(--muted); font-weight: 500; white-space: nowrap; }
+:root .settings-page .settings-tabs [role="tab"]:hover { --button-fill: var(--surface); background: var(--surface); color: var(--text); }
+:root .settings-page .settings-tabs [role="tab"][aria-selected="true"] { --button-fill: color-mix(in srgb, var(--text) 6%, var(--surface)); color: var(--text); background: var(--button-fill); }
+:root .settings-page .settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
 .settings-content, .settings-panel { min-width: 0; }
+.settings-content { width: 100%; max-width: 760px; }
 .settings-panel[hidden] { display: none; }
-.settings-page .settings-card { padding: 20px 22px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 16px; box-shadow: none; }
+.settings-page .settings-card { padding: 18px 20px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 12px; box-shadow: none; }
 .settings-page .settings-card > h2, .settings-page .section-heading h2 { margin: 0 0 8px; padding: 0; border: 0; font-size: 17px; line-height: 1.4; }
 .settings-page .section-heading { gap: 16px; align-items: center; margin-bottom: 12px; }
 .settings-page .section-heading h3, .settings-page .section-heading h4 { margin: 0; font-size: 15px; }
-.settings-page .settings-card p { font-size: 13px; line-height: 1.55; }
+.settings-page .settings-card p:not(.typography-preview) { font-size: 13px; line-height: 1.55; }
 .settings-page .settings-card > p { color: var(--muted); margin: 6px 0 14px; }
-.settings-page .setting-row { display: flex; flex-direction: row; align-items: center; gap: 20px; padding: 14px 0; }
+.settings-page .setting-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; }
 .settings-page .setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
-.settings-page .setting-row > div { min-width: 0; }
+.settings-page .setting-row > div { min-width: 0; overflow-wrap: anywhere; }
 .settings-page .setting-row strong { font-size: 14px; }
 .settings-page .setting-row p { margin: 4px 0 0; color: var(--muted); }
-.settings-page .setting-row select { max-width: 260px; min-height: 44px; }
-.settings-page button, .settings-page .button-link { min-height: 44px; }
+.settings-page .setting-row select { flex: 0 1 auto; width: auto; min-width: 0; max-width: min(55%, 260px); min-height: 44px; border-width: 1px; border-radius: 9px; }
 .settings-page .setting-row > button, .settings-page .section-heading > button { flex-shrink: 0; }
+.settings-page .typography-group { padding-top: 16px; }
+.settings-page .typography-group h3 { margin: 0 0 4px; font-size: 14px; line-height: 1.5; font-weight: 650; }
+.settings-page .typography-group .setting-row { padding-block: 6px; }
+.settings-page .typography-group .setting-row label { font-size: 14px; }
+.settings-page .typography-group .typography-preview { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; }
+.settings-page .app-icon-setting > div:first-child { flex: 1 1 auto; }
+.settings-page .app-icon-setting > .app-icon-options { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 0; }
+:root .settings-page .app-icon-setting .app-icon-options > button { flex: 0 0 auto; flex-direction: row; gap: 7px; min-width: 0; padding: 5px 8px; border-width: 1px; }
+.settings-page .app-icon-options img { width: 32px; height: 32px; }
 .settings-page details > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 13px; font-weight: 600; padding-block: 10px; }
 .settings-page details > summary:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 6px; }
 .settings-page .settings-details { margin-top: 14px; border-top: 1px solid var(--line); }
@@ -81,21 +91,20 @@
 .usage-days { margin: 0; }
 .usage-days > div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-top: 1px solid var(--line); }
 .usage-days dd { margin: 0; }
-@media (max-width: 999px) {
-  .settings-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
-  .settings-navigation { position: static; }
-
-  .settings-tabs [role="tab"] { justify-content: center; padding-inline: 8px; }
-
+@container nova-settings (min-width: 780px) {
+  .settings-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 28px; }
+  .settings-navigation { position: sticky; top: 0; }
+  .settings-tabs { flex-direction: column; overflow-x: visible; }
+  :root .settings-page .settings-tabs [role="tab"] { justify-content: flex-start; text-align: left; }
 }
 @media (max-width: 650px) {
   .settings-page > .page-intro { margin-bottom: 16px; }
-  .settings-page .page-intro h1 { font-size: 25px; }
-  .settings-tabs { grid-template-columns: repeat(3,minmax(0,1fr)); }
-  .settings-page .settings-card { padding: 18px 16px; }
-  .settings-page .setting-row { flex-wrap: wrap; gap: 12px; }
-  .settings-page .setting-row select { width: 100%; max-width: none; }
-  .settings-page .setting-row > div { flex: 1 1 180px; }
+  .settings-page .settings-card { padding: 16px 14px; }
+  .settings-page .setting-row { gap: 10px; }
+  .settings-page .setting-row > button { flex-shrink: 1; }
+  .settings-page .setting-row > div { flex: 1 1 auto; }
+  .settings-page .setting-row select { max-width: 58%; }
+  .settings-page .typography-setting select { min-width: 132px; max-width: 70%; }
   .settings-page .section-heading { gap: 10px; }
   .settings-page .provider-card { padding: 12px; }
   .usage-windows { grid-template-columns: minmax(0,1fr); gap: 18px; }
@@ -107,6 +116,6 @@
 
 .usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
 
-.settings-tabs [role=tab] > span { display:block; width:100%; text-align:center; }
+.settings-tabs [role=tab] > span { display: block; width: 100%; text-align: inherit; }
 .settings-about details { margin-top:6px; }
 .settings-about details p { font-size:12px; }

@@ -21,7 +21,7 @@ function PlanDocument({ item }: { item: AssistantPlan }) {
   return <article className="nova-plan-document" aria-label="Full plan">
     <div className="nova-plan-document-toolbar"><span>Plan</span>{item.versions.length > 1 ? <select aria-label="Plan version" value={selected} onChange={event => setSelected(Number(event.target.value))}>{[...item.versions].reverse().map(value => <option key={value.version} value={value.version}>Version {value.version}{value.version === item.version ? ' · Current' : ''}</option>)}</select> : <span>Version {item.version}</span>}</div>
     {selected !== item.version && <p className="nova-plan-state">Earlier version. The current proposal is version {item.version}.</p>}
-    {proposal ? <ProposalBody proposal={proposal}/> : <p>No completed proposal was saved for this version.</p>}
+    {proposal ? <div className="nova-plan-body"><ProposalBody proposal={proposal}/></div> : <p>No completed proposal was saved for this version.</p>}
   </article>;
 }
 
@@ -33,7 +33,7 @@ export function PlanReviewCard({ review, onOpenPanel }: { review: PlanReviewCont
   if (!item || item.state === 'drafting' && !review.proposal && !item.error) return null;
   return <section className="nova-plan-review" aria-label="Plan proposal">
     <div className="nova-plan-heading"><List size={16}/><span>Plan</span><span>Version {item.version}</span>{onOpenPanel && <button type="button" className="nova-plan-panel-button" aria-label="Open plan in side panel" title="Open in side panel" onClick={onOpenPanel}><PanelRight size={17}/></button>}</div>
-    {review.proposal && <><div id={bodyId} className={open ? 'nova-plan-inline-document' : 'nova-plan-preview-content'}>{open ? <PlanReviewDocument item={item}/> : <ProposalBody proposal={review.proposal} preview/>}</div><button type="button" className="nova-plan-expand" aria-expanded={open} aria-controls={bodyId} onClick={() => setExpanded(open ? null : identity)}>{open ? 'Collapse plan' : 'Expand plan'}<ChevronDown size={15} className={open ? 'expanded' : ''}/></button></>}
+    {review.proposal && <><div id={bodyId} className={open ? 'nova-plan-inline-document' : 'nova-plan-preview-content'}>{open ? <PlanReviewDocument item={item}/> : <div className="nova-plan-body"><ProposalBody proposal={review.proposal} preview/></div>}</div><button type="button" className="nova-plan-expand" aria-expanded={open} aria-controls={bodyId} onClick={() => setExpanded(open ? null : identity)}>{open ? 'Collapse plan' : 'Expand plan'}<ChevronDown size={15} className={open ? 'expanded' : ''}/></button></>}
     {(item.state !== 'ready' || review.accepted) && <p className="nova-plan-state" role="status">{review.status}</p>}
     {item.error && <p className="nova-plan-state" role="status">{item.error}</p>}
     {!review.decisionVisible && review.canReview && <button type="button" className="nova-plan-return" onClick={review.openDecision}>Review plan</button>}

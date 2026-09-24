@@ -42,23 +42,31 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
   const tabs = categories.filter(tab => !phone || tab.id === 'general' || tab.id === 'phone');
   const current = tabs.find(tab => tab.id === selected) ?? tabs.find(tab => tab.id === 'phone')!;
   const buttons = useRef(new Map<SettingsTab, HTMLButtonElement>());
+  const tablist = useRef<HTMLDivElement>(null);
+  const [orientation, setOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
   const recoveryPaused = !!(access?.recovery || access?.recoveryLocal);
   useEffect(() => {
+    const list = tablist.current;
     const button = buttons.current.get(current.id);
-    if (!button?.parentElement) return;
-    const reveal = () => button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    const resize = new ResizeObserver(reveal);
-    resize.observe(button.parentElement); reveal();
+    if (!list || !button) return;
+    const update = () => {
+      setOrientation(getComputedStyle(list).flexDirection === 'column' ? 'vertical' : 'horizontal');
+      button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    };
+    const resize = new ResizeObserver(update);
+    resize.observe(list); update();
     return () => resize.disconnect();
   }, [current.id]);
   return <main className="page-scroll settings-page">
     {returnTo && <div className="settings-return"><button onClick={returnTo.open}><ArrowLeft size={16}/>Back to {returnTo.label}</button></div>}
-    <div className="page-intro"><div><h1>Settings</h1><p>Preferences, connections and usage.</p></div></div>
+    <div className="page-intro"><h1>Settings</h1></div>
     <div className="settings-layout">
     <div className="settings-navigation">
-      <div className="settings-tabs" role="tablist" aria-label="Settings categories" aria-orientation="horizontal">
-        {tabs.map((tab, index) => <button key={tab.id} id={`settings-tab-${tab.id}`} role="tab" aria-selected={current.id === tab.id} aria-controls={`settings-panel-${tab.id}`} tabIndex={current.id === tab.id ? 0 : -1} ref={node => { if (node) buttons.current.set(tab.id, node); else buttons.current.delete(tab.id); }} onClick={() => select(tab.id)} onKeyDown={event => {
-          const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
+      <div ref={tablist} className="settings-tabs" role="tablist" aria-label="Settings categories" aria-orientation={orientation}>
+        {tabs.map((tab, index) => <button type="button" key={tab.id} id={`settings-tab-${tab.id}`} role="tab" aria-selected={current.id === tab.id} aria-controls={`settings-panel-${tab.id}`} tabIndex={current.id === tab.id ? 0 : -1} ref={node => { if (node) buttons.current.set(tab.id, node); else buttons.current.delete(tab.id); }} onClick={() => select(tab.id)} onKeyDown={event => {
+          const forward = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
+          const backward = orientation === 'vertical' ? 'ArrowUp' : 'ArrowLeft';
+          const next = event.key === forward ? (index + 1) % tabs.length : event.key === backward ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
           if (next === undefined) return;
           event.preventDefault(); select(tabs[next].id); buttons.current.get(tabs[next].id)?.focus();
         }}><span>{tab.label}</span></button>)}

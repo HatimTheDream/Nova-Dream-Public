@@ -1,3 +1,8 @@
+## [1.12.8] — 2026-09-24
+
+- Give App interface and Assistant messages separate font and text-size preferences, preserving existing device choices. Keep message reading independent of navigation, controls and the composer, with readable touch-screen input and monospace code.
+- Simplify Settings into compact grouped rows with aligned controls, a category sidebar on wide windows and a single scrolling category row on narrow screens.
+
 ## [1.12.7] — 2026-09-24
 
 - Connect Chat Research workload estimates to the original run’s native tool activity, including cached runtime tools. Handle updates arriving before their activity event, preserve exact retry identity, and reject late progress after Stop, disconnection or completion.

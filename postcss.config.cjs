@@ -11,5 +11,6 @@ module.exports = { plugins: [
       root.removeAll(); root.append(expanded.root.nodes);
     },
   },
+  require('./scripts/interface-typography.cjs')(),
   require('autoprefixer'),
 ] };

@@ -7,52 +7,61 @@ function memoryStorage() {
   return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, clear: () => values.clear() };
 }
 
-test('Typography uses compact defaults and independently recovers invalid saved choices', () => {
+test('Typography migrates the shared font and reading size without inventing an interface size', () => {
   const storage = memoryStorage();
-  assert.deepEqual(readTypography(storage), { font: 'system', textSize: 'standard' });
+  assert.deepEqual(readTypography(storage), defaultTypography);
+  storage.setItem(typographyStorageKey, JSON.stringify({ font: 'serif', textSize: 'large' }));
+  assert.deepEqual(readTypography(storage), { interfaceFont: 'serif', interfaceTextSize: 'standard', messageFont: 'serif', messageTextSize: 'large' });
   storage.setItem(typographyStorageKey, '{');
   assert.deepEqual(readTypography(storage), defaultTypography);
-  storage.setItem(typographyStorageKey, JSON.stringify({ font: 'serif', textSize: 1000 }));
-  assert.deepEqual(readTypography(storage), { font: 'serif', textSize: 'standard' });
-  assert.deepEqual(resolveTypography({ font: 'url(https://example.invalid/font)', textSize: 'large' }), { font: 'system', textSize: 'large' });
   assert.deepEqual(resolveTypography(null), defaultTypography);
 });
 
-test('Saved typography applies before rendering and reload retains the preference without touching workspace data', () => {
+test('Each preference independently validates and explicit new fields take precedence over legacy choices', () => {
+  assert.deepEqual(resolveTypography({ font: 'serif', textSize: 'large', interfaceFont: 'sora', interfaceTextSize: 'small', messageFont: 'url(https://example.invalid/font)', messageTextSize: 1000 }), {
+    interfaceFont: 'sora', interfaceTextSize: 'small', messageFont: 'system', messageTextSize: 'standard',
+  });
+});
+
+test('Interface and message changes are independent, persist across reload and do not touch workspace or zoom', () => {
   const storage = memoryStorage();
   storage.setItem('e3:workspace', 'saved work');
-  const root = { dataset: { theme: 'dark' }, style: { zoom: '1' } };
+  const root = { dataset: { theme: 'dark', font: 'serif', textSize: 'large' }, style: { zoom: '1' } };
   const target = { documentElement: root } as unknown as Document;
   const first = createTypographyStore(storage, value => applyDocumentTypography(value, target));
   first.apply();
-  assert.deepEqual(root.dataset, { theme: 'dark', font: 'system', textSize: 'standard' });
-  assert.equal(first.update({ font: 'sora', textSize: 'extra-large' }), true);
+  assert.deepEqual(root.dataset, { theme: 'dark', ...defaultTypography });
+  assert.equal(first.update({ ...first.getSnapshot(), interfaceFont: 'sora', interfaceTextSize: 'large' }), true);
+  assert.equal(first.getSnapshot().messageTextSize, 'standard');
+  assert.equal(first.getSnapshot().messageFont, 'system');
+  assert.equal(first.update({ ...first.getSnapshot(), messageFont: 'serif', messageTextSize: 'small' }), true);
   const reloaded = createTypographyStore(storage, value => applyDocumentTypography(value, target));
   reloaded.apply();
-  assert.deepEqual(reloaded.getSnapshot(), { font: 'sora', textSize: 'extra-large' });
-  assert.deepEqual(root.dataset, { theme: 'dark', font: 'sora', textSize: 'extra-large' });
+  const expected = { interfaceFont: 'sora', interfaceTextSize: 'large', messageFont: 'serif', messageTextSize: 'small' };
+  assert.deepEqual(reloaded.getSnapshot(), expected);
+  assert.deepEqual(root.dataset, { theme: 'dark', ...expected });
   assert.deepEqual(root.style, { zoom: '1' });
   assert.equal(storage.getItem('e3:workspace'), 'saved work');
 });
 
-test('Storage failure keeps a live preference for the current window and reports that it was not saved', () => {
+test('Storage failure keeps the current window preference and reports the unsaved state', () => {
   const storage = { getItem() { throw Error('Unavailable'); }, setItem() { throw Error('Full'); } };
   let applied = { ...defaultTypography }, notifications = 0;
   const store = createTypographyStore(storage, value => { applied = value; });
   const unsubscribe = store.subscribe(() => { notifications += 1; });
-  assert.deepEqual(store.getSnapshot(), defaultTypography);
-  assert.equal(store.update({ font: 'serif', textSize: 'small' }), false);
-  assert.deepEqual(applied, { font: 'serif', textSize: 'small' });
-  assert.deepEqual(store.getSnapshot(), applied);
+  const next = { ...defaultTypography, messageFont: 'serif', interfaceTextSize: 'small' } as const;
+  assert.equal(store.update(next), false);
+  assert.deepEqual(applied, next);
+  assert.deepEqual(store.getSnapshot(), next);
   store.apply();
-  assert.deepEqual(applied, { font: 'serif', textSize: 'small' });
+  assert.deepEqual(applied, next);
   assert.equal(notifications, 1);
   unsubscribe();
-  store.update({ font: 'system', textSize: 'large' });
+  store.update({ ...next, messageTextSize: 'large' });
   assert.equal(notifications, 1);
 });
 
-test('Other tabs update text preferences, while unrelated storage changes do not overwrite this window', () => {
+test('Other tabs synchronize all four choices and clearing resets both scopes', () => {
   const storage = memoryStorage();
   const store = createTypographyStore(storage, () => {});
   let notifications = 0;
@@ -61,9 +70,10 @@ test('Other tabs update text preferences, while unrelated storage changes do not
   store.receiveStorageChange('unrelated');
   assert.equal(store.getSnapshot(), originalSnapshot);
   assert.equal(notifications, 0);
-  storage.setItem(typographyStorageKey, JSON.stringify({ font: 'sora', textSize: 'large' }));
+  const next = { interfaceFont: 'serif', interfaceTextSize: 'large', messageFont: 'sora', messageTextSize: 'small' };
+  storage.setItem(typographyStorageKey, JSON.stringify(next));
   store.receiveStorageChange(typographyStorageKey);
-  assert.deepEqual(store.getSnapshot(), { font: 'sora', textSize: 'large' });
+  assert.deepEqual(store.getSnapshot(), next);
   assert.equal(notifications, 1);
   store.receiveStorageChange(typographyStorageKey);
   assert.equal(notifications, 1);

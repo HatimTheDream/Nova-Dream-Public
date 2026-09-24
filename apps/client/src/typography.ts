@@ -11,10 +11,12 @@ export const textSizeChoices = [
   { value: 'extra-large', label: 'Extra large' },
 ] as const;
 export type TypographyPreferences = {
-  font: typeof fontChoices[number]['value'];
-  textSize: typeof textSizeChoices[number]['value'];
+  interfaceFont: typeof fontChoices[number]['value'];
+  interfaceTextSize: typeof textSizeChoices[number]['value'];
+  messageFont: typeof fontChoices[number]['value'];
+  messageTextSize: typeof textSizeChoices[number]['value'];
 };
-export const defaultTypography: Readonly<TypographyPreferences> = { font: 'system', textSize: 'standard' };
+export const defaultTypography: Readonly<TypographyPreferences> = { interfaceFont: 'system', interfaceTextSize: 'standard', messageFont: 'system', messageTextSize: 'standard' };
 type TypographyStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
 function browserStorage(): TypographyStorage | undefined {
@@ -23,9 +25,14 @@ function browserStorage(): TypographyStorage | undefined {
 
 export function resolveTypography(value: unknown): TypographyPreferences {
   const saved = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  // Keep the original device preference when upgrading from the shared font control.
+  const font = (value: unknown) => fontChoices.find(choice => choice.value === value)?.value ?? 'system';
+  const size = (value: unknown) => textSizeChoices.find(choice => choice.value === value)?.value ?? 'standard';
   return {
-    font: fontChoices.find(choice => choice.value === saved.font)?.value ?? defaultTypography.font,
-    textSize: textSizeChoices.find(choice => choice.value === saved.textSize)?.value ?? defaultTypography.textSize,
+    interfaceFont: font('interfaceFont' in saved ? saved.interfaceFont : saved.font),
+    interfaceTextSize: size(saved.interfaceTextSize),
+    messageFont: font('messageFont' in saved ? saved.messageFont : saved.font),
+    messageTextSize: size('messageTextSize' in saved ? saved.messageTextSize : saved.textSize),
   };
 }
 
@@ -36,8 +43,9 @@ export function readTypography(storage = browserStorage()): TypographyPreference
 
 export function applyDocumentTypography(value: TypographyPreferences, target: Document = document): void {
   const preferences = resolveTypography(value);
-  target.documentElement.dataset.font = preferences.font;
-  target.documentElement.dataset.textSize = preferences.textSize;
+  Object.assign(target.documentElement.dataset, preferences);
+  delete target.documentElement.dataset.font;
+  delete target.documentElement.dataset.textSize;
 }
 
 /** Device appearance never mutates the shared workspace or changes browser zoom. */
@@ -46,7 +54,7 @@ export function createTypographyStore(storage: TypographyStorage | undefined, ap
   const listeners = new Set<() => void>();
   const publish = (next: TypographyPreferences) => {
     apply(next);
-    if (current.font === next.font && current.textSize === next.textSize) return;
+    if (Object.keys(next).every(key => current[key as keyof TypographyPreferences] === next[key as keyof TypographyPreferences])) return;
     current = next;
     for (const listener of listeners) listener();
   };
