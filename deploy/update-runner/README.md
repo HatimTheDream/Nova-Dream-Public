@@ -16,8 +16,8 @@ Next to the protected controller configuration, provision `runner.json` owned by
   "nodePath": "/opt/nova/runtime/node/bin/node",
   "healthPort": 4383,
   "dependencyDirectory": "/opt/nova/dependencies/node_modules",
-  "recoveryDirectory": "/var/lib/nova/recovery",
-  "baselineDirectory": "/var/lib/nova/recovery/before-reviewed-bootstrap",
+  "recoveryDirectory": "/var/lib/nova-update-recovery",
+  "baselineDirectory": "/var/lib/nova-update-recovery/before-reviewed-bootstrap",
   "protectedFiles": [
     "/etc/nova/server.key",
     "/etc/nova/host.env",
@@ -29,6 +29,8 @@ Next to the protected controller configuration, provision `runner.json` owned by
 ```
 
 Use the actual independently reviewed paths. The driver hashes and preserves protected files without displaying their bytes. App dependencies must be the same retained root-owned directory selected by the prior app. The real service process must inherit `E3_UPDATE_SOCKET=/run/nova-update/control.sock`. No caller can supply another command, service, server URL, or recovery path.
+
+The recovery root and its ancestors must be owned by root and not writable by the app account. Keep them outside an app-owned home directory; do not change that home directory's ownership to satisfy updater checks. When retaining an earlier closed snapshot in a new protected recovery root, preserve its full manifest, acceptance, content and metadata and verify that no regular file shares an inode with the live workspace. Preserve the original snapshot.
 
 The baseline must be a root-private closed snapshot with `workspace/`, `acceptance.json` identifying the installed candidate, and `snapshot-verified.json` authenticating `snapshot-manifest.json` (or the older `linked-snapshot-source.json`). It must remain separate from live workspace files. The driver compares every snapshot byte and relevant metadata before reusing unchanged files. After an accepted update, a protected `latest-update.json` selects the next verified baseline; no recovery folder is deleted or replaced.
 
