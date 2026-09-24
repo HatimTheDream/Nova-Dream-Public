@@ -1,4 +1,4 @@
-const guides = new Set(['https://tailscale.com/download', 'https://auth.openai.com/codex/device', 'https://developers.google.com/identity/protocols/oauth2/native-app', 'https://learn.microsoft.com/en-us/entra/identity-platform/reply-url']);
+const guides = new Set(['https://tailscale.com/download', 'https://auth.openai.com/codex/device', 'https://developers.google.com/identity/protocols/oauth2/native-app', 'https://support.google.com/cloud/answer/15549945?hl=en', 'https://learn.microsoft.com/en-us/entra/identity-platform/reply-url']);
 function canOpenExternal(value) {
   if (guides.has(value)) return true;
   try {

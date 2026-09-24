@@ -271,6 +271,8 @@ test('native external links allow only supported sign-in with a local callback a
   const bad = new URL(url); bad.searchParams.set('redirect_uri', 'https://untrusted.example/callback'); assert.equal(canOpenExternal(bad.href), false);
   bad.searchParams.set('redirect_uri', 'http://127.0.0.1:45000/oauth/callback'); bad.searchParams.append('state', 'c'.repeat(43)); assert.equal(canOpenExternal(bad.href), false);
   assert.equal(canOpenExternal('https://accounts.google.com.untrusted.example/o/oauth2/v2/auth'), false); assert.equal(canOpenExternal('file:///tmp/example'), false); assert.equal(canOpenExternal('https://auth.openai.com/codex/device'), true);
+  const guide = 'https://support.google.com/cloud/answer/15549945?hl=en'; assert.equal(canOpenExternal(guide), true);
+  for (const unsupported of [guide + '&redirect=https://untrusted.example', guide + '#untrusted', guide.replace('support.google.com', 'support.google.com.untrusted.example'), guide.replace('15549945', '15549946'), guide.replace('https:', 'http:')]) assert.equal(canOpenExternal(unsupported), false);
 });
 
 test('partial provider reads retain the working source and never expose raw provider errors', async () => {
@@ -314,6 +316,51 @@ test('provider consent refusal finishes without exchanging or reflecting private
     const callback = new URL(auth.searchParams.get('redirect_uri')!); callback.searchParams.set('state', auth.searchParams.get('state')!); callback.searchParams.set('error', 'access_denied'); callback.searchParams.set('error_description', 'private-error-fixture');
     const response = await fetch(callback); assert.equal(response.status, 200); assert.ok(!(await response.text()).includes('private-error-fixture'));
     assert.equal((await f.accounts.start('device-a', command)).state, 'failed'); assert.equal(f.calls.length, 0); assert.equal(f.accounts.state('device-a').accounts.length, 0);
+  } finally { await f.close(); }
+});
+
+test('OAuth refusals classify only known codes, keep connected accounts and never infer Testing from access_denied', async () => {
+  const f = fixture(); try {
+    const { account } = await connect(f), credential = f.store.internalRead('accounts:credential:' + account.id), calls = f.calls.length;
+    const cases = [
+      ['access_denied', /not approved/],
+      ['org_internal', /organization.*Google sign-in/],
+      ['admin_policy_enforced', /Workspace administrator/],
+      ['invalid_client', /app’s sign-in setup/],
+      ['temporarily_unavailable', /temporarily unable/],
+      ['private-unknown-error-fixture', /did not complete/],
+    ] as const;
+    for (const [error, expected] of cases) {
+      const command = { ...f.command(), provider: 'google', accountId: account.id, expectedRevision: account.revision };
+      const attempt = await f.accounts.start('device-a', command), auth = new URL(attempt.authorizationUrl!), callback = new URL(auth.searchParams.get('redirect_uri')!);
+      callback.searchParams.set('state', auth.searchParams.get('state')!);
+      callback.searchParams.set('error', error);
+      callback.searchParams.set('error_description', '<script>private-provider-details</script>');
+      const response = await fetch(callback); assert.equal(response.status, 200);
+      assert.doesNotMatch(await response.text(), /private-provider-details|private-unknown-error-fixture/);
+      const result = await f.accounts.start('device-a', command);
+      assert.equal(result.id, attempt.id); assert.equal(result.state, 'failed'); assert.match(result.message, expected);
+      assert.doesNotMatch(JSON.stringify(result), /private-provider-details|private-unknown-error-fixture|test users|testing|try again/i);
+      assert.deepEqual(f.accounts.state('device-a').accounts, [account]);
+      assert.deepEqual(f.store.internalRead('accounts:credential:' + account.id), credential);
+      assert.equal(f.calls.length, calls, 'A denied callback cannot reach token exchange or replace credentials');
+    }
+  } finally { await f.close(); }
+});
+
+test('invalid-state and mixed error/code refusals keep the original waiting sign-in usable', async () => {
+  const f = fixture(); try {
+    f.accounts.configure('device-a', { ...f.command(), expectedRevision: 0, configuration: google });
+    const attempt = await f.accounts.start('device-a', { ...f.command(), provider: 'google' }), auth = new URL(attempt.authorizationUrl!), callback = new URL(auth.searchParams.get('redirect_uri')!);
+    callback.searchParams.set('state', 'wrong-state'); callback.searchParams.set('error', 'org_internal');
+    let response = await fetch(callback); assert.equal(response.status, 400); await response.text();
+    callback.searchParams.set('state', auth.searchParams.get('state')!); callback.searchParams.set('code', 'untrusted-code');
+    response = await fetch(callback); assert.equal(response.status, 400); await response.text();
+    assert.equal(f.accounts.state('device-a').attempts[0].state, 'waiting'); assert.equal(f.calls.length, 0);
+    assert.equal(f.accounts.state('device-a').attempts[0].authorizationUrl, attempt.authorizationUrl);
+    callback.searchParams.delete('code');
+    response = await fetch(callback); assert.equal(response.status, 200); await response.text();
+    assert.equal(f.accounts.state('device-a').attempts[0].state, 'failed'); assert.equal(f.calls.length, 0);
   } finally { await f.close(); }
 });
 

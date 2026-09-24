@@ -1,3 +1,8 @@
+## [1.12.10] — 2026-09-24
+
+- Dictation writes directly into the composer as words arrive, with recording state shown on the microphone button. Keep surrounding writing and edits, avoid duplicate insertion on Stop, and retain interrupted transcripts for recovery.
+- Clarify Google and Microsoft sign-in failures, add contextual Google testing and organization guidance, and preserve existing account connections and interrupted sign-in requests.
+
 ## [1.12.9] — 2026-09-24
 
 - Simplify Settings into flat, compact rows and optional details. Keep separate font and size controls for the app interface and Assistant messages, with an expandable preview.

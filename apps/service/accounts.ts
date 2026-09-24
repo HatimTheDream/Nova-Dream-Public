@@ -15,6 +15,14 @@ type Live = { controller: AbortController; server?: Server; url?: string; ready?
 const active = (a: AccountSignIn) => ['preparing', 'waiting', 'exchanging'].includes(a.state);
 const equal = (a: string, b: string) => { const left = Buffer.from(a), right = Buffer.from(b); return left.length === right.length && timingSafeEqual(left, right); };
 const stamp = (time: number) => new Date(time).toISOString();
+function signInRefusal(provider: Provider, code: string | null) {
+  const name = provider === 'google' ? 'Google' : 'Microsoft';
+  if (provider === 'google' && ['org_internal', 'admin_policy_enforced'].includes(code ?? '')) return 'Your organization did not allow this Google sign-in. Ask its Google Workspace administrator to review access. Existing accounts are kept.';
+  if (['invalid_client', 'unauthorized_client', 'redirect_uri_mismatch', 'invalid_scope'].includes(code ?? '')) return `${name} could not use this app’s sign-in setup. Review the app registration before starting another sign-in. Existing accounts are kept.`;
+  if (['temporarily_unavailable', 'server_error'].includes(code ?? '')) return `${name} is temporarily unable to complete sign-in. Start a new sign-in when it is available. Existing accounts are kept.`;
+  if (code === 'access_denied') return `${name} sign-in was not approved. Review the explanation in your browser before starting another sign-in. Existing accounts are kept.`;
+  return `${name} did not complete this sign-in. Review the browser’s explanation and app setup. Existing accounts are kept.`;
+}
 
 /** Dedicated E3 OAuth authority. No predecessor config, token stores or browser passwords. */
 export class Accounts {
@@ -124,7 +132,7 @@ export class Accounts {
       if (this.closed || this.live.get(id) !== live || !current || current.state !== 'waiting' || this.now() >= current.expiresAt) return answer(409, 'This sign-in is no longer waiting for a response.');
       if (url.searchParams.has('error')) {
         if (url.searchParams.has('code') || url.searchParams.getAll('error').length !== 1) return answer(400, 'The provider response was not accepted.');
-        this.writeAttempt({ ...current, state: 'failed', message: 'The provider did not approve this sign-in. You can try again when ready.' }); answer(200, 'The account was not connected.'); removeCallback(); this.live.delete(id); return;
+        this.writeAttempt({ ...current, state: 'failed', message: signInRefusal(a.provider, url.searchParams.get('error')) }); answer(200, 'The account was not connected.'); removeCallback(); this.live.delete(id); return;
       }
       const code = url.searchParams.get('code');
       if (!code || code.length > 4096 || url.searchParams.getAll('code').length !== 1) return answer(400, 'The provider response was incomplete.');

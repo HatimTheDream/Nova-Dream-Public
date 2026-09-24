@@ -148,7 +148,11 @@ import assert from 'node:assert/strict';
 // 1.12.4 adds saved typography choices and a task-aware Research estimate.
 // Measured total 652,683 gzip bytes; the estimate replaces fixed milestone fill.
 // Bound this slice at653 KB, retaining the startup and deferred-chunk ceilings.
-export const clientLimits = { startup: 180000, total: 653000, deferredChunk: 80000 };
+// 1.12.10 projects live dictation into retained drafts and clarifies provider
+// sign-in failures. Measured total654,547 (+1,572 / 0.24% over1.12.9).
+// Browser dictation loads on demand; startup148,905 and largest deferred78,209
+// preserve the existing startup/chunk ceilings. Bound this slice at655 KB.
+export const clientLimits = { startup: 180000, total: 655000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

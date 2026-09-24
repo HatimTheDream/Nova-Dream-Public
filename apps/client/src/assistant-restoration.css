@@ -78,8 +78,8 @@
 .assistant-workspace .composer-queue>summary { cursor: pointer; min-height: 44px; align-content: center; }
 .assistant-workspace .composer-queue .queued-message { padding: 8px 0; }
 .assistant-workspace .composer-queue .queued-message p { font-size: 13px; }
-.assistant-workspace .dictation-preview { padding: 8px; max-height: 160px; overflow: auto; font-size: 13px; }
-.assistant-workspace .dictation-preview p { font-size: 14px; white-space: pre-wrap; line-height: 1.5; }
+.assistant-workspace .dictation-recovery { padding: 0 8px; font-size: 13px; }
+.assistant-workspace .dictation-recovery p { white-space: pre-wrap; line-height: 1.5; }
 .assistant-workspace .dictation-active { background: var(--soft-violet); color: var(--violet); }
 .assistant-workspace .conversation-row { display: flex; align-items: center; min-width: 0; }
 .assistant-workspace .conversation-row>.saved-draft { flex: 1; min-width: 0; }
