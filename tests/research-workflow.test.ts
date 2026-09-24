@@ -46,6 +46,7 @@ function host(initial: any, respond: (path: string, body: any) => unknown | Prom
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
 const text = (node: any): string => typeof node === 'string' || typeof node === 'number' ? String(node) : Array.isArray(node) ? node.map(text).join('') : node?.props ? text(node.props.children) : '';
 const button = (tree: any, label: string) => nodes(tree).find(node => node.type === 'button' && text(node) === label);
+const labelledButton = (tree: any, label: string) => nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === label);
 const byClass = (tree: any, name: string) => nodes(tree).filter(node => node.props?.className?.split(' ').includes(name));
 const progress = (tree: any) => nodes(tree).find(node => node.props.role === 'progressbar');
 const assertProgress = (tree: any, complete: number, total: number) => {
@@ -53,6 +54,7 @@ const assertProgress = (tree: any, complete: number, total: number) => {
   assert.equal(bar.props['aria-valuemin'], 0); assert.equal(bar.props['aria-valuemax'], total); assert.equal(bar.props['aria-valuenow'], complete);
   assert.match(bar.props['aria-valuetext'], new RegExp(`${complete} of ${total} research steps complete`, 'i'));
   assert.notEqual(bar.props['aria-hidden'], true);
+  assert.doesNotMatch(text(tree), /\d+ of \d+ research steps complete/i, 'Measured counts belong to the accessible bar, not a duplicate visible row');
   const fill = byClass(bar, 'research-progress-fill')[0]; assert.ok(fill, 'Determinate progress needs a visible completed segment');
   assert.ok(Math.abs(parseFloat(fill.props.style.width) - complete / total * 100) < 0.000001, 'The visible completed segment must match observed step counts');
   return bar;
@@ -134,9 +136,17 @@ test('active research renders actual steps and actions for the exact approved op
     const steps = nodes(app.tree).filter(node => node.type === 'li');
     assert.deepEqual(steps.map(node => node.props['data-state']), ['complete', 'active', 'waiting']);
     assert.match(text(steps[1]), /Compare the evidence/); assert.doesNotMatch(text(app.tree), /Proposed search/);
-    assert.match(text(app.tree), /Researching for 1m 0s/); assertProgress(app.tree, 1, 3);
-    assert.match(text(byClass(app.tree, 'research-current-tool')[0]), /Reading NASA/);
-    button(app.tree, 'Update').props.onClick(); button(app.tree, 'Stop').props.onClick();
+    assert.match(text(app.tree), /Researching…/); assertProgress(app.tree, 1, 3);
+    assert.doesNotMatch(text(app.tree), /Researching for|1m 0s|1 of 3 research steps complete|Reading NASA|Earth seasons/);
+    assert.equal(byClass(app.tree, 'research-current-tool').length, 0); assert.equal(app.timers, 0);
+    const stopControl = labelledButton(app.tree, 'Stop research'); assert.ok(stopControl);
+    assert.equal(text(stopControl), '', 'Stop is icon-only with an accessible action name');
+    const row = byClass(app.tree, 'research-progress-row')[0], region = byClass(app.tree, 'research-progress-region')[0];
+    assert.ok(row); assert.equal(nodes(row).includes(stopControl), true); assert.equal(nodes(row).includes(progress(app.tree)), true);
+    assert.ok(nodes(row).indexOf(progress(app.tree)) < nodes(row).indexOf(stopControl), 'Stop follows the bar in its row');
+    const status = nodes(region).find(node => node.props.role === 'status'); assert.equal(text(status), 'Researching…');
+    assert.ok(nodes(region).indexOf(status) < nodes(region).indexOf(row), 'The research status sits above the progress row');
+    button(app.tree, 'Update').props.onClick(); stopControl.props.onClick();
     assert.deepEqual(updated, ['research-operation']); assert.deepEqual(stopped, ['research-operation']); assert.equal(app.calls.length, 0);
     assert.equal(nodes(app.tree).some(node => node.props.role === 'dialog' || node.props['aria-modal']), false);
   } finally { app.close(); }
@@ -148,14 +158,15 @@ test('a pending Stop keeps honest stopping status and removes animated progress 
     await app.flush(); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree, 1, 3);
     assert.equal(nodes(app.tree).some(node => node.props['data-state'] === 'active'), false);
     assert.equal(byClass(app.tree, 'research-current-tool').length, 0); assert.equal(button(app.tree, 'Update'), undefined);
-    assert.equal(button(app.tree, 'Stopping…').props.disabled, true); assert.match(text(app.tree), /Stopping/);
+    const stopControl = labelledButton(app.tree, 'Stopping research'); assert.ok(stopControl);
+    assert.equal(stopControl.props.disabled, true); assert.equal(text(stopControl), ''); assert.match(text(app.tree), /Stopping/); assert.equal(app.timers, 0);
   } finally { app.close(); }
 });
 
 test('Stop and Update wait for a captured native run identity', async () => {
   const app = host(props(active(), { operations: [operation({ state: 'prepared', nativeRunId: null })], stop() {}, update() {} }));
   try {
-    await app.flush(); assert.equal(button(app.tree, 'Stop').props.disabled, true); assert.equal(button(app.tree, 'Update').props.disabled, true);
+    await app.flush(); assert.equal(labelledButton(app.tree, 'Stop research').props.disabled, true); assert.equal(button(app.tree, 'Update').props.disabled, true);
     assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });
@@ -166,7 +177,7 @@ test('unknown research freezes progress and offers a read-only status check', as
   try {
     await app.flush(); assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assertProgress(app.tree, 1, 3);
     assert.equal(nodes(app.tree).some(node => node.props['data-state'] === 'active'), false);
-    assert.match(text(app.tree), /Checking|unconfirmed/); assert.equal(button(app.tree, 'Stop'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
+    assert.match(text(app.tree), /Checking|unconfirmed/); assert.equal(labelledButton(app.tree, 'Stop research'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
     button(app.tree, 'Check status').props.onClick(); await app.flush(); assert.equal(refreshed, 1); assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });
@@ -174,7 +185,7 @@ test('unknown research freezes progress and offers a read-only status check', as
 test('an operation becoming unknown before the plan refresh also freezes and exposes recovery', async () => {
   const app = host(props(active(), { operations: [operation()], stop() {}, update() {} }));
   try {
-    await app.flush(); assert.equal(app.timers, 1);
+    await app.flush(); assert.equal(app.timers, 0);
     await app.update({ operations: [operation({ state: 'unknown' })] });
     assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-progress--running').length, 0);
     assert.match(text(app.tree), /Checking|unconfirmed/); assert.ok(button(app.tree, 'Check status')); assertProgress(app.tree, 1, 3);
@@ -187,7 +198,7 @@ for (const mismatch of ['conversation', 'workflow'] as const) test(`an operation
   const app = host(props(active(), { operations: [other], stop() {}, update() {} }));
   try {
     await app.flush(); assert.equal(byClass(app.tree, 'research-progress--running').length, 0); assert.equal(app.timers, 0);
-    assert.equal(button(app.tree, 'Stop'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
+    assert.equal(labelledButton(app.tree, 'Stop research'), undefined); assert.equal(button(app.tree, 'Update'), undefined);
     assert.doesNotMatch(text(app.tree), /Found primary sources|Compare the evidence/);
   } finally { app.close(); }
 });
@@ -205,9 +216,21 @@ test('the completed workflow card disappears and clears its countdown interval',
 test('the confirmed approved operation finishing removes the workflow before a lagging plan refresh', async () => {
   const app = host(props(active(), { operations: [operation()] }));
   try {
-    await app.flush(); assert.ok(app.tree); assert.equal(app.timers, 1);
+    await app.flush(); assert.ok(app.tree); assert.equal(app.timers, 0);
     await app.update({ operations: [operation({ state: 'completed', settledAt: '2026-09-23T12:00:00Z' })] });
     assert.equal(app.tree, null); assert.equal(app.timers, 0);
+  } finally { app.close(); }
+});
+
+test('starting research clears the ready countdown timer and does not add an inner elapsed timer', async () => {
+  const app = host(props(item(), { stop() {} }));
+  try {
+    await app.flush(); assert.equal(app.timers, 1);
+    await app.update({ item: active(), operations: [operation()] });
+    assert.equal(app.timers, 0); assert.equal(byClass(app.tree, 'research-countdown').length, 0);
+    await app.advance(300000); assert.equal(app.timers, 0); assertProgress(app.tree, 1, 3);
+    assert.match(text(app.tree), /Researching…/); assert.doesNotMatch(text(app.tree), /Researching for|\d+m \d+s/);
+    assert.equal(app.calls.length, 0);
   } finally { app.close(); }
 });
 
@@ -244,7 +267,7 @@ test('linear research progress derives completed and remaining counts only from 
     await app.advance(30000); assertProgress(app.tree, 1, 3);
     const revised = { ...observed, plan: observed.plan.map((step: any) => step.id === 'verify' ? { ...step, status: 'complete' } : step) };
     await app.update({ operations: [revised] }); assertProgress(app.tree, 2, 3);
-    assert.match(text(app.tree), /2 of 3 research steps complete/i);
+    assert.doesNotMatch(text(app.tree), /\d+ of \d+ research steps complete/i, 'Measured progress remains accessible without adding a visible count row');
     assert.doesNotMatch(text(app.tree), /\d+% (?:of (?:the )?)?(?:work|research|effort|time)/i);
     const extended = { ...revised, plan: [...revised.plan, { id: 'check', label: 'Check a newly discovered source', status: 'waiting' }] };
     await app.update({ operations: [extended] }); assertProgress(app.tree, 2, 4);

@@ -1,3 +1,8 @@
+## [1.12.1] — 2026-09-23
+
+- Simplify the active Chat Research card: keep the activity list, show a quiet Researching status above a slim progress bar, and place a circular Stop control beside the bar.
+- Remove the visible step counter, duplicate elapsed timer and repeated tool details; retain accessible measured progress and interruption recovery. Keep the card on the same raised surface as the composer.
+
 ## [1.12.0] — 2026-09-23
 
 - Give Chat Research a saved research plan, edit/start/cancel controls, a service-owned start countdown, read-only investigation progress, and interruption recovery. Keep Work Research in the normal Codex-style conversation flow.

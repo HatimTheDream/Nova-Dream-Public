@@ -12,12 +12,15 @@
 :root button.research-control:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
 .research-controls-end { margin-left:auto; display:flex; align-items:center; gap:5px; }
 .research-countdown { opacity:.65; font-variant-numeric:tabular-nums; min-width:16px; }
-.research-status,.research-current-tool { color:var(--muted); font-size:12px; margin:12px 0 0; }
+.research-status { color:var(--muted); font-size:12px; margin:12px 0 0; }
 .research-workflow footer .research-status { margin:0; }
-.research-progress { height:5px; overflow:hidden; border-radius:2px; background:var(--line); margin:20px 0 8px; }
+.research-progress-region { margin-top:22px; }
+.research-progress-region .research-status { margin:0 0 4px; }
+.research-progress-row { display:flex; align-items:center; gap:12px; min-height:36px; }
+.research-progress { flex:1; min-width:0; height:4px; overflow:hidden; border-radius:2px; background:var(--line); }
+:root button.research-update { flex-shrink:0; border:1px solid var(--line); border-radius:999px; }
+:root button.research-stop { flex:0 0 40px; width:40px; height:40px; padding:0; border-radius:50%; background:var(--line); }
 .research-progress--running::after { content:''; display:block; width:28%; height:100%; background:var(--muted); animation:research-sweep 2.5s ease-in-out infinite alternate; }
-.research-current-tool { overflow-wrap:anywhere; }
-.research-current-tool span { display:block; font-size:11px; }
 .research-edit { display:grid; gap:10px; margin:14px 0; }
 .research-edit label { font-size:12px; color:var(--muted); }
 .research-edit textarea { width:100%; min-height:80px; resize:vertical; }
@@ -30,5 +33,4 @@
 @media(max-width:600px) { .research-workflow { padding:15px 13px; border-radius:14px; } .research-workflow h3 { font-size:14px; } .research-steps { gap:12px; margin:18px 0; } :root button.research-control { min-height:40px; padding:8px; } }
 
 .research-progress-fill { display:block; height:100%; border-radius:inherit; background:var(--text); transition:width .25s ease; }
-.research-progress-label { font-size:11px; color:var(--muted); margin:0 0 12px; font-variant-numeric:tabular-nums; }
 @media(prefers-reduced-motion:reduce) { .research-progress-fill { transition:none; } }
