@@ -684,6 +684,21 @@ class RunnerTests(unittest.TestCase):
                 connection.execute('insert into cron_jobs values('+','.join('?' for _ in range(15))+')',
                     ('store',job['id'],job['declarationKey'],None,job['name'],None,1,'main',job['payload']['kind'],json.dumps(job),json.dumps({'nextRunAtMs':next_run}),job['createdAtMs'],'retained schedule identity',0,job['createdAtMs']))
             with patch.object(recovery,'digest',side_effect=digest),patch.object(recovery.hashlib,'sha256',side_effect=hash_bytes):
+                migrated = after.execute('select * from cron_jobs').fetchone()
+                retained = before.execute('select * from cron_jobs').fetchone()
+                after.execute('delete from cron_jobs')
+                after.execute('insert into cron_jobs values('+','.join('?' for _ in retained)+')',retained)
+                self.assertEqual(recovery.retained_collection_review_jobs(before,after,node),{})
+                for column, value in (('job_json',json.dumps({**old_job,'enabled':False})),
+                                      ('state_json',json.dumps({'nextRunAtMs':604800101})),
+                                      ('payload_kind','agentTurn'),('updated_at',1001)):
+                    after.execute('update cron_jobs set '+column+'=?',(value,))
+                    with self.assertRaisesRegex(RuntimeError,'offline Workshop monitor'):
+                        recovery.retained_collection_review_jobs(before,after,node)
+                    after.execute('delete from cron_jobs')
+                    after.execute('insert into cron_jobs values('+','.join('?' for _ in retained)+')',retained)
+                after.execute('delete from cron_jobs')
+                after.execute('insert into cron_jobs values('+','.join('?' for _ in migrated)+')',migrated)
                 self.assertEqual(len(recovery.retained_collection_review_jobs(before,after,node)),1)
                 for mutate in (
                     lambda job:job['payload'].update(message='different instructions'),

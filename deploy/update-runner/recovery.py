@@ -1247,6 +1247,12 @@ def retained_collection_review_jobs(before, after, node):
                     and row['declaration_key'] == old['declaration_key']]
         require(len(matching) == 1, 'The generated Workshop monitor is missing or duplicated.')
         new = matching[0]
+        if new['job_id'] == old['job_id']:
+            # Offline schema migration leaves this generated job intact. The
+            # replacement below is created only when the new gateway starts.
+            require(all(new[name] == old[name] for name in old_names),
+                    'The offline Workshop monitor changed retained settings.')
+            continue
         old_job, new_job = json.loads(old['job_json']), json.loads(new['job_json'])
         require(set(old_job) == job_keys and set(new_job) == job_keys | {'delivery', 'scheduledToolPolicy'}
                 and old_job['payload'] == {'kind': 'skillCollectionReview'}

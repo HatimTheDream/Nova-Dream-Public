@@ -1,3 +1,7 @@
+## [1.13.9] — 2026-09-25
+
+- Verify unchanged maintenance jobs before the agent starts and the reviewed replacement after startup, so combined updates can complete both stages without weakening saved-work checks.
+
 ## [1.13.8] — 2026-09-25
 
 - Complete combined updates when verified Nova plugins move to the new installation folder, while preserving checks on saved settings, accounts, permissions and recovery data.
