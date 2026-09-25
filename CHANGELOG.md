@@ -1,3 +1,7 @@
+## [1.13.11] — 2026-09-25
+
+- Check full recovery space while the managed service is stopped, then verify operating space after restart. Avoid rejecting an otherwise verified combined update because of temporary agent startup files that are removed before restoration.
+
 ## [1.13.10] — 2026-09-25
 
 - Verify saved data after the upgraded service has settled and stopped, then restart and confirm readiness before completing the update. Keep temporary SQLite activity from causing a false data-loss failure without weakening retained-data checks.

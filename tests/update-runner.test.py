@@ -838,6 +838,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(restored=restored):
                 instance = self.instance()
                 instance.recovery, instance.data = self.root / 'recovery', self.root / 'live'
+                instance.recovery_root = self.root
                 calls, running = [], [True]
                 def ready(*args, **kwargs):
                     self.assertTrue(running[0])
@@ -860,15 +861,15 @@ class RunnerTests(unittest.TestCase):
                     self.assertEqual(action, 'start');stopped()
                     calls.append('start');running[0] = True
                 instance.service = start
-                with patch.object(driver, 'saved_state', side_effect=lambda before, after, **kwargs:
+                with patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(driver, 'saved_state', side_effect=lambda before, after, **kwargs:
                                   (self.assertEqual(kwargs, {'restored': restored}), check('saved'))):
-                    accepted = instance.settled_acceptance(instance.prior_id, '1.13.2', restored=restored)
+                    accepted = instance.settled_acceptance(instance.prior_id, '1.13.2', restored=restored, independent=None if restored else 4096)
                 self.assertEqual(calls, ['ready','hold','stop','saved','native','configuration','hold','start','ready','configuration'])
                 self.assertEqual(accepted['health']['startup'], 2)
                 self.assertFalse((self.root / 'result.json').exists())
 
     def test_second_target_start_failure_uses_original_restore_without_success_publication(self):
-        for failure in ('saved', 'native', 'second_start', 'second_readiness', None):
+        for failure in ('saved', 'native', 'second_start', 'second_readiness', 'persistent_growth', 'operating_space', None):
             with self.subTest(failure=failure):
                 scope = self.root / (failure or 'success');scope.mkdir()
                 instance = self.instance()
@@ -912,14 +913,35 @@ class RunnerTests(unittest.TestCase):
                 instance.verify_configuration = lambda: None
                 instance.restore_prior = lambda: actions.append('original-paired-restore')
                 instance.result = lambda outcome: actions.append(outcome)
-                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
+                independent = 4096
+                def disk_usage(path):
+                    self.assertEqual(path, scope)
+                    minimum = driver.RESERVE + driver.ALLOWANCE
+                    if not running[0]:
+                        free = minimum + independent - int(starts[0] == 1 and failure == 'persistent_growth')
+                    else:
+                        # Running scratch uses the restoration allocation, but
+                        # must still leave the complete operating minimum.
+                        self.assertEqual(starts[0], 2)
+                        free = minimum - int(failure == 'operating_space')
+                    return types.SimpleNamespace(free=free)
+                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', return_value=({}, {'snapshot': {'allocated': independent}})), patch.object(driver.shutil, 'disk_usage', side_effect=disk_usage), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
                     instance.run()
                 if failure:
                     self.assertEqual(actions[-2:], ['failure', 'original-paired-restore'])
                     self.assertNotIn('completed', actions)
+                    if failure == 'persistent_growth':self.assertEqual(starts[0], 1)
                 else:
                     self.assertEqual(actions, ['stop','start','stop','start','completed'])
                 self.assertFalse(instance.result_publication_started)
+
+    def test_target_settled_acceptance_requires_verified_positive_restoration_size(self):
+        for independent in (None, 0, -1, True, 4096.0, '4096'):
+            with self.subTest(independent=independent):
+                instance = self.instance()
+                instance.wait_acceptance = lambda *args, **kwargs: self.fail('Invalid reserve evidence must fail before startup verification.')
+                with self.assertRaisesRegex(RuntimeError, 'verified independent restoration size'):
+                    instance.settled_acceptance(instance.prior_id, '1.13.2', independent=independent)
 
     def test_exact_app_and_native_barrier_are_required_by_acceptance(self):
         instance = driver.Driver(self.root / 'request.json')

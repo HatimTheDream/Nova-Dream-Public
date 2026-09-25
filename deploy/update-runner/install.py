@@ -832,11 +832,13 @@ class Driver:
                 search = lambda value: value.get('tools', {}).get('web', {}).get('search')
                 require(search(old) == search(new), 'Existing web-search configuration changed.')
 
-    def settled_acceptance(self, expected, version, *, restored=False):
+    def settled_acceptance(self, expected, version, *, restored=False, independent=None):
         # Startup may open otherwise inactive SQLite stores and their transient
         # sidecars. Prove held readiness first, then compare the complete saved
         # state with every process in the managed pair stopped. The final start
         # must independently pass readiness before any result can be published.
+        if not restored:
+            require(type(independent) is int and independent > 0, 'Target acceptance requires the verified independent restoration size.')
         self.wait_acceptance(expected, version, restored_prior=restored)
         self.controller_hold()
         self.guarded_stop(restored_prior=restored)
@@ -846,9 +848,17 @@ class Driver:
         self.verify_configuration()
         self.require_stopped()
         self.controller_hold()
+        if not restored:
+            # Restoration starts by stopping this same pair. Its independent
+            # copy must fit here, after runtime scratch has been released.
+            require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
+                    'The stopped migrated pair no longer leaves full independent recovery capacity and reserve.')
         self.service('start')
         accepted = self.wait_acceptance(expected, version, restored_prior=restored)
         self.verify_configuration()
+        if not restored:
+            require(shutil.disk_usage(self.recovery_root).free >= RESERVE + ALLOWANCE,
+                    'The running migrated pair no longer leaves its operating reserve.')
         return accepted
 
     def result(self, outcome):
@@ -966,9 +976,7 @@ class Driver:
             self.stage('restarting')
             self.service('start')
             self.stage('checking')
-            accepted = self.settled_acceptance(self.target_id, self.release['novaVersion'])
-            require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
-                    'The migrated pair no longer leaves full independent recovery capacity and reserve.')
+            accepted = self.settled_acceptance(self.target_id, self.release['novaVersion'], independent=independent)
             require(self.current.resolve(strict=True) == self.target, 'The selected target changed during acceptance.')
             candidate(self.target, self.target_id, self.release['novaVersion'])
             write_json(self.recovery / 'acceptance.json', {'health': accepted['health'], 'agentVersion': self.active_engine})
