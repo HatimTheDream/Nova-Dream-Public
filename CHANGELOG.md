@@ -1,3 +1,8 @@
+## [1.13.7] — 2026-09-24
+
+- Recognize OpenClaw 2026.9.6's update-readiness response so combined updates can finish verification and resume Assistant access. Keep active work and unrecognized responses blocked.
+- Pause background mail indexing during update verification and resume from the retained page when maintenance ends.
+
 ## [1.13.6] — 2026-09-24
 
 - Complete combined app and agent updates without mistaking verified configuration-size changes for lost saved data.

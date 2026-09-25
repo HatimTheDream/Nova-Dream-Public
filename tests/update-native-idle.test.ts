@@ -20,26 +20,90 @@ function setup(t:TestContext){
   let owned={epoch:store.epoch,pid:112,url:'ws://127.0.0.1:55321',generation:randomUUID(),startedAt:time-5000,version:'2026.9.2' as '2026.9.2'|'2026.9.6'},reportedVersion:string|undefined;
   let state:AssistantConnection={state:'ready',url:owned.url,generation:owned.generation,message:'',grantedScopes:['operator.read','operator.admin'],methods:['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'],modelAuthReady:false};
   let current:{requestId:string;suspensionId:string;expiresAtMs:number}|undefined,busy=false,drop=false,prepares=0,resumes=0,systems=0;
+  let transform=(method:string,result:Record<string,unknown>)=>result;
+  const response=(method:string,result:Record<string,unknown>)=>transform(method,owned.version==='2026.9.6'&&method==='gateway.suspend.prepare'?{...result,writeCustody:[]}:result);
   const requests:string[]=[];const listeners=new Set<(event:EventFrame)=>void>();
   const factory=()=>({start(){},async stop(){},status:()=>state,serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:reportedVersion??owned.version}),subscribe(listener:(event:EventFrame)=>void){listeners.add(listener);return()=>listeners.delete(listener);},async request<T>(method:string,raw:unknown):Promise<T>{
     const input=raw as any;if(current&&current.expiresAtMs<=time)current=undefined;
     if(method==='system.info'){systems++;if(current)throw Error('suspended');return {pid:owned.pid,processInstanceId:'process-'+owned.pid} as T;}
     if(method==='gateway.suspend.prepare'){
       assert.equal(input.terminalPolicy,'preserve');assert.equal(input.drain,false);requests.push(input.requestId);prepares++;
-      if(busy)return {status:'busy',reason:'active-work',activeCount:1,retryAfterMs:20000,blockers:[{kind:'terminal-session',count:1,message:'private task title'}]} as T;
+      if(busy)return response(method,{status:'busy',reason:'active-work',activeCount:1,retryAfterMs:20000,blockers:[{kind:'terminal-session',count:1,message:'private task title'}]}) as T;
       if(current&&current.requestId!==input.requestId)throw Error('other lease');
       current??={requestId:input.requestId,suspensionId:randomUUID(),expiresAtMs:time+120000};current.expiresAtMs=time+120000;
-      if(drop){drop=false;throw Error('lost reply');}return {status:'ready',suspensionId:current.suspensionId,expiresAtMs:current.expiresAtMs,activeCount:0,blockers:[]} as T;
+      if(drop){drop=false;throw Error('lost reply');}return response(method,{status:'ready',suspensionId:current.suspensionId,expiresAtMs:current.expiresAtMs,activeCount:0,blockers:[]}) as T;
     }
-    if(method==='gateway.suspend.resume'){resumes++;if(current&&current.suspensionId!==input.suspensionId)throw Error('wrong lease');const resumed=!!current;current=undefined;return {ok:true,status:'running',resumed} as T;}
+    if(method==='gateway.suspend.resume'){resumes++;if(current&&current.suspensionId!==input.suspensionId)throw Error('wrong lease');const resumed=!!current;current=undefined;return response(method,{ok:true,status:'running',resumed}) as T;}
     throw Error(method);
   }});
   let modelReady=true,catalogReads=0,writeScope=true;
   const assistant={status:()=>({...state,grantedScopes:writeScope?['operator.read','operator.write']:['operator.read'],modelAuthReady:modelReady}),serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:owned.version}),async models(){catalogReads++;assert.equal(current,undefined,'Models must be read only after native resume');return [];}};
   const runtime={updateIdentity:()=>owned,updateStartupBlockers:()=>[] as {code:string;message:string}[]};const lease=new NativeUpdateLease(store,runtime,factory,()=>time,assistant);store.setUpdateMaintenanceHeld(true);
   t.after(async()=>{await lease.close();store.close();rmSync(root,{recursive:true,force:true});});
-  return {root,store,lease,runtime,factory,assistant,modelReady:(ready:boolean)=>modelReady=ready,writeScope:(granted:boolean)=>writeScope=granted,catalogReads:()=>catalogReads,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
+  return {root,store,lease,runtime,factory,assistant,response:(modify:typeof transform)=>transform=modify,modelReady:(ready:boolean)=>modelReady=ready,writeScope:(granted:boolean)=>writeScope=granted,catalogReads:()=>catalogReads,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
 }
+
+test('9.6 ready custody response acquires, renews and releases only after authenticated readiness',async t=>{
+  const f=setup(t);f.version('2026.9.6');
+  assert.deepEqual(await f.lease.acquire(f.job),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,true);
+  const receipt=f.store.internalRead<any>('update:native-lease:'+f.job);
+  f.advance(30000);assert.deepEqual(await f.lease.acquire(f.job),[]);
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).suspensionId,receipt.suspensionId);
+  assert.equal(f.counts().systems,1);assert.equal(f.catalogReads(),0);
+  f.modelReady(false);assert.equal((await f.lease.release(f.job))[0].code,'native_readiness');
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'releasing');
+  f.modelReady(true);assert.deepEqual(await f.lease.release(f.job),[]);
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'released');
+  assert.equal(f.catalogReads(),2);assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+});
+
+test('9.6 busy custody facts remain blockers and never establish an idle lease',async t=>{
+  const f=setup(t);f.version('2026.9.6');f.busy();
+  for(const reason of ['active-work','gateway-draining']){
+    // These are the four phases emitted by the pinned 9.6 snapshot producer.
+    f.response((_,result)=>({...result,reason,activeCount:5,writeCustody:[
+      {phase:'backup',count:1},{phase:'migration',count:2},{phase:'session-mutation',count:1},{phase:'terminal-persistence',count:1},
+    ]}));
+    assert.equal((await f.lease.acquire(f.job))[0].code,'native_busy');
+    assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);assert.deepEqual(f.lease.pendingJobIds(),[]);
+  }
+  assert.equal(f.counts().resumes,0);
+});
+
+test('custody compatibility rejects malformed, active and unknown ready facts without broadening 9.2',async t=>{
+  const cases:[string,'2026.9.2'|'2026.9.6',(result:Record<string,unknown>)=>Record<string,unknown>][]=[
+    ['missing custody','2026.9.6',({writeCustody,...rest})=>rest],
+    ['active custody','2026.9.6',result=>({...result,writeCustody:[{phase:'backup',count:1}]})],
+    ['malformed custody','2026.9.6',result=>({...result,writeCustody:null})],
+    ['unknown field','2026.9.6',result=>({...result,newAuthority:true})],
+    ['old protocol extra field','2026.9.2',result=>({...result,writeCustody:[]})],
+  ];
+  for(const [name,version,modify]of cases)await t.test(name,async child=>{
+    const f=setup(child);f.version(version);f.response((_,result)=>modify(result));
+    assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+    assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'preparing');
+  });
+});
+
+test('9.6 busy custody validates phase, positive count, uniqueness and total activity',async t=>{
+  const f=setup(t);f.version('2026.9.6');f.busy();
+  for(const writeCustody of [
+    [{phase:'unreviewed',count:1}],[{phase:'backup',count:0}],[{phase:'backup',count:-1}],
+    [{phase:'backup',count:1.5}],[{phase:'backup',count:1,extra:true}],
+    [{phase:'backup',count:1},{phase:'backup',count:1}],[{phase:'backup',count:2}],
+  ]){
+    f.response((_,result)=>({...result,writeCustody}));
+    assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+  }
+});
+
+test('9.6 resume retains its strict reviewed response contract',async t=>{
+  const f=setup(t);f.version('2026.9.6');assert.deepEqual(await f.lease.acquire(f.job),[]);
+  f.response((method,result)=>method==='gateway.suspend.resume'?{...result,writeCustody:[]}:result);
+  assert.equal((await f.lease.release(f.job))[0].code,'native_unknown');assert.equal(f.catalogReads(),0);
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'releasing');
+  f.response((_,result)=>result);assert.deepEqual(await f.lease.release(f.job),[]);assert.equal(f.catalogReads(),1);
+});
 
 test('native resume retains a durable hold until real model readiness survives process recreation',async t=>{
   const f=setup(t);await f.lease.acquire(f.job);f.modelReady(false);

@@ -39,7 +39,7 @@ export class MailIndexService {
   constructor(private store: Store, private accounts: Pick<Accounts, 'state' | 'mailRead'>, private options: Options = {}) {
     this.now = options.now ?? Date.now;
   }
-  start() { this.pump(); this.prune(); }
+  start() { if(this.closed||this.store.updateMaintenanceHeld)return;this.pump(); this.prune(); }
   private wait(milliseconds: number, signal: AbortSignal) { return this.options.wait ? this.options.wait(milliseconds, signal) : delay(milliseconds, undefined, { signal }); }
   private stamp() { return new Date(this.now()).toISOString(); }
   private open() { if (this.closed) throw new Fault(503, 'mail_index_closed', 'Mail indexing is restarting. Saved mail remains available.'); }
@@ -53,9 +53,9 @@ export class MailIndexService {
   private scope(input: Pick<MailIndexRead, 'epoch' | 'accountId' | 'generation'>) { return hash(JSON.stringify([input.epoch, input.accountId, input.generation])); }
   private head(scope: string) { return this.store.internalRead<Head>(headKey(scope)); }
   private heads() { return this.store.internalList<Head>('mail:index:head:'); }
-  private write(head: Head) { return this.store.internalWrite(headKey(head.scope), { ...head, revision: head.revision + 1, updatedAt: this.stamp() }); }
+  private write(head: Head) { this.store.assertUpdateAdmission();return this.store.internalWrite(headKey(head.scope), { ...head, revision: head.revision + 1, updatedAt: this.stamp() }); }
   private current(head: Head, signal?: AbortSignal) {
-    this.account(head); signal?.throwIfAborted();
+    this.store.assertUpdateAdmission();this.account(head); signal?.throwIfAborted();
     const current = this.head(head.scope);
     if (!current || current.runId !== head.runId || current.status !== 'indexing') throw new Fault(409, 'mail_index_changed', 'This index job has stopped or been replaced.');
     return current;
@@ -114,6 +114,7 @@ export class MailIndexService {
     } finally { this.readers--; this.prune(); }
   }
   async command(device: string, raw: unknown): Promise<MailIndexResult> {
+    this.store.assertUpdateAdmission();
     const cmd = mailIndexCommandSchema.parse(raw), account = this.account(cmd), scope = this.scope(cmd);
     const admission = this.store.admit(device, cmd, { type: 'mail-index', ...cmd }, () => {
       const existing = this.head(scope);
@@ -140,7 +141,7 @@ export class MailIndexService {
   /** Queue a fresh pass after provider writes, preserving a user's paused job
    * and the existing readable index until its replacement is complete. */
   async providerChanged(identity: {epoch:string;accountId:string;generation:string},threadId?:string,unread?:boolean) {
-    this.account(identity);const scope=this.scope(identity);
+    this.store.assertUpdateAdmission();this.account(identity);const scope=this.scope(identity);
     if(threadId&&unread!==undefined){
       const changes=this.readChanges.get(scope)??new Map();changes.set(threadId,{revision:++this.readRevision,unread});this.readChanges.set(scope,changes);
       if(changes.size>2000)changes.delete(changes.keys().next().value!);
@@ -156,7 +157,7 @@ export class MailIndexService {
     this.store.internalWrite(`mail:index:changed:${scope}`,true);this.pump();
   }
   private pump() {
-    if (this.closed) return;
+    if (this.closed||this.store.updateMaintenanceHeld) return;
     for (let head of this.heads()) {
       if (this.jobs.size >= 4) break;
       if(head.status==='complete'&&!this.jobs.has(head.scope)&&this.store.internalRead(`mail:index:changed:${head.scope}`)) {
@@ -254,18 +255,20 @@ export class MailIndexService {
         await this.wait(this.options.pageDelayMs ?? (head.provider === 'gmail' ? 15000 : 350), signal);
       }
     } catch (error) {
-      if (this.closed || signal.aborted) return;
+      // A hold discards the late page without changing its saved cursor/status.
+      // The existing hold-release hook starts this same run again afterwards.
+      if (this.closed || signal.aborted || this.store.updateMaintenanceHeld || error instanceof Fault&&error.code==='update_maintenance') return;
       const current = this.head(head.scope);
       if (!current || current.runId !== head.runId || current.status !== 'indexing') return;
       this.write({ ...current, status: 'error', error: error instanceof ProviderError || error instanceof Fault ? error.message : 'Mail indexing was interrupted. Existing mail remains searchable; resume to retry.' });
     }
   }
   private prune() {
-    if (this.closed || this.cleaning || this.readers) return;
+    if (this.closed || this.store.updateMaintenanceHeld || this.cleaning || this.readers) return;
     this.cleaning = true;
     this.cleanup = (async () => {
       for (const head of this.heads()) for (const runId of head.retired) {
-        while (!this.closed && !this.readers) {
+        while (!this.closed && !this.store.updateMaintenanceHeld && !this.readers) {
           const rows = this.store.internalPage(dataPrefix(head.scope, runId), '', 100);
           if (!rows.length) {
             const current = this.head(head.scope);

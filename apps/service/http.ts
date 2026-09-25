@@ -211,7 +211,7 @@ export async function startServer(options: { directory: string; port: number; pr
     epoch:()=>store.epoch,
     installed:()=>({novaVersion:options.version??'development',candidateId:options.candidateId??'',agent:agentServiceInfo(gateway.serviceInfo?.())}),
     heldFor:()=>updateHold,
-    hold:id=>{updateHold=id;store.setUpdateMaintenanceHeld(!!id);},
+    hold:id=>{const wasHeld=store.updateMaintenanceHeld;updateHold=id;store.setUpdateMaintenanceHeld(!!id);if(wasHeld&&!id&&!store.recoveryEffectsPaused)mailIndex.start();},
     blockers:localUpdateBlockers,
     native:nativeUpdateLease,
   },updateHost);

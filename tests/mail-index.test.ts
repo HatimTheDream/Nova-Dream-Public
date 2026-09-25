@@ -37,6 +37,49 @@ function fixture(respond: (selector: MailReadSelector, cursor: string | undefine
 }
 const complete = (result: MailIndexResult) => result.snapshot?.status === 'complete';
 
+test('update hold discards an in-flight mail page without writes and release resumes its saved cursor',async()=>{
+  const entered=deferred<void>(),late=deferred<ProviderMailPage>();let released=false;
+  const f=fixture((selector,cursor)=>{
+    if(selector.kind==='gmail.stats')return {value:{}};
+    if(!cursor)return {value:{threads:[summary('first')]},next:'saved-cursor'};
+    assert.equal(cursor,'saved-cursor');
+    if(released)return {value:{threads:[summary('second')]}};
+    entered.resolve();return late.promise;
+  });
+  try{
+    await f.sync();await entered.promise;
+    const before=f.store.internalPage('mail:index:'),runId=(await f.read()).runId,calls=f.calls.length;
+    f.store.setUpdateMaintenanceHeld(true);late.resolve({value:{threads:[summary('must-not-publish')]}});
+    await yieldTurn();await yieldTurn();f.index.start();await f.read();
+    await assert.rejects(f.index.providerChanged(f.input(),'first',true),/update/i);
+    await assert.rejects(f.sync(),/update/i);
+    assert.deepEqual(f.store.internalPage('mail:index:'),before);assert.equal(f.calls.length,calls);
+    released=true;f.store.setUpdateMaintenanceHeld(false);f.index.start();
+    const after=await eventually(()=>f.read(),complete);
+    assert.equal(after.runId,runId);assert.deepEqual(after.snapshot?.threads.map(thread=>thread.id).sort(),['first','second']);
+    assert.equal(f.calls.filter(call=>call.cursor==='saved-cursor').length,2);
+  }finally{late.resolve({value:{threads:[]}});await f.close();}
+});
+
+test('held startup and index reads preserve paused heads and retired pages until release',async()=>{
+  const f=fixture(selector=>selector.kind==='gmail.stats'?{value:{}}:{value:{threads:[summary('saved')]}});
+  try{
+    await f.sync();await eventually(()=>f.read(),complete);
+    const head=f.store.internalList<any>('mail:index:head:')[0],retired=randomUUID();
+    f.store.internalBatch([
+      {id:'mail:index:head:'+head.scope,value:{...head,status:'paused',retired:[retired]}},
+      {id:`mail:index:data:${head.scope}:${retired}:p:00000000`,value:[summary('retired')]},
+    ]);
+    const before=f.store.internalPage('mail:index:'),calls=f.calls.length;
+    f.store.setUpdateMaintenanceHeld(true);f.index.start();assert.equal((await f.read()).snapshot?.status,'paused');await yieldTurn();
+    assert.deepEqual(f.store.internalPage('mail:index:'),before);assert.equal(f.calls.length,calls);
+    f.store.setUpdateMaintenanceHeld(false);f.index.start();
+    await eventually(()=>f.store.internalList<any>('mail:index:head:')[0].retired.length,count=>count===0);
+    assert.equal((await f.read()).snapshot?.status,'paused');assert.equal(f.calls.length,calls);
+    assert.equal(f.store.internalPage(`mail:index:data:${head.scope}:${retired}:`).length,0);
+  }finally{await f.close();}
+});
+
 test('background Gmail indexing reserves foreground quota and pause cancels the paced next page', async () => {
   let threadReads = 0, pages = 0, elapsed = 0;
   const waits: { ms: number; finish: () => void }[] = [];

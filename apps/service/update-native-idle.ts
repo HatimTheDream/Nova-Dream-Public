@@ -13,6 +13,14 @@ const savedSchema=z.object({jobId:z.uuid(),requestId:z.uuid(),identity,processIn
 type Saved=z.infer<typeof savedSchema>;
 const key=(jobId:string)=>'update:native-lease:'+jobId;
 const methods=['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'];
+const readyResult=z.object({status:z.literal('ready'),suspensionId:id,expiresAtMs:z.number().int().nonnegative(),activeCount:z.literal(0),blockers:z.array(z.unknown()).length(0)}).strict();
+const busyResult=z.object({status:z.literal('busy'),reason:z.enum(['active-work','gateway-draining']),activeCount:z.number().int().nonnegative(),retryAfterMs:z.number().int().nonnegative(),blockers:z.array(z.object({kind:id,count:z.number().int().nonnegative(),message:z.string()}).passthrough())}).strict();
+// OpenClaw 2026.9.6 gateway-active-work/lifecycle-write-custody includes these
+// outstanding writes in totalActive. Ready therefore requires no custody facts.
+const writeCustody=z.array(z.object({phase:z.enum(['backup','migration','session-mutation','terminal-persistence']),count:z.number().int().positive().safe()}).strict()).max(4)
+  .refine(facts=>new Set(facts.map(fact=>fact.phase)).size===facts.length);
+const readyResult96=readyResult.extend({writeCustody:writeCustody.length(0)});
+const busyResult96=busyResult.extend({writeCustody}).refine(result=>result.writeCustody.reduce((total,fact)=>total+fact.count,0)<=result.activeCount);
 const unknown=():NativeUpdateBlocker[]=>[{code:'native_unknown',message:'Assistant update readiness could not be verified. Its existing work is kept.'}];
 const checking=():NativeUpdateBlocker[]=>[{code:'native_readiness',message:'Checking Assistant access after the update. Your saved work is kept.'}];
 const same=(a:Identity,b:Identity|undefined)=>!!b&&Object.keys(a).every(k=>a[k as keyof Identity]===b[k as keyof Identity]);
@@ -92,11 +100,11 @@ export class NativeUpdateLease {
       const result=await transport.request<Record<string,unknown>>('gateway.suspend.prepare',{requestId:saved.requestId,terminalPolicy:'preserve',drain:false});
       if(!same(owned,this.runtime.updateIdentity()))return unknown();
       if(result.status==='busy'){
-        const busy=z.object({status:z.literal('busy'),reason:z.enum(['active-work','gateway-draining']),activeCount:z.number().int().nonnegative(),retryAfterMs:z.number().int().nonnegative(),blockers:z.array(z.object({kind:id,count:z.number().int().nonnegative(),message:z.string()}).passthrough())}).strict().parse(result);
+        const busy=(owned.version==='2026.9.6'?busyResult96:busyResult).parse(result);
         this.save({...saved,state:'released',suspensionId:undefined,expiresAtMs:undefined});
         return [{code:'native_busy',message:busy.blockers.some(b=>b.kind==='terminal-session')?'Close the Assistant’s open terminals before updating.':'Waiting for the Assistant’s current work and saved results to finish.'}];
       }
-      const ready=z.object({status:z.literal('ready'),suspensionId:id,expiresAtMs:z.number().int().nonnegative(),activeCount:z.literal(0),blockers:z.array(z.unknown()).length(0)}).strict().parse(result);
+      const ready=(owned.version==='2026.9.6'?readyResult96:readyResult).parse(result);
       saved=this.save({...saved,state:'held',suspensionId:ready.suspensionId,expiresAtMs:ready.expiresAtMs});
       if(ready.expiresAtMs-this.now()<=15000||ready.expiresAtMs-this.now()>125000)return unknown();
       const checkKey=JSON.stringify([owned,ready.suspensionId]);
