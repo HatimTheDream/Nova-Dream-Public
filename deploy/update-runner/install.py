@@ -616,7 +616,7 @@ class Driver:
         require(self.api('health') == health, 'The app changed during readiness checks.')
         return {'health': health, 'accounts': retained_accounts, 'epoch': guard['epoch']}
 
-    def guarded_stop(self):
+    def guarded_stop(self, *, restored_prior=False):
         try:
             self.require_stopped()
             return
@@ -628,7 +628,7 @@ class Driver:
         expected = self.target_id if selected == self.target else self.prior_id
         version = self.release['novaVersion'] if selected == self.target else self.release['compatibility']['fromNovaVersion']
         try:
-            self.acceptance(expected, version)
+            self.acceptance(expected, version, restored_prior=True) if restored_prior else self.acceptance(expected, version)
         except Exception:
             self.qualify_started_barrier(selected, expected, version)
         self.service('stop')
@@ -832,6 +832,25 @@ class Driver:
                 search = lambda value: value.get('tools', {}).get('web', {}).get('search')
                 require(search(old) == search(new), 'Existing web-search configuration changed.')
 
+    def settled_acceptance(self, expected, version, *, restored=False):
+        # Startup may open otherwise inactive SQLite stores and their transient
+        # sidecars. Prove held readiness first, then compare the complete saved
+        # state with every process in the managed pair stopped. The final start
+        # must independently pass readiness before any result can be published.
+        self.wait_acceptance(expected, version, restored_prior=restored)
+        self.controller_hold()
+        self.guarded_stop(restored_prior=restored)
+        self.require_stopped()
+        saved_state(self.recovery / 'workspace', self.data, restored=restored)
+        self.retained_native()
+        self.verify_configuration()
+        self.require_stopped()
+        self.controller_hold()
+        self.service('start')
+        accepted = self.wait_acceptance(expected, version, restored_prior=restored)
+        self.verify_configuration()
+        return accepted
+
     def result(self, outcome):
         payload = {'format': 1, 'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id, 'outcome': outcome}
         if outcome == 'unchanged':
@@ -883,10 +902,7 @@ class Driver:
         self.stage('restarting')
         self.service('start')
         self.stage('checking')
-        accepted = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'], restored_prior=True)
-        saved_state(self.recovery / 'workspace', self.data, restored=True)
-        self.retained_native()
-        self.verify_configuration()
+        accepted = self.settled_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'], restored=True)
         write_json(self.recovery / 'restoration-accepted.json', {'health': accepted['health'], 'agentVersion': self.from_engine, 'failedWorkspaceRetained': True})
         latest = self.recovery_root / ('latest-restored-' + self.job_id + '.json')
         write_json(latest, {'candidateId': self.prior_id, 'agentVersion': self.from_engine, 'directory': str(self.baseline)})
@@ -950,10 +966,7 @@ class Driver:
             self.stage('restarting')
             self.service('start')
             self.stage('checking')
-            accepted = self.wait_acceptance(self.target_id, self.release['novaVersion'])
-            saved_state(self.recovery / 'workspace', self.data)
-            self.retained_native()
-            self.verify_configuration()
+            accepted = self.settled_acceptance(self.target_id, self.release['novaVersion'])
             require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
                     'The migrated pair no longer leaves full independent recovery capacity and reserve.')
             require(self.current.resolve(strict=True) == self.target, 'The selected target changed during acceptance.')

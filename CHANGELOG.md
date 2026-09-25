@@ -1,3 +1,7 @@
+## [1.13.10] — 2026-09-25
+
+- Verify saved data after the upgraded service has settled and stopped, then restart and confirm readiness before completing the update. Keep temporary SQLite activity from causing a false data-loss failure without weakening retained-data checks.
+
 ## [1.13.9] — 2026-09-25
 
 - Verify unchanged maintenance jobs before the agent starts and the reviewed replacement after startup, so combined updates can complete both stages without weakening saved-work checks.

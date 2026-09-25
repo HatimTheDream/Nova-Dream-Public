@@ -833,6 +833,94 @@ class RunnerTests(unittest.TestCase):
         with patch.object(driver, 'candidate', return_value=instance.prior_manifest), self.assertRaises(RuntimeError):
             instance.retained_native()
 
+    def test_settled_acceptance_compares_only_stopped_data_and_requires_fresh_readiness(self):
+        for restored in (False, True):
+            with self.subTest(restored=restored):
+                instance = self.instance()
+                instance.recovery, instance.data = self.root / 'recovery', self.root / 'live'
+                calls, running = [], [True]
+                def ready(*args, **kwargs):
+                    self.assertTrue(running[0])
+                    self.assertEqual(kwargs, {'restored_prior': restored})
+                    calls.append('ready')
+                    return {'health': {'startup': calls.count('ready')}}
+                def stopped():
+                    self.assertFalse(running[0])
+                def stop(**kwargs):
+                    self.assertEqual(kwargs, {'restored_prior': restored})
+                    calls.append('stop');running[0] = False
+                def check(name):
+                    stopped();calls.append(name)
+                instance.wait_acceptance = ready
+                instance.controller_hold = lambda: calls.append('hold')
+                instance.guarded_stop, instance.require_stopped = stop, stopped
+                instance.retained_native = lambda: check('native')
+                instance.verify_configuration = lambda: calls.append('configuration')
+                def start(action):
+                    self.assertEqual(action, 'start');stopped()
+                    calls.append('start');running[0] = True
+                instance.service = start
+                with patch.object(driver, 'saved_state', side_effect=lambda before, after, **kwargs:
+                                  (self.assertEqual(kwargs, {'restored': restored}), check('saved'))):
+                    accepted = instance.settled_acceptance(instance.prior_id, '1.13.2', restored=restored)
+                self.assertEqual(calls, ['ready','hold','stop','saved','native','configuration','hold','start','ready','configuration'])
+                self.assertEqual(accepted['health']['startup'], 2)
+                self.assertFalse((self.root / 'result.json').exists())
+
+    def test_second_target_start_failure_uses_original_restore_without_success_publication(self):
+        for failure in ('saved', 'native', 'second_start', 'second_readiness', None):
+            with self.subTest(failure=failure):
+                scope = self.root / (failure or 'success');scope.mkdir()
+                instance = self.instance()
+                instance.recovery, instance.restore = scope / 'recovery', scope / 'restore'
+                instance.recovery_root, instance.data, instance.baseline = scope, scope / 'data', scope / 'baseline'
+                instance.target = scope / 'target'
+                instance.release.update(manifestExpiresAt=9999999999999, novaVersion='1.13.10')
+                selected, running, starts, actions = [instance.prior], [True], [0], []
+                instance.current = types.SimpleNamespace(resolve=lambda strict: selected[0])
+                instance.config_files = []
+                instance.validate = instance.stage_app = instance.migrate_runtime = lambda: None
+                instance.switch_runtime = lambda: None
+                instance.stage = lambda value: None
+                instance.switch = lambda path: selected.__setitem__(0, path)
+                instance.record_failure = lambda error: actions.append('failure')
+                instance.controller_hold = lambda: None
+                def stopped():self.assertFalse(running[0])
+                instance.require_stopped = stopped
+                def service(action):
+                    actions.append(action)
+                    if action == 'start':
+                        starts[0] += 1
+                        if starts[0] == 2 and failure == 'second_start':raise RuntimeError('synthetic start failure')
+                    running[0] = action == 'start'
+                instance.service = service
+                def ready(*args, **kwargs):
+                    self.assertTrue(running[0])
+                    if starts[0] == 2 and failure == 'second_readiness':raise RuntimeError('synthetic readiness failure')
+                    return {'health': {'startup': starts[0]}, 'accounts': [], 'epoch': 'saved-epoch'}
+                instance.wait_acceptance = ready
+                def stop(**kwargs):
+                    ready();service('stop');stopped()
+                instance.guarded_stop = stop
+                def saved(*args, **kwargs):
+                    stopped()
+                    if instance.switched and failure == 'saved':raise RuntimeError('saved content changed')
+                def native():
+                    stopped()
+                    if failure == 'native':raise RuntimeError('native content changed')
+                instance.retained_native = native
+                instance.verify_configuration = lambda: None
+                instance.restore_prior = lambda: actions.append('original-paired-restore')
+                instance.result = lambda outcome: actions.append(outcome)
+                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
+                    instance.run()
+                if failure:
+                    self.assertEqual(actions[-2:], ['failure', 'original-paired-restore'])
+                    self.assertNotIn('completed', actions)
+                else:
+                    self.assertEqual(actions, ['stop','start','stop','start','completed'])
+                self.assertFalse(instance.result_publication_started)
+
     def test_exact_app_and_native_barrier_are_required_by_acceptance(self):
         instance = driver.Driver(self.root / 'request.json')
         instance.active_engine = '2026.9.2'
