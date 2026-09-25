@@ -3,6 +3,8 @@ import { attachmentSchema } from './contracts.js';
 
 export const sourcePluginId = 'edition3-sources';
 export const sourceTransferVersion = '2026.9.2';
+export const sourceTransferVersions = ['2026.9.2', '2026.9.6'] as const;
+export const supportsSourceTransferRuntime = (version: string) => sourceTransferVersions.some(value => value === version);
 export const sourceTransferLimit = 8 * 1024 * 1024;
 export const sourceMimeTypes: Record<string, string> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
 export const sourceMime = (name: string) => sourceMimeTypes[name.split('.').pop()?.toLowerCase() ?? ''];

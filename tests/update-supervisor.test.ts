@@ -33,6 +33,18 @@ test('clock rollback cannot turn an older heartbeat into fresh installation auth
  assert.equal(f.supervisor.view().blocker?.code,'workspace_unknown');assert.equal(f.runs(),0);
 });
 
+test('runtime updates require the exact displayed release even when the app candidate stays unchanged',async()=>{
+  const engine={...structuredClone(release),candidateId:from,agentVersion:'2026.9.6',runtimeBundle:{url:'https://example.test/runtime.tgz',bytes:100,sha256:'e'.repeat(64)}};
+  const journal=memory(),supervisor=new UpdateSupervisor({status:()=>({availability:'available'}),check:async()=>({availability:'available'}),verifiedRelease:()=>structuredClone(engine)},journal,{prepare:async()=>{},run:async()=>assert.fail('No native hold was acquired'),reconcile:async()=>undefined},()=>from,()=>1000);
+  supervisor.beat({candidateId:from,epoch,heldFor:null,nativeSuspended:false,blockers:[]});
+  const input={epoch,candidateId:from,currentCandidateId:from,idempotencyKey:randomUUID(),when:'now'};
+  await assert.rejects(supervisor.request(input),/available update changed/);
+  await assert.rejects(supervisor.request({...input,releaseId:'f'.repeat(64)}),/available update changed/);
+  const accepted=await supervisor.request({...input,releaseId:engine.bundle.sha256});await supervisor.settle();assert.equal(accepted.job?.releaseId,engine.bundle.sha256);
+  await assert.rejects(supervisor.request({...input,releaseId:'f'.repeat(64)}),/different operation/);
+  supervisor.stop();
+});
+
 test('lost release verification releases an unstarted hold, while refresh remains pending',async()=>{
   const f=fixture();f.beat();await f.supervisor.request(f.input());await f.supervisor.settle();
   const id=f.supervisor.view().job!.id;assert.equal(f.supervisor.view().holdFor,id);
@@ -121,9 +133,9 @@ test('an uncertain durable save is adopted by same-key replay instead of launchi
 test('file journal commits current selection and all old receipts atomically',()=>{
   const directory=mkdtempSync(join(tmpdir(),'nova-update-journal-'));
   try{
-    const journal=new FileUpdateJournal(directory),first=saved({state:'cancelled'}),second=saved();journal.save(first);journal.save(second);
+    const journal=new FileUpdateJournal(directory),first=saved({state:'cancelled'}),second=saved({releaseId:release.bundle.sha256});journal.save(first);journal.save(second);
     assert.deepEqual(readdirSync(directory),['journal.json']);
-    const reopened=new FileUpdateJournal(directory);assert.equal(reopened.current()?.id,second.id);assert.equal(reopened.find(first.idempotencyKey)?.state,'cancelled');
+    const reopened=new FileUpdateJournal(directory);assert.equal(reopened.current()?.id,second.id);assert.equal(reopened.current()?.releaseId,release.bundle.sha256);assert.equal(reopened.find(first.idempotencyKey)?.state,'cancelled');
     const before=readFileSync(join(directory,'journal.json'),'utf8');
     assert.throws(()=>journal.save({...first,candidateId:'e'.repeat(64)}));
     assert.equal(readFileSync(join(directory,'journal.json'),'utf8'),before);

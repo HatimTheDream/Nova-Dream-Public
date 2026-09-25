@@ -4,6 +4,17 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { registerModuleTools, type ModulePluginApi } from '../apps/service/module-plugin/index.js';
+
+test('workspace tool and trusted policy contracts remain available on both reviewed engines',()=>{
+ for(const version of ['2026.9.2','2026.9.6','2026.9.5']){
+  const sessionId=randomUUID(),factories:any[]=[];let policyCount=0,methodCount=0;
+  registerModuleTools({registrationMode:'full',pluginConfig:{epoch:randomUUID(),bundlePath:'/owned/plugin',url:'http://127.0.0.1:4383/workspace',token:'b'.repeat(64)},
+   runtime:{version,agent:{session:{getSessionEntry:()=>({sessionId})}}},registerTool:factory=>factories.push(factory),registerTrustedToolPolicy:()=>policyCount++,registerGatewayMethod:()=>methodCount++});
+  const tools=factories.flatMap(factory=>factory({agentId:'main',sessionKey:'agent:main:e3:fixture',sessionId})??[]);
+  if(version==='2026.9.5'){assert.equal(policyCount,0);assert.equal(methodCount,0);assert.equal(tools.length,0);}
+  else {assert.equal(policyCount,1);assert.equal(methodCount,1);assert.ok(tools.some((tool:any)=>tool.name==='nova_write'));assert.ok(tools.some((tool:any)=>tool.name==='nova_plan'));}
+ }
+});
 import { withModulePlugin } from '../apps/service/module-runtime-config.js';
 import { phoneRouteAllowed } from '../apps/service/phone-policy.js';
 test('tool factory binds native session and server authority, excludes other agents, and rejects stale settings',async t=>{

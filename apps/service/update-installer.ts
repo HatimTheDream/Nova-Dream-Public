@@ -17,6 +17,22 @@ const resultSchema=z.discriminatedUnion('outcome',[
 ]);
 async function hashFile(path:string){const hash=createHash('sha256');for await(const part of createReadStream(path))hash.update(part);return hash.digest('hex');}
 
+/** GitHub release downloads use one public CDN redirect. Never follow arbitrary
+ * redirects or send credentials; the signed length and hash still authenticate bytes. */
+export async function reviewedAssetResponse(url:string,signal:AbortSignal,fetcher=globalThis.fetch){
+  const original=new URL(url),github=original.origin==='https://github.com'&&/^\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/]+$/.test(original.pathname)&&!original.search&&!original.hash&&!original.username&&!original.password;
+  let response=await fetcher(url,{redirect:github?'manual':'error',credentials:'omit',signal});
+  if(github&&response.status===302&&!response.redirected&&(!response.url||response.url===url)){
+    const location=response.headers.get('location');if(!location)throw Error('Missing reviewed asset location.');
+    const target=new URL(location);
+    if(target.origin!=='https://release-assets.githubusercontent.com'||!target.pathname.startsWith('/github-production-release-asset/')||target.username||target.password||target.hash)throw Error('Untrusted update asset redirect.');
+    await response.body?.cancel();url=target.href;
+    response=await fetcher(url,{redirect:'error',credentials:'omit',signal});
+  }
+  if(response.status!==200||response.redirected||response.url&&response.url!==url||!response.body)throw Error('Could not download the exact reviewed package.');
+  return response;
+}
+
 /** Executes only the fixed install.py entry from a publisher-authenticated,
  * exact-candidate bundle. The reviewed runner owns platform-specific staging,
  * closed snapshots, paired rollback and retained-work acceptance. */
@@ -24,7 +40,9 @@ export class ManagedUpdateInstaller implements Installer {
   constructor(private readonly directory:string,private readonly hostConfiguration:string,private readonly python='/usr/bin/python3',private readonly fetch=globalThis.fetch){}
   private folder(release:VerifiedUpdateRelease){
     if(!/^[a-f0-9]{64}$/.test(release.candidateId))throw Error('Invalid update candidate identity.');
-    const folder=join(this.directory,release.candidateId);
+    const identity=release.runtimeBundle?release.bundle.sha256:release.candidateId;
+    if(!/^[a-f0-9]{64}$/.test(identity))throw Error('Invalid update release identity.');
+    const folder=join(this.directory,identity);
     if(existsSync(folder)){const info=lstatSync(folder);if(!info.isDirectory()||info.isSymbolicLink())throw Error('An update path needs review.');}
     return folder;
   }
@@ -43,6 +61,31 @@ export class ManagedUpdateInstaller implements Installer {
     return folder;
   }
   async prepare(release:VerifiedUpdateRelease,progress:(received:number,total:number)=>void){
+    const runtime = release.runtimeBundle, total = release.bundle.bytes + (runtime?.bytes ?? 0);
+    await this.prepareApp(release, received => progress(received, total));
+    if (!runtime) return;
+    if (!Number.isSafeInteger(runtime.bytes) || runtime.bytes <= 0 || runtime.bytes > 512 * 1024 * 1024) throw Error('The runtime package exceeds its supported size.');
+    const dir = this.folder(release), download = join(dir, 'runtime.tgz');
+    if (await this.verifiedAsset(runtime, download)) { progress(total,total); return; }
+    const space = statfsSync(this.directory); if (Number(space.bavail) * Number(space.bsize) < runtime.bytes + 128 * 1024 * 1024) throw Error('Not enough space to stage the runtime update.');
+    if (existsSync(download)) { const info=lstatSync(download); if(!info.isFile()||info.isSymbolicLink()) throw Error('A runtime update path needs review.'); renameSync(download,join(dir,'incomplete-runtime-'+randomUUID()+'.tgz')); }
+    const abort = new AbortController(), timer = setTimeout(()=>abort.abort(),10*60*1000); timer.unref();
+    let file: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      const response=await reviewedAssetResponse(runtime.url,abort.signal,this.fetch);
+      const declared=response.headers.get('content-length');if(declared&&Number(declared)!==runtime.bytes)throw Error('Runtime package size changed.');
+      file=await open(download,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+      const hash=createHash('sha256');let received=0,lastReport=0;
+      for await(const part of response.body as unknown as AsyncIterable<Uint8Array>){received+=part.length;if(received>runtime.bytes)throw Error('Runtime package exceeded its verified size.');hash.update(part);await file.writeFile(part);if(Date.now()-lastReport>=250||received===runtime.bytes){progress(release.bundle.bytes+received,total);lastReport=Date.now();}}
+      await file.sync();await file.close();file=undefined;
+      if(received!==runtime.bytes||hash.digest('hex')!==runtime.sha256)throw Error('Runtime package verification failed.');
+    } finally { clearTimeout(timer); await file?.close(); }
+  }
+  private async verifiedAsset(asset:{bytes:number;sha256:string},path:string){
+    if(!existsSync(path))return false;
+    const info=lstatSync(path);return info.isFile()&&!info.isSymbolicLink()&&info.size===asset.bytes&&await hashFile(path)===asset.sha256;
+  }
+  private async prepareApp(release:VerifiedUpdateRelease,progress:(received:number,total:number)=>void){
     if(release.bundle.bytes>maxBundle)throw Error('This update package exceeds the supported size.');
     const dir=this.folder(release),download=join(dir,'bundle.json');mkdirSync(dir,{mode:0o700,recursive:true});
     if(await this.verifiedBundle(release,download)){this.extract(release,download);progress(release.bundle.bytes,release.bundle.bytes);return;}
@@ -53,8 +96,7 @@ export class ManagedUpdateInstaller implements Installer {
     const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),10*60*1000);timer.unref();
     let file:Awaited<ReturnType<typeof open>>|undefined;
     try{
-      const response=await this.fetch(release.bundle.url,{redirect:'error',credentials:'omit',signal:abort.signal});
-      if(response.status!==200||response.redirected||response.url&&response.url!==release.bundle.url||!response.body)throw Error('Could not download the exact reviewed package.');
+      const response=await reviewedAssetResponse(release.bundle.url,abort.signal,this.fetch);
       const declared=response.headers.get('content-length');if(declared&&Number(declared)!==release.bundle.bytes)throw Error('Update package size changed.');
       file=await open(download,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
       const hash=createHash('sha256');let received=0,lastReport=0;
@@ -67,7 +109,7 @@ export class ManagedUpdateInstaller implements Installer {
   private extract(release:VerifiedUpdateRelease,path:string){
     const bundle=bundleSchema.parse(readUpdateJson(path,maxBundle));
     if(new Set(bundle.files.map(f=>f.name)).size!==bundle.files.length)throw Error('Duplicate update files.');
-    if(bundle.files.some(f=>['bundle.json','request.json','result.json','runner.log','attempts'].includes(f.name)))throw Error('Reserved update file.');
+    if(bundle.files.some(f=>['bundle.json','runtime.tgz','request.json','result.json','runner.log','attempts'].includes(f.name)))throw Error('Reserved update file.');
     const runner=bundle.files.find(f=>f.name==='install.py');if(!runner||runner.sha256!==release.bundle.runnerSha256)throw Error('The installer does not match its reviewed identity.');
     for(const file of bundle.files){const bytes=Buffer.from(file.data,'base64');if(bytes.toString('base64')!==file.data||createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('An update file did not verify.');const dest=join(this.folder(release),file.name);if(existsSync(dest)){const info=lstatSync(dest);if(!info.isFile()||info.isSymbolicLink()||!readFileSync(dest).equals(bytes))throw Error('A staged update file changed.');}else{const fd=openSync(dest,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{writeFileSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}}}
   }
@@ -81,6 +123,7 @@ export class ManagedUpdateInstaller implements Installer {
     const directory=this.folder(release),runner=join(directory,'install.py');
     const bundle=join(directory,'bundle.json');
     if(!await this.verifiedBundle(release,bundle))throw Error('Update package changed after verification.');
+    if(release.runtimeBundle&&!await this.verifiedAsset(release.runtimeBundle,join(directory,'runtime.tgz')))throw Error('Runtime package changed after verification.');
     this.extract(release,bundle);
     const runnerInfo=lstatSync(runner);
     if(!runnerInfo.isFile()||runnerInfo.isSymbolicLink()||await hashFile(runner)!==release.bundle.runnerSha256)throw Error('Installer changed after verification.');

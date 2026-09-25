@@ -25,12 +25,12 @@ function elements(html: string, tag: string) {
 }
 
 test('only the fresh available reviewed pair enables installation', () => {
-  assert.equal(elements(render(), 'button').find(b => b.text === 'Update now')?.attributes.disabled, undefined);
+  assert.equal(elements(render(), 'button').find(b => b.text === 'Update Nova Dream')?.attributes.disabled, undefined);
   for (const props of [{ online: false }, { failed: true }, { restricted: 'Use the owner session.' }, { busy: 'check' as const }]) {
-    assert.ok('disabled' in elements(render(status(), props), 'button').find(b => b.text === 'Update now')!.attributes);
+    assert.ok('disabled' in elements(render(status(), props), 'button').find(b => b.text === 'Update Nova Dream')!.attributes);
   }
-  assert.ok('disabled' in elements(render(status({ installation: { supported: false, reason: 'Host setup required.' } })), 'button').find(b => b.text === 'Update now')!.attributes);
-  for (const availability of ['checking', 'current', 'unavailable', 'error'] as const) assert.equal(elements(render(status({ availability })), 'button').some(b => /Update now|Update when idle/.test(b.text)), false);
+  assert.ok('disabled' in elements(render(status({ installation: { supported: false, reason: 'Host setup required.' } })), 'button').find(b => b.text === 'Update Nova Dream')!.attributes);
+  for (const availability of ['checking', 'current', 'unavailable', 'error'] as const) assert.equal(elements(render(status({ availability })), 'button').some(b => /Update Nova Dream|Update Nova Dream when idle/.test(b.text)), false);
   assert.ok(elements(render(status(), { restricted: 'Read-only paired device.' }), 'button').every(b => 'disabled' in b.attributes));
 });
 
@@ -45,11 +45,11 @@ test('failed refresh cannot claim current status or a connected agent version', 
 
 test('work blockers offer an idle update and active jobs prevent another installation', () => {
   const waiting = render(status({ blocker: { code: 'active_work', message: 'Assistant work is active.' } }));
-  assert.ok(elements(waiting, 'button').find(b => b.text === 'Update when idle' && !('disabled' in b.attributes)));
+  assert.ok(elements(waiting, 'button').find(b => b.text === 'Update Nova Dream when idle' && !('disabled' in b.attributes)));
   assert.match(waiting, /Assistant work is active/);
   for (const state of ['waiting', 'downloading', 'verifying', 'preparing', 'installing', 'restarting', 'checking'] as const) {
     const buttons = elements(render(status({ job: job(state) })), 'button');
-    assert.equal(buttons.some(b => /Update now|Update when idle/.test(b.text)), false);
+    assert.equal(buttons.some(b => /Update Nova Dream|Update Nova Dream when idle/.test(b.text)), false);
     assert.equal(buttons.some(b => b.text === 'Cancel update'), ['waiting', 'downloading', 'verifying'].includes(state));
   }
 });
@@ -71,9 +71,21 @@ test('uncertain receipts retain the original candidate and cannot offer a second
   assert.equal(retainedUpdateRequest(saved, 'other-workspace'), undefined);
   for (const invalid of [null, { ...saved, when: 'automatic' }, { ...saved, idempotencyKey: 1 }]) assert.equal(retainedUpdateRequest(invalid, 'workspace'), undefined);
   const buttons = elements(render(status(), { pending: true }), 'button');
-  assert.equal(buttons.some(b => /Update now|Update when idle/.test(b.text)), false);
+  assert.equal(buttons.some(b => /Update Nova Dream|Update Nova Dream when idle/.test(b.text)), false);
   assert.ok(buttons.find(b => b.text === 'Reconcile update request'));
   assert.equal(confirmedUpdateReceipt(saved,status({job:job('completed')})),undefined);
   assert.equal(confirmedUpdateReceipt(saved,status({job:{...job('cancelled'),candidateId:saved.candidateId}}))?.state,'cancelled');
   assert.match(render(status(),{receipt:'Saved update request: Update cancelled.'}),/Saved update request: Update cancelled\./);
+});
+
+
+test('a combined reviewed release has one action, while upstream discovery alone cannot authorize installation', () => {
+  const both=status({release:{...status().release!,agentVersion:'2026.9.6'}});
+  assert.equal(elements(render(both),'button').filter(b=>b.text==='Update all').length,1);
+  const engine=status({release:{...both.release!,novaVersion:status().installed.novaVersion}});
+  assert.equal(elements(render(engine),'button').filter(b=>b.text==='Update OpenClaw').length,1);
+  const upstream=status({availability:'available',release:undefined,agentUpdate:{state:'available',version:'2026.9.6',releaseNotesUrl:'https://github.com/openclaw/openclaw/releases/tag/v2026.9.6'}});
+  const html=render(upstream);assert.match(html,/OpenClaw update available/);assert.doesNotMatch(html,/Up to date/);
+  assert.equal(elements(html,'button').filter(b=>/^Update /.test(b.text)).length,0);
+  assert.match(html,/compatible installation package is not yet available/);
 });

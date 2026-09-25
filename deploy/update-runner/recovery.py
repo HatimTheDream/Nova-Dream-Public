@@ -7,6 +7,7 @@ import contextlib
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 import pathlib
 import re
@@ -14,6 +15,7 @@ import shutil
 import signal
 import sqlite3
 import stat
+import struct
 import subprocess
 import time
 import uuid
@@ -83,6 +85,14 @@ NATIVE_RETAINED_TABLES |= {'user_profiles', 'user_profile_emails', 'user_profile
 NATIVE_FTS_TABLES = frozenset(base + suffix for base in ('standing_intents_fts', 'session_transcript_fts', 'memory_index_chunks_fts', 'memory_index_paths_fts')
                              for suffix in ('', '_data', '_idx', '_content', '_docsize', '_config'))
 NATIVE_KNOWN_TABLES = NATIVE_RETAINED_TABLES | NATIVE_TRANSIENT_TABLES | NATIVE_FTS_TABLES | NATIVE_RECONNECT_COLUMNS.keys()
+NATIVE_96_RETAINED_TABLES = frozenset('''
+    cron_run_trigger_state_retirements github_publication_session_lifecycles github_repository_publication_requests
+    local_workspace_projections node_worker_launch_cleanup node_worker_prepared_workspaces
+    operator_approval_standing_grant_generations session_repository_workspaces worktree_templates
+    session_input_completions session_transcript_cold_archives
+'''.split())
+NATIVE_96_DERIVED_TABLES = frozenset({'session_canonical_validation_pending', 'session_transcript_fts_rows'})
+NATIVE_VERSIONS = {'2026.9.2': (19, 15), '2026.9.6': (23, 18)}
 
 
 class InsufficientStorage(RuntimeError):
@@ -396,19 +406,25 @@ def static_sqlite_files(root, selected, active):
     return result
 
 
-def native_schema(connection, relative):
-    expected = 19 if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'} else 15 if relative.name == 'openclaw.sqlite' else None
+def native_schema(connection, relative, version='2026.9.2'):
+    require(version in NATIVE_VERSIONS, 'The native version has no reviewed data contract.')
+    agent, shared = NATIVE_VERSIONS[version]
+    expected = agent if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'} else shared if relative.name == 'openclaw.sqlite' else None
     require(expected is not None and connection.execute('pragma user_version').fetchone()[0] == expected, 'An unreviewed native database needs separate recovery qualification.')
     tables = {item[0] for item in connection.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
-    require(tables <= NATIVE_KNOWN_TABLES, 'Native database coverage contains an unreviewed table.')
+    known = NATIVE_KNOWN_TABLES | (NATIVE_96_RETAINED_TABLES | NATIVE_96_DERIVED_TABLES if version == '2026.9.6' else set())
+    require(tables <= known, 'Native database coverage contains an unreviewed table.')
     return tables
 
 
-def native_preflight(root, expected_epoch=None):
+def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None):
     selected, epoch, paths = native_scope(root, expected_epoch)
     for relative in sorted(paths):
         with contextlib.closing(database(root / relative, False)) as connection:
-            native_schema(connection, relative)
+            tables = native_schema(connection, relative, version)
+            if target_version is not None and target_version != version:
+                require((version, target_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
+                migration_preflight(connection, tables)
     return selected, epoch, paths
 
 
@@ -438,7 +454,143 @@ def native_projected_rows(connection, table):
     return result
 
 
-def native_saved_state(snapshot, live, expected_epoch=None):
+def migration_preflight(connection, tables):
+    # Schema16 intentionally discards ambiguous workshop ownership and rewrites
+    # released proposals. Do not authorize either loss through this update route.
+    if 'skill_workshop_proposals' in tables:
+        require(connection.execute('select 1 from skill_workshop_proposals where claim_released_time is not null limit 1').fetchone() is None,
+                'Released native workshop work needs separate migration review.')
+    if 'skill_workshop_collection_reviews' in tables:
+        for (directory,) in connection.execute('select distinct workspace_dir from skill_workshop_collection_reviews'):
+            owners = connection.execute('select distinct owner_agent_id from skill_workshop_proposals where workspace_dir=? and owner_agent_id is not null', (directory,)).fetchall()
+            require(len(owners) == 1, 'Native workshop review ownership cannot migrate without losing saved work.')
+    if 'memory_index_chunks' in tables:
+        for (value,) in connection.execute('select embedding from memory_index_chunks'):
+            embedding_bytes(value)
+
+
+def embedding_bytes(value):
+    if isinstance(value, bytes):
+        require(len(value) % 8 == 0, 'Invalid migrated memory vector.')
+        coordinates = struct.unpack('<' + 'd' * (len(value) // 8), value)
+    else:
+        require(isinstance(value, str) and len(value) <= 1024 * 1024, 'Native memory vector exceeded its bound.')
+        coordinates = json.loads(value)
+        require(isinstance(coordinates, list) and len(coordinates) <= 131072, 'Invalid retained memory vector.')
+    require(all(type(item) in {int, float} and math.isfinite(item) for item in coordinates), 'Native memory vector cannot migrate losslessly.')
+    return struct.pack('<' + 'd' * len(coordinates), *coordinates)
+
+
+TRANSCRIPT_HASHES = r'''
+import {DatabaseSync} from 'node:sqlite';
+import {createHash} from 'node:crypto';
+import {zstdDecompressSync} from 'node:zlib';
+const db=new DatabaseSync(process.argv[1],{readOnly:true});
+try {
+ const compressed=db.prepare('pragma table_info(transcript_events)').all().some(x=>x.name==='event_zstd');
+ const statement=db.prepare('select rowid,session_id,seq,created_at,cast(event_json as blob) as payload'+(compressed?',event_zstd,event_utf8_bytes':'')+' from transcript_events');
+ statement.setReadBigInts(true); const result=[];
+ for(const row of statement.iterate()) {
+  if(result.length>=1000000)throw Error('bound');
+  let payload=row.payload;
+  if(compressed && row.event_zstd!==null) {
+   if(payload!==null||row.event_utf8_bytes<0n||row.event_utf8_bytes>4194304n)throw Error('encoding');
+   payload=zstdDecompressSync(row.event_zstd,{maxOutputLength:4194304});
+   if(BigInt(payload.length)!==row.event_utf8_bytes)throw Error('length');
+  }
+  if(!(payload instanceof Uint8Array))throw Error('payload');
+  const identity=JSON.stringify([String(row.rowid),row.session_id,String(row.seq),String(row.created_at)]);
+  result.push(createHash('sha256').update(identity).update('\0').update(payload).digest('hex'));
+ }
+ process.stdout.write(JSON.stringify(result));
+} finally {db.close();}
+'''
+
+
+def transcript_hashes(path, node):
+    require(node is not None, 'Reviewed transcript migration requires the verified agent Node runtime.')
+    output = subprocess.check_output([str(node), '--input-type=module', '-e', TRANSCRIPT_HASHES, str(path)],
+                                     stderr=subprocess.DEVNULL, timeout=120)
+    require(len(output) <= 68 * 1024 ** 2, 'Retained transcript verification exceeded its bound.')
+    hashes = json.loads(output)
+    require(isinstance(hashes, list) and all(isinstance(value, str) and re.fullmatch('[a-f0-9]{64}', value) for value in hashes),
+            'Unexpected retained transcript proof.')
+    return Counter(hashes)
+
+
+def migrated_native_rows(before, after, tables, before_path, after_path, node):
+    for table in tables:
+        require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
+        if table == 'transcript_events':
+            require(transcript_hashes(before_path, node) <= transcript_hashes(after_path, node), 'Migrated native transcript bytes changed.')
+            continue
+        if table not in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES | NATIVE_RECONNECT_COLUMNS.keys():
+            continue
+        old_names = [item[1] for item in before.execute('pragma table_info("' + table + '")')]
+        new_names = [item[1] for item in after.execute('pragma table_info("' + table + '")')]
+        removed = set(old_names) - set(new_names)
+        allowed_removed = {'workspace_dir', 'claim_released_time'} if table == 'skill_workshop_proposals' else {'workspace_dir'} if table == 'skill_workshop_collection_reviews' else set()
+        require(removed == allowed_removed, 'A retained native column disappeared outside the reviewed migration.')
+        omitted = set(NATIVE_RECONNECT_COLUMNS.get(table, ()))
+        if table == 'schema_meta':
+            expected = 23 if after_path.name != 'openclaw.sqlite' else 18
+            old_meta = before.execute("select schema_version,app_version from schema_meta where meta_key='primary'").fetchone()
+            new_meta = after.execute("select schema_version,app_version from schema_meta where meta_key='primary'").fetchone()
+            require(old_meta is not None, 'Retained native schema ownership is missing.')
+            # Shared repair publishes its schema without rewriting app_version;
+            # normal gateway startup later publishes the current package version.
+            allowed_versions = {old_meta[1], '2026.9.6'} if expected == 18 else {'2026.9.6'}
+            require(new_meta is not None and new_meta[0] == expected and new_meta[1] in allowed_versions,
+                    'Migrated native schema ownership does not identify the reviewed version.')
+        selected = [name for name in old_names if name not in removed | omitted]
+        def projected(connection, names, old):
+            result = Counter()
+            for row, count in rows(connection, table).items():
+                values = dict(zip(names, row))
+                if table == 'session_nodes' and old and values.get('entry_valid') == 0:
+                    # The official projection validates pending entries. A
+                    # negative result is rejected; identity and JSON stay exact.
+                    values['entry_valid'] = 1
+                if table == 'schema_meta' and not old and values.get('meta_key') == 'primary':
+                    values['schema_version'], values['app_version'] = old_meta
+                if table == 'memory_index_state':
+                    require(values.get('id') == 1 and type(values.get('revision')) is int, 'Unexpected memory index revision owner.')
+                    if not old:
+                        prior_revision = before.execute('select revision from memory_index_state where id=1').fetchone()[0]
+                        require(values['revision'] >= prior_revision, 'Memory index revision moved backwards.')
+                        values['revision'] = prior_revision
+                if table == 'memory_index_sources' and old:
+                    # The pinned provenance backfill invalidates only sources
+                    # whose retained chunks lack provenance; all content stays exact.
+                    missing = before.execute('select 1 from memory_index_chunks c left join memory_index_chunk_provenance p on p.chunk_id=c.id where c.path=? and c.source is ? and p.chunk_id is null limit 1', (values['path'], values['source'])).fetchone()
+                    if missing is not None:
+                        values['hash'] = ''
+                if table == 'agent_databases' and not old and values.get('schema_version') == 23:
+                    # Registration republishes the version after the exact
+                    # canonical agent databases have passed schema23 validation.
+                    values['schema_version'] = 19
+                if table == 'memory_index_chunks':
+                    values['embedding'] = embedding_bytes(values['embedding'])
+                if table == 'device_pairing_paired' and values.get('tokens_json') is not None:
+                    tokens = json.loads(values['tokens_json'])
+                    for role, token in tokens.items():
+                        require(token.get('role') == role and isinstance(token.get('token'), str), 'Native token identity changed.')
+                        token.pop('lastUsedAtMs', None)
+                    values['tokens_json'] = json.dumps(tokens, sort_keys=True, separators=(',', ':'))
+                retained = [values[name] for name in selected]
+                if table == 'skill_workshop_collection_reviews':
+                    owner = before.execute('select distinct owner_agent_id from skill_workshop_proposals where workspace_dir=? and owner_agent_id is not null', (values['workspace_dir'],)).fetchone()[0] if old else values['owner_agent_id']
+                    retained.append(owner)
+                result[tuple(retained)] += count
+            return result
+        require(projected(before, old_names, True) <= projected(after, new_names, False),
+                'Native migration did not retain saved work, history, configuration or permissions.')
+
+
+def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None):
+    to_version = to_version or from_version
+    migrating = from_version != to_version
+    require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch)
     selected, epoch, paths = native_scope(live, before_epoch)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
@@ -446,14 +598,23 @@ def native_saved_state(snapshot, live, expected_epoch=None):
     for relative in sorted(before_paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
-            old_tables = native_schema(before, relative)
-            require(old_tables == native_schema(after, relative), 'An unchanged native database changed its schema.')
+            old_tables = native_schema(before, relative, from_version)
+            new_tables = native_schema(after, relative, to_version)
+            if migrating:
+                migration_preflight(before, old_tables)
+                # The pinned agent migration retires its old process lease table;
+                # the shared database still owns current maintenance leases.
+                retired = {'state_leases'} if relative.name != 'openclaw.sqlite' else set()
+                require(old_tables - retired <= new_tables, 'A retained native table disappeared during migration.')
+                migrated_native_rows(before, after, old_tables, snapshot / relative, live / relative, node)
+                continue
+            require(old_tables == new_tables, 'An unchanged native database changed its schema.')
             schema = lambda connection: Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
             require(schema(before) == schema(after), 'An unchanged native database changed its schema definitions.')
             for table in old_tables:
                 require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
-                if table in NATIVE_RETAINED_TABLES:
+                if table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
                     require(rows(before, table) <= rows(after, table), 'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
                     require(native_projected_rows(before, table) <= native_projected_rows(after, table), 'Retained native identity, account content or permissions changed.')

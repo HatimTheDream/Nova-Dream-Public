@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, lstatSync, openSync, fsyncSync, closeSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, lstatSync, openSync, fsyncSync, closeSync, renameSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, isAbsolute, delimiter } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Fault, Store } from './store.js';
 import { Gateway } from './gateway.js';
@@ -26,6 +26,8 @@ export function needsShortRuntimeTemporaryDirectory(root:string,platform:NodeJS.
 export class ManagedRuntime {
   private child?: ChildProcess;
   private childStartedAt?:number;
+  private childVersion?: '2026.9.2' | '2026.9.6';
+  private childEntry?: string;
   private browserNetwork=new BrowserNetwork();
   private shortTemporaryDirectory?:string;
   private launching?: Promise<RuntimeStatus>;
@@ -61,11 +63,11 @@ export class ManagedRuntime {
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
     const selected = this.store.internalRead<{url:string;token:string}>('gateway:configuration'), connection = this.gateway.status();
     if (!config || !this.child?.pid || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.stopping || this.current.state !== 'running' || !this.childStartedAt || connection.state !== 'ready' || !connection.generation || connection.url !== `ws://127.0.0.1:${config.port}` || selected?.url !== connection.url || selected.token !== config.token) return;
-    try { if (!this.child.spawnargs.includes(this.entry())) return; } catch { return; }
-    return { epoch:this.store.epoch,pid:this.child.pid,url:connection.url,generation:connection.generation,startedAt:this.childStartedAt,version:'2026.9.2' as const };
+    try { if (!this.childVersion || this.childEntry !== realpathSync(this.entry()) || !this.child.spawnargs.includes(this.entry())) return; } catch { return; }
+    return { epoch:this.store.epoch,pid:this.child.pid,url:connection.url,generation:connection.generation,startedAt:this.childStartedAt,version:this.childVersion };
   }
   updateStartupBlockers() {
-    try { this.entry(); const serviceDirectory=dirname(fileURLToPath(import.meta.url)); return qualifyNativeUpdateStartup(join(this.store.directory,'openclaw-runtime'),import.meta.url.endsWith('.ts')?resolve(serviceDirectory,'../../dist/service/apps/service'):serviceDirectory); }
+    try { const entry=this.entry(), version=this.childVersion??JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version; const serviceDirectory=dirname(fileURLToPath(import.meta.url)); return qualifyNativeUpdateStartup(join(this.store.directory,'openclaw-runtime'),import.meta.url.endsWith('.ts')?resolve(serviceDirectory,'../../dist/service/apps/service'):serviceDirectory,undefined,version); }
     catch { return [{code:'native_startup_policy',message:'Automatic Assistant startup needs review before this host can update. Existing settings and work are kept.'}]; }
   }
   signInCommand(method: ChatGptSignInMethod = 'device-code', profileId = 'openai:edition3-voice'): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
@@ -73,7 +75,7 @@ export class ManagedRuntime {
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration');
     if (this.stopping || !config || !this.child?.pid || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.gateway.status().url !== `ws://127.0.0.1:${config.port}`) throw new Fault(409, 'local_runtime_required', 'Start the Assistant on this host before signing in here.');
     const { root, config: configPath } = this.paths();
-    return { file: process.execPath, args: [this.entry(), '--profile', 'edition3', 'models', 'auth', 'login', '--agent', 'main', '--provider', 'openai', ...(method === 'browser' ? ['--method', 'oauth'] : ['--device-code']), '--profile-id', profileId], cwd: root, env: this.environment(config, root, configPath) };
+    return { file: this.nodePath(), args: [this.entry(), '--profile', 'edition3', 'models', 'auth', 'login', '--agent', 'main', '--provider', 'openai', ...(method === 'browser' ? ['--method', 'oauth'] : ['--device-code']), '--profile-id', profileId], cwd: root, env: this.environment(config, root, configPath) };
   }
   accountCommand() {
     const command = this.signInCommand(); // Same live, owned-host check; no sign-in is executed.
@@ -87,14 +89,19 @@ export class ManagedRuntime {
     const config = this.store.internalRead<RuntimeConfiguration>('runtime:configuration') ?? (['restore', 'verify'].includes(args[0]) ? { port: 1, token: randomBytes(32).toString('hex'), entry: this.entry() } : undefined);
     if (!config) return undefined;
     const { root, config: configPath } = this.paths();
-    return { file: process.execPath, args: [this.entry(), '--profile', 'edition3', 'backup', ...args], cwd: root, env: this.environment(config, root, configPath) };
+    return { file: this.nodePath(), args: [this.entry(), '--profile', 'edition3', 'backup', ...args], cwd: root, env: this.environment(config, root, configPath) };
+  }
+  private nodePath() {
+    const node = process.env.E3_OPENCLAW_NODE ?? process.execPath;
+    if (!isAbsolute(node) || !existsSync(node)) throw new Fault(503, 'openclaw_node', 'The managed Assistant runtime needs its configured Node installation.');
+    return node;
   }
   private entry() {
     const candidates = [process.env.E3_OPENCLAW_ENTRY, '/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs', '/usr/local/lib/node_modules/openclaw/openclaw.mjs', join(dirname(process.execPath), 'node_modules/openclaw/openclaw.mjs'), ...(process.env.APPDATA ? [join(process.env.APPDATA, 'npm/node_modules/openclaw/openclaw.mjs')] : [])].filter((p): p is string => !!p);
     const entry = candidates.find(p => existsSync(p) && p.endsWith('openclaw.mjs'));
     if (!entry) throw new Fault(503, 'openclaw_missing', 'Install OpenClaw on this host or connect a configured private Gateway.');
     const pkg = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8'));
-    if (pkg.name !== 'openclaw' || pkg.version !== '2026.9.2') throw new Fault(503, 'openclaw_version', 'This build’s managed runtime requires the verified OpenClaw 2026.9.2 package.');
+    if (pkg.name !== 'openclaw' || !['2026.9.2', '2026.9.6'].includes(pkg.version)) throw new Fault(503, 'openclaw_version', 'This OpenClaw version has not been verified with Nova Dream. Check Software Update.');
     return resolve(entry);
   }
   private paths() {
@@ -110,6 +117,7 @@ export class ManagedRuntime {
     // Existing ChatGPT access is consumed only by OpenClaw's supported native login bridge.
     // No ambient provider key, channel token, runtime flag, or old OpenClaw profile is inherited.
     const env: NodeJS.ProcessEnv = Object.fromEntries(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SystemRoot', 'COMSPEC', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
+    env.PATH = `${dirname(this.nodePath())}${delimiter}${env.PATH ?? ''}`;
     const temporary=needsShortRuntimeTemporaryDirectory(root)?(this.shortTemporaryDirectory??=mkdtempSync('/tmp/nova-')):join(root,'tmp');
     return { ...env, OPENCLAW_HOME: join(root, 'home'), OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: join(root, 'workspace'), OPENCLAW_PROFILE: 'edition3', OPENCLAW_GATEWAY_PORT: String(config.port), OPENCLAW_GATEWAY_TOKEN: config.token, OPENCLAW_LOAD_SHELL_ENV: '0', OPENCLAW_EXEC_SHELL_SNAPSHOT: '0', OPENCLAW_NO_AUTO_UPDATE: '1', OPENCLAW_DISABLE_BONJOUR: '1', OPENCLAW_SKIP_CHANNELS: '1', TMPDIR: temporary, TEMP: temporary, TMP: temporary };
   }
@@ -171,7 +179,7 @@ export class ManagedRuntime {
       const sessionBindings = this.store.internalList<import('../../packages/domain/assistant.js').Conversation>('assistant:conversation:').flatMap(conversation => conversation.nativeId && !conversation.deleted ? [{nativeKey:conversation.nativeKey,nativeId:conversation.nativeId}] : []);
       const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig,null,2);
       if (this.store.updateMaintenanceHeld) {
-        const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig));
+        const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig),JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version);
         if(blockers.length)throw new Fault(409,blockers[0].code,blockers[0].message);
       }
       if (JSON.stringify(JSON.parse(originalConfig)) !== JSON.stringify(JSON.parse(updatedConfig))) {
@@ -189,7 +197,8 @@ export class ManagedRuntime {
       // Keep the verified CLI in the IPC-owned process. Native respawning would
       // detach its lifetime from that descriptor. Supply its Windows stack flag
       // here; disable ambient compile-cache respawns in this managed launch only.
-      const child = spawn(process.execPath, [...(process.platform === 'win32' ? ['--stack-size=8192'] : []), ownerEntry, entry, '--profile', 'edition3', 'gateway', 'run', '--port', String(config.port), '--bind', 'loopback', '--auth', 'token', '--tailscale', 'off'], { cwd: root, env: { ...this.environment(config, root, configPath), OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, shell: false });
+      const child = spawn(this.nodePath(), [...(process.platform === 'win32' ? ['--stack-size=8192'] : []), ownerEntry, entry, '--profile', 'edition3', 'gateway', 'run', '--port', String(config.port), '--bind', 'loopback', '--auth', 'token', '--tailscale', 'off'], { cwd: root, env: { ...this.environment(config, root, configPath), OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, shell: false });
+      this.childEntry = realpathSync(entry); this.childVersion = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')).version;
       this.child = child;this.childStartedAt=Date.now();
       const append = (buffer: Buffer) => { log = (log + buffer.toString()).slice(-500000); };
       child.stdout?.on('data', append); child.stderr?.on('data', append);

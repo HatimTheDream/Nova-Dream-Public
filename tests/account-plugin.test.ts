@@ -21,8 +21,20 @@ function fixture() {
   const api: AccountPluginApi = { registrationMode: 'full', pluginConfig: { epoch, bundlePath: '/fixture/plugin', runtimeEntry: '/fixture/openclaw.mjs' }, runtime: { version: '2026.9.2' }, registerGatewayMethod(name, h, opts) { assert.equal(name, 'e3.accounts.snapshot'); assert.equal(opts.scope, 'operator.read'); handler = h; }, registerService(service) { stop = service.stop; } };
   registerAccounts(api, async () => sdk, () => now, async (_url, init) => { reads++; if (fail) throw Error('SECRET_PROVIDER_ERROR'); const token = (init?.headers as Record<string, string>).Authorization; return new Response(JSON.stringify({ rate_limit: { primary_window: missing ? {} : { used_percent: token === 'SECRET_A' ? 19 : 73 } } }), { status: 200 }); });
   const read = async (requestedEpoch = epoch, extra: { refresh?: boolean; includeUsage?: boolean } = {}) => { let output: any; await handler({ params: { epoch: requestedEpoch, ...extra }, respond(ok, value, error) { output = { ok, value, error }; } }); return output; };
-  return { read, stop: () => stop(), native, counters: () => ({ reads, resolves }), advance: () => { now += 31000; }, failure: () => { fail = true; }, missing: () => { missing = true; }, wrong: () => { wrong = true; } };
+  return { api, read, stop: () => stop(), native, counters: () => ({ reads, resolves }), advance: () => { now += 31000; }, failure: () => { fail = true; }, missing: () => { missing = true; }, wrong: () => { wrong = true; } };
 }
+
+test('account SDK accepts only the two reviewed engine versions', async () => {
+  const f = fixture();
+  try {
+    f.api.runtime.version = '2026.9.6';
+    const accepted=await f.read(); assert.equal(accepted.ok,true); assert.equal(accepted.value.accounts.length, 2);
+    const before = f.counters();
+    f.api.runtime.version = '2026.9.5';
+    assert.equal((await f.read()).ok,false);
+    assert.deepEqual(f.counters(), before);
+  } finally { await f.stop(); }
+});
 
 test('exact account usage stays credential-isolated, independent, cached and coalesced', async () => {
   const f = fixture();

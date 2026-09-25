@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { chatGptAccountPluginId, chatGptAccountRuntimeVersion, chatGptAccountSnapshotSchema, chatGptProfileIdSchema, chatGptUsageFreshMs, emptyChatGptUsage } from '../../../packages/domain/chatgpt-accounts.js';
+import { chatGptAccountPluginId, supportsChatGptAccountRuntime, chatGptAccountSnapshotSchema, chatGptProfileIdSchema, chatGptUsageFreshMs, emptyChatGptUsage } from '../../../packages/domain/chatgpt-accounts.js';
 import type { ChatGptAccountUsage } from '../../../packages/domain/sign-in.js';
 
 type Credential = { provider: string; type: string; access?: string; accountId?: string; email?: string; expires?: number };
@@ -41,7 +41,7 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
   const config = z.object({ epoch: z.string().uuid(), bundlePath: z.string().min(1), runtimeEntry: z.string().min(1) }).strict().parse(api.pluginConfig);
   let closing = false, sdkPromise: Promise<AccountSdk> | undefined;
   const cache = new Map<string, ChatGptAccountUsage>(), flights = new Map<string, Promise<ChatGptAccountUsage>>();
-  const current = () => { if (closing || api.runtime.version !== chatGptAccountRuntimeVersion) throw Error('Account adapter unavailable.'); };
+  const current = () => { if (closing || !supportsChatGptAccountRuntime(api.runtime.version)) throw Error('Account adapter unavailable.'); };
   const identity = (sdk: AccountSdk, cred?: Credential) => {
     if (!cred || cred.provider !== 'openai' || cred.type !== 'oauth' || !cred.access) return undefined;
     const info = sdk.resolveOpenAICodexAuthIdentity({ access: cred.access, ...(cred.accountId ? { accountId: cred.accountId } : {}), ...(cred.email ? { email: cred.email } : {}) });

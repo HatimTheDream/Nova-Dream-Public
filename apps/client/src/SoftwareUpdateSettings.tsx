@@ -16,7 +16,8 @@ const bytes = (value: number) => value < 1024 * 1024 ? `${Math.round(value / 102
 function heading(status?: UpdateStatus, stale = false, pending = false): string {
   if (stale) return status?.job ? 'Reconnecting to update status' : 'Update status unavailable';
   if (pending && !activeJob(status)) return 'Update request unconfirmed';
-  if (status?.job && (activeJob(status) || status.availability !== 'available' || status.job.candidateId === status.release?.candidateId)) return stages[status.job.state];
+  if (status?.job && (activeJob(status) || status.availability !== 'available' || (status.release?.releaseId ? status.job.releaseId === status.release.releaseId : status.job.candidateId === status.release?.candidateId))) return stages[status.job.state];
+  if (!status?.release && status?.agentUpdate?.state === 'available') return 'OpenClaw update available';
   return !status || status.availability === 'checking' ? 'Checking for updates…'
     : status.availability === 'current' ? 'Up to date' : status.availability === 'available' ? 'Update available'
       : status.availability === 'error' ? 'Could not check for updates' : 'Updates unavailable';
@@ -26,10 +27,10 @@ function heading(status?: UpdateStatus, stale = false, pending = false): string 
 export function retainedUpdateRequest(value: unknown, epoch: string): UpdateInstallRequest | undefined {
   if (!value || typeof value !== 'object') return;
   const item = value as UpdateInstallRequest;
-  if (item.epoch === epoch && typeof item.candidateId === 'string' && typeof item.idempotencyKey === 'string' && (item.when === 'now' || item.when === 'idle')) return { epoch, candidateId: item.candidateId, idempotencyKey: item.idempotencyKey, when: item.when };
+  if (item.epoch === epoch && typeof item.candidateId === 'string' && (item.releaseId === undefined || typeof item.releaseId === 'string' && /^[a-f0-9]{64}$/.test(item.releaseId)) && typeof item.idempotencyKey === 'string' && (item.when === 'now' || item.when === 'idle')) return { epoch, candidateId: item.candidateId, ...(item.releaseId?{releaseId:item.releaseId}:{}), idempotencyKey: item.idempotencyKey, when: item.when };
 }
 export function confirmedUpdateReceipt(intent: UpdateInstallRequest, response: UpdateStatus) {
-  return response?.job?.candidateId === intent.candidateId ? response.job : undefined;
+  return response?.job?.candidateId === intent.candidateId && (intent.releaseId === undefined || response.job.releaseId === intent.releaseId) ? response.job : undefined;
 }
 
 type ViewProps = {
@@ -47,15 +48,20 @@ export function SoftwareUpdateView({ status, online, failed, restricted, busy, p
   const showCancel = !!job && ['waiting', 'downloading', 'verifying'].includes(job.state);
   const canCancel = showCancel && !restricted && !stale && !busy;
   const release = status?.release;
+  const novaChanges = !!release && release.novaVersion !== status?.installed.novaVersion;
+  const agentChanges = !!release && release.agentVersion !== status?.installed.agent.version;
+  const installLabel = novaChanges && agentChanges ? 'Update all' : agentChanges ? `Update ${agent?.name ?? 'agent'}` : 'Update Nova Dream';
+  const agentUpdate = status?.agentUpdate;
+  const unpreparedAgent = agentUpdate?.state === 'available' && agentUpdate.version !== release?.agentVersion;
   return <div className="software-update-body">
     <dl className="settings-versions software-update-versions" aria-label="Installed versions">
-      <div><dt>Nova Dream</dt><dd>{status ? `${stale ? 'Last known: ' : ''}${status.installed.novaVersion}` : online ? 'Checking…' : 'Unavailable'}</dd></div>
-      <div><dt>{agent?.name ?? 'Agent service'}</dt><dd>{agentVersion}</dd></div>
+      <div><dt>Nova Dream</dt><dd>{status ? `${stale ? 'Last known: ' : ''}${status.installed.novaVersion}` : online ? 'Checking…' : 'Unavailable'}{novaChanges && <> → {release.novaVersion}</>}</dd></div>
+      <div><dt>{agent?.name ?? 'Agent service'}</dt><dd>{agentVersion}{agentChanges ? <> → {release.agentVersion}</> : agentUpdate?.state === 'available' ? <> → {agentUpdate.version}</> : null}</dd></div>
     </dl>
     <section className="software-update-release" aria-label="Update availability">
       <div className="software-update-row"><div><h3 role="status">{heading(status, stale, pending)}</h3>
         {release && <p>Nova Dream {release.novaVersion} · {agent?.name ?? 'Agent service'} {release.agentVersion}</p>}
-      </div>{release && !running && !pending && status?.availability === 'available' && <button type="button" className="primary" disabled={!canInstall} onClick={install}>{busy === 'install' ? 'Requesting…' : status.blocker ? 'Update when idle' : 'Update now'}</button>}
+      </div>{release && !running && !pending && status?.availability === 'available' && <button type="button" className="primary" disabled={!canInstall} onClick={install}>{busy === 'install' ? 'Requesting…' : status.blocker ? `${installLabel} when idle` : installLabel}</button>}
         {showCancel && <button type="button" disabled={!canCancel} onClick={cancel}>{busy === 'cancel' ? 'Cancelling…' : 'Cancel update'}</button>}
       </div>
       {release && !!release.notes.length && <ul className="software-update-notes" aria-label="Release notes">{release.notes.slice(0, 3).map((note, index) => <li key={index}>{note}</li>)}</ul>}
@@ -63,7 +69,9 @@ export function SoftwareUpdateView({ status, online, failed, restricted, busy, p
       {running && job?.message && <p className="software-update-message">{stale ? 'Last reported: ' : ''}{job.message}</p>}
       {!running && job?.message && ['failed', 'restored'].includes(job.state) && <p className="software-update-message">{job.message}</p>}
       {download && <div className="software-update-download"><progress aria-label={stale ? 'Last reported download progress' : 'Download progress'} max={download.total} value={Math.min(download.received, download.total)}/><span>{stale ? 'Last reported: ' : ''}{bytes(download.received)} of {bytes(download.total)} downloaded</span></div>}
-      {status?.blocker && <p className="software-update-message">{status.blocker.message}</p>}
+      {status?.blocker && (release || running) && <p className="software-update-message">{status.blocker.message}</p>}
+      {!stale && unpreparedAgent && <p className="software-update-message">OpenClaw {agentUpdate.version} is available. A compatible installation package is not yet available for this host.</p>}
+      {!stale && agentUpdate?.releaseNotesUrl && <a href={agentUpdate.releaseNotesUrl} target="_blank" rel="noreferrer">OpenClaw release notes</a>}
       {(restricted || status && !status.installation.supported) && <p className="software-update-message">{restricted ?? status?.installation.reason ?? 'Installation is unavailable on this host.'}</p>}
       {!online && <p className="software-update-message">Connect to refresh this host’s update status.</p>}
       {failed && online && <p className="software-update-message">The host could not be reached. The last response is kept; reconnect to confirm the current state.</p>}
@@ -107,7 +115,7 @@ export function SoftwareUpdateSettings({ identity, epoch, active, online, restri
 
   async function act(kind: NonNullable<ViewProps['busy']>, retry = false) {
     if (mutation.current || !context.current.online || context.current.restricted) return;
-    const captured = context.current, displayedCandidate = status?.release?.candidateId, selectedWhen = status?.blocker ? 'idle' : 'now';
+    const captured = context.current, displayedCandidate = status?.release?.candidateId, displayedRelease = status?.release?.releaseId, selectedWhen = status?.blocker ? 'idle' : 'now';
     const abort = new AbortController(); mutation.current = abort; setBusy(kind); setError(undefined); setReceipt(undefined);
     const current = () => mutation.current === abort && captured.identity === context.current.identity && !abort.signal.aborted;
     try {
@@ -126,8 +134,8 @@ export function SoftwareUpdateSettings({ identity, epoch, active, online, restri
         if (retry && !intent.current) return;
         if (!intent.current) {
           if (value?.availability !== 'available' || !value.release || !value.installation.supported) return;
-          if (value.release.candidateId !== displayedCandidate) throw new Error('The available update changed. Review its release notes before updating.');
-          const next: UpdateInstallRequest = { epoch: captured.epoch, candidateId: displayedCandidate, idempotencyKey: crypto.randomUUID(), when: selectedWhen };
+          if (value.release.candidateId !== displayedCandidate || value.release.releaseId !== displayedRelease) throw new Error('The available update changed. Review its release notes before updating.');
+          const next: UpdateInstallRequest = { epoch: captured.epoch, candidateId: displayedCandidate, ...(displayedRelease?{releaseId:displayedRelease}:{}), idempotencyKey: crypto.randomUUID(), when: selectedWhen };
           if (!saveLocal(storageKey(captured.identity), next)) throw new Error('Browser storage is needed to retain this update request.');
           intent.current = next; setPending(next);
         }

@@ -4,9 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, lstatSync, chmodSync, readFileSync, realpathSync, openSync, closeSync, fstatSync, constants, unlinkSync } from 'node:fs';
 import { dirname, basename, isAbsolute, join } from 'node:path';
 import { canonical } from '../../../packages/domain/contracts.js';
-import { sourcePluginId, sourceTransferVersion, sourceTransferLimit, sourceStageSchema, sourceMime, type SourceReference } from '../../../packages/domain/source-transfer.js';
+import { sourcePluginId, supportsSourceTransferRuntime, sourceTransferLimit, sourceStageSchema, sourceMime, type SourceReference } from '../../../packages/domain/source-transfer.js';
 
-// Public OpenClaw 2026.9.2 SDK subset. This stages bytes only; it cannot
+// Public OpenClaw 2026.9.2/2026.9.6 SDK subset. This stages bytes only; it cannot
 // execute an agent, change session settings, or write native registry tables.
 export type SourcePluginApi = {
   registrationMode: string; pluginConfig?: Record<string, unknown>;
@@ -56,7 +56,7 @@ export function registerSourceTransfer(api: SourcePluginApi) {
     try {
       const input = sourceStageSchema.parse(params), mimeType = sourceMime(input.file.name);
       const current = () => {
-        if (closing || api.runtime.version !== sourceTransferVersion || input.epoch !== config.epoch) throw new Error('Reconnect this source to its original Nova Dream runtime.');
+        if (closing || !supportsSourceTransferRuntime(api.runtime.version) || input.epoch !== config.epoch) throw new Error('Reconnect this source to its original Nova Dream runtime.');
         if (api.runtime.agent.session.getSessionEntry({ agentId: 'main', sessionKey: input.nativeKey, readConsistency: 'latest' })?.sessionId !== input.nativeId) throw new Error('The original source conversation changed.');
       };
       current();

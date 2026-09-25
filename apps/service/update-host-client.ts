@@ -37,4 +37,4 @@ export const updateHeartbeatSchema = z.object({
   nativeSuspended: z.boolean(),
 }).strict();
 export type UpdateHeartbeat = z.infer<typeof updateHeartbeatSchema>;
-export type UpdateHostView = Pick<SoftwareUpdateStatus, 'availability' | 'checkedAt' | 'release' | 'error' | 'installation' | 'job' | 'blocker'> & { holdFor: string | null };
+export type UpdateHostView = Pick<SoftwareUpdateStatus, 'availability' | 'checkedAt' | 'release' | 'error' | 'installation' | 'job' | 'blocker' | 'agentUpdate'> & { holdFor: string | null };

@@ -35,6 +35,16 @@ function fixture() {
 }
 const identity = (input: Awaited<ReturnType<ReturnType<typeof fixture>['input']>>) => ({ epoch: input.epoch, hostId: input.hostId, attemptId: input.attemptId, inputHash: input.inputHash });
 
+test('reviewed engine upgrade retains worker contract and original dispatch identity', async () => {
+  const f=fixture(), input=await f.input(), prior=await f.invoke('run', input);
+  f.api.runtime.version='2026.9.6';
+  const caps=await f.invoke<{contract:number;runtimeVersion:string}>('capabilities',{epoch:f.epoch});
+  assert.equal(caps.contract,2); assert.equal(caps.runtimeVersion,'2026.9.6');
+  assert.deepEqual(await f.invoke('run',input),prior); assert.equal(f.calls.length,1);
+  f.api.runtime.version='2026.9.5';
+  await assert.rejects(f.invoke('run',input),/verified OpenClaw version/); assert.equal(f.calls.length,1);
+});
+
 test('settled failure category survives journal reload without raw provider details or another native call',async()=>{
   const f=fixture(),input=await f.input(),receipt=await f.invoke('run',input);
   f.setObserve(async params=>({runId:params.runId,status:'error',endedAt:123,error:'subscription usage limit private-provider-sentinel'}));

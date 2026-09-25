@@ -13,14 +13,15 @@ import { NativeUpdateLease } from '../apps/service/update-native-idle.js';
 import { qualifyNativeUpdateStartup } from '../apps/service/update-native-startup.js';
 import { Gateway } from '../apps/service/gateway.js';
 import { ManagedRuntime } from '../apps/service/runtime.js';
+import { updateMaintenanceBlockers } from '../apps/service/update-maintenance.js';
 
 function setup(t:TestContext){
   const root=mkdtempSync(join(tmpdir(),'nova-native-lease-')),store=new Store(join(root,'app'));let time=Date.now();
-  let owned={epoch:store.epoch,pid:112,url:'ws://127.0.0.1:55321',generation:randomUUID(),startedAt:time-5000,version:'2026.9.2' as const};
+  let owned={epoch:store.epoch,pid:112,url:'ws://127.0.0.1:55321',generation:randomUUID(),startedAt:time-5000,version:'2026.9.2' as '2026.9.2'|'2026.9.6'},reportedVersion:string|undefined;
   let state:AssistantConnection={state:'ready',url:owned.url,generation:owned.generation,message:'',grantedScopes:['operator.read','operator.admin'],methods:['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'],modelAuthReady:false};
   let current:{requestId:string;suspensionId:string;expiresAtMs:number}|undefined,busy=false,drop=false,prepares=0,resumes=0,systems=0;
   const requests:string[]=[];const listeners=new Set<(event:EventFrame)=>void>();
-  const factory=()=>({start(){},async stop(){},status:()=>state,serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:'2026.9.2'}),subscribe(listener:(event:EventFrame)=>void){listeners.add(listener);return()=>listeners.delete(listener);},async request<T>(method:string,raw:unknown):Promise<T>{
+  const factory=()=>({start(){},async stop(){},status:()=>state,serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:reportedVersion??owned.version}),subscribe(listener:(event:EventFrame)=>void){listeners.add(listener);return()=>listeners.delete(listener);},async request<T>(method:string,raw:unknown):Promise<T>{
     const input=raw as any;if(current&&current.expiresAtMs<=time)current=undefined;
     if(method==='system.info'){systems++;if(current)throw Error('suspended');return {pid:owned.pid,processInstanceId:'process-'+owned.pid} as T;}
     if(method==='gateway.suspend.prepare'){
@@ -35,8 +36,31 @@ function setup(t:TestContext){
   }});
   const runtime={updateIdentity:()=>owned,updateStartupBlockers:()=>[] as {code:string;message:string}[]};const lease=new NativeUpdateLease(store,runtime,factory,()=>time);store.setUpdateMaintenanceHeld(true);
   t.after(async()=>{await lease.close();store.close();rmSync(root,{recursive:true,force:true});});
-  return {root,store,lease,runtime,factory,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:()=>busy=true,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
+  return {root,store,lease,runtime,factory,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
 }
+
+test('reviewed native versions must match the exact owned running process',async t=>{
+  const f=setup(t);f.version('2026.9.6');f.reportVersion('2026.9.2');
+  assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.equal(f.counts().prepares,0);
+  f.reportVersion('2026.10.0');assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.equal(f.counts().prepares,0);
+  f.reportVersion(undefined);assert.deepEqual(await f.lease.acquire(f.job),[]);
+  assert.equal(f.lease.snapshot(f.job).nativeSuspended,true);
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).identity.version,'2026.9.6');
+});
+
+test('qualified uncertain history still requires a native hold and verified restart journals',async t=>{
+  const f=setup(t),conversation={id:randomUUID(),state:'ready',nativeKey:'agent:main:kept',nativeId:randomUUID(),connectionGeneration:randomUUID()};
+  const operation={id:randomUUID(),requestId:randomUUID(),epoch:f.store.epoch,conversationId:conversation.id,nativeKey:conversation.nativeKey,nativeId:conversation.nativeId,connectionGeneration:conversation.connectionGeneration,nativeRunId:randomUUID(),state:'unknown',input:'Original kept input',context:{digest:'original'}};
+  f.store.internalWrite('assistant:conversation:'+conversation.id,conversation);f.store.internalWrite('assistant:operation:'+operation.id,operation);
+  const before=JSON.stringify(f.store.internalRead('assistant:operation:'+operation.id));
+  assert.deepEqual(updateMaintenanceBlockers(f.store),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+  f.busy();assert.equal((await f.lease.acquire(f.job))[0].code,'native_busy');assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+  f.busy(false);f.runtime.updateStartupBlockers=()=>[{code:'native_startup_policy',message:'Unfinished restart work.'}];
+  assert.equal((await f.lease.acquire(f.job))[0].code,'native_startup_policy');assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
+  assert.deepEqual(await f.lease.release(f.job),[]);f.runtime.updateStartupBlockers=()=>[];
+  assert.deepEqual(await f.lease.acquire(f.job),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,true);
+  assert.equal(JSON.stringify(f.store.internalRead('assistant:operation:'+operation.id)),before);
+});
 test('native global lease renews and never uses terminal destruction or leaks task details',async t=>{
   const f=setup(t);assert.deepEqual(await f.lease.acquire(f.job),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,true);
   f.advance(50000);assert.deepEqual(await f.lease.acquire(f.job),[]);assert.equal(new Set(f.requests).size,1);assert.equal(f.counts().systems,1);
@@ -119,6 +143,41 @@ test('maintenance startup reads actual configuration and native journals without
   native.exec('PRAGMA user_version=20');assert.equal(qualifyNativeUpdateStartup(runtime,service).length,1);native.exec('PRAGMA user_version=19');
   assert.deepEqual(qualifyNativeUpdateStartup(runtime,service),[]);assert.equal(readFileSync(path,'utf8'),before);
   writeFileSync(path,JSON.stringify({...configuration,cron:{enabled:true}}));assert.equal(qualifyNativeUpdateStartup(runtime,service).length,1);
+});
+
+test('9.6 startup accepts only its exact schema pair and settled new journals, preserving terminal history',t=>{
+  const root=mkdtempSync(join(tmpdir(),'nova-native-startup-96-')),service=join(root,'service'),runtime=join(root,'runtime');
+  mkdirSync(join(runtime,'state','agents','main','agent'),{recursive:true});mkdirSync(join(runtime,'state','state'));
+  const config={gateway:{bind:'loopback',controlUi:{enabled:false}},agents:{defaults:{heartbeat:{every:'0m'}},entries:{main:{}}},cron:{enabled:false},update:{checkOnStart:false,auto:{enabled:false}},models:{catalogRefresh:{enabled:false}},plugins:{allow:['openai','codex'],entries:{}}};
+  const configPath=join(runtime,'openclaw.json'),agentPath=join(runtime,'state','agents','main','agent','openclaw-agent.sqlite'),sharedPath=join(runtime,'state','state','openclaw.sqlite');
+  writeFileSync(configPath,JSON.stringify(config));writeFileSync(join(runtime,'edition3-runtime.identity'),'edition3-owned-gateway\n');
+  const agent=new DatabaseSync(agentPath),shared=new DatabaseSync(sharedPath);
+  agent.exec("PRAGMA user_version=23;CREATE TABLE session_nodes(status TEXT,entry_json TEXT);CREATE TABLE session_canonical_validation_pending(session_key TEXT);INSERT INTO session_canonical_validation_pending VALUES ('kept');CREATE TABLE session_input_completions(outcome_json TEXT);INSERT INTO session_input_completions VALUES ('{\"error\":\"original outcome\"}');");
+  agent.prepare('INSERT INTO session_nodes VALUES (?,?)').run('failed',JSON.stringify({status:'failed',abortedLastRun:true,restartRecoveryRuns:[{runId:'retained'}]}));
+  shared.exec("PRAGMA user_version=18;CREATE TABLE node_worker_prepared_workspaces(state TEXT);CREATE TABLE node_worker_launch_cleanup(lineage_settled INTEGER);CREATE TABLE worktree_templates(status TEXT);CREATE TABLE github_repository_publication_requests(status TEXT,effect_state TEXT);CREATE TABLE local_workspace_projections(pending_ref TEXT,pending_target TEXT,paused_runtimes_json TEXT,journal_json TEXT,journal_pack BLOB);CREATE TABLE worker_transcript_commits(state TEXT);INSERT INTO node_worker_prepared_workspaces VALUES ('retired');INSERT INTO node_worker_launch_cleanup VALUES (1);INSERT INTO worktree_templates VALUES ('ready');INSERT INTO github_repository_publication_requests VALUES ('published','observed');INSERT INTO local_workspace_projections VALUES (NULL,NULL,NULL,NULL,NULL);INSERT INTO worker_transcript_commits VALUES ('terminal');");
+  t.after(()=>{agent.close();shared.close();rmSync(root,{recursive:true,force:true});});
+  const check=()=>qualifyNativeUpdateStartup(runtime,service,undefined,'2026.9.6');
+  const before=[configPath,agentPath,sharedPath].map(path=>readFileSync(path));
+  assert.deepEqual(check(),[]);assert.deepEqual([configPath,agentPath,sharedPath].map(path=>readFileSync(path)),before);
+  assert.equal(qualifyNativeUpdateStartup(runtime,service).length,1,'New schemas require the matching verified runtime version.');
+  shared.exec('PRAGMA user_version=15');assert.equal(check().length,1);shared.exec('PRAGMA user_version=18');
+  agent.exec('PRAGMA user_version=19');assert.equal(check().length,1);agent.exec('PRAGMA user_version=23');
+  for(const [table,column,busy,settled]of [
+    ['node_worker_prepared_workspaces','state','bound','retired'],
+    ['node_worker_prepared_workspaces','state','retiring','retired'],
+    ['node_worker_launch_cleanup','lineage_settled',null,1],
+    ['worktree_templates','status','preparing','ready'],
+    ['github_repository_publication_requests','status','needs_confirmation','published'],
+    ['github_repository_publication_requests','effect_state','dispatched','observed'],
+    ['local_workspace_projections','pending_ref','unfinished',null],
+    ['local_workspace_projections','journal_json','{}',null],
+    ['worker_transcript_commits','state','pending','terminal'],
+  ] as [string,string,string|number|null,string|number|null][]){
+    shared.prepare(`UPDATE ${table} SET ${column}=?`).run(busy);assert.equal(check().length,1,table+'.'+column);
+    shared.prepare(`UPDATE ${table} SET ${column}=?`).run(settled);assert.deepEqual(check(),[]);
+  }
+  agent.exec("UPDATE session_nodes SET status='running'");assert.equal(check().length,1);
+  assert.equal(agent.prepare('SELECT outcome_json FROM session_input_completions').get()?.outcome_json,'{"error":"original outcome"}');
 });
 
 test('a held startup with unsupported native automation returns status without launching or rewriting configuration',async()=>{

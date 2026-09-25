@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { assignmentRuntimeAgent, assignmentNativeRuntimeAgent, configuredAssignmentNativeTools, nativeToolNamesSchema, matchesAssignmentRuntimePolicy } from '../../../packages/domain/agent-capabilities.js';
-import { workerCapabilitiesSchema, workerContract, workerIdentitySchema, readNativeWorkerObservation, workerPluginId, workerReceiptSchema, workerRunSchema, workerRuntimeVersion, type WorkerIdentity, type WorkerReceipt, type WorkerStatus } from '../../../packages/domain/worker.js';
+import { workerCapabilitiesSchema, workerContract, workerIdentitySchema, readNativeWorkerObservation, workerPluginId, workerReceiptSchema, workerRunSchema, supportsWorkerRuntime, type WorkerIdentity, type WorkerReceipt, type WorkerStatus } from '../../../packages/domain/worker.js';
 import { workerInputHash, workerNativeIdentity } from './identity.js';
 import { WorkerJournal } from './journal.js';
 
-// Public SDK subset, verified against OpenClaw 2026.9.2. No private Gateway
+// Public SDK subset, verified against OpenClaw 2026.9.2 and 2026.9.6. No private Gateway
 // context, global credentials, or generic runtime.gateway access is used.
 export type WorkerPluginApi = {
   config?: { mcp?: unknown; agents?: { entries?: Record<string, unknown>; list?: { id: string; [key: string]: unknown }[] } };
@@ -53,7 +53,7 @@ export function registerWorker(api: WorkerPluginApi) {
     observing.set(receipt.attemptId, work); return work;
   };
   const validate = (raw: unknown) => {
-    if (api.runtime.version !== workerRuntimeVersion) throw new Error('The worker adapter requires its verified OpenClaw version.');
+    if (!supportsWorkerRuntime(api.runtime.version)) throw new Error('The worker adapter requires its verified OpenClaw version.');
     const input = workerIdentitySchema.parse(raw);
     if (input.epoch !== config.epoch) throw new Error('This worker belongs to a different workspace generation.');
     if (input.hostId !== hostId()) throw new Error('Reconnect the original assignment runtime before continuing.');
@@ -120,7 +120,7 @@ export function registerWorker(api: WorkerPluginApi) {
   }, { scope });
   method('e3.assignments.capabilities', 'operator.read', raw => {
     z.object({ epoch: z.string().uuid() }).strict().parse(raw);
-    if (raw.epoch !== config.epoch || api.runtime.version !== workerRuntimeVersion) throw new Error('This worker adapter does not match the selected workspace and runtime.');
+    if (raw.epoch !== config.epoch || !supportsWorkerRuntime(api.runtime.version)) throw new Error('This worker adapter does not match the selected workspace and runtime.');
     return workerCapabilitiesSchema.parse({ contract: workerContract, epoch: config.epoch, hostId: hostId(), runtimeVersion: api.runtime.version, tools: workspaceToolsReady() ? 'workspace' : 'none', ...(workspaceToolsReady() && nativeTools().length ? { nativeTools: nativeTools() } : {}), automaticDelivery: false, durableReceipts: true, durableOutcomes: true, newRunsAvailable: store().hasCapacity() });
   });
   method('e3.assignments.run', 'operator.write', run);

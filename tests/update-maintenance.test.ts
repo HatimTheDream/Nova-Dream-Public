@@ -140,3 +140,82 @@ test('blockers include unknown acknowledged work, unsaved voice finals, dictatio
   assert.equal(maintenanceGatewayKind('approval.resolve', { decision: 'allow-once' }), 'effect');
   assert.equal(maintenanceGatewayKind('unknown.future.method', {}), 'effect');
 }));
+
+function retainedHistory(store: Store) {
+  const conversation = { id: randomUUID(), state: 'ready', nativeKey: 'agent:main:fixture', nativeId: randomUUID(), connectionGeneration: randomUUID() };
+  const operation = { id: randomUUID(), requestId: randomUUID(), epoch: store.epoch, conversationId: conversation.id, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId, nativeRunId: randomUUID(), connectionGeneration: conversation.connectionGeneration, state: 'unknown', input: 'Kept input', context: { digest: 'kept-context' }, error: 'Outcome unconfirmed.' };
+  const meeting = { id: randomUUID(), epoch: randomUUID(), state: 'ended', turns: [{ planId: 'assignment:old-meeting', state: 'unknown' }] };
+  const mail = { review: { id: randomUUID(), epoch: randomUUID(), state: 'uncertain', mode: 'draft', phase: 'create' }, attempted: 'create', completed: [] };
+  const rows = { ['assistant:conversation:' + conversation.id]: conversation, ['assistant:operation:' + operation.id]: operation, ['hub:meeting:' + meeting.id]: meeting, ['mail:delivery:head:' + mail.review.id]: mail };
+  for (const [key, value] of Object.entries(rows)) store.internalWrite(key, value);
+  return { conversation, operation, meeting, mail, rows };
+}
+
+test('retained uncertainty can reach native qualification without changing any saved outcome', () => fixture(async store => {
+  const { rows } = retainedHistory(store);
+  const before = Object.keys(rows).map(key => JSON.stringify(store.internalRead(key)));
+  const original = store.internalWrite;
+  store.internalWrite = (() => { throw Error('Readiness must not write saved records.'); }) as typeof store.internalWrite;
+  try {
+    assert.deepEqual(updateMaintenanceBlockers(store), []);
+    store.setUpdateMaintenanceHeld(true);
+    assert.deepEqual(updateMaintenanceBlockers(store), []);
+    assert.deepEqual(Object.keys(rows).map(key => JSON.stringify(store.internalRead(key))), before);
+  } finally { store.internalWrite = original; }
+}));
+
+test('active, unbound, cancelling and steering Assistant work still blocks independently of age', () => fixture(async store => {
+  const { operation, conversation } = retainedHistory(store), key = 'assistant:operation:' + operation.id;
+  for (const patch of [{ state: 'prepared' }, { state: 'dispatching' }, { state: 'accepted' }, { state: 'running' }, { nativeRunId: null }, { nativeId: 'different' }, { connectionGeneration: 'different' }, { epoch: randomUUID() }, { cancelRequested: true }, { steerTarget: 'original' }]) {
+    store.internalWrite(key, { ...operation, createdAt: '2000-01-01T00:00:00Z', ...patch });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'), JSON.stringify(patch));
+  }
+  store.internalWrite(key, operation);
+  for (const patch of [{ state: 'unknown' }, { pendingSettings: { requestId: randomUUID() } }, { pendingResume: { requestId: randomUUID() } }]) {
+    store.internalWrite('assistant:conversation:' + conversation.id, { ...conversation, ...patch });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant-context'));
+  }
+}));
+
+test('ended meeting history never hides a current or linked uncertain assignment', () => fixture(async store => {
+  const { meeting } = retainedHistory(store), key = 'hub:meeting:' + meeting.id;
+  for (const state of ['unknown', 'running', 'dispatching', 'stopping']) {
+    store.internalWrite(key, { ...meeting, epoch: store.epoch, turns: [{ ...meeting.turns[0], state }] });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'meetings'), state);
+  }
+  store.internalWrite(key, meeting);
+  store.internalWrite('assignments:summary:linked', { id: 'linked', assignmentId: meeting.turns[0].planId, state: 'unknown', unresolvedReview: { acknowledged: true } });
+  const kinds = updateMaintenanceBlockers(store).map(row => row.kind);
+  assert.ok(kinds.includes('meetings')); assert.ok(kinds.includes('assignments'));
+}));
+
+test('only a parked older-epoch draft creation qualifies, never live or multi-stage mail effects', () => fixture(async store => {
+  const { mail } = retainedHistory(store), key = 'mail:delivery:head:' + mail.review.id;
+  for (const patch of [{ epoch: store.epoch }, { mode: 'send' }, { state: 'running' }, { phase: 'update-draft' }, { providerDraftId: 'provider-draft' }, { providerMessageId: 'provider-message' }]) {
+    store.internalWrite(key, { ...mail, review: { ...mail.review, ...patch } });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'mail-delivery'), JSON.stringify(patch));
+  }
+  for (const patch of [{ attempted: 'send' }, { completed: ['create'] }, { files: { cursor: 0, pending: true } }]) {
+    store.internalWrite(key, { ...mail, ...patch });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'mail-delivery'), JSON.stringify(patch));
+  }
+}));
+
+test('automatic sources and accepted effects still block alongside qualified historical records', () => fixture(async store => {
+  retainedHistory(store);
+  store.internalWrite('assistant:queue:future', { state: 'paused', automatic: true });
+  store.internalWrite('assistant:plan:future', { kind: 'research', state: 'ready', autoStartAt: '2099-01-01T00:00:00Z', autoStartRequestId: randomUUID() });
+  store.internalWrite('agent-routines:item:future', { value: { enabled: true }, nextAt: Date.parse('2099-01-01T00:00:00Z') });
+  store.internalWrite('accounts:item:contacts', { id: 'contacts', generation: 'current', state: 'connected', capabilities: { contactsRead: true } });
+  store.internalWrite('crm:address-link:automatic', { accountId: 'contacts', generation: 'current', mode: 'both', state: 'synced' });
+  store.internalWrite('crm:address-link:uncertain', { mode: 'read', state: 'unknown', intent: { requestId: 'original' } });
+  const result = deferred<void>(), reached = deferred<void>();
+  const effect = store.trackUpdateEffect('provider-writes', async () => { reached.resolve(); await result.promise; });
+  await reached.promise;
+  try {
+    store.setUpdateMaintenanceHeld(true);
+    const kinds = updateMaintenanceBlockers(store).map(row => row.kind);
+    for (const kind of ['automatic-queue', 'automatic-research', 'agent-routines', 'automatic-contacts', 'contact-write', 'provider-writes']) assert.ok(kinds.includes(kind), kind);
+    assert.equal(kinds.includes('assistant'), false);
+  } finally { result.resolve(); await effect; }
+}));

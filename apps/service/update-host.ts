@@ -4,6 +4,7 @@ import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, r
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { UpdateFeed, type UpdateFeedInstalled } from './update-feed.js';
+import { OpenClawUpdateFeed } from './openclaw-update-feed.js';
 import { UpdateAdmissionError, UpdateSupervisor } from './update-supervisor.js';
 import { ManagedUpdateInstaller } from './update-installer.js';
 import { FileUpdateJournal, guardedUpdatePath, readUpdateJson, writeUpdateJson } from './update-storage.js';
@@ -14,7 +15,7 @@ const absolute = z.string().min(1).max(4096).refine(value => isAbsolute(value) &
 export const updateHostConfigSchema = z.object({
   format: z.literal(1), socketGroup: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/).default('nova'),
   stateDirectory: absolute, workspaceDirectory: absolute, releaseDirectory: absolute, runtimeDirectory: absolute,
-  appCurrent: absolute, agentDirectory: absolute,
+  appCurrent: absolute, agentDirectory: absolute, agentNodePath: absolute.optional(),
   feed: z.object({ url: z.string().url().max(2048), publicKeyFile: absolute, channel: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), artifactOrigins: z.array(z.string().url().max(2048)).min(1).max(8) }).strict(),
 }).strict();
 export type UpdateHostConfig = z.infer<typeof updateHostConfigSchema>;
@@ -29,15 +30,33 @@ export function installedUpdateIdentity(config: UpdateHostConfig, verifyCandidat
   const selected = resolve(dirname(config.appCurrent), readlinkSync(config.appCurrent));
   if (realpathSync(config.appCurrent) !== selected || !within(selected, config.releaseDirectory) || selected === config.releaseDirectory) throw Error('The selected application must be a direct immutable release.');
   guardedUpdatePath(selected, true);
-  guardedUpdatePath(config.agentDirectory, true);
+  const agentDirectory = managedAgentDirectory(config);
+  if(config.agentNodePath) managedAgentNode(config);
   if (!within(config.agentDirectory, config.runtimeDirectory)) throw Error('The managed agent package is outside its protected runtime.');
   guardedUpdatePath(join(selected, 'package.json'), false); guardedUpdatePath(join(selected, 'dist/candidate.json'), false);
   const candidate = verifyCandidate(selected);
   for (const path of candidate.bytes.keys()) guardedUpdatePath(join(selected, path), false);
-  const packageFile = join(config.agentDirectory, 'package.json');
-  guardedUpdatePath(packageFile, false); guardedUpdatePath(join(config.agentDirectory, 'openclaw.mjs'), false);
+  const packageFile = join(agentDirectory, 'package.json');
+  guardedUpdatePath(packageFile, false); guardedUpdatePath(join(agentDirectory, 'openclaw.mjs'), false);
   const agent = z.object({ name: z.literal('openclaw'), version: z.string().regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/) }).passthrough().parse(readUpdateJson(packageFile, 256 * 1024));
   return { candidateId: candidate.id, novaVersion: candidate.manifest.version, agentVersion: agent.version, schemaVersion: candidate.manifest.schemaVersion, platform: process.platform, arch: process.arch, nodeMajor: Number(process.versions.node.split('.')[0]), protocolVersion: 4 };
+}
+
+/** A root-owned selector may point only into the retained protected runtime. */
+export function managedAgentDirectory(config: Pick<UpdateHostConfig, 'agentDirectory' | 'runtimeDirectory'>) {
+  guardedUpdatePath(dirname(config.agentDirectory), true);
+  const info = lstatSync(config.agentDirectory), selected = realpathSync(config.agentDirectory);
+  if (info.isSymbolicLink() && info.uid !== 0 || !within(selected, config.runtimeDirectory) || selected === config.runtimeDirectory) throw Error('Invalid managed agent selector.');
+  guardedUpdatePath(selected, true);
+  return selected;
+}
+
+export function managedAgentNode(config: Pick<UpdateHostConfig,'agentNodePath'|'runtimeDirectory'>){
+  if(!config.agentNodePath)throw Error('The managed agent Node selector is missing.');
+  guardedUpdatePath(dirname(config.agentNodePath),true);
+  const info=lstatSync(config.agentNodePath),selected=realpathSync(config.agentNodePath);
+  if(!info.isSymbolicLink()||info.uid!==0||!within(config.agentNodePath,config.runtimeDirectory)||!within(selected,config.runtimeDirectory)||selected===config.runtimeDirectory)throw Error('Invalid managed agent Node selector.');
+  guardedUpdatePath(selected,false);return selected;
 }
 
 type HostController = Pick<UpdateSupervisor, 'view' | 'check' | 'request' | 'cancel' | 'beat'>;
@@ -105,12 +124,16 @@ export async function startUpdateHost(configurationPath: string, verifyCandidate
   let installed = installedUpdateIdentity(config, verifyCandidate), observedAt = Date.now();
   const current = () => {
     // Root-protected candidates are immutable. Recheck the complete bytes after a pointer change or each minute.
-    if (Date.now() - observedAt > 60_000 || realpathSync(config.appCurrent) !== selectedPath) { installed = installedUpdateIdentity(config, verifyCandidate); selectedPath = realpathSync(config.appCurrent); observedAt = Date.now(); }
+    if (Date.now() - observedAt > 60_000 || realpathSync(config.appCurrent) !== selectedPath || realpathSync(config.agentDirectory) !== selectedAgent) { installed = installedUpdateIdentity(config, verifyCandidate); selectedPath = realpathSync(config.appCurrent); selectedAgent = realpathSync(config.agentDirectory); observedAt = Date.now(); }
     return installed;
   };
   let selectedPath = realpathSync(config.appCurrent);
+  let selectedAgent = realpathSync(config.agentDirectory);
   const cacheFile = join(config.stateDirectory, 'feed.json');
+  const agentCache = join(config.stateDirectory, 'openclaw-release.json');
+  const agentFeed = new OpenClawUpdateFeed({ installed: () => current().agentVersion, read: () => existsSync(agentCache) ? readUpdateJson(agentCache, 4096) : undefined, write: value => writeUpdateJson(agentCache, value) });
   const feed = new UpdateFeed({ store: { read: () => existsSync(cacheFile) ? readUpdateJson(cacheFile, 256 * 1024) : undefined, write: value => writeUpdateJson(cacheFile, value) }, installed: current,
+    agentFeed,
     trust: { url: config.feed.url, channel: config.feed.channel, artifactOrigins: config.feed.artifactOrigins, publicKey: readFileSync(config.feed.publicKeyFile, 'utf8') } });
   for (const path of [join(config.stateDirectory, 'jobs'), join(config.stateDirectory, 'staging')]) { mkdirSync(path, { recursive: true, mode: 0o700 }); guardedUpdatePath(path, true); }
   const supervisor = new UpdateSupervisor(feed, new FileUpdateJournal(join(config.stateDirectory, 'jobs')), new ManagedUpdateInstaller(join(config.stateDirectory, 'staging'), configurationPath), () => current().candidateId);

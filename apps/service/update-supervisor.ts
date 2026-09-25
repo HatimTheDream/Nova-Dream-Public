@@ -19,7 +19,7 @@ export interface Installer {
   run(release:VerifiedUpdateRelease,jobId:string,phase:(state:'preparing'|'installing'|'restarting'|'checking')=>void):Promise<InstallerResult>;
   reconcile(release:VerifiedUpdateRelease,jobId:string):Promise<InstallerResult|undefined>;
 }
-const install=z.object({epoch:z.string().uuid(),candidateId:z.string().regex(/^[0-9a-f]{64}$/),currentCandidateId:z.string().regex(/^[0-9a-f]{64}$/),idempotencyKey:z.string().uuid(),when:z.enum(['now','idle'])}).strict();
+const install=z.object({epoch:z.string().uuid(),candidateId:z.string().regex(/^[0-9a-f]{64}$/),releaseId:z.string().regex(/^[0-9a-f]{64}$/).optional(),currentCandidateId:z.string().regex(/^[0-9a-f]{64}$/),idempotencyKey:z.string().uuid(),when:z.enum(['now','idle'])}).strict();
 
 /** Durable single-job state machine owned by a separate host service. A browser
  * disconnect, application replacement or repeated click cannot re-run a switch. */
@@ -38,8 +38,8 @@ export class UpdateSupervisor {
     return {...status,installation:this.job?.hold&&this.job.state==='failed'?{supported:false,reason:'The previous update needs host review before another installation.'}:{supported:true},...(this.job?{job:this.publicJob(this.job)}:{}),...(blocker?{blocker}:{}),holdFor:this.job?.hold?this.job.id:null};
   }
   private publicJob(job:Job):SoftwareUpdateJob {
-    const {id,candidateId,state,requestedAt,updatedAt,message,download}=job;
-    return {id,candidateId,state,requestedAt,updatedAt,...(message?{message}:{}),...(download?{download}:{})};
+    const {id,candidateId,releaseId,state,requestedAt,updatedAt,message,download}=job;
+    return {id,candidateId,...(releaseId?{releaseId}:{}),state,requestedAt,updatedAt,...(message?{message}:{}),...(download?{download}:{})};
   }
   beat(input:UpdateHeartbeat) { if(input.candidateId!==this.current())throw new Error('The workspace version changed. Reconnect before updating.'); this.heartbeat={...input,at:this.now()};if(this.job?.hold&&!this.job.started&&input.heldFor===null&&input.blockers.length)this.change({hold:false,state:'waiting',message:input.blockers[0].message});this.kick();return this.view(); }
   async check() {await this.feed.check(true);return this.view();}
@@ -48,7 +48,7 @@ export class UpdateSupervisor {
     if(prior) {
       // currentCandidateId is derived anew by the app bridge. It can legitimately
       // change after the original operation completed; the owner's intent cannot.
-      if(prior.epoch!==input.epoch||prior.candidateId!==input.candidateId||prior.when!==input.when)throw new UpdateAdmissionError('This update request already identifies a different operation.');
+      if(prior.epoch!==input.epoch||prior.candidateId!==input.candidateId||prior.releaseId!==input.releaseId||prior.when!==input.when)throw new UpdateAdmissionError('This update request already identifies a different operation.');
       const persisted=this.journal.current();
       if(persisted?.id===prior.id&&this.job?.id!==prior.id&&!this.working){this.job=persisted;this.kick();}
       return {...this.view(),job:this.publicJob(this.job?.id===prior.id?this.job:prior)};
@@ -58,8 +58,9 @@ export class UpdateSupervisor {
     if(input.currentCandidateId!==this.current()||this.heartbeat?.candidateId!==input.currentCandidateId||this.heartbeat.epoch!==input.epoch||!this.freshHeartbeat())throw new UpdateAdmissionError('Refresh Software Update before installing.');
     const release=this.feed.verifiedRelease(input.candidateId);
     if(!release||release.fromCandidateId!==input.currentCandidateId)throw new UpdateAdmissionError('This compatible update is no longer verified. Check for updates again.');
+    if(input.releaseId!==undefined&&input.releaseId!==release.bundle.sha256||release.runtimeBundle&&!input.releaseId)throw new UpdateAdmissionError('The available update changed. Refresh and review its versions before updating.');
     if(input.when==='now'&&this.heartbeat.blockers.length)throw new UpdateAdmissionError(this.heartbeat.blockers[0].message);
-    const job:Job={id:randomUUID(),candidateId:input.candidateId,fromCandidateId:input.currentCandidateId,epoch:input.epoch,idempotencyKey:input.idempotencyKey,when:input.when,hold:false,started:false,prepared:false,state:'waiting',requestedAt:this.now(),updatedAt:this.now(),release};
+    const job:Job={id:randomUUID(),candidateId:input.candidateId,...(input.releaseId?{releaseId:input.releaseId}:{}),fromCandidateId:input.currentCandidateId,epoch:input.epoch,idempotencyKey:input.idempotencyKey,when:input.when,hold:false,started:false,prepared:false,state:'waiting',requestedAt:this.now(),updatedAt:this.now(),release};
     this.journal.save(job);this.job=job;this.kick();return this.view();
   }
   cancel(value:unknown) {
@@ -84,7 +85,7 @@ export class UpdateSupervisor {
     const same=()=>this.job?.id===job.id;
     const release=job.started?job.release:this.feed.verifiedRelease(job.candidateId);
     if(!release) {this.unverified();return;}
-    if(release.bundle.sha256!==job.release.bundle.sha256)throw new Error('The reviewed update changed.');
+    if(release.bundle.sha256!==job.release.bundle.sha256||JSON.stringify(release.runtimeBundle)!==JSON.stringify(job.release.runtimeBundle)||release.agentVersion!==job.release.agentVersion)throw new Error('The reviewed update changed.');
     if(job.started) {
       // Restart recovery is read-only. The original runner is never launched a second time.
       const observed=await this.installer.reconcile(release,job.id),result=observed&&resultState(observed);
@@ -106,7 +107,9 @@ export class UpdateSupervisor {
     if(!this.admitted(job)) {this.change({state:'waiting',message:'Waiting for current work to finish.'});return;}
     // Request maintenance first, then wait for a subsequent live heartbeat that
     // acknowledges it and observes all old work/effects drained.
-    if(!this.feed.verifiedRelease(job.candidateId)){this.unverified();return;}
+    const refreshed=this.feed.verifiedRelease(job.candidateId);
+    if(!refreshed){this.unverified();return;}
+    if(refreshed.bundle.sha256!==release.bundle.sha256||JSON.stringify(refreshed.runtimeBundle)!==JSON.stringify(release.runtimeBundle)||refreshed.agentVersion!==release.agentVersion)throw Error('The reviewed update changed during preparation.');
     if(!this.job!.hold){this.change({state:'waiting',hold:true,message:'Preparing to update.'});return;}
     if(this.heartbeat?.heldFor!==job.id||this.heartbeat.nativeSuspended!==true)return;
     this.change({state:'preparing',started:true,message:'Preparing recovery.'});

@@ -3,6 +3,8 @@ import { assistantRequestSchema } from './assistant.js';
 
 export const chatGptAccountPluginId = 'edition3-accounts';
 export const chatGptAccountRuntimeVersion = '2026.9.2';
+export const chatGptAccountRuntimeVersions = ['2026.9.2', '2026.9.6'] as const;
+export const supportsChatGptAccountRuntime = (version: string) => chatGptAccountRuntimeVersions.some(value => value === version);
 export const chatGptUsageFreshMs = 30000;
 // Runtime-owned profile names only; reject option-like input, paths and control characters.
 export const chatGptProfileIdSchema = z.string().min(1).max(200).regex(/^openai:[A-Za-z0-9_.@+-]+$/);

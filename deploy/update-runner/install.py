@@ -1,8 +1,8 @@
-"""Reviewed Linux app-only update driver; fixed entry invoked with --request.
+"""Reviewed Linux paired update driver; fixed entry invoked with --request.
 
 No operation runs on import. This driver deliberately supports unchanged
-OpenClaw 2026.9.2, unchanged dependencies, and schema55 only. It never installs
-packages, prunes recovery, downloads additional code, or chooses another release.
+app dependencies and schema55 only. Optional runtime closures are immutable,
+offline packages; no package manager, download or release selection runs here.
 """
 import contextlib
 import fcntl
@@ -25,11 +25,32 @@ import uuid
 
 sys.dont_write_bytecode = True
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, prepare_independent,
-                      require, saved_state, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json)
+                      require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json)
 
 SOCKET = '/run/nova-update/control.sock'
 ENGINE = '2026.9.2'
+ENGINES = {'2026.9.2', '2026.9.6'}
 MAXIMUM = 128 * 1024 ** 2
+RUNTIME_MAXIMUM = 512 * 1024 ** 2
+RUNTIME_EXPANDED_MAXIMUM = 2 * 1024 ** 3
+NATIVE_MIGRATION = r'''
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
+const root=process.argv[1], paths=JSON.parse(process.argv[2]);
+const load=name=>import(pathToFileURL(join(root,'dist',name)).href);
+const {withDoctorSqliteMaintenanceLock}=await load('doctor-sqlite-maintenance-lock-8wr_GXh1.mjs');
+const {repairOpenClawStateDatabaseSchema,closeOpenClawStateDatabaseAsync}=await load('openclaw-state-db-quM4UOZq.mjs');
+const {withAgentDatabaseMaintenanceLease,migrateOpenClawAgentDatabaseForMaintenance,closeOpenClawAgentDatabasesAsync}=await load('openclaw-agent-db-BrZi20Hq.mjs');
+await withDoctorSqliteMaintenanceLock({env:process.env,operation:'reviewed Nova engine migration',protectedPaths:[join(process.env.OPENCLAW_STATE_DIR,'state','openclaw.sqlite'),...paths.map(x=>x.path)],run:async()=>{
+ const report=repairOpenClawStateDatabaseSchema({env:process.env});
+ if(report.warnings.length)throw Error('Shared schema migration was refused');
+ await withAgentDatabaseMaintenanceLease({env:process.env},async maintenance=>{
+  for(const entry of paths)await migrateOpenClawAgentDatabaseForMaintenance({agentId:entry.agentId,pathname:entry.path},maintenance);
+ });
+ await closeOpenClawAgentDatabasesAsync();
+ await closeOpenClawStateDatabaseAsync();
+}});
+'''
 STARTUP_FILES = {'dist/service/apps/service/http.js', 'dist/service/apps/service/store.js',
                  'dist/service/apps/service/software-updates.js', 'dist/service/apps/service/runtime.js',
                  'dist/service/apps/service/update-native-startup.js', 'dist/service/apps/service/update-native-idle.js',
@@ -51,6 +72,54 @@ def read_json(path, maximum=1024 * 1024):
     info = path.lstat()
     require(stat.S_ISREG(info.st_mode) and not path.is_symlink() and info.st_size <= maximum, 'Invalid bounded update JSON file.')
     return json.loads(path.read_bytes())
+
+
+def protected_selector(path, root, directory):
+    """Only the final, root-owned selector may be a symlink."""
+    protected(path.parent, True)
+    require(path.is_symlink() and path.lstat().st_uid == 0, 'The runtime selector is not owned by root.')
+    selected = path.resolve(strict=True)
+    require(selected.is_relative_to(root) and selected != root, 'The runtime selector escaped its protected root.')
+    protected(selected, directory)
+    return selected
+
+
+def runtime_members(archive_path, description):
+    with tarfile.open(archive_path, 'r:gz') as archive:
+        members, expanded = [], 0
+        for member in archive:
+            expanded += member.size
+            require(len(members) < 100000 and expanded <= RUNTIME_EXPANDED_MAXIMUM, 'Reviewed runtime expansion exceeded its bound.')
+            members.append(member)
+    require(1 <= len(members) == description['fileCount'] <= 100000
+            and sum(member.size for member in members) == description['expandedBytes'] <= RUNTIME_EXPANDED_MAXIMUM,
+            'Reviewed runtime expansion exceeded its bound.')
+    names, links = set(), set()
+    for member in members:
+        name = member.name
+        parts = name.split('/')
+        require(name not in names and all(part not in ('', '.', '..') for part in parts)
+                and not pathlib.PurePosixPath(name).is_absolute()
+                and parts[0] in {'node', 'node_modules', 'package.json', 'package-lock.json'}
+                and (member.isdir() or member.isfile() or member.issym()) and not member.islnk(),
+                'Unsafe reviewed runtime archive entry.')
+        require(not any('/'.join(parts[:index]) in links for index in range(1, len(parts))), 'Runtime entry follows an archive symlink.')
+        names.add(name)
+        if member.issym():
+            require(member.linkname and not pathlib.PurePosixPath(member.linkname).is_absolute(), 'Runtime link is not internal.')
+            resolved = list(parts[:-1])
+            for part in member.linkname.split('/'):
+                if part == '..':
+                    require(resolved, 'Runtime link escaped its closure.')
+                    resolved.pop()
+                elif part not in ('', '.'):
+                    resolved.append(part)
+            require(resolved, 'Runtime link points outside its closure.')
+            links.add(name)
+    require(not any(any(name.startswith(link + '/') for name in names) for link in links), 'Runtime archive traverses a link.')
+    require({'node/bin/node', 'node_modules/openclaw/package.json', 'node_modules/openclaw/openclaw.mjs',
+             'package.json', 'package-lock.json'} <= names, 'The offline runtime closure is incomplete.')
+    return members
 
 
 def candidate(directory, expected, version):
@@ -103,6 +172,8 @@ class Driver:
         self.stdout_open = True
         self.before = None
         self.launched = None
+        self.runtime = None
+        self.active_engine = None
 
     def stage(self, stage):
         if not self.stdout_open:
@@ -124,12 +195,16 @@ class Driver:
         require(self.job_id == self.request['jobId'] and self.output.name == self.job_id, 'The attempt directory does not match its receipt.')
         self.release = self.request['release']
         self.target_id, self.prior_id = self.release['candidateId'], self.release['fromCandidateId']
-        require(all(re.fullmatch('[a-f0-9]{64}', value) for value in (self.target_id, self.prior_id)) and self.target_id != self.prior_id, 'Invalid exact candidate pair.')
+        require(all(re.fullmatch('[a-f0-9]{64}', value) for value in (self.target_id, self.prior_id)), 'Invalid exact candidate pair.')
         compatibility = self.release['compatibility']
-        require(self.release['agentVersion'] == compatibility['fromAgentVersion'] == ENGINE
+        self.from_engine, self.to_engine = compatibility['fromAgentVersion'], self.release['agentVersion']
+        self.active_engine = self.from_engine
+        require(self.from_engine in ENGINES and self.to_engine in ENGINES
+                and (self.from_engine == self.to_engine or (self.from_engine, self.to_engine) == ('2026.9.2', '2026.9.6'))
+                and (self.target_id != self.prior_id or self.from_engine != self.to_engine)
                 and compatibility['fromSchemaVersion'] == compatibility['toSchemaVersion'] == 55
                 and compatibility['reviewed'] is True and compatibility['gatewayProtocol'] == 4
-                and compatibility['pluginVersion'] == self.release['novaVersion'], 'This runner does not qualify an engine or schema upgrade.')
+                and compatibility['pluginVersion'] == self.release['novaVersion'], 'This runner does not qualify this app and engine pair.')
         host_path = pathlib.Path(self.request['hostConfiguration'])
         protected(host_path)
         self.host = read_json(host_path, 65536)
@@ -145,11 +220,23 @@ class Driver:
         self.releases = pathlib.Path(self.host['releaseDirectory'])
         self.current = pathlib.Path(self.host['appCurrent'])
         self.agent = pathlib.Path(self.host['agentDirectory'])
+        self.runtime_root = pathlib.Path(self.host['runtimeDirectory'])
         self.dependencies = pathlib.Path(self.settings['dependencyDirectory'])
         self.recovery_root = pathlib.Path(self.settings['recoveryDirectory'])
         self.node = pathlib.Path(self.settings['nodePath'])
-        for path in (self.releases, self.agent, self.dependencies, self.recovery_root):
+        for path in (self.releases, self.runtime_root, self.dependencies, self.recovery_root):
             protected(path, True)
+        if self.agent.is_symlink():
+            self.prior_agent = protected_selector(self.agent, self.runtime_root, True)
+        else:
+            protected(self.agent, True)
+            self.prior_agent = self.agent
+        self.agent_node = pathlib.Path(self.host.get('agentNodePath', str(self.node)))
+        if self.agent_node.is_symlink():
+            self.prior_agent_node = protected_selector(self.agent_node, self.runtime_root, False)
+        else:
+            protected(self.agent_node)
+            self.prior_agent_node = self.agent_node
         protected(self.node)
         require(self.data.resolve(strict=True) == self.data and self.data.is_dir() and not self.data.is_symlink(), 'Workspace path changed.')
         require(not self.recovery_root.is_relative_to(self.data) and not self.data.is_relative_to(self.recovery_root), 'Recovery must be outside live workspace replacement.')
@@ -158,7 +245,7 @@ class Driver:
         self.prior = self.current.resolve(strict=True)
         require(self.prior.parent == self.releases, 'Selected release is outside its protected root.')
         self.prior_manifest = candidate(self.prior, self.prior_id, compatibility['fromNovaVersion'])
-        self.target = self.releases / (self.release['novaVersion'] + '-' + self.target_id[:12])
+        self.target = self.prior if self.target_id == self.prior_id else self.releases / (self.release['novaVersion'] + '-' + self.target_id[:12])
         self.recovery = self.recovery_root / ('update-' + self.job_id)
         self.restore = self.data.parent / ('workspace.restore-' + self.job_id)
         self.failed = self.recovery / 'failed-workspace'
@@ -167,12 +254,14 @@ class Driver:
         if latest.exists():
             protected(latest, private=True)
             selected = read_json(latest, 4096)
-            require(selected['candidateId'] == self.prior_id, 'Latest recovery acceptance does not match the installed pair.')
+            require(selected['candidateId'] == self.prior_id and selected.get('agentVersion', ENGINE) == self.from_engine,
+                    'Latest recovery acceptance does not match the installed pair.')
             self.baseline = pathlib.Path(selected['directory'])
         protected(self.baseline, True, True)
         require(self.baseline.parent == self.recovery_root, 'Recovery baseline is outside the reviewed root.')
         acceptance = read_json(self.baseline / 'acceptance.json')
-        require(acceptance['health']['candidateId'] == self.prior_id, 'The recovery baseline is not paired with the installed candidate.')
+        require(acceptance['health']['candidateId'] == self.prior_id and acceptance.get('agentVersion', ENGINE) == self.from_engine,
+                'The recovery baseline is not paired with the installed candidate and engine.')
         manifest_file = self.baseline / ('snapshot-manifest.json' if (self.baseline / 'snapshot-manifest.json').exists() else 'linked-snapshot-source.json')
         verified = read_json(self.baseline / 'snapshot-verified.json')
         require(digest(manifest_file) == verified['manifestSha256'], 'The recovery baseline verification changed.')
@@ -180,20 +269,22 @@ class Driver:
         require(inventory(self.baseline / 'workspace')[0] == self.baseline_entries, 'The verified closed baseline changed.')
         self.pair = read_json(self.bundle / 'reviewed-pair.json', 65536)
         require({'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256'} <= set(self.pair)
-                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier'}
+                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime'}
                 and self.pair['format'] == 1 and self.pair['candidateId'] == self.target_id and self.pair['priorCandidateId'] == self.prior_id,
                 'The reviewed archive does not identify this exact pair.')
         self.archive = self.bundle / 'app.tgz'
         protected(self.archive, private=True)
         require(self.archive.stat().st_size == self.pair['archiveBytes'] <= MAXIMUM and digest(self.archive) == self.pair['archiveSha256'], 'Reviewed application archive changed.')
+        self.validate_runtime()
         self.config_files = [pathlib.Path(value) for value in self.settings['protectedFiles']]
         require(1 <= len(self.config_files) <= 16 and len(set(self.config_files)) == len(self.config_files), 'Invalid protected host configuration set.')
         for path in self.config_files:
             protected(path)
             require(not path.is_relative_to(self.data) and not path.is_relative_to(self.releases), 'Host protection files must remain outside replacements.')
         self.config_hashes = {str(path): digest(path) for path in self.config_files}
-        self.agent_identity = inventory(self.agent)[0]
-        require(read_json(self.agent / 'package.json')['version'] == ENGINE, 'The installed agent version changed.')
+        self.agent_identity = inventory(self.prior_agent)[0]
+        require(read_json(self.prior_agent / 'package.json')['version'] == self.from_engine, 'The installed agent version changed.')
+        self.agent_node_hash = digest(self.prior_agent_node)
         self.runtime_node_hash = digest(self.node)
         self.dependency_identity = inventory(self.dependencies)[0]
         self.origin = 'http://127.0.0.1:' + str(self.settings['healthPort'])
@@ -201,6 +292,142 @@ class Driver:
         self.client_candidate = None
         require(not (self.output / 'result.json').exists() and not (self.output / 'driver-attempt.json').exists(), 'The original runner attempt must be reconciled, never repeated.')
         write_json(self.output / 'driver-attempt.json', {'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id})
+
+    def validate_runtime(self):
+        runtime = self.pair.get('runtime')
+        signed = self.release.get('runtimeBundle')
+        require((runtime is None) == (signed is None), 'The runtime archive is not bound to the signed release.')
+        if runtime is None:
+            require(self.from_engine == self.to_engine, 'An engine upgrade requires its reviewed offline runtime closure.')
+            return
+        require(set(runtime) == {'format', 'fromVersion', 'toVersion', 'archiveBytes', 'archiveSha256',
+                                 'expandedBytes', 'fileCount', 'nodeVersion', 'nodeSha256'}
+                and runtime['format'] == 1 and runtime['fromVersion'] == self.from_engine
+                and runtime['toVersion'] == self.to_engine and self.from_engine != self.to_engine
+                and runtime['nodeVersion'] == '24.21.0'
+                and all(re.fullmatch('[a-f0-9]{64}', runtime[key]) for key in ('archiveSha256', 'nodeSha256'))
+                and all(type(runtime[key]) is int and runtime[key] > 0 for key in ('archiveBytes', 'expandedBytes', 'fileCount'))
+                and runtime['archiveBytes'] == signed['bytes'] <= RUNTIME_MAXIMUM
+                and runtime['archiveSha256'] == signed['sha256'], 'The reviewed runtime does not match this signed pair.')
+        require(self.agent.is_symlink() and self.agent_node.is_symlink() and self.agent != self.agent_node,
+                'Runtime replacement requires separately provisioned root-owned selectors.')
+        self.runtime = runtime
+        self.runtime_archive = self.bundle / 'runtime.tgz'
+        protected(self.runtime_archive, private=True)
+        require(self.runtime_archive.stat().st_size == runtime['archiveBytes'] and digest(self.runtime_archive) == runtime['archiveSha256'],
+                'The downloaded runtime archive changed.')
+        self.runtime_archive_members = runtime_members(self.runtime_archive, runtime)
+        self.runtime_target = self.runtime_root / 'managed-updates' / ('openclaw-' + self.to_engine + '-' + runtime['archiveSha256'][:12])
+        self.target_agent = self.runtime_target / 'node_modules' / 'openclaw'
+        self.target_agent_node = self.runtime_target / 'node' / 'bin' / 'node'
+
+    def stage_runtime(self):
+        if self.runtime is None:
+            return
+        if not self.runtime_target.parent.exists():
+            self.runtime_target.parent.mkdir(mode=0o755)
+        protected(self.runtime_target.parent, True)
+        if self.runtime_target.exists() or self.runtime_target.is_symlink():
+            self.verify_staged_runtime()
+            return
+        self.runtime_target.mkdir(mode=0o755)
+        with tarfile.open(self.runtime_archive, 'r:gz') as archive:
+            for member in self.runtime_archive_members:
+                destination = self.runtime_target / member.name
+                destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                if member.isdir():
+                    destination.mkdir(mode=0o755, exist_ok=True)
+                elif member.issym():
+                    destination.symlink_to(member.linkname)
+                else:
+                    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755 if member.mode & 0o111 else 0o644)
+                    with os.fdopen(descriptor, 'wb') as output, archive.extractfile(member) as source:
+                        shutil.copyfileobj(source, output)
+                        output.flush()
+                        os.fsync(output.fileno())
+        self.runtime_target.chmod(0o755)
+        for destination in self.runtime_target.rglob('*'):
+            if destination.is_symlink():
+                require(destination.resolve(strict=True).is_relative_to(self.runtime_target), 'Extracted runtime link escaped its closure.')
+            else:
+                destination.chmod(0o755 if destination.is_dir() or destination.stat().st_mode & 0o111 else 0o644)
+        self.verify_staged_runtime()
+        sync_dir(self.runtime_target)
+
+    def verify_staged_runtime(self):
+        protected(self.runtime_target, True)
+        expected = {'.'}
+        with tarfile.open(self.runtime_archive, 'r:gz') as archive:
+            for member in self.runtime_archive_members:
+                destination = self.runtime_target / member.name
+                expected.add(member.name)
+                expected.update(parent.as_posix() for parent in pathlib.PurePosixPath(member.name).parents)
+                info = destination.lstat()
+                require(info.st_uid == 0 and (member.issym() or not stat.S_IMODE(info.st_mode) & 0o022), 'Staged runtime is writable outside root.')
+                if member.issym():
+                    require(destination.is_symlink() and os.readlink(destination) == member.linkname
+                            and destination.resolve(strict=True).is_relative_to(self.runtime_target), 'Staged runtime link changed.')
+                elif member.isdir():
+                    protected(destination, True)
+                else:
+                    protected(destination)
+                    with archive.extractfile(member) as source:
+                        require(digest(destination) == hashlib.file_digest(source, 'sha256').hexdigest()
+                                and bool(info.st_mode & 0o111) == bool(member.mode & 0o111), 'Staged runtime file changed.')
+        require({'.'} | {path.relative_to(self.runtime_target).as_posix() for path in self.runtime_target.rglob('*')} == expected,
+                'The runtime closure contains unreviewed files.')
+        protected(self.target_agent, True)
+        protected(self.target_agent_node)
+        package = read_json(self.target_agent / 'package.json')
+        require(package.get('name') == 'openclaw' and package.get('version') == self.to_engine
+                and digest(self.target_agent_node) == self.runtime['nodeSha256'], 'The runtime closure contains a different engine or Node binary.')
+        version = subprocess.check_output([str(self.target_agent_node), '--version'], text=True, timeout=10).strip()
+        require(version == 'v' + self.runtime['nodeVersion'], 'The staged agent Node runtime has a different version.')
+        self.target_runtime_identity = inventory(self.runtime_target)[0]
+
+    def switch_runtime(self, restoring=False):
+        if self.runtime is None:
+            return
+        self.require_stopped()
+        for selector, target, kind in ((self.agent, self.prior_agent if restoring else self.target_agent, 'agent'),
+                                      (self.agent_node, self.prior_agent_node if restoring else self.target_agent_node, 'node')):
+            pointer = selector.parent / ('update-' + kind + '-' + self.job_id + ('-restore' if restoring else '-next'))
+            require(not pointer.exists() and not pointer.is_symlink(), 'A runtime pointer attempt already exists.')
+            pointer.symlink_to(target)
+            os.replace(pointer, selector)
+            sync_dir(selector.parent)
+        self.active_engine = self.from_engine if restoring else self.to_engine
+
+    def migrate_runtime(self):
+        if self.runtime is None:
+            return
+        import pwd
+        self.require_stopped()
+        self.controller_hold()
+        selected, _, paths = native_scope(self.data, self.before['epoch'])
+        root = self.data / selected / 'openclaw-runtime'
+        agents = [{'agentId': path.parts[-3], 'path': str(self.data / path)} for path in sorted(paths)
+                  if path.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}]
+        user = pwd.getpwnam(self.settings['serviceUser'])
+        env = {'PATH': str(self.target_agent_node.parent) + ':/usr/bin:/bin', 'HOME': user.pw_dir,
+               'USER': user.pw_name, 'LOGNAME': user.pw_name, 'LANG': 'C.UTF-8',
+               'OPENCLAW_HOME': str(root / 'home'), 'OPENCLAW_STATE_DIR': str(root / 'state'),
+               'OPENCLAW_CONFIG_PATH': str(root / 'openclaw.json'), 'OPENCLAW_WORKSPACE_DIR': str(root / 'workspace'),
+               'OPENCLAW_PROFILE': 'edition3', 'OPENCLAW_LOAD_SHELL_ENV': '0', 'OPENCLAW_EXEC_SHELL_SNAPSHOT': '0',
+               'OPENCLAW_NO_AUTO_UPDATE': '1', 'OPENCLAW_DISABLE_BONJOUR': '1', 'OPENCLAW_SKIP_CHANNELS': '1',
+               'NODE_DISABLE_COMPILE_CACHE': '1', 'TMPDIR': str(root / 'tmp')}
+        self.workspace_mutated = True
+        with (self.output / 'native-migration.log').open('xb') as log:
+            subprocess.run([str(self.target_agent_node), '--input-type=module', '-e', NATIVE_MIGRATION,
+                            str(self.target_agent), json.dumps(agents, separators=(',', ':'))],
+                           cwd=root, env=env, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
+        self.require_stopped()
+        self.controller_hold()
+        native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine,
+                           self.to_engine, self.target_agent_node)
+        write_json(self.output / 'native-migration-verified.json', {'format': 1, 'fromVersion': self.from_engine,
+                   'toVersion': self.to_engine, 'savedWorkVerified': True})
 
     def api(self, path, session=False):
         headers = {'Origin': self.origin, 'X-Edition3-Client': '1', 'Content-Type': 'application/json'}
@@ -239,7 +466,7 @@ class Driver:
         require(not require_idle or guard.get('blockers') == [], 'Live work is not verified idle.')
         self.controller_hold()
         agent = self.api('assistant/service')
-        require(agent.get('id') == 'openclaw' and agent.get('state') == 'ready' and agent.get('version') == ENGINE, 'The actual agent is not the reviewed unchanged version.')
+        require(agent.get('id') == 'openclaw' and agent.get('state') == 'ready' and agent.get('version') == self.active_engine, 'The actual agent is not the expected reviewed version.')
         assistant = self.api('assistant/state')['connection']
         require(assistant.get('state') == 'ready' and assistant.get('modelAuthReady') is True
                 and 'operator.write' in assistant.get('grantedScopes', []), 'Assistant access is not ready.')
@@ -310,8 +537,14 @@ class Driver:
 
     def verify_configuration(self):
         require(all(digest(path) == self.config_hashes[str(path)] for path in self.config_files), 'Protected host configuration changed; all versions were retained.')
-        require(inventory(self.agent)[0] == self.agent_identity and digest(self.node) == self.runtime_node_hash,
-                'The unchanged runtime or Node binary changed.')
+        require(inventory(self.prior_agent)[0] == self.agent_identity and digest(self.node) == self.runtime_node_hash
+                and digest(self.prior_agent_node) == self.agent_node_hash, 'The retained runtime or Node binary changed.')
+        if self.runtime is not None:
+            require(protected_selector(self.agent, self.runtime_root, True) in {self.prior_agent, self.target_agent}
+                    and protected_selector(self.agent_node, self.runtime_root, False) in {self.prior_agent_node, self.target_agent_node},
+                    'A runtime selector selected an unreviewed package.')
+            if hasattr(self, 'target_runtime_identity'):
+                require(inventory(self.runtime_target)[0] == self.target_runtime_identity, 'The immutable staged runtime changed.')
         require(inventory(self.dependencies)[0] == self.dependency_identity, 'The retained dependency tree changed.')
 
     def service(self, action):
@@ -319,6 +552,11 @@ class Driver:
         if action == 'start':
             selected = self.current.resolve(strict=True)
             require(selected in {self.target, self.prior}, 'Refuse to start an unexpected selected application.')
+            if self.runtime is not None:
+                restoring = self.active_engine == self.from_engine
+                require(self.agent.resolve(strict=True) == (self.prior_agent if restoring else self.target_agent)
+                        and self.agent_node.resolve(strict=True) == (self.prior_agent_node if restoring else self.target_agent_node),
+                        'Refuse to start a mixed engine and Node pair.')
             self.launched = {'candidateId': self.target_id if selected == self.target else self.prior_id,
                              'notBeforeTicks': int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))}
         subprocess.run(['/usr/bin/systemctl', action, self.settings['serviceName']], check=True, timeout=120)
@@ -349,14 +587,23 @@ class Driver:
         return members
 
     def stage_app(self):
-        native_preflight(self.data, self.before['epoch'])
+        _, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine)
         members = self.archive_members()
         source, source_inodes = inventory(self.data)
         baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
+        if self.runtime is not None:
+            required += self.runtime['expandedBytes'] + self.runtime['fileCount'] * 4096
+            # Native23 rebuilds payload tables in SQLite transactions. Preserve
+            # rollback capacity separately from both replacement tables and WAL.
+            native_bytes = sum((self.data / path).stat().st_size + sum(side.stat().st_size for side in
+                               ((self.data / path).with_name(path.name + '-wal'),) if side.exists()) for path in native_paths)
+            required += 2 * native_bytes
+            require(self.runtime_root.stat().st_dev == self.recovery_root.stat().st_dev, 'Runtime and recovery capacity require the same reviewed filesystem.')
         plan = capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required)
         require(self.releases.stat().st_dev == self.recovery_root.stat().st_dev, 'Candidate and recovery capacity need a separately reviewed filesystem plan.')
         write_json(self.output / 'capacity.json', plan)
+        self.stage_runtime()
         if self.target.exists() or self.target.is_symlink():
             candidate(self.target, self.target_id, self.release['novaVersion'])
             with tarfile.open(self.archive, 'r:gz') as archive:
@@ -401,6 +648,8 @@ class Driver:
         sync_dir(self.target)
 
     def switch(self, target):
+        if target == self.current.resolve(strict=True):
+            return
         pointer = self.current.parent / ('update-pointer-' + self.job_id + ('-restore' if target == self.prior else '-next'))
         require(not pointer.exists() and not pointer.is_symlink(), 'Previous pointer-switch evidence exists.')
         pointer.symlink_to(target)
@@ -421,7 +670,8 @@ class Driver:
 
     def retained_native(self):
         snapshot = self.recovery / 'workspace'
-        native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None)
+        native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
+                           self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None)
         for path in snapshot.rglob('*.jsonl'):
             if 'openclaw-runtime' not in path.parts:
                 continue
@@ -482,6 +732,7 @@ class Driver:
             raise
         sync_dir(self.data.parent)
         candidate(self.prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
+        self.switch_runtime(restoring=True)
         self.switch(self.prior)
         self.stage('restarting')
         self.service('start')
@@ -490,9 +741,9 @@ class Driver:
         saved_state(self.recovery / 'workspace', self.data, restored=True)
         self.retained_native()
         self.verify_configuration()
-        write_json(self.recovery / 'restoration-accepted.json', {'health': accepted['health'], 'failedWorkspaceRetained': True})
+        write_json(self.recovery / 'restoration-accepted.json', {'health': accepted['health'], 'agentVersion': self.from_engine, 'failedWorkspaceRetained': True})
         latest = self.recovery_root / ('latest-restored-' + self.job_id + '.json')
-        write_json(latest, {'candidateId': self.prior_id, 'directory': str(self.baseline)})
+        write_json(latest, {'candidateId': self.prior_id, 'agentVersion': self.from_engine, 'directory': str(self.baseline)})
         os.replace(latest, self.recovery_root / 'latest-update.json')
         sync_dir(self.recovery_root)
         self.result('restored')
@@ -524,6 +775,8 @@ class Driver:
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             self.stage('installing')
             self.switch_attempted = True
+            self.switch_runtime()
+            self.migrate_runtime()
             self.switch(self.target)
             self.switched = True
             self.stage('restarting')
@@ -533,11 +786,13 @@ class Driver:
             saved_state(self.recovery / 'workspace', self.data)
             self.retained_native()
             self.verify_configuration()
+            require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
+                    'The migrated pair no longer leaves full independent recovery capacity and reserve.')
             require(self.current.resolve(strict=True) == self.target, 'The selected target changed during acceptance.')
             candidate(self.target, self.target_id, self.release['novaVersion'])
-            write_json(self.recovery / 'acceptance.json', {'health': accepted['health']})
+            write_json(self.recovery / 'acceptance.json', {'health': accepted['health'], 'agentVersion': self.active_engine})
             latest = self.recovery_root / ('latest-' + self.job_id + '.json')
-            write_json(latest, {'candidateId': self.target_id, 'directory': str(self.recovery)})
+            write_json(latest, {'candidateId': self.target_id, 'agentVersion': self.active_engine, 'directory': str(self.recovery)})
             os.replace(latest, self.recovery_root / 'latest-update.json')
             sync_dir(self.recovery_root)
             self.result('completed')

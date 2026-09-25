@@ -4,6 +4,7 @@ Linux adds real rsync/cp metadata and independent-inode coverage. Other systems
 exercise bounded admission, saved SQLite data, receipt and orchestration rules.
 """
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -250,6 +251,7 @@ class RunnerTests(unittest.TestCase):
 
     def instance(self):
         instance = driver.Driver(self.root / 'request.json')
+        instance.from_engine = instance.to_engine = instance.active_engine = '2026.9.2'
         instance.job_id = '34104484-7465-4b71-acf8-0e390a17aa42'
         instance.target_id, instance.prior_id = 'b' * 64, 'a' * 64
         instance.prior = self.root / 'prior'
@@ -342,6 +344,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_exact_app_and_native_barrier_are_required_by_acceptance(self):
         instance = driver.Driver(self.root / 'request.json')
+        instance.active_engine = '2026.9.2'
         instance.job_id, instance.client_candidate = 'job', 'a' * 64
         health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.0', 'schemaVersion': 55, 'apiVersion': 1}
         guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
@@ -356,6 +359,147 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 instance.acceptance('a' * 64, '1.13.0')
             guard[key] = before
+        # An engine-only update has the same app identity throughout. Its phase,
+        # not candidate equality, selects the expected live engine version.
+        instance.active_engine = '2026.9.6'
+        with self.assertRaises(RuntimeError):
+            instance.acceptance('a' * 64, '1.13.0')
+        responses['assistant/service']['version'] = '2026.9.6'
+        instance.acceptance('a' * 64, '1.13.0')
+
+    def runtime_archive(self, additional=()):
+        archive = self.root / 'runtime.tgz'
+        entries = [('node/bin/node', b'node'), ('node_modules/openclaw/package.json', b'{}'),
+                   ('node_modules/openclaw/openclaw.mjs', b'export{}'), ('package.json', b'{}'), ('package-lock.json', b'{}')]
+        with tarfile.open(archive, 'w:gz') as output:
+            for name, content in [*entries, *additional]:
+                member = tarfile.TarInfo(name)
+                if isinstance(content, str):
+                    member.type, member.linkname = tarfile.SYMTYPE, content
+                    output.addfile(member)
+                else:
+                    member.size = len(content)
+                    output.addfile(member, io.BytesIO(content))
+        return archive, {'fileCount': len(entries) + len(additional), 'expandedBytes': sum(len(value) for _, value in [*entries, *additional] if isinstance(value, bytes))}
+
+    def test_offline_runtime_archive_bounds_and_internal_links(self):
+        archive, description = self.runtime_archive([('node_modules/.bin/openclaw', '../openclaw/openclaw.mjs')])
+        self.assertEqual(len(driver.runtime_members(archive, description)), 6)
+        for extra in [[('../outside', b'bad')], [('node_modules/link', '../../outside')],
+                      [('node_modules/link', '/outside')], [('node_modules/link', 'openclaw'), ('node_modules/link/file', b'bad')],
+                      [('node/bin/node', b'duplicate')]]:
+            archive, description = self.runtime_archive(extra)
+            with self.assertRaises(RuntimeError):
+                driver.runtime_members(archive, description)
+        archive, description = self.runtime_archive()
+        description['expandedBytes'] += 1
+        with self.assertRaises(RuntimeError):
+            driver.runtime_members(archive, description)
+
+    def test_runtime_archive_must_match_signed_bytes_and_hash(self):
+        instance = self.instance()
+        archive, expansion = self.runtime_archive()
+        runtime = {'format': 1, 'fromVersion': '2026.9.2', 'toVersion': '2026.9.6', 'archiveBytes': archive.stat().st_size,
+                   'archiveSha256': hashlib.sha256(archive.read_bytes()).hexdigest(), **expansion,
+                   'nodeVersion': '24.21.0', 'nodeSha256': 'd' * 64}
+        instance.from_engine, instance.to_engine = runtime['fromVersion'], runtime['toVersion']
+        instance.pair, instance.release = {'runtime': runtime}, {'runtimeBundle': {'bytes': runtime['archiveBytes'], 'sha256': runtime['archiveSha256']}}
+        instance.bundle, instance.runtime_root = self.root, self.root
+        instance.agent = types.SimpleNamespace(is_symlink=lambda: True)
+        instance.agent_node = types.SimpleNamespace(is_symlink=lambda: True, distinct=True)
+        with patch.object(driver, 'protected'):
+            instance.validate_runtime()
+            instance.release['runtimeBundle']['sha256'] = 'e' * 64
+            with self.assertRaises(RuntimeError):
+                instance.validate_runtime()
+            instance.release.pop('runtimeBundle')
+            with self.assertRaises(RuntimeError):
+                instance.validate_runtime()
+
+    def test_migration_rejects_ambiguous_or_released_workshop_history(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as connection:
+            connection.executescript('''create table skill_workshop_proposals(workspace_dir text,owner_agent_id text,claim_released_time text);
+                create table skill_workshop_collection_reviews(workspace_dir text);
+                insert into skill_workshop_proposals values('/saved','agent',null);
+                insert into skill_workshop_collection_reviews values('/saved');''')
+            tables = {'skill_workshop_proposals', 'skill_workshop_collection_reviews'}
+            recovery.migration_preflight(connection, tables)
+            connection.execute("insert into skill_workshop_proposals values('/saved','other',null)")
+            with self.assertRaises(RuntimeError):
+                recovery.migration_preflight(connection, tables)
+            connection.execute("delete from skill_workshop_proposals where owner_agent_id='other'")
+            connection.execute("update skill_workshop_proposals set claim_released_time='released'")
+            with self.assertRaises(RuntimeError):
+                recovery.migration_preflight(connection, tables)
+
+    def test_migration_retains_old_columns_and_exact_binary_memory_vectors(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            before.executescript("create table memory_index_chunks(id text,embedding text,content text);insert into memory_index_chunks values('saved','[0.25,-2.5]','retained');")
+            after.executescript('create table memory_index_chunks(chunk_rowid integer,id text,embedding blob,content text);')
+            after.execute('insert into memory_index_chunks values(1,?,?,?)', ('saved', recovery.embedding_bytes('[0.25,-2.5]'), 'retained'))
+            args = (before, after, {'memory_index_chunks'}, self.root / 'before', self.root / 'after', None)
+            recovery.migrated_native_rows(*args)
+            after.execute("update memory_index_chunks set content='lost'")
+            with self.assertRaises(RuntimeError):
+                recovery.migrated_native_rows(*args)
+            for invalid in ('[NaN]', '[true]', '{"x":1}', 'not-json'):
+                with self.assertRaises((RuntimeError, ValueError)):
+                    recovery.embedding_bytes(invalid)
+
+    def test_migration_registry_changes_only_the_reviewed_agent_schema_version(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            for connection, version in ((before,19),(after,23)):
+                connection.execute('create table agent_databases(agent_id text,path text,schema_version integer,last_seen_at integer,size_bytes integer)')
+                connection.execute('insert into agent_databases values(?,?,?,?,?)',('main','../agents/main/agent/openclaw-agent.sqlite',version,version,version))
+            args=(before,after,{'agent_databases'},self.root/'before',self.root/'after',None)
+            recovery.migrated_native_rows(*args)
+            after.execute('update agent_databases set schema_version=24')
+            with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+
+    def test_migration_allows_only_proven_index_and_validation_metadata_changes(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            schema = '''create table memory_index_sources(id integer,path text,source text,hash text,mtime integer,size integer);
+                create table memory_index_chunks(id text,path text,source text);
+                create table memory_index_chunk_provenance(chunk_id text);
+                create table memory_index_state(id integer,revision integer);
+                create table session_nodes(session_key text,entry_json text,entry_valid integer);
+                create table schema_meta(meta_key text,role text,schema_version integer,app_version text,created_at integer,updated_at integer);'''
+            for connection in (before, after):
+                connection.executescript(schema)
+                connection.executescript("insert into memory_index_sources values(1,'MEMORY.md','memory','retained-hash',4,9);insert into memory_index_chunks values('c','MEMORY.md','memory');insert into memory_index_state values(1,2);insert into session_nodes values('saved','{\"status\":\"done\"}',0);insert into schema_meta values('primary','global',15,'2026.9.2',10,10);")
+            after.executescript("update memory_index_sources set hash='';insert into memory_index_chunk_provenance values('c');update memory_index_state set revision=3;update session_nodes set entry_valid=1;update schema_meta set schema_version=18,updated_at=11;")
+            tables={'memory_index_sources','memory_index_state','session_nodes','schema_meta'}
+            args=(before,after,tables,self.root/'old-openclaw.sqlite',self.root/'openclaw.sqlite',None)
+            recovery.migrated_native_rows(*args)
+            for mutation, restore in [
+                    ("update memory_index_sources set hash='replacement'", "update memory_index_sources set hash=''"),
+                    ("update memory_index_sources set size=8", "update memory_index_sources set size=9"),
+                    ("update memory_index_state set revision=1", "update memory_index_state set revision=3"),
+                    ("update session_nodes set entry_valid=-1", "update session_nodes set entry_valid=1"),
+                    ("update session_nodes set entry_json='{}'", "update session_nodes set entry_json='{\"status\":\"done\"}'"),
+                    ("update schema_meta set app_version='2026.9.7'", "update schema_meta set app_version='2026.9.2'")]:
+                after.execute(mutation)
+                with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+                after.execute(restore)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node required for native zstd transcript verification')
+    def test_migrated_zstd_transcript_keeps_original_bytes_and_identity(self):
+        node = shutil.which('node')
+        before_path, after_path = self.root / 'before.sqlite', self.root / 'after.sqlite'
+        payload = '{"saved":"' + 'history ' * 300 + '"}'
+        compressed = subprocess.check_output([node, '--input-type=module', '-e',
+            "import{zstdCompressSync}from'node:zlib';process.stdout.write(zstdCompressSync(Buffer.from(process.argv[1])));", payload])
+        with contextlib.closing(sqlite3.connect(before_path)) as before, contextlib.closing(sqlite3.connect(after_path)) as after:
+            before.execute('create table transcript_events(session_id text,seq integer,event_json text,created_at integer)')
+            before.execute('insert into transcript_events values(?,?,?,?)', ('saved', 1, payload, 100))
+            before.commit()
+            after.execute('create table transcript_events(session_id text,seq integer,event_json text,created_at integer,event_zstd blob,event_utf8_bytes integer,navigation_json text)')
+            after.execute('insert into transcript_events values(?,?,?,?,?,?,?)', ('saved', 1, None, 100, compressed, len(payload.encode()), '{}'))
+            after.commit()
+            self.assertEqual(recovery.transcript_hashes(before_path, node), recovery.transcript_hashes(after_path, node))
+            after.execute('update transcript_events set seq=2')
+            after.commit()
+            self.assertNotEqual(recovery.transcript_hashes(before_path, node), recovery.transcript_hashes(after_path, node))
 
     def test_driver_preflight_failure_does_not_stop_and_stop_failure_never_claims_unchanged(self):
         def setup(fail):
@@ -406,6 +550,28 @@ class RunnerTests(unittest.TestCase):
         with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
             instance.run()
         self.assertEqual(actions, ['stop', 'paired-restore'])
+        self.assertTrue(instance.switch_attempted)
+
+    def test_engine_only_migration_failure_restores_pair_even_without_an_app_pointer_change(self):
+        instance = self.instance()
+        instance.target_id = instance.prior_id
+        instance.target = instance.prior
+        instance.recovery, instance.restore = self.root / 'recovery', self.root / 'restore'
+        instance.recovery_root = self.root
+        instance.data, instance.baseline = self.root / 'data', self.root / 'baseline'
+        instance.config_files = []
+        instance.release.update(manifestExpiresAt=9999999999999, novaVersion='1.13.0')
+        instance.validate = instance.stage_app = instance.require_stopped = lambda: None
+        instance.stage = lambda value: None
+        actions = []
+        instance.service = lambda action: actions.append(action)
+        instance.switch_runtime = lambda: actions.append('select-new-engine-and-node')
+        instance.migrate_runtime = lambda: (_ for _ in ()).throw(RuntimeError('migration rejected'))
+        instance.switch = lambda path: actions.append('app-pointer')
+        instance.restore_prior = lambda: actions.append('restore-engine-node-and-workspace')
+        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
+            instance.run()
+        self.assertEqual(actions, ['stop', 'select-new-engine-and-node', 'restore-engine-node-and-workspace'])
         self.assertTrue(instance.switch_attempted)
 
     @unittest.skipUnless(sys.platform == 'linux' and pathlib.Path('/usr/bin/rsync').exists(), 'Requires Linux rsync/cp metadata support; no host service is used.')

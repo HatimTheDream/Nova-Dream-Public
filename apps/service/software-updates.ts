@@ -17,7 +17,7 @@ export interface UpdateWorkspace {
     pendingJobIds():string[];
   };
 }
-const installInput = z.object({epoch:z.string().uuid(),candidateId:z.string().regex(/^[a-f0-9]{64}$/),idempotencyKey:z.string().uuid(),when:z.enum(['now','idle'])}).strict();
+const installInput = z.object({epoch:z.string().uuid(),candidateId:z.string().regex(/^[a-f0-9]{64}$/),releaseId:z.string().regex(/^[a-f0-9]{64}$/).optional(),idempotencyKey:z.string().uuid(),when:z.enum(['now','idle'])}).strict();
 const cancelInput = z.object({epoch:z.string().uuid(),jobId:z.string().uuid()}).strict();
 const checkInput = z.object({epoch:z.string().uuid()}).strict();
 
@@ -37,6 +37,7 @@ export class SoftwareUpdates {
       : this.view?.installation ?? {supported:false,reason:'Checking the host update service…'};
     return { installed:this.workspace.installed(), availability:this.unavailable ? 'error' : this.view?.availability ?? (this.host ? 'checking' : 'unavailable'),
       ...(this.view?.checkedAt ? {checkedAt:this.view.checkedAt}:{}), ...(this.view?.release ? {release:this.view.release}:{}),
+      ...(this.view?.agentUpdate ? {agentUpdate:this.view.agentUpdate}:{}),
       ...(this.unavailable ? {error:'Could not reach the update service.'} : this.view?.error ? {error:this.view.error}:{}), installation,
       ...(this.view?.job ? {job:this.view.job}:{}), ...(this.view?.blocker ? {blocker:this.view.blocker}:{}) };
   }

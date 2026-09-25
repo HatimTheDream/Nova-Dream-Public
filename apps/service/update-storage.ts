@@ -24,11 +24,11 @@ export const updateJournalLimits=Object.freeze({receipts:2048,bytes:16*1024*1024
 const id=z.string().uuid(),candidate=z.string().regex(/^[a-f0-9]{64}$/);
 const release=updateManifestSchema.shape.releases.element.safeExtend({manifestSequence:z.number().int().positive(),manifestExpiresAt:z.number().finite().nonnegative()});
 const jobSchema=z.object({
-  id,candidateId:candidate,fromCandidateId:candidate,epoch:id,idempotencyKey:id,when:z.enum(['now','idle']),hold:z.boolean(),started:z.boolean(),prepared:z.boolean().optional(),
+  id,candidateId:candidate,releaseId:candidate.optional(),fromCandidateId:candidate,epoch:id,idempotencyKey:id,when:z.enum(['now','idle']),hold:z.boolean(),started:z.boolean(),prepared:z.boolean().optional(),
   state:z.enum(['waiting','downloading','verifying','preparing','installing','restarting','checking','completed','restored','failed','cancelled']),
   requestedAt:z.number().finite().nonnegative(),updatedAt:z.number().finite().nonnegative(),message:z.string().max(1000).optional(),
   download:z.object({received:z.number().int().nonnegative(),total:z.number().int().positive()}).strict().optional(),release,
-}).strict().refine(job=>job.candidateId===job.release.candidateId&&job.fromCandidateId===job.release.fromCandidateId,'The saved release identity changed.');
+}).strict().refine(job=>job.candidateId===job.release.candidateId&&job.fromCandidateId===job.release.fromCandidateId&&(job.releaseId===undefined?!job.release.runtimeBundle:job.releaseId===job.release.bundle.sha256),'The saved release identity changed.');
 const journalSchema=z.object({format:z.literal(1),currentId:id.nullable(),jobs:z.array(jobSchema).max(updateJournalLimits.receipts)}).strict().superRefine((state,ctx)=>{
   if(new Set(state.jobs.map(job=>job.id)).size!==state.jobs.length||new Set(state.jobs.map(job=>job.idempotencyKey)).size!==state.jobs.length||state.currentId!==null&&!state.jobs.some(job=>job.id===state.currentId)||state.currentId===null&&state.jobs.length)ctx.addIssue({code:'custom',message:'Invalid update receipt references.'});
 });

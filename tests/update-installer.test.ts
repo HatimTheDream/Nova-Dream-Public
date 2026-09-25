@@ -4,13 +4,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedUpdateInstaller } from '../apps/service/update-installer.js';
+import { ManagedUpdateInstaller, reviewedAssetResponse } from '../apps/service/update-installer.js';
 import type { VerifiedUpdateRelease } from '../apps/service/update-feed.js';
 
 const hash=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
 const file=(name:string,content:string)=>({name,data:Buffer.from(content).toString('base64'),sha256:hash(content)});
 const runner=file('install.py','# Inert integrity fixture. This file must never execute.\n');
 const companion=file('acceptance.py','# Another inert fixture.\n');
+test('only the fixed GitHub release CDN redirect is followed without credentials',async()=>{
+  const source='https://github.com/example/repo/releases/download/v1/runtime.tgz',cdn='https://release-assets.githubusercontent.com/github-production-release-asset/123/file?token=fixture';
+  const calls:unknown[]=[];
+  const fetcher=(async(url,init)=>{calls.push([url,init?.redirect,init?.credentials]);return url===source?new Response(null,{status:302,headers:{location:cdn}}):new Response('verified later by hash');}) as typeof fetch;
+  await reviewedAssetResponse(source,new AbortController().signal,fetcher);assert.deepEqual(calls,[[source,'manual','omit'],[cdn,'error','omit']]);
+  for(const location of ['http://127.0.0.1/private','https://evil.example/github-production-release-asset/a','https://user:secret@release-assets.githubusercontent.com/github-production-release-asset/a','https://release-assets.githubusercontent.com/other/a']){
+    let count=0;await assert.rejects(reviewedAssetResponse(source,new AbortController().signal,(async()=>{count++;return new Response(null,{status:302,headers:{location}});}) as typeof fetch),/Untrusted/);assert.equal(count,1);
+  }
+});
 function fixture(files=[runner,companion]){
   const directory=mkdtempSync(join(tmpdir(),'nova-update-installer-')),candidateId='b'.repeat(64),folder=join(directory,candidateId);
   const bytes=Buffer.from(JSON.stringify({format:1,files}));let requests=0;
@@ -33,6 +42,28 @@ test('authenticated bundle bytes and every extracted file verify, and cached ret
     await f.installer.prepare(f.release,()=>{});assert.equal(f.requests(),1);
     assert.equal(existsSync(join(f.folder,'request.json')),false,'Preparation cannot start the runner.');
   }finally{f.close();}
+});
+
+test('paired runtime download is separately authenticated, reused, and checked again before execution',async()=>{
+  const f=fixture(),runtime=Buffer.from('inert runtime archive integrity fixture');let requests=0;
+  const release={...f.release,runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:runtime.length,sha256:hash(runtime)}};
+  const folder=join(f.directory,release.bundle.sha256),progress:number[][]=[];
+  const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),'must-not-execute',(async(url)=>{requests++;return new Response(url===release.runtimeBundle.url?runtime:f.bytes);}) as typeof fetch);
+  try{
+    await installer.prepare(release,(a,b)=>progress.push([a,b]));
+    assert.deepEqual(readFileSync(join(folder,'runtime.tgz')),runtime);assert.deepEqual(progress.at(-1),[f.bytes.length+runtime.length,f.bytes.length+runtime.length]);
+    await installer.prepare(release,()=>{});assert.equal(requests,2);
+    writeFileSync(join(folder,'runtime.tgz'),Buffer.alloc(runtime.length));
+    await assert.rejects(installer.run(release,randomUUID(),()=>{}),/Runtime package changed/);
+    assert.equal(existsSync(join(folder,'attempts')),false,'Tampered runtime cannot start or record installation.');
+  }finally{f.close();}
+});
+
+test('invalid runtime bytes cannot be accepted alongside a valid application package',async()=>{
+  const f=fixture(),runtime=Buffer.from('runtime');
+  const release={...f.release,runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:runtime.length,sha256:hash(runtime)}};
+  const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),'must-not-execute',(async(url)=>new Response(url===release.runtimeBundle.url?Buffer.from('invalid'):f.bytes)) as typeof fetch);
+  try{await assert.rejects(installer.prepare(release,()=>{}),/Runtime package verification failed|runtime package exceeded/i);assert.equal(existsSync(join(f.directory,release.bundle.sha256,'attempts')),false);}finally{f.close();}
 });
 
 test('interrupted download evidence is retained while a later attempt downloads and verifies anew',async()=>{

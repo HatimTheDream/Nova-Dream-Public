@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { UpdateFeed, updateFeedLimits, updateManifestSchema, type UpdateCurrentCandidate, type UpdateFeedInstalled, type UpdateFeedOptions, type UpdateManifest, type UpdateRelease } from '../apps/service/update-feed.js';
 import { updateInstallRequestSchema } from '../packages/domain/software-update.js';
+import { OpenClawUpdateFeed } from '../apps/service/openclaw-update-feed.js';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const keys = generateKeyPairSync('ed25519');
@@ -46,12 +47,37 @@ test('one host check coalesces tabs, verifies the pair and returns only bounded 
   release(f.response(f.manifest()));
   assert.equal((await first).availability, 'available'); assert.equal((await second).availability, 'available');
   const status = f.feed.status();
-  assert.deepEqual(status.release, { candidateId, novaVersion: target.novaVersion, agentVersion: target.agentVersion, notes: target.notes, downloadBytes: 8192 });
+  assert.deepEqual(status.release, { candidateId, releaseId: target.bundle.sha256, novaVersion: target.novaVersion, agentVersion: target.agentVersion, notes: target.notes, downloadBytes: 8192 });
   assert(!JSON.stringify(status).includes('https:')); assert(!JSON.stringify(status).includes('runner'));
   assert.equal(f.feed.verifiedRelease(candidateId)?.bundle.sha256, target.bundle.sha256);
   assert.equal(f.feed.verifiedRelease(hostId), undefined);
   const copy = f.feed.verifiedRelease(candidateId)!; copy.bundle.sha256 = '0'.repeat(64);
   assert.equal(f.feed.verifiedRelease(candidateId)?.bundle.sha256, target.bundle.sha256);
+});
+
+test('an independently discovered engine update is never reported as fully up to date', async () => {
+  const f=fixture();let cached:unknown;
+  const agentFeed=new OpenClawUpdateFeed({installed:()=>installed.agentVersion,read:()=>cached,write:value=>{cached=value;},fetch:(async()=>new Response(JSON.stringify({tag_name:'v2026.9.6',draft:false,prerelease:false,html_url:'https://github.com/openclaw/openclaw/releases/tag/v2026.9.6'}))) as typeof fetch});
+  const current={...installed,agentVersion:installed.agentVersion!,protocolVersion:4};
+  f.setResponder(()=>f.response({...f.manifest([]),currentCandidates:[current]}));
+  const feed=new UpdateFeed({...f.options,agentFeed});
+  const status=await feed.check();
+  assert.equal(status.availability,'available');assert.equal(status.agentUpdate?.version,'2026.9.6');assert.equal(status.release,undefined,'Upstream discovery cannot authorize an unsigned installation.');
+  feed.stop();
+});
+
+test('an engine-only release retains app identity and captures its distinct exact package',async()=>{
+  const f=fixture();
+  const engine={...structuredClone(target),candidateId:hostId,novaVersion:installed.novaVersion,agentVersion:'2026.9.6',compatibility:{...target.compatibility,pluginVersion:installed.novaVersion},runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:12345,sha256:'e'.repeat(64)}};
+  f.setResponder(()=>f.response(f.manifest([engine])));
+  await f.feed.check();assert.equal(f.feed.status().release?.releaseId,engine.bundle.sha256);assert.equal(f.feed.status().release?.downloadBytes,8192+12345);
+  assert.equal(f.feed.verifiedRelease(hostId)?.agentVersion,'2026.9.6');
+  f.setHost({...installed,agentVersion:'2026.9.6'});assert.equal(f.feed.verifiedRelease(hostId),undefined,'An installed engine cannot be admitted again.');
+});
+
+test('a signed runtime asset outside configured artifact origins cannot be installed',async()=>{
+  const f=fixture();f.setResponder(()=>f.response(f.manifest([{...target,agentVersion:'2026.9.6',runtimeBundle:{url:'https://other.example.test/runtime.tgz',bytes:100,sha256:'e'.repeat(64)}}])));
+  await f.feed.check();assert.equal(f.feed.status().availability,'error');assert.equal(f.feed.verifiedRelease(candidateId),undefined);
 });
 
 test('automatic checks and manual checks remain bounded through service restart', async () => {

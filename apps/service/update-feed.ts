@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
 import { updateCandidateIdSchema, type SoftwareUpdateReleaseSummary, type SoftwareUpdateStatus } from '../../packages/domain/software-update.js';
+import type { OpenClawUpdateFeed } from './openclaw-update-feed.js';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 export const updateFeedLimits = Object.freeze({ maxBytes: 128 * 1024, timeoutMs: 10_000, freshnessMs: 36 * HOUR, manualIntervalMs: 5 * 60_000, automaticIntervalMs: DAY });
@@ -23,13 +24,14 @@ const releaseSchema = z.object({
   }).strict(),
   recovery: z.object({ pairedSnapshot: z.literal(true), independentRestore: z.literal(true), readinessTimeoutSeconds: z.number().int().min(30).max(600) }).strict(),
   bundle: z.object({ url: z.string().max(2048).url(), bytes: z.number().int().positive().max(8 * 1024 ** 3), sha256: hex, runnerSha256: hex }).strict(),
+  runtimeBundle: z.object({ url: z.string().max(2048).url(), bytes: z.number().int().positive().max(512 * 1024 ** 2), sha256: hex }).strict().optional(),
 }).strict().refine(release => release.compatibility.pluginVersion === release.novaVersion, 'The reviewed plugin must match Nova.');
 export const updateManifestSchema = z.object({
   format: z.literal(1), channel: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   createdAt: z.iso.datetime(), expiresAt: z.iso.datetime(), releases: z.array(releaseSchema).max(32),
   currentCandidates: z.array(currentCandidateSchema).max(32).optional(),
 }).strict().refine(manifest => {
-  const identities = [...manifest.releases, ...(manifest.currentCandidates ?? [])].map(record => record.candidateId);
+  const identities = [...manifest.releases, ...(manifest.currentCandidates ?? [])].map(record => `${record.candidateId}:${record.agentVersion}`);
   return new Set(identities).size === identities.length;
 }, 'Candidate identities must be unique.');
 export type UpdateRelease = z.infer<typeof releaseSchema>;
@@ -42,9 +44,10 @@ export type UpdateFeedInstalled = {
   candidateId: string; novaVersion: string; agentVersion?: string; platform: string; arch: string; nodeMajor: number; schemaVersion: number; protocolVersion: number;
 };
 export type UpdateFeedStore = { read(): unknown; write(state: unknown): void };
-export type UpdateFeedStatus = Pick<SoftwareUpdateStatus, 'availability' | 'checkedAt' | 'release' | 'error' | 'notification'>;
+export type UpdateFeedStatus = Pick<SoftwareUpdateStatus, 'availability' | 'checkedAt' | 'release' | 'error' | 'notification' | 'agentUpdate'>;
 export type UpdateFeedOptions = {
   store: UpdateFeedStore; installed(): UpdateFeedInstalled; trust?: UpdateFeedTrust; fetch?: typeof globalThis.fetch; now?: () => number; random?: () => number;
+  agentFeed?: Pick<OpenClawUpdateFeed, 'status' | 'check' | 'stop'>;
 };
 const base64 = z.string().min(4).max(updateFeedLimits.maxBytes).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
 const envelopeSchema = z.object({ payload: base64, signature: z.string().length(88).regex(/^[A-Za-z0-9+/]{86}==$/) }).strict();
@@ -122,7 +125,7 @@ export class UpdateFeed {
     if (manifest.channel !== this.trust.channel || created > now + 5 * 60_000 || expires <= now || expires <= created || expires - created > 31 * DAY) throw Error('Invalid validity period');
     const payloadHash = createHash('sha256').update(bytes).digest('hex');
     if (manifest.sequence < this.cache.highestSequence || (manifest.sequence === this.cache.highestSequence && payloadHash !== this.cache.highestPayloadHash)) throw Error('Release sequence rollback');
-    for (const release of manifest.releases) if (!this.trust.artifactOrigins.includes(trustedHttps(release.bundle.url).origin)) throw Error('Untrusted artifact origin');
+    for (const release of manifest.releases) for (const artifact of [release.bundle, release.runtimeBundle].filter(Boolean)) if (!this.trust.artifactOrigins.includes(trustedHttps(artifact!.url).origin)) throw Error('Untrusted artifact origin');
     return { manifest, payloadHash };
   }
 
@@ -134,25 +137,26 @@ export class UpdateFeed {
     const compatible = manifest.releases.filter(release => release.platform === host.platform && release.arch === host.arch && release.nodeMajor === host.nodeMajor && release.compatibility.gatewayProtocol === host.protocolVersion);
     const current = compatible.some(release => release.candidateId === host.candidateId && release.novaVersion === host.novaVersion && release.agentVersion === host.agentVersion && release.compatibility.toSchemaVersion === host.schemaVersion)
       || (manifest.currentCandidates ?? []).some(record => record.candidateId === host.candidateId && record.novaVersion === host.novaVersion && record.agentVersion === host.agentVersion && record.platform === host.platform && record.arch === host.arch && record.nodeMajor === host.nodeMajor && record.schemaVersion === host.schemaVersion && record.protocolVersion === host.protocolVersion);
-    const targets = compatible.filter(release => release.candidateId !== host.candidateId && release.fromCandidateId === host.candidateId && release.compatibility.fromNovaVersion === host.novaVersion && release.compatibility.fromAgentVersion === host.agentVersion && release.compatibility.fromSchemaVersion === host.schemaVersion);
+    const targets = compatible.filter(release => (release.candidateId !== host.candidateId || release.agentVersion !== host.agentVersion) && release.fromCandidateId === host.candidateId && release.compatibility.fromNovaVersion === host.novaVersion && release.compatibility.fromAgentVersion === host.agentVersion && release.compatibility.fromSchemaVersion === host.schemaVersion);
     // Multiple successors would make the supposedly exact review ambiguous.
     return { manifest, ...(targets.length === 1 ? { release: targets[0] } : {}), current: targets.length === 0 && current };
   }
 
   private summary(release: UpdateRelease): SoftwareUpdateReleaseSummary {
-    return { candidateId: release.candidateId, novaVersion: release.novaVersion, agentVersion: release.agentVersion, notes: [...release.notes], downloadBytes: release.bundle.bytes };
+    return { candidateId: release.candidateId, releaseId: release.bundle.sha256, novaVersion: release.novaVersion, agentVersion: release.agentVersion, notes: [...release.notes], downloadBytes: release.bundle.bytes + (release.runtimeBundle?.bytes ?? 0) };
   }
 
   status(): UpdateFeedStatus {
-    const checked = this.cache.checkedAt === undefined ? {} : { checkedAt: this.cache.checkedAt };
+    const agentUpdate = this.options.agentFeed?.status();
+    const checked = { ...(this.cache.checkedAt === undefined ? {} : { checkedAt: this.cache.checkedAt }), ...(agentUpdate ? { agentUpdate } : {}) };
     if (this.inFlight) return { ...checked, availability: 'checking' };
     if (!this.trust) return { ...checked, availability: 'unavailable', error: this.configurationError ? 'The trusted update service needs host configuration.' : 'A trusted update service has not been configured for this host.' };
     if (this.cacheUnavailable) return { ...checked, availability: 'error', error: 'Saved update verification needs host repair before checking again.' };
     if (this.cache.error) return { ...checked, availability: 'error', error: safeErrors[this.cache.error] };
     const latest = this.latest();
     if (!latest) return { ...checked, availability: 'unavailable', error: this.cache.checkedAt === undefined ? 'Updates have not been checked yet.' : 'The last update information is no longer current. Check again before installing.' };
-    if (latest.release) return { ...checked, availability: 'available', release: this.summary(latest.release), ...(this.cache.notifiedCandidateId !== latest.release.candidateId && this.cache.dismissedCandidateId !== latest.release.candidateId ? { notification: { candidateId: latest.release.candidateId } } : {}) };
-    if (latest.current) return { ...checked, availability: 'current' };
+    if (latest.release) return { ...checked, availability: 'available', release: this.summary(latest.release), ...(this.cache.notifiedCandidateId !== latest.release.bundle.sha256 && this.cache.dismissedCandidateId !== latest.release.bundle.sha256 ? { notification: { candidateId: latest.release.candidateId } } : {}) };
+    if (latest.current) return { ...checked, availability: agentUpdate?.state === 'available' ? 'available' : agentUpdate?.state === 'unavailable' ? 'unavailable' : 'current', ...(agentUpdate?.state === 'unavailable' ? { error: 'Nova Dream is current. Could not check OpenClaw releases.' } : {}) };
     return { ...checked, availability: 'unavailable', error: 'No reviewed update is available for this host and its current agent service.' };
   }
 
@@ -167,13 +171,13 @@ export class UpdateFeed {
   notification(): SoftwareUpdateReleaseSummary | undefined {
     const state = this.status();
     if (!state.notification || !state.release) return;
-    this.cache.notifiedCandidateId = state.notification.candidateId;
+    this.cache.notifiedCandidateId = state.release.releaseId;
     if (!this.persist()) return;
     return state.release;
   }
 
   dismiss(candidateId: string): UpdateFeedStatus {
-    if (updateCandidateIdSchema.safeParse(candidateId).success && this.status().release?.candidateId === candidateId) { this.cache.dismissedCandidateId = candidateId; this.persist(); }
+    if (updateCandidateIdSchema.safeParse(candidateId).success && this.status().release?.candidateId === candidateId) { this.cache.dismissedCandidateId = this.status().release?.releaseId; this.persist(); }
     return this.status();
   }
 
@@ -184,11 +188,11 @@ export class UpdateFeed {
 
   check(manual = false): Promise<UpdateFeedStatus> {
     if (this.inFlight) return this.inFlight;
-    if (!this.trust || this.cacheUnavailable) return Promise.resolve(this.status());
+    if (!this.trust || this.cacheUnavailable) return Promise.resolve(this.options.agentFeed?.check(manual)).then(() => this.status());
     const now = this.now();
-    if (now < this.cache.retryAt || (manual ? this.cache.attemptedAt !== undefined && now - this.cache.attemptedAt < updateFeedLimits.manualIntervalMs : now < this.cache.nextAutomaticAt)) return Promise.resolve(this.status());
+    if (now < this.cache.retryAt || (manual ? this.cache.attemptedAt !== undefined && now - this.cache.attemptedAt < updateFeedLimits.manualIntervalMs : now < this.cache.nextAutomaticAt)) return Promise.resolve(this.options.agentFeed?.check(manual)).then(() => this.status());
     // Resolve after clearing the checking flag, so every coalesced caller gets the actual result.
-    this.inFlight = this.performCheck().finally(() => { this.inFlight = undefined; if (this.running) this.schedule(); }).then(() => this.status());
+    this.inFlight = Promise.all([this.performCheck(), this.options.agentFeed?.check(manual)]).finally(() => { this.inFlight = undefined; if (this.running) this.schedule(); }).then(() => this.status());
     return this.inFlight;
   }
 
@@ -246,5 +250,5 @@ export class UpdateFeed {
     const delay = Math.max(1_000, Math.max(this.cache.nextAutomaticAt, this.cache.retryAt) - this.now());
     this.timer = setTimeout(() => { void this.check(); }, delay); this.timer.unref?.();
   }
-  stop() { this.running = false; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.controller?.abort(); }
+  stop() { this.running = false; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.controller?.abort(); this.options.agentFeed?.stop(); }
 }

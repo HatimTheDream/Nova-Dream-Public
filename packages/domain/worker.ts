@@ -4,6 +4,8 @@ import { classifyWorkerFailure, workerFailureSchema } from './worker-failure.js'
 
 export const workerContract = 2;
 export const workerRuntimeVersion = '2026.9.2';
+export const workerRuntimeVersions = ['2026.9.2', '2026.9.6'] as const;
+export const supportsWorkerRuntime = (version: string) => workerRuntimeVersions.some(value => value === version);
 export const workerPluginId = 'edition3-worker';
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const workerIdentitySchema = z.object({ epoch: z.string().uuid(), hostId: z.string().uuid(), attemptId: z.string().uuid(), inputHash: hash, toolMode: z.literal('workspace').optional(), nativeTools: nativeToolNamesSchema.optional() }).strict();
@@ -16,7 +18,7 @@ export const workerReceiptSchema = workerIdentitySchema.extend({
   runtime: z.object({ harness: z.string(), provider: z.string(), model: z.string() }).optional(),
 }).strict();
 export type WorkerReceipt = z.infer<typeof workerReceiptSchema>;
-export const workerCapabilitiesSchema = z.object({ contract: z.literal(workerContract), epoch: z.string().uuid(), hostId: z.string().uuid(), runtimeVersion: z.literal(workerRuntimeVersion), tools: z.enum(['none', 'workspace']), nativeTools: nativeToolNamesSchema.optional(), automaticDelivery: z.literal(false), durableReceipts: z.literal(true), durableOutcomes: z.literal(true), newRunsAvailable: z.boolean() }).strict();
+export const workerCapabilitiesSchema = z.object({ contract: z.literal(workerContract), epoch: z.string().uuid(), hostId: z.string().uuid(), runtimeVersion: z.enum(workerRuntimeVersions), tools: z.enum(['none', 'workspace']), nativeTools: nativeToolNamesSchema.optional(), automaticDelivery: z.literal(false), durableReceipts: z.literal(true), durableOutcomes: z.literal(true), newRunsAvailable: z.boolean() }).strict();
 export type WorkerCapabilities = z.infer<typeof workerCapabilitiesSchema>;
 export const workerObservationSchema = z.object({
   runId: z.string().min(1), status: z.enum(['ok', 'error', 'pending', 'timeout']),

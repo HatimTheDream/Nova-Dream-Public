@@ -8,7 +8,7 @@ type Identity = NonNullable<ReturnType<ManagedRuntime['updateIdentity']>>;
 type Transport = Pick<AssistantTransport,'status'|'request'|'serviceInfo'|'subscribe'> & {start():void;stop():Promise<void>};
 export type NativeUpdateBlocker = {code:string;message:string};
 const id=z.string().min(1).max(128).regex(/^\S+$/);
-const identity=z.object({epoch:z.uuid(),pid:z.number().int().positive(),url:z.string(),generation:z.string().min(1),startedAt:z.number().int().positive(),version:z.literal('2026.9.2')}).strict();
+const identity=z.object({epoch:z.uuid(),pid:z.number().int().positive(),url:z.string(),generation:z.string().min(1),startedAt:z.number().int().positive(),version:z.enum(['2026.9.2','2026.9.6'])}).strict();
 const savedSchema=z.object({jobId:z.uuid(),requestId:z.uuid(),identity,processInstanceId:id,state:z.enum(['preparing','held','releasing','released']),suspensionId:id.optional(),expiresAtMs:z.number().int().nonnegative().optional()}).strict();
 type Saved=z.infer<typeof savedSchema>;
 const key=(jobId:string)=>'update:native-lease:'+jobId;
@@ -16,7 +16,7 @@ const methods=['system.info','gateway.suspend.prepare','gateway.suspend.status',
 const unknown=():NativeUpdateBlocker[]=>[{code:'native_unknown',message:'Assistant update readiness could not be verified. Its existing work is kept.'}];
 const same=(a:Identity,b:Identity|undefined)=>!!b&&Object.keys(a).every(k=>a[k as keyof Identity]===b[k as keyof Identity]);
 
-/** Uses OpenClaw 2026.9.2's supported cooperative suspension contract.
+/** Uses the reviewed OpenClaw versions' cooperative suspension contract.
  * prepare(false, preserve) checks the process-wide inventory atomically with
  * native admission. Busy never drains/interrupts work. Stable request IDs recover
  * lost replies; only our saved suspension ID can be resumed. Source contract:
@@ -45,7 +45,7 @@ export class NativeUpdateLease {
     if(this.transport&&(!['unconfigured','connecting','ready'].includes(this.transport.status().state)||this.transport.status().generation&&this.transport.status().generation!==owned.generation)){this.unsubscribe?.();await this.transport.stop();this.transport=undefined;}
     if(!this.transport){this.transport=this.factory();this.unsubscribe=this.transport.subscribe(event=>{if(['e3.connected','e3.disconnected','e3.connection-stopped','e3.history-gap'].includes(event.event)||event.event==='gateway.suspension')this.verified=undefined;});this.transport.start();}
     const state=this.transport.status(),info=this.transport.serviceInfo?.();
-    if(state.state!=='ready'||state.url!==owned.url||state.generation!==owned.generation||!state.grantedScopes.includes('operator.admin')||!state.grantedScopes.includes('operator.read')||!methods.every(m=>state.methods.includes(m))||info?.id!=='openclaw'||info.version!=='2026.9.2')return;
+    if(state.state!=='ready'||state.url!==owned.url||state.generation!==owned.generation||!state.grantedScopes.includes('operator.admin')||!state.grantedScopes.includes('operator.read')||!methods.every(m=>state.methods.includes(m))||info?.id!=='openclaw'||info.version!==owned.version)return;
     return this.transport;
   }
   snapshot(jobId:string|null){
