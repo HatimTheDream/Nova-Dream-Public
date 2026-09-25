@@ -26,6 +26,9 @@ const questionMethods = new Set(['sessions.messages.subscribe', 'question.list',
 const reviewMethods = new Set(['sessions.messages.subscribe', 'approval.get', 'approval.resolve']);
 const skillReadMethods = new Set(['skills.proposals.list', 'skills.proposals.inspect', 'skills.proposals.events.list']);
 const skillManagementMethods = new Set([...skillReadMethods, 'skills.proposals.create', 'skills.proposals.update', 'skills.proposals.revise', 'skills.proposals.apply', 'skills.proposals.reject']);
+// A cold native SDK can take nearly a minute before its first read returns.
+// Wait for that one read; never extend or retry a turn submission as a result.
+const preparationReadMethods = new Set(['models.list', 'chat.history', 'sessions.describe', 'sessions.messages.subscribe', 'question.list', 'question.get', 'approval.get', 'e3.workspace.policy']);
 
 /** Supported, version-pinned Gateway transport. All credentials stay in host storage. */
 export class Gateway implements AssistantTransport {
@@ -148,7 +151,9 @@ export class Gateway implements AssistantTransport {
     if (!this.connection.methods.includes(method)) throw new Fault(501, 'gateway_capability', 'This OpenClaw version does not expose the required operation.');
     const lifecycle = this.lifecycle;
     const kind = maintenanceGatewayKind(method, params);
-    const send = () => this.client!.request<T>(method, params, method === 'talk.speak' ? { timeoutMs: 45000 } : undefined);
+    const preparationRead = preparationReadMethods.has(method) || method === 'e3.accounts.snapshot' && (params as { includeUsage?: unknown } | null)?.includeUsage === false;
+    const timeoutMs = preparationRead ? 90000 : method === 'talk.speak' ? 45000 : undefined;
+    const send = () => this.client!.request<T>(method, params, timeoutMs === undefined ? undefined : { timeoutMs });
     const result = kind === 'read' ? await send() : await this.store.trackUpdateEffect('native-requests', send, kind === 'settling');
     if (this.stopped || this.lifecycle !== lifecycle) throw new Fault(503, 'gateway_replaced', 'The OpenClaw connection changed before this result was confirmed. Check the original operation.');
     if (managementConfig && JSON.stringify(managementConfig) !== JSON.stringify(this.store.internalRead<Configuration>('gateway:configuration'))) throw new Fault(409, 'gateway_replaced', 'The Assistant host changed before this management result was confirmed. Check the original operation.');

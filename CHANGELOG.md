@@ -1,3 +1,9 @@
+## [1.13.12] — 2026-09-25
+
+- Keep Assistant preparation waiting through a cold agent startup, without retrying message sends or weakening duplicate-send protection.
+- Explain preparation failures accurately when the saved input was never sent.
+- Install the Codex component through its official, version- and integrity-pinned package so upgraded agents retain the trusted storage needed to answer requests.
+
 ## [1.13.11] — 2026-09-25
 
 - Check full recovery space while the managed service is stopped, then verify operating space after restart. Avoid rejecting an otherwise verified combined update because of temporary agent startup files that are removed before restoration.

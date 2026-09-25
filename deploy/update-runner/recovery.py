@@ -1123,8 +1123,8 @@ def transcript_hashes(path, node):
     return Counter(hashes)
 
 
-def retained_plugin_index(before, after, node):
-    """Permit the pinned offline Codex install and its rebuilt catalog only."""
+def retained_plugin_index(before, after, node, after_path):
+    """Permit the pinned official npm Codex install and rebuilt catalog only."""
     names = ['state_key', 'value_json', 'updated_at_ms']
     for connection in (before, after):
         require([item[1] for item in connection.execute('pragma table_info(config_machine_state)')] == names,
@@ -1192,16 +1192,40 @@ def retained_plugin_index(before, after, node):
             and bounded_json(package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
             'The Codex install differs from the verified runtime package.')
     record = updated['codex']
-    require(set(record) == {'source', 'sourcePath', 'installPath', 'version', 'installedAt', 'acceptedSurface', 'acceptedSurfaceHash', 'acceptedSurfaceAt'}
-            and record['source'] == 'path' and record['version'] == '2026.9.6'
-            and record['sourcePath'] == record['installPath'] == str(package)
+    lock = bounded_json(runtime / 'companions' / 'codex' / 'package-lock.json', 16 * 1024 * 1024)
+    locked = lock.get('packages', {}).get('node_modules/@openclaw/codex', {})
+    require(locked.get('version') == '2026.9.6' and isinstance(locked.get('integrity'), str)
+            and re.fullmatch(r'sha512-[A-Za-z0-9+/]+={0,2}', locked['integrity']), 'The verified Codex npm resolution is missing.')
+    base_fields = {'source', 'spec', 'installPath', 'version', 'installedAt', 'resolvedName', 'resolvedVersion',
+                   'resolvedSpec', 'integrity', 'shasum', 'resolvedAt'}
+    consent_fields = {'acceptedSurface', 'acceptedSurfaceHash', 'acceptedSurfaceAt'}
+    require(set(record) in (base_fields, base_fields | consent_fields)
+            and record['source'] == 'npm' and record['version'] == record['resolvedVersion'] == '2026.9.6'
+            and record['spec'] == record['resolvedSpec'] == '@openclaw/codex@2026.9.6'
+            and record['resolvedName'] == '@openclaw/codex' and record['integrity'] == locked['integrity']
+            and isinstance(record['shasum'], str) and re.fullmatch('[a-f0-9]{40}', record['shasum'])
             and all(isinstance(record[name], str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z', record[name])
-                    for name in ('installedAt', 'acceptedSurfaceAt')),
+                    for name in ('installedAt', 'resolvedAt', 'acceptedSurfaceAt') if name in record),
             'The Codex installation is outside the reviewed transition.')
-    surface = record['acceptedSurface']
-    require(isinstance(surface, dict) and record['acceptedSurfaceHash'] == 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
-            and hashlib.sha256(json.dumps(surface, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest() == record['acceptedSurfaceHash'],
-            'The Codex capability surface changed.')
+    installed = pathlib.Path(record['installPath'])
+    prior = pathlib.Path(records['codex'].get('installPath', ''))
+    require(installed.is_absolute() and prior.is_absolute() and len(installed.parts) >= 7
+            and installed.parts[-6:-4] == ('npm', 'projects')
+            and re.fullmatch(r'openclaw-codex-[a-f0-9]{10}', installed.parts[-4])
+            and installed.parts[-3:] == ('node_modules', '@openclaw', 'codex')
+            and installed.parts[:-6] == prior.parts[:-6], 'The official Codex npm store changed.')
+    # Stored absolute paths retain the selected workspace namespace in closed
+    # recovery copies; inspect the corresponding payload inside this tree.
+    retained_package = pathlib.Path(after_path).parent.parent.joinpath(*installed.parts[-6:])
+    require(retained_package.resolve(strict=True) == retained_package
+            and bounded_json(retained_package / 'package.json', 1024 * 1024).get('name') == '@openclaw/codex'
+            and bounded_json(retained_package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
+            'The official Codex npm payload changed.')
+    if consent_fields <= set(record):
+        surface = record['acceptedSurface']
+        require(isinstance(surface, dict) and record['acceptedSurfaceHash'] == 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
+                and hashlib.sha256(json.dumps(surface, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest() == record['acceptedSurfaceHash'],
+                'The Codex capability surface changed.')
 
 
 def retained_collection_review_jobs(before, after, node):
@@ -1307,7 +1331,7 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
     for table in tables:
         require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
         if table == 'config_machine_state':
-            retained_plugin_index(before, after, node)
+            retained_plugin_index(before, after, node, after_path)
             continue
         if table == 'transcript_events':
             require(transcript_hashes(before_path, node) <= transcript_hashes(after_path, node), 'Migrated native transcript bytes changed.')

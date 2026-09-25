@@ -955,7 +955,7 @@ export class AssistantService {
       operation = this.operation(id);
       const rejected = error instanceof GatewayClientRequestError && error.gatewayCode === 'INVALID_REQUEST';
       const beforeSend = operation.state === 'prepared';
-      this.saveOperation({ ...operation, state: beforeSend || rejected ? 'failed' : 'unknown', error: beforeSend && error instanceof Fault ? error.message : rejected ? 'OpenClaw rejected this request before admission. The original input is kept for review.' : 'OpenClaw has not confirmed the outcome. Check the original run; it will not be sent again.' });
+      this.saveOperation({ ...operation, state: beforeSend || rejected ? 'failed' : 'unknown', error: beforeSend ? error instanceof Fault ? error.message : 'The Assistant could not prepare this reply. Your message was not sent. Review the saved input and try again.' : rejected ? 'OpenClaw rejected this request before admission. The original input is kept for review.' : 'OpenClaw has not confirmed the outcome. Check the original run; it will not be sent again.' });
     }
   }
   async edit(device: string, raw: unknown) {

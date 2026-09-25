@@ -2,7 +2,8 @@
 
 No operation runs on import. This driver deliberately supports unchanged
 app dependencies and schema55 only. Optional runtime closures are immutable,
-offline packages; no package manager, download or release selection runs here.
+offline engine packages. The official Codex plugin is installed through npm
+at the exact version and integrity captured by the verified companion lock.
 """
 import ast
 import contextlib
@@ -55,9 +56,24 @@ await withDoctorSqliteMaintenanceLock({env:process.env,operation:'reviewed Nova 
 CODEX_SURFACE = 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
 CODEX_INSTALL = r'''
 import {pathToFileURL} from 'node:url';
-import {readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {readFileSync,realpathSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {join,resolve,relative,isAbsolute,sep} from 'node:path';
 const root=process.argv[1], plugin=process.argv[2], surface=process.argv[3];
+const spec='@openclaw/codex@2026.9.6';
+const locked=JSON.parse(readFileSync(resolve(plugin,'../../..','package-lock.json'),'utf8')).packages?.['node_modules/@openclaw/codex'];
+if(locked?.version!=='2026.9.6'||typeof locked.integrity!=='string'||!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(locked.integrity))throw Error('The verified Codex npm resolution is missing');
+function verifyRecord(record){
+ if(record?.source!=='npm'||record.spec!==spec||record.resolvedSpec!==spec||record.resolvedName!=='@openclaw/codex'||record.resolvedVersion!=='2026.9.6'||record.version!=='2026.9.6'||record.integrity!==locked.integrity||record.sourcePath!==undefined||(record.acceptedSurfaceHash!==undefined&&record.acceptedSurfaceHash!==surface))throw Error('The official Codex npm record did not verify');
+ if(record.acceptedSurfaceHash!==undefined&&createHash('sha256').update(JSON.stringify(record.acceptedSurface??null)).digest('hex')!==surface)throw Error('The accepted Codex capability surface changed');
+ const path=record.installPath;
+ if(typeof path!=='string'||!isAbsolute(path)||realpathSync(path)!==path)throw Error('The official Codex payload was redirected');
+ const rel=relative(join(process.env.OPENCLAW_STATE_DIR,'npm','projects'),path);
+ if(isAbsolute(rel)||rel.startsWith('..'+sep)||!new RegExp('^[^/\\\\]+[/\\\\]node_modules[/\\\\]@openclaw[/\\\\]codex$').test(rel))throw Error('The official Codex payload is outside the managed npm store');
+ const pkg=JSON.parse(readFileSync(join(path,'package.json'),'utf8'));
+ if(pkg.name!=='@openclaw/codex'||pkg.version!=='2026.9.6')throw Error('The official Codex package changed');
+ return path;
+}
 const load=name=>import(pathToFileURL(join(root,'dist',name)).href);
 const {c:readConfigFileSnapshot}=await load('io.runtime-hPN4FOBi.mjs');
 const {installManagedPluginSource}=await load('management-install-DV30z_Uq.mjs');
@@ -69,12 +85,15 @@ const {n:discoverPlugins}=await load('discovery-D_5mAUI7.mjs');
 const {closeOpenClawStateDatabaseAsync}=await load('openclaw-state-db-quM4UOZq.mjs');
 try {
  const before=await loadRecords();
- if(!before.codex || before.codex.version!=='2026.9.2')throw Error('The original Codex companion changed');
+ if(!before.codex || !['2026.9.2','2026.9.6'].includes(before.codex.version))throw Error('The original Codex companion changed');
  const originalConfig=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
+ const alreadyOfficial=before.codex.source==='npm'&&before.codex.version==='2026.9.6';
+ if(alreadyOfficial)verifyRecord(before.codex);
+ else {
  const snapshot=await readConfigFileSnapshot();
  const result=await installManagedPluginSource({
   snapshot:{config:snapshot.sourceConfig??snapshot.config,baseHash:snapshot.hash,writeOptions:{}},env:process.env,
-  request:{source:'local',recordSource:'path',path:plugin,link:true,mode:'update'},
+  request:{source:'npm',spec,expectedPluginId:'codex',expectedIntegrity:locked.integrity,pin:true,mode:'update'},
   onCapabilityConsent:async review=>{
    if(review.pluginId!=='codex'||review.reviewToken!==surface)throw Error('Unreviewed Codex capability surface');
    return {reviewToken:surface};
@@ -85,22 +104,27 @@ try {
   runtime:{log:()=>{},error:()=>{},exit:()=>{throw Error('Companion install stopped')}},
   logger:{info:()=>{},warn:()=>{},error:()=>{}}
  });
- if(!result.ok)throw Error('The offline Codex companion was not installed');
+ if(!result.ok)throw Error('The official Codex companion was not installed');
+ }
  const after=await loadRecords(), record=after.codex;
- if(record.source!=='path'||record.installPath!==plugin||record.sourcePath!==plugin||record.version!=='2026.9.6'||record.acceptedSurfaceHash!==surface)throw Error('The Codex install record did not verify');
+ const installed=verifyRecord(record);
  for(const [id,record] of Object.entries(before))if(id!=='codex'&&JSON.stringify(record)!==JSON.stringify(after[id]))throw Error('An unrelated plugin record changed');
  if(Object.keys(before).length!==Object.keys(after).length)throw Error('The plugin inventory changed');
  const config=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
- // The installed index already discovers this payload. Keep Nova's existing
- // generated-plugin path admission unchanged instead of adding a load path.
+ // npm owns discovery. Remove only the superseded Codex path override;
+ // retain every unrelated generated-plugin admission exactly.
+ const expectedLoad=structuredClone(originalConfig.plugins?.load);
+ if(expectedLoad?.paths)expectedLoad.paths=expectedLoad.paths.filter(path=>![plugin,installed,before.codex.installPath,before.codex.sourcePath].includes(path));
  if(originalConfig.plugins?.load===undefined)delete config.plugins.load;
- else config.plugins.load=structuredClone(originalConfig.plugins.load);
- const current=await readConfigFileSnapshot();
- await replaceConfigFile({nextConfig:config,baseHash:current.hash,writeOptions:{afterWrite:{mode:'none',reason:'Nova updater owns the stopped-service restart'}}});
- await refreshPluginRegistry({configPath:process.env.OPENCLAW_CONFIG_PATH,reason:'source-changed',installRecords:after});
+ else config.plugins.load=expectedLoad;
+ if(JSON.stringify(config)!==JSON.stringify(originalConfig)||!alreadyOfficial){
+  const current=await readConfigFileSnapshot();
+  await replaceConfigFile({nextConfig:config,baseHash:current.hash,writeOptions:{afterWrite:{mode:'none',reason:'Nova updater owns the stopped-service restart'}}});
+  await refreshPluginRegistry({configPath:process.env.OPENCLAW_CONFIG_PATH,reason:'source-changed',installRecords:after});
+ }
  const finalConfig=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
- if(JSON.stringify(finalConfig.plugins?.load)!==JSON.stringify(originalConfig.plugins?.load))throw Error('Plugin path admission changed');
- const candidates=discoverPlugins({config:finalConfig,installRecords:after}).candidates.filter(candidate=>candidate.rootDir===plugin||candidate.packageDir===plugin);
+ if(JSON.stringify(finalConfig.plugins?.load)!==JSON.stringify(expectedLoad))throw Error('Plugin path admission changed');
+ const candidates=discoverPlugins({config:finalConfig,installRecords:after}).candidates.filter(candidate=>candidate.rootDir===installed||candidate.packageDir===installed);
  if(candidates.length!==1||candidates[0].origin!=='global')throw Error('The installed Codex payload was not discovered');
  const issues=await detectHealth({cfg:finalConfig,env:process.env});
  if(issues.some(issue=>issue.pluginId==='codex'))throw Error('The Codex companion still requires repair');
@@ -544,8 +568,8 @@ class Driver:
         with (self.output / 'codex-companion-install.log').open('xb') as log:
             subprocess.run([str(self.target_agent_node), '--input-type=module', '-e', CODEX_INSTALL,
                             str(self.target_agent), str(self.target_codex), CODEX_SURFACE],
-                           cwd=root, env={**env, 'npm_config_offline': 'true'}, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
-                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+                           cwd=root, env=env, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
         self.require_stopped()
         self.controller_hold()
         native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine,

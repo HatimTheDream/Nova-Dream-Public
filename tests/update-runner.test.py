@@ -1286,6 +1286,75 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
                 after.execute(restore)
 
+    @unittest.skipUnless(shutil.which('node'), 'Node is required to exercise the official plugin boundary')
+    def test_codex_installer_uses_pinned_official_npm_and_reuses_verified_registration(self):
+        runtime = self.root / 'runtime'
+        dist = runtime / 'node_modules/openclaw/dist'
+        dist.mkdir(parents=True)
+        companion = runtime / 'companions/codex'
+        plugin = companion / 'node_modules/@openclaw/codex'
+        plugin.mkdir(parents=True)
+        integrity = 'sha512-' + 'A' * 86 + '=='
+        (companion / 'package-lock.json').write_text(json.dumps({'packages': {
+            'node_modules/@openclaw/codex': {'version': '2026.9.6', 'integrity': integrity}}}))
+        state = self.root / 'state'
+        installed = state / 'npm/projects/openclaw-codex-8902d781d4/node_modules/@openclaw/codex'
+        installed.mkdir(parents=True)
+        (installed / 'package.json').write_text('{"name":"@openclaw/codex","version":"2026.9.6"}')
+        config = self.root / 'openclaw.json'
+        fixture = {'source': 'npm', 'spec': '@openclaw/codex@2026.9.6', 'resolvedSpec': '@openclaw/codex@2026.9.6',
+                   'resolvedName': '@openclaw/codex', 'resolvedVersion': '2026.9.6', 'version': '2026.9.6',
+                   'integrity': integrity, 'installPath': str(installed)}
+        (dist / 'fixture.mjs').write_text('''
+import {readFileSync,writeFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const data=JSON.parse(process.env.TEST_FIXTURE), mode=process.env.TEST_MODE;
+let records={codex:mode==='already'?data:{source:'npm',version:'2026.9.2',installPath:'/old/codex'},other:{retained:true}};
+export const read=async()=>structuredClone(records);
+export const snapshot=async()=>({config:JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8')),hash:'fixture'});
+export async function install(input){
+ assert.equal(mode==='already',false,'A valid official install must not be replaced');
+ assert.deepEqual(input.request,{source:'npm',spec:'@openclaw/codex@2026.9.6',expectedPluginId:'codex',expectedIntegrity:data.integrity,pin:true,mode:'update'});
+ assert.deepEqual(await input.onCapabilityConsent({pluginId:'codex',reviewToken:process.argv[3]}),{reviewToken:process.argv[3]});
+ if(mode==='rejected')return{ok:false};
+ records.codex={...data,...(mode==='path'?{source:'path'}:{}),...(mode==='integrity'?{integrity:'sha512-OTHER'}:{})};
+ if(mode==='unrelated')records.other={retained:false};
+ writeFileSync(process.env.TEST_CALLED,'called');
+ return{ok:true};
+}
+export const replace=async({nextConfig})=>writeFileSync(process.env.OPENCLAW_CONFIG_PATH,JSON.stringify(nextConfig));
+export const refresh=async()=>{};
+export const health=async()=>[];
+export const discover=()=>({candidates:[{rootDir:data.installPath,origin:'global'}]});
+export const close=async()=>{};
+''', encoding='utf8')
+        for name, function, alias in [
+                ('io.runtime-hPN4FOBi.mjs', 'snapshot', 'c'),
+                ('management-install-DV30z_Uq.mjs', 'install', 'installManagedPluginSource'),
+                ('installed-plugin-index-record-reader-B3UvF50J.mjs', 'read', 'r'),
+                ('missing-configured-plugin-install-CFxe2oL4.mjs', 'health', 'a'),
+                ('mutate-CgnqHZzJ.mjs', 'replace', 'r'),
+                ('registry-refresh-CrMs7Cpq.mjs', 'refresh', 'n'),
+                ('discovery-D_5mAUI7.mjs', 'discover', 'n'),
+                ('openclaw-state-db-quM4UOZq.mjs', 'close', 'closeOpenClawStateDatabaseAsync')]:
+            (dist / name).write_text("export {" + function + ' as ' + alias + "} from './fixture.mjs';")
+        for mode in ('install', 'already', 'path', 'integrity', 'unrelated', 'rejected'):
+            with self.subTest(mode=mode):
+                config.write_text(json.dumps({'plugins': {'load': {'paths': ['/retained/plugin', str(plugin)]}}}))
+                called = self.root / ('called-' + mode)
+                env = {**os.environ, 'OPENCLAW_CONFIG_PATH': str(config), 'OPENCLAW_STATE_DIR': str(state),
+                       'TEST_FIXTURE': json.dumps(fixture), 'TEST_MODE': mode, 'TEST_CALLED': str(called)}
+                result = subprocess.run([shutil.which('node'), '--input-type=module', '-e', driver.CODEX_INSTALL,
+                                         str(dist.parent), str(plugin), driver.CODEX_SURFACE],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                if mode in ('install', 'already'):
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(config.read_text())['plugins']['load']['paths'], ['/retained/plugin'])
+                    self.assertEqual(called.exists(), mode == 'install')
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn('companionInstalled', result.stdout)
+
     def test_plugin_index_rebuild_retains_every_other_record_and_exact_codex_surface(self):
         runtime = self.root / 'runtime'
         node = runtime / 'node' / 'bin' / 'node'
@@ -1295,6 +1364,13 @@ class RunnerTests(unittest.TestCase):
         for path in (package, engine):
             path.mkdir(parents=True)
             (path / 'package.json').write_text('{"version":"2026.9.6"}')
+        integrity = 'sha512-' + 'A' * 86 + '=='
+        (runtime / 'companions/codex/package-lock.json').write_text(json.dumps({'packages': {
+            'node_modules/@openclaw/codex': {'version': '2026.9.6', 'integrity': integrity}}}))
+        state = self.root / 'after/openclaw-runtime/state'
+        installed = state / 'npm/projects/openclaw-codex-8902d781d4/node_modules/@openclaw/codex'
+        installed.mkdir(parents=True)
+        (installed / 'package.json').write_text('{"name":"@openclaw/codex","version":"2026.9.6"}')
         tools = ['codex_endpoint_probe', 'codex_plugins', 'codex_session_interrupt', 'codex_session_read',
                  'codex_session_send', 'codex_sessions_list', 'codex_threads']
         surface = {'channels': [], 'providers': ['codex'], 'tools': tools,
@@ -1303,13 +1379,15 @@ class RunnerTests(unittest.TestCase):
                    'hooks': [], 'mcpServers': [], 'cliCommands': ['codex'], 'cliBackends': [], 'skills': [], 'dangerousConfigFlags': []}
         old = {'revision': 100, 'index': {'version': 1, 'warning': 'Generated catalog', 'hostContractVersion': '2026.9.2',
                'compatRegistryVersion': 'a' * 64, 'migrationVersion': 1, 'policyHash': 'b' * 64, 'generatedAtMs': 99,
-               'workspaceDir': '/saved/workspace', 'installRecords': {'codex': {'source': 'npm', 'version': '2026.9.2'},
+               'workspaceDir': '/saved/workspace', 'installRecords': {'codex': {'source': 'npm', 'version': '2026.9.2', 'installPath': str(installed)},
                'retained-plugin': {'source': 'path', 'installPath': '/saved/plugin', 'opaque': {'retained': True}}},
                'plugins': [{'pluginId': 'bundled', 'packageVersion': '2026.9.2'}], 'diagnostics': []}}
         new = json.loads(json.dumps(old)); new['revision'] = 200
         new['index'].update(hostContractVersion='2026.9.6', compatRegistryVersion='c' * 64, generatedAtMs=199,
                             refreshReason='source-changed', plugins=[{'pluginId': 'bundled', 'packageVersion': '2026.9.6'}])
-        new['index']['installRecords']['codex'] = {'source': 'path', 'sourcePath': str(package), 'installPath': str(package),
+        new['index']['installRecords']['codex'] = {'source': 'npm', 'spec': '@openclaw/codex@2026.9.6', 'installPath': str(installed),
+            'resolvedName': '@openclaw/codex', 'resolvedVersion': '2026.9.6', 'resolvedSpec': '@openclaw/codex@2026.9.6',
+            'integrity': integrity, 'shasum': 'a' * 40, 'resolvedAt': '2026-09-25T03:34:49.711Z',
             'version': '2026.9.6', 'installedAt': '2026-09-25T03:34:49.714Z', 'acceptedSurface': surface,
             'acceptedSurfaceHash': driver.CODEX_SURFACE, 'acceptedSurfaceAt': '2026-09-25T03:34:49.711Z'}
         with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
@@ -1319,16 +1397,31 @@ class RunnerTests(unittest.TestCase):
                 connection.execute("insert into config_machine_state values('retained-setting','{\"exact\":true}',7)")
                 stamp, updated = ('2026-09-25T00:00:00.000Z', 1790294400000) if connection is before else ('2026-09-25T00:00:01.000Z', 1790294401000)
                 connection.execute('insert into config_machine_state values(?,?,?)', ('config.lastTouchedAt', json.dumps(stamp), updated))
-            args = (before, after, {'config_machine_state'}, self.root / 'before', self.root / 'after', node)
+            args = (before, after, {'config_machine_state'}, self.root / 'before', state / 'state/openclaw.sqlite', node)
             recovery.migrated_native_rows(*args)
+            # Official catalog provenance may replace an explicit local
+            # capability receipt; require the actual observed npm record shape.
+            official = json.loads(json.dumps(new))
+            for field in ('acceptedSurface', 'acceptedSurfaceHash', 'acceptedSurfaceAt'):
+                official['index']['installRecords']['codex'].pop(field)
+            after.execute('update config_machine_state set value_json=? where state_key=?',
+                          (json.dumps(official), 'plugins.installedIndex'))
+            recovery.migrated_native_rows(*args)
+            official['index']['installRecords']['codex']['acceptedSurfaceHash'] = driver.CODEX_SURFACE
+            after.execute('update config_machine_state set value_json=? where state_key=?',
+                          (json.dumps(official), 'plugins.installedIndex'))
+            with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+            after.execute('update config_machine_state set value_json=? where state_key=?', (json.dumps(new), 'plugins.installedIndex'))
             after.execute("update config_machine_state set value_json='\"not-a-timestamp\"' where state_key='config.lastTouchedAt'")
             with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
             after.execute('update config_machine_state set value_json=? where state_key=?', (json.dumps('2026-09-25T00:00:01.000Z'), 'config.lastTouchedAt'))
             mutations = [
                 lambda v: v['index']['installRecords']['retained-plugin'].update(opaque={'retained': False}),
                 lambda v: v['index']['installRecords'].pop('retained-plugin'),
-                lambda v: v['index']['installRecords']['codex'].update(source='npm'),
+                lambda v: v['index']['installRecords']['codex'].update(source='path'),
                 lambda v: v['index']['installRecords']['codex'].update(installPath='/other/codex'),
+                lambda v: v['index']['installRecords']['codex'].update(integrity='sha512-' + 'B' * 86 + '=='),
+                lambda v: v['index']['installRecords']['codex'].update(spec='@openclaw/codex@latest'),
                 lambda v: v['index']['installRecords']['codex'].update(version='2026.9.7'),
                 lambda v: v['index']['installRecords']['codex'].update(unreviewed=True),
                 lambda v: v['index']['installRecords']['codex']['acceptedSurface']['tools'].append('unreviewed-tool'),
@@ -1357,9 +1450,9 @@ class RunnerTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
             for connection in (before, after):
                 connection.executescript("create table config_machine_state(state_key text primary key,value_json text,updated_at_ms integer);insert into config_machine_state values('saved','exact',1);")
-            recovery.retained_plugin_index(before, after, None)
+            recovery.retained_plugin_index(before, after, None, self.root / 'after.sqlite')
             after.execute("update config_machine_state set updated_at_ms=2")
-            with self.assertRaises(RuntimeError):recovery.retained_plugin_index(before, after, None)
+            with self.assertRaises(RuntimeError):recovery.retained_plugin_index(before, after, None, self.root / 'after.sqlite')
 
     @unittest.skipUnless(shutil.which('node'), 'Node required for native zstd transcript verification')
     def test_migrated_zstd_transcript_keeps_original_bytes_and_identity(self):

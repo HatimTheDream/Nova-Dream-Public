@@ -519,6 +519,23 @@ test('Project changes during history preflight fence the dispatch and retain the
   assert.equal(f.service.operations()[0].context.project?.purpose, 'Required sentinel: silver-orbit-41');
 }));
 
+for (const stage of ['history', 'account'] as const) test(`a ${stage} preparation timeout preserves input without claiming the message was sent`, () => fixture(async f => {
+  const request = f.gateway.request.bind(f.gateway);
+  if (stage === 'history') f.gateway.request = async (method, params) => {
+    if (method === 'chat.history') throw new Error('Request timed out');
+    return request(method, params);
+  };
+  else f.service.setAccountRouter(async () => { throw new Error('Request timed out'); }, async () => {});
+  f.service.submit(f.device, submission(f)); await tick();
+  const operation = f.service.operations()[0];
+  assert.equal(operation.state, 'failed');
+  assert.equal(operation.nativeRunId, null);
+  assert.equal(operation.input, 'Use the selected context.');
+  assert.match(operation.error ?? '', /message was not sent/);
+  assert.doesNotMatch(operation.error ?? '', /not confirmed the outcome/);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'chat.send').length, 0);
+}));
+
 test('unknown send survives service restart without another dispatch and blocks an accidental new send', () => fixture(async f => {
   f.gateway.rejectSend = true;
   const request = submission(f); f.service.submit(f.device, request); await tick();

@@ -8,6 +8,48 @@ import type { HelloOk } from '@openclaw/gateway-protocol/frame-guards';
 import { Gateway } from '../apps/service/gateway.js';
 import { Store } from '../apps/service/store.js';
 
+test('cold preparation waits for one native read while send timeouts remain bounded and never retry', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nova-cold-preparation-')), store = new Store(directory);
+  let options!: GatewayClientOptions, coldMs = 57187;
+  const calls: { method: string; timeout: number }[] = [];
+  const gateway = new Gateway(store, 'fixture', value => {
+    options = value;
+    return { start() {}, async stopAndWait() {}, request<T>(method: string, _params: unknown, requestOptions?: { timeoutMs?: number }) {
+      const timeout = requestOptions?.timeoutMs ?? options.requestTimeoutMs!;
+      calls.push({ method, timeout });
+      if (method === 'models.list') return Promise.resolve({ models: [] } as T);
+      return new Promise<T>((resolve, reject) => {
+        const failure = setTimeout(() => { clearTimeout(success); reject(new Error('Native request timed out')); }, timeout);
+        const success = setTimeout(() => { clearTimeout(failure); resolve({ ready: true } as T); }, method === 'chat.send' ? 12001 : coldMs);
+      });
+    } };
+  });
+  try {
+    await gateway.configure('ws://127.0.0.1:59999', 'fixture');
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    options.onHelloOk?.({ protocol: 4, features: { methods: ['models.list', 'e3.accounts.snapshot', 'chat.history', 'chat.send'], events: [] }, auth: { scopes: ['operator.read', 'operator.write'] }, policy: {} } as unknown as HelloOk);
+    for (const method of ['chat.history', 'e3.accounts.snapshot']) {
+      let settled = false;
+      const reading = gateway.request(method, { epoch: store.epoch, includeUsage: false }).finally(() => { settled = true; });
+      t.mock.timers.tick(12000); await Promise.resolve();
+      assert.equal(settled, false, 'cold preparation is still waiting after the former timeout');
+      t.mock.timers.tick(45187);
+      assert.deepEqual(await reading, { ready: true });
+      assert.equal(calls.filter(call => call.method === method).length, 1, 'the original read is awaited without a retry');
+    }
+    const sending = assert.rejects(gateway.request('chat.send', { message: 'fixture', idempotencyKey: 'original' }), /timed out/);
+    t.mock.timers.tick(12000); await sending;
+    assert.deepEqual(calls.filter(call => call.method === 'chat.send'), [{ method: 'chat.send', timeout: 12000 }]);
+    coldMs = 90001;
+    const unavailable = assert.rejects(gateway.request('e3.accounts.snapshot', { epoch: store.epoch, includeUsage: false }), /timed out/);
+    t.mock.timers.tick(90000); await unavailable;
+    assert.equal(calls.filter(call => call.method === 'e3.accounts.snapshot').length, 2, 'a failed preparation does not automatically repeat');
+    const usage = assert.rejects(gateway.request('e3.accounts.snapshot', { epoch: store.epoch, includeUsage: true }), /timed out/);
+    t.mock.timers.tick(12000); await usage;
+    assert.equal(calls.at(-1)?.timeout, 12000, 'unrelated usage refreshes retain their ordinary timeout');
+  } finally { await gateway.stop(); t.mock.timers.reset(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('account ordering has separate finite authority while usage stays read-only', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nova-account-control-')), store = new Store(directory);
   const clients: GatewayClientOptions[] = [], calls: string[] = [];
