@@ -39,23 +39,25 @@ export class ChatGptAccount {
   private ordering?: Promise<ChatGptAccountStatus>;
   constructor(private runtime: Pick<ManagedRuntime, 'accountCommand'> & Partial<Pick<ManagedRuntime, 'accountOrderCommand'>>, private run: ReadCommand = readCommand, private now = Date.now, private options?: Options) {}
   private fingerprint(command: Command) { return JSON.stringify([command, this.options?.gateway.status().generation, this.options?.gateway.status().url]); }
+  private readsPaused() { return this.abort.signal.aborted || !!this.options?.store.updateMaintenanceHeld; }
   async read(refresh = false): Promise<ChatGptAccountStatus> {
-    if (this.abort.signal.aborted) return unavailable();
+    if (this.readsPaused()) return unavailable();
     let command: Command;
     try { command = this.runtime.accountCommand(); } catch { this.cache = undefined; return unavailable(); }
     const fingerprint = this.fingerprint(command);
     if (this.pending) return this.pending;
     if (!refresh && this.cache && this.cache.fingerprint === fingerprint && this.cache.until > this.now()) return this.cache.value;
     const pending = (async () => {
+      // Check metadata first: slow or failed probes must not start another CLI.
+      const metadata = await this.run(command, this.abort.signal);
+      if (this.readsPaused() || this.fingerprint(this.runtime.accountCommand()) !== fingerprint) return unavailable();
       const state = this.options?.gateway.status();
-      const [metadata, ordered, exact] = await Promise.allSettled([
-        this.run(command, this.abort.signal),
+      const [ordered, exact] = await Promise.allSettled([
         this.runtime.accountOrderCommand ? this.run(this.runtime.accountOrderCommand(), this.abort.signal) : Promise.resolve(undefined),
         state?.state === 'ready' && state.methods.includes('e3.accounts.snapshot') ? this.options!.gateway.request('e3.accounts.snapshot', { epoch: this.options!.store.epoch, refresh }) : Promise.resolve(undefined),
       ]);
-      try { if (this.abort.signal.aborted || this.fingerprint(this.runtime.accountCommand()) !== fingerprint) return unavailable(); } catch { return unavailable(); }
-      if (metadata.status !== 'fulfilled') return unavailable();
-      const value = readChatGptAccount(metadata.value, this.now()), accounts = value.accounts!;
+      try { if (this.readsPaused() || this.fingerprint(this.runtime.accountCommand()) !== fingerprint) return unavailable(); } catch { return unavailable(); }
+      const value = readChatGptAccount(metadata, this.now()), accounts = value.accounts!;
       let nativeOrder: string[] | undefined;
       if (ordered.status === 'fulfilled' && ordered.value) {
         const parsed = z.object({ agentId: z.literal('main'), provider: z.literal('openai'), order: z.array(chatGptProfileIdSchema).max(100).nullable() }).safeParse(JSON.parse(ordered.value));

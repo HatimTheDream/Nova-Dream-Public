@@ -1,3 +1,9 @@
+## [1.13.14] — 2026-09-25
+
+- Keep account checks from spawning overlapping agent processes or running during updates; preserve sign-in and account routing.
+- Verify historical configuration promotion records correctly during updates and recovery while retaining strict checks on the current configuration and saved data.
+- Includes the Assistant cold-start, accurate failure reporting and trusted Codex component fixes from 1.13.12.
+
 ## [1.13.13] — 2026-09-25
 
 - Check full backup and recovery capacity after the agent has stopped and released temporary plugin copies. Keep staging reserves and restart the unchanged app if closed-state capacity is insufficient.

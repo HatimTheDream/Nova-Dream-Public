@@ -994,11 +994,19 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
                     if value.get(field) == previous.get(field):
                         continue
                     observations = []
-                    for encoded, config_hash, config_bytes in zip((previous.get(field), value.get(field)), configuration['hashes'], configuration['byteSizes']):
+                    for index, (encoded, config_hash, config_bytes) in enumerate(zip((previous.get(field), value.get(field)), configuration['hashes'], configuration['byteSizes'])):
                         require(isinstance(encoded, str) and len(encoded) <= 1024 * 1024, 'Unexpected native config observation.')
                         observation = json.loads(encoded)
-                        require(isinstance(observation, dict) and observation.get('hash') == config_hash, 'Native config observation does not identify the retained configuration.')
-                        require(type(observation.get('bytes')) is int and observation['bytes'] == config_bytes,
+                        require(isinstance(observation, dict) and isinstance(observation.get('hash'), str)
+                                and re.fullmatch(r'[a-f0-9]{64}', observation['hash']), 'Unexpected native config observation hash.')
+                        require(type(observation.get('bytes')) is int and 0 <= observation['bytes'] <= 4 * 1024 * 1024,
+                                'Unexpected native config observation size.')
+                        # The last promotion can precede a later legitimate config
+                        # write. Only that historical before-side observation may
+                        # be stale; startup must now identify the verified config.
+                        historical_promotion = index == 0 and field == 'last_promoted_good_json'
+                        require(historical_promotion or observation['hash'] == config_hash, 'Native config observation does not identify the retained configuration.')
+                        require(historical_promotion or observation['bytes'] == config_bytes,
                                 'Native config observation size does not match the retained configuration.')
                         require(all(type(observation.get(name)) in (int, float) and math.isfinite(observation[name]) and observation[name] >= 0 for name in ('ctimeMs', 'mtimeMs'))
                                 and isinstance(observation.get('ino'), str) and re.fullmatch(r'[0-9]+', observation['ino'])

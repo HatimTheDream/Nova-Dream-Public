@@ -77,9 +77,10 @@ export class ManagedRuntime {
     const { root, config: configPath } = this.paths();
     return { file: this.nodePath(), args: [this.entry(), '--profile', 'edition3', 'models', 'auth', 'login', '--agent', 'main', '--provider', 'openai', ...(method === 'browser' ? ['--method', 'oauth'] : ['--device-code']), '--profile-id', profileId], cwd: root, env: this.environment(config, root, configPath) };
   }
-  accountCommand() {
+  accountCommand(): ReturnType<ManagedRuntime['signInCommand']> {
     const command = this.signInCommand(); // Same live, owned-host check; no sign-in is executed.
-    return { ...command, args: [...command.args.slice(0, 3), 'models', 'auth', 'list', '--agent', 'main', '--provider', 'openai', '--json'] };
+    // Bounded metadata probes must stay in the process owned by their timeout.
+    return { ...command, env: { ...command.env, OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' }, args: [...command.args.slice(0, 3), 'models', 'auth', 'list', '--agent', 'main', '--provider', 'openai', '--json'] };
   }
   accountOrderCommand() {
     const command = this.accountCommand();

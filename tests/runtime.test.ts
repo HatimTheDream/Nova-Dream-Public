@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../apps/service/store.js';
 import { ManagedRuntime, needsShortRuntimeTemporaryDirectory } from '../apps/service/runtime.js';
+import { ChatGptAccount } from '../apps/service/chatgpt-account.js';
 import type { AssistantConnection } from '../packages/domain/assistant.js';
 
 test('reconnecting the owned runtime reuses its live process and leaves a healthy connection alone', async () => {
@@ -50,7 +51,8 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     assert(signIn.args.includes('--device-code'));
     assert(signIn.args.includes('openai:edition3-voice'));
     const browser = runtime.signInCommand('browser'); assert.deepEqual(browser.args, signIn.args.flatMap(arg => arg === '--device-code' ? ['--method', 'oauth'] : [arg]));
-    const account = runtime.accountCommand(); assert.deepEqual(account.args, [...signIn.args.slice(0, 3), 'models', 'auth', 'list', '--agent', 'main', '--provider', 'openai', '--json']); assert.deepEqual(account.env, signIn.env);
+    const account = runtime.accountCommand(); assert.deepEqual(account.args, [...signIn.args.slice(0, 3), 'models', 'auth', 'list', '--agent', 'main', '--provider', 'openai', '--json']); assert.deepEqual(account.env, { ...signIn.env, OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' });
+    assert.deepEqual(runtime.accountOrderCommand().env, account.env);
     assert(!signIn.args.includes('--force')); assert(!signIn.args.includes('--set-default'));
     assert.equal(signIn.env.OPENCLAW_STATE_DIR, join(store.directory, 'openclaw-runtime/state'));
     assert.equal(signIn.env.OPENCLAW_CONFIG_PATH, join(store.directory, 'openclaw-runtime/openclaw.json'));
@@ -87,6 +89,46 @@ test('recovered Linux workspaces need a short temporary socket path without chan
   assert.equal(needsShortRuntimeTemporaryDirectory(recovered,'linux'),true);
   assert.equal(needsShortRuntimeTemporaryDirectory('/tmp/short','linux'),false);
   assert.equal(needsShortRuntimeTemporaryDirectory(recovered,'win32'),false);
+});
+
+test('an account CLI timeout leaves no respawned child and never starts the order probe', { timeout: 30000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'edition3-account-timeout-')), previous = process.env.E3_OPENCLAW_ENTRY;
+  const entry = join(directory, 'openclaw.mjs');
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'openclaw', version: '2026.9.2' }));
+  writeFileSync(entry, `import {writeFileSync,appendFileSync} from 'node:fs';import {createServer} from 'node:http';import {spawn} from 'node:child_process';
+if(process.argv.includes('models')){
+  appendFileSync('account-starts.txt','probe\\n');
+  let respawned;
+  if(process.env.OPENCLAW_NO_RESPAWN!=='1'||process.env.NODE_DISABLE_COMPILE_CACHE!=='1'){
+    const child=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{detached:true,stdio:'ignore'});respawned=child.pid;child.unref();
+  }
+  writeFileSync('account-processes.json',JSON.stringify({pid:process.pid,respawned}));
+  setInterval(()=>{},1000);
+}else{
+  const server=createServer((q,r)=>r.end('ready'));server.listen(Number(process.env.OPENCLAW_GATEWAY_PORT),'127.0.0.1');
+  process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
+}
+`);
+  process.env.E3_OPENCLAW_ENTRY = entry;
+  const store = new Store(join(directory, 'workspace'));
+  let connection: AssistantConnection = { state: 'disconnected', message: '', methods: [], grantedScopes: [], modelAuthReady: false };
+  const runtime = new ManagedRuntime(store, { status: () => connection, configure: async url => (connection = { ...connection, state: 'ready', url }) });
+  const service = new ChatGptAccount(runtime), root = join(store.directory, 'openclaw-runtime');
+  try {
+    assert.equal((await runtime.start()).state, 'running');
+    const reading = service.read(), concurrent = service.read(true);
+    assert.equal((await reading).state, 'unavailable'); assert.deepEqual(await concurrent, await reading);
+    const child = JSON.parse(readFileSync(join(root, 'account-processes.json'), 'utf8'));
+    assert.equal(child.respawned, undefined, 'the timeout must own the process that performs the probe');
+    assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+    assert.equal(readFileSync(join(root, 'account-starts.txt'), 'utf8'), 'probe\n');
+  } finally {
+    await service.close(); await runtime.stop();
+    const marker = join(root, 'account-processes.json');
+    if (existsSync(marker)) { const owned = JSON.parse(readFileSync(marker, 'utf8')); if (owned.respawned) { try { process.kill(owned.respawned, 'SIGKILL'); } catch { /* Already exited. */ } } }
+    store.close(); if (previous === undefined) delete process.env.E3_OPENCLAW_ENTRY; else process.env.E3_OPENCLAW_ENTRY = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 

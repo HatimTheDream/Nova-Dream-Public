@@ -597,6 +597,28 @@ class RunnerTests(unittest.TestCase):
                 recovery.native_saved_state(before, live)
         (live / config_relative).write_bytes(good_config)
 
+    def test_historical_promotion_can_refresh_but_current_config_and_permissions_stay_exact(self):
+        old_hash, new_hash = 'a' * 64, 'b' * 64
+        observation = {'hash': old_hash, 'bytes': 100, 'ctimeMs': 1, 'mtimeMs': 1, 'ino': '1',
+                       'observedAt': '2026-01-01T00:00:00Z', 'mode': 0o600, 'gatewayMode': 'local', 'other': {'keep': True}}
+        promoted = {**observation, 'hash': 'c' * 64, 'bytes': 90}
+        current = {**observation, 'hash': new_hash, 'bytes': 110, 'observedAt': '2026-01-02T00:00:00Z'}
+        configuration = {'path': '/retained/openclaw.json', 'hashes': [old_hash, new_hash], 'byteSizes': [100, 110]}
+        def compare(known=observation, historical=promoted, after=current):
+            with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as newer:
+                for connection, fields in ((before, (known, historical)), (newer, (current, after))):
+                    connection.execute('create table config_health_entries(config_path text primary key,last_known_good_json text,last_promoted_good_json text,updated_at_ms integer)')
+                    connection.execute('insert into config_health_entries values(?,?,?,1)', (configuration['path'], *(json.dumps(value) for value in fields)))
+                return recovery.native_boot_replacements(before, newer, {'config_health_entries'}, configuration, '2026.9.6', '2026.9.6', None)
+        result = compare()
+        self.assertEqual(json.loads(result[('config_health_entries', configuration['path'])]['last_promoted_good_json']), promoted)
+        for values in ({'after': {**current, 'hash': 'd' * 64}}, {'known': promoted},
+                       {'historical': {**promoted, 'hash': 'not-a-hash'}}, {'historical': {**promoted, 'bytes': -1}},
+                       {'historical': {**promoted, 'bytes': True}}, {'historical': {**promoted, 'bytes': 4 * 1024 * 1024 + 1}},
+                       {'after': {**current, 'mode': 0o644}}, {'after': {**current, 'other': {'keep': False}}}):
+            with self.subTest(changed=values), self.assertRaises(RuntimeError):
+                compare(**values)
+
     def test_official_companion_config_normalization_preserves_model_and_permissions(self):
         before, after = self.root / 'before-config', self.root / 'after-config'
         for root in (before, after):

@@ -40,6 +40,54 @@ test('account failure hides raw output and close cancels an owned pending read',
   const result=pending.read();await pending.close();assert(aborted);assert.equal((await result).state,'unavailable');assert.equal((await pending.read()).state,'unavailable');
 });
 
+test('concurrent account refreshes share sequential CLI probes and metadata failure skips order', async () => {
+  const calls: string[] = []; let release!: (value: string) => void;
+  const runtime = { accountCommand: () => command, accountOrderCommand: () => ({ ...command, args: ['order'] }) };
+  const service = new ChatGptAccount(runtime, async cmd => { calls.push(cmd.args[0]); return new Promise<string>(resolve => { release = resolve; }); });
+  try {
+    const first = service.read(), second = service.read(true);
+    assert.deepEqual(calls, ['fixture']);
+    release(JSON.stringify(payload)); await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, ['fixture', 'order']);
+    const third = service.read(true);
+    release(JSON.stringify({ agentId: 'main', provider: 'openai', order: ['openai:edition3-voice'] }));
+    assert.deepEqual(await first, await second); assert.deepEqual(await first, await third);
+    assert.deepEqual(calls, ['fixture', 'order']);
+  } finally { await service.close(); }
+  const failedCalls: string[] = [];
+  const failed = new ChatGptAccount(runtime, async cmd => { failedCalls.push(cmd.args[0]); throw Error('Unavailable'); });
+  try { assert.equal((await failed.read()).state, 'unavailable'); assert.deepEqual(failedCalls, ['fixture']); }
+  finally { await failed.close(); }
+});
+
+test('update maintenance suppresses account probes and discards reads spanning the hold', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'nova-account-maintenance-')), store = new Store(directory);
+  let reads = 0, snapshots = 0, release: ((value: string) => void) | undefined;
+  const gateway = { status: () => ({ state: 'ready', generation: 'fixture', methods: ['e3.accounts.snapshot'] }), async request() { snapshots++; } } as unknown as AssistantTransport;
+  const service = new ChatGptAccount({ accountCommand: () => command, accountOrderCommand: () => ({ ...command, args: ['order'] }) }, async cmd => {
+    reads++;
+    if (cmd.args[0] === 'order') return JSON.stringify({ agentId: 'main', provider: 'openai', order: null });
+    return new Promise<string>(resolve => { release = resolve; });
+  }, Date.now, { store, gateway });
+  try {
+    store.setUpdateMaintenanceHeld(true);
+    assert.equal((await service.read(true)).state, 'unavailable'); assert.equal(reads, 0); assert.equal(snapshots, 0);
+    store.setUpdateMaintenanceHeld(false);
+    const initial = service.read(); release!(JSON.stringify(payload));
+    assert.equal((await initial).state, 'available'); assert.equal(reads, 2); assert.equal(snapshots, 1);
+    store.setUpdateMaintenanceHeld(true);
+    assert.equal((await service.read()).state, 'unavailable', 'a cached result must not claim current availability during maintenance');
+    assert.equal(reads, 2);
+    store.setUpdateMaintenanceHeld(false);
+    const crossing = service.read(true); assert.equal(reads, 3);
+    store.setUpdateMaintenanceHeld(true); release!(JSON.stringify(payload));
+    assert.equal((await crossing).state, 'unavailable'); assert.equal(reads, 3); assert.equal(snapshots, 1);
+    store.setUpdateMaintenanceHeld(false);
+    const resumed = service.read(true); release!(JSON.stringify(payload));
+    assert.equal((await resumed).state, 'available'); assert.equal(reads, 5); assert.equal(snapshots, 2);
+  } finally { await service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 async function managed(run: (fixture: { service: ChatGptAccount; store: Store; device: string; status: any; snapshot: any; counts: { writes: number; lastParams?: any }; loseReply(): void; setOrder(ids: string[]): void }) => Promise<void>) {
   const directory = mkdtempSync(join(tmpdir(), 'nova-accounts-')), store = new Store(directory);
   const status = { state: 'ready', generation: randomUUID(), url: 'ws://127.0.0.1:49999', methods: ['e3.accounts.snapshot', 'models.authOrderSet'], grantedScopes: ['operator.read', 'operator.write'], modelAuthReady: true, message: '' };
