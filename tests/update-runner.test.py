@@ -107,6 +107,61 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             recovery.saved_state(before, live)
 
+    def retained_wal_database(self):
+        source, snapshot = self.root / 'source.sqlite', self.root / 'snapshot' / 'retained.sqlite'
+        snapshot.parent.mkdir()
+        with contextlib.closing(sqlite3.connect(source)) as writer:
+            writer.execute('pragma journal_mode=WAL')
+            writer.execute('pragma wal_autocheckpoint=0')
+            writer.execute('create table retained(value text)')
+            writer.execute("insert into retained values('committed only in WAL')")
+            writer.commit()
+            for suffix in ('', '-wal', '-shm'):
+                shutil.copyfile(pathlib.Path(str(source) + suffix), pathlib.Path(str(snapshot) + suffix))
+        return snapshot
+
+    def test_closed_sqlite_reads_committed_wal_without_changing_retained_files(self):
+        snapshot = self.retained_wal_database()
+        expected = recovery.sqlite_source_identity(snapshot)
+        self.assertGreater(pathlib.Path(str(snapshot) + '-wal').stat().st_size, 0)
+        with contextlib.closing(recovery.database(snapshot, True)) as connection:
+            scratch = connection.database_path.parent
+            self.assertEqual(connection.execute('select value from retained').fetchall(), [('committed only in WAL',)])
+            self.assertEqual(connection.execute('pragma quick_check').fetchone()[0], 'ok')
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("insert into retained values('forbidden')")
+            self.assertEqual(recovery.sqlite_source_identity(snapshot), expected)
+        self.assertFalse(scratch.exists())
+        self.assertEqual(recovery.sqlite_source_identity(snapshot), expected)
+
+    def test_closed_sqlite_rejects_changed_evidence_and_cleans_private_copy(self):
+        snapshot = self.retained_wal_database()
+        connection = recovery.database(snapshot, True)
+        scratch = connection.database_path.parent
+        self.assertEqual(connection.execute('select count(*) from retained').fetchone()[0], 1)
+        with pathlib.Path(str(snapshot) + '-wal').open('ab') as changed:
+            changed.write(b'changed after copy')
+        with self.assertRaisesRegex(RuntimeError, 'evidence changed during verification'):
+            connection.close()
+        self.assertFalse(scratch.exists())
+
+    def test_closed_sqlite_rejects_truncated_or_corrupt_committed_wal(self):
+        snapshot = self.retained_wal_database()
+        wal = pathlib.Path(str(snapshot) + '-wal')
+        original = wal.read_bytes()
+        corrupted = bytearray(original)
+        corrupted[-1] ^= 1
+        page_size = int.from_bytes(original[8:12], 'big')
+        for changed in (original[:-1], original[:-(page_size + 24)], corrupted):
+            with self.subTest(size=len(changed)):
+                wal.write_bytes(changed)
+                with self.assertRaisesRegex(RuntimeError, 'WAL'):
+                    recovery.database(snapshot, True)
+        wal.write_bytes(original)
+        pathlib.Path(str(snapshot) + '-shm').unlink()
+        with contextlib.closing(recovery.database(snapshot, True)) as connection:
+            self.assertEqual(connection.execute('select value from retained').fetchall(), [('committed only in WAL',)])
+
     def test_closed_uncheckpointed_journal_and_missing_saved_history_fail(self):
         before, live = self.root / 'snapshot', self.root / 'live'
         fixture_database(before / 'workspace.sqlite')
@@ -349,7 +404,7 @@ class RunnerTests(unittest.TestCase):
         health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.0', 'schemaVersion': 55, 'apiVersion': 1}
         guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
         responses = {'health': health, 'software-update/acceptance': guard, 'assistant/service': {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.2'},
-                     'assistant/state': {'connection': {'state': 'ready', 'modelAuthReady': True, 'grantedScopes': ['operator.write']}}, 'accounts': {'accounts': []}}
+                     'assistant/state': {'connection': {'state': 'ready', 'modelAuthReady': True, 'grantedScopes': ['operator.read', 'operator.write']}}, 'accounts': {'accounts': []}}
         instance.api = lambda path, session=False: responses[path]
         instance.controller_hold = lambda: None
         self.assertEqual(instance.acceptance('a' * 64, '1.13.0')['epoch'], 'epoch')
@@ -367,15 +422,15 @@ class RunnerTests(unittest.TestCase):
         responses['assistant/service']['version'] = '2026.9.6'
         instance.acceptance('a' * 64, '1.13.0')
 
-    def test_acceptance_reads_lazy_model_catalog_without_weakening_authentication(self):
-        for authenticated in [True, False]:
-            with self.subTest(authenticated=authenticated):
+    def test_held_acceptance_defers_cold_models_only_with_a_durable_post_resume_gate(self):
+        for post_resume_gate in [True, False]:
+            with self.subTest(post_resume_gate=post_resume_gate):
                 instance = driver.Driver(self.root / 'request.json')
                 instance.active_engine = '2026.9.6'
                 instance.job_id, instance.client_candidate = 'job', 'a' * 64
                 health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.2', 'schemaVersion': 55, 'apiVersion': 1}
-                guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
-                connection = {'state': 'ready', 'modelAuthReady': False, 'grantedScopes': ['operator.write']}
+                guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch', 'resumeReadinessRequired': post_resume_gate}
+                connection = {'state': 'ready', 'modelAuthReady': False, 'grantedScopes': ['operator.read', 'operator.write']}
                 responses = {'health': health, 'software-update/acceptance': guard,
                              'assistant/service': {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.6'},
                              'assistant/state': {'connection': connection}, 'accounts': {'accounts': []}}
@@ -384,18 +439,25 @@ class RunnerTests(unittest.TestCase):
                     self.assertFalse(session, 'Catalog refresh must be a read.')
                     calls.append(path)
                     if path == 'assistant/models':
-                        connection['modelAuthReady'] = authenticated
-                        return {'models': []}
+                        raise AssertionError('Suspended OpenClaw forbids model catalog RPCs')
                     return responses[path]
                 instance.api = api
                 instance.controller_hold = lambda: calls.append('controller-hold')
-                if authenticated:
+                if post_resume_gate:
                     self.assertEqual(instance.acceptance('a' * 64, '1.13.2')['epoch'], 'epoch')
                 else:
-                    with self.assertRaisesRegex(RuntimeError, 'Assistant access is not ready'):
+                    with self.assertRaisesRegex(RuntimeError, 'cannot verify cold model access'):
                         instance.acceptance('a' * 64, '1.13.2')
-                self.assertEqual(calls[:7], ['health', 'software-update/acceptance', 'controller-hold', 'assistant/service', 'assistant/state', 'assistant/models', 'assistant/state'])
-                self.assertEqual(calls.count('assistant/models'), 1)
+                self.assertEqual(calls[:5], ['health', 'software-update/acceptance', 'controller-hold', 'assistant/service', 'assistant/state'])
+                self.assertNotIn('assistant/models', calls)
+                # An old app's actual warm authentication remains sufficient.
+                connection['modelAuthReady'] = True
+                self.assertEqual(instance.acceptance('a' * 64, '1.13.2')['epoch'], 'epoch')
+                for scopes in [[], ['operator.read'], ['operator.write']]:
+                    connection['grantedScopes'] = scopes
+                    with self.assertRaisesRegex(RuntimeError, 'not authenticated'):
+                        instance.acceptance('a' * 64, '1.13.2')
+                connection['grantedScopes'] = ['operator.read', 'operator.write']
                 for change in [('guard', 'nativeSuspended', False), ('agent', 'version', 'unreviewed')]:
                     row = guard if change[0] == 'guard' else responses['assistant/service']
                     original, row[change[1]] = row[change[1]], change[2]
@@ -453,6 +515,49 @@ class RunnerTests(unittest.TestCase):
             instance.release.pop('runtimeBundle')
             with self.assertRaises(RuntimeError):
                 instance.validate_runtime()
+
+    @unittest.skipUnless(sys.platform == 'linux', 'POSIX umask and directory traversal modes')
+    def test_runtime_staging_repairs_only_a_validated_parent_under_private_umask(self):
+        for existing in [False, True]:
+            with self.subTest(existing=existing):
+                instance = self.instance()
+                instance.runtime_archive, description = self.runtime_archive()
+                instance.runtime_archive_members = driver.runtime_members(instance.runtime_archive, description)
+                instance.runtime = description
+                instance.runtime_target = self.root / ('retained' if existing else 'fresh') / 'runtime'
+                if existing:instance.runtime_target.parent.mkdir(mode=0o700)
+                checks = []
+                def protected(path, directory=False):
+                    self.assertEqual(path, instance.runtime_target.parent)
+                    checks.append(path)
+                instance.verify_staged_runtime = lambda: self.assertEqual(instance.runtime_target.parent.stat().st_mode & 0o777, 0o755)
+                previous = os.umask(0o077)
+                try:
+                    with patch.object(driver, 'protected', side_effect=protected), patch.object(driver, 'sync_dir'):
+                        instance.stage_runtime()
+                finally:os.umask(previous)
+                self.assertEqual(checks, [instance.runtime_target.parent])
+                self.assertEqual(instance.runtime_target.parent.stat().st_mode & 0o777, 0o755)
+                instance.runtime_target.parent.chmod(0o700)
+                with patch.object(driver, 'protected', side_effect=RuntimeError('Untrusted parent')):
+                    with self.assertRaises(RuntimeError):instance.stage_runtime()
+                self.assertEqual(instance.runtime_target.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_staged_node_is_checked_as_service_user_before_migration(self):
+        instance = self.instance()
+        instance.settings = {'serviceUser': 'synthetic'}
+        instance.target_agent_node = self.root / 'node' / 'bin' / 'node'
+        instance.runtime = {'nodeVersion': '24.21.0'}
+        user = types.SimpleNamespace(pw_uid=321, pw_gid=654, pw_dir=str(self.root))
+        with patch.dict(sys.modules, {'pwd': types.SimpleNamespace(getpwnam=lambda name: user)}), patch.object(driver.subprocess, 'check_output', return_value='v24.21.0\n') as child:
+            instance.verify_runtime_execution()
+            args, kwargs = child.call_args
+            self.assertEqual(args[0], [str(instance.target_agent_node), '--version'])
+            self.assertEqual((kwargs['user'], kwargs['group'], kwargs['extra_groups']), (321, 654, []))
+            self.assertEqual(set(kwargs['env']), {'PATH', 'HOME', 'LANG', 'NODE_DISABLE_COMPILE_CACHE'})
+            child.side_effect = PermissionError('Synthetic untraversable parent')
+            with self.assertRaises(PermissionError):instance.verify_runtime_execution()
+        self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
 
     def test_migration_rejects_ambiguous_or_released_workshop_history(self):
         with contextlib.closing(sqlite3.connect(':memory:')) as connection:

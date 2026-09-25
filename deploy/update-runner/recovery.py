@@ -17,6 +17,7 @@ import sqlite3
 import stat
 import struct
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -272,13 +273,142 @@ def prepare_independent(snapshot, destination, failed, require_stopped):
     return expected
 
 
+def sqlite_file_identity(path):
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and not path.is_symlink(), 'Expected an ordinary retained SQLite file.')
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                              value.st_nlink, value.st_size, value.st_mtime_ns,
+                              value.st_ctime_ns if os.name != 'nt' else 0)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(descriptor, 'rb') as source:
+        require(identity(os.fstat(source.fileno())) == identity(info), 'Retained SQLite file identity changed.')
+        sha256 = hashlib.file_digest(source, 'sha256').hexdigest()
+        require(identity(os.fstat(source.fileno())) == identity(info), 'Retained SQLite file changed while being read.')
+    require(identity(path.lstat()) == identity(info), 'Retained SQLite file identity changed.')
+    return identity(info), sha256
+
+
+def sqlite_source_identity(path):
+    result = {}
+    for suffix in ('', '-wal', '-shm', '-journal'):
+        source = pathlib.Path(str(path) + suffix)
+        if source.exists() or source.is_symlink():
+            result[suffix] = sqlite_file_identity(source)
+    require('' in result, 'Expected an ordinary workspace database.')
+    return result
+
+
+def sqlite_wal_checksum(data, byteorder, initial=(0, 0)):
+    first, second = initial
+    for left, right in struct.iter_unpack(byteorder + 'II', data):
+        first = (first + left + second) & 0xffffffff
+        second = (second + right + first) & 0xffffffff
+    return first, second
+
+
+def verify_sqlite_wal(path):
+    """Reject truncated/corrupt committed WAL instead of silently ignoring it.
+
+    SQLite file format sections 4.1-4.4 define these cumulative checksums.
+    A valid retained WAL-index binds the committed prefix when reset WALs also
+    contain obsolete frames. Without it, require complete current-salt frames.
+    """
+    wal = pathlib.Path(str(path) + '-wal')
+    if not wal.exists() or not wal.stat().st_size:
+        return
+    with wal.open('rb') as source:
+        header = source.read(32)
+        require(len(header) == 32, 'Retained SQLite WAL header is invalid.')
+        magic, version, page_size, _, salt1, salt2, check1, check2 = struct.unpack('>8I', header)
+        require(magic in {0x377f0682, 0x377f0683} and version == 3007000
+                and 512 <= page_size <= 65536 and page_size & (page_size - 1) == 0,
+                'Retained SQLite WAL header is invalid.')
+        byteorder = '>' if magic == 0x377f0683 else '<'
+        checksum = sqlite_wal_checksum(header[:24], byteorder)
+        require(checksum == (check1, check2), 'Retained SQLite WAL header checksum failed.')
+        size = wal.stat().st_size - 32
+        require(size % (24 + page_size) == 0, 'Retained SQLite WAL contains a truncated frame.')
+        frames = size // (24 + page_size)
+        committed, end_checksum = None, None
+        shm = pathlib.Path(str(path) + '-shm')
+        if shm.exists() and shm.stat().st_size:
+            with shm.open('rb') as index:
+                indexes = index.read(96)
+            require(len(indexes) == 96 and indexes[:48] == indexes[48:96], 'Retained SQLite WAL index headers differ.')
+            index = indexes[:48]
+            values = struct.unpack('=12I', index)
+            require(values[0] == 3007000 and index[12] == 1
+                    and index[13] == (magic & 1)
+                    and sqlite_wal_checksum(index[:40], '=') == values[10:12]
+                    and index[32:40] == header[16:24], 'Retained SQLite WAL index identity failed.')
+            committed, end_checksum = values[4], values[6:8]
+            require(0 <= committed <= frames, 'Retained SQLite WAL lost committed frames.')
+        limit = frames if committed is None else committed
+        final_commit = 0
+        for number in range(1, limit + 1):
+            frame_header, page = source.read(24), source.read(page_size)
+            page_number, database_size, frame_salt1, frame_salt2, first, second = struct.unpack('>6I', frame_header)
+            require(page_number > 0 and (frame_salt1, frame_salt2) == (salt1, salt2), 'Retained SQLite WAL frame identity failed.')
+            checksum = sqlite_wal_checksum(page, byteorder, sqlite_wal_checksum(frame_header[:8], byteorder, checksum))
+            require(checksum == (first, second), 'Retained SQLite WAL frame checksum failed.')
+            if database_size:
+                final_commit = number
+        require(final_commit == limit, 'Retained SQLite WAL has an uncommitted tail.')
+        if end_checksum is not None and limit:
+            require(checksum == end_checksum, 'Retained SQLite WAL committed index differs.')
+
+
+class CopiedDatabase:
+    """Read closed DB/WAL bytes without SQLite touching retained evidence."""
+    def __init__(self, path):
+        self.source_path = path
+        self.source_identity = sqlite_source_identity(path)
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-sqlite-read-')
+        self.database_path = pathlib.Path(self.temporary.name) / path.name
+        self.connection = None
+        try:
+            require(shutil.disk_usage(self.temporary.name).free >= sum(value[0][6] for value in self.source_identity.values()) + RESERVE + ALLOWANCE,
+                    'Private SQLite verification copies and recovery reserve no longer fit.')
+            for suffix, expected in self.source_identity.items():
+                source_path = pathlib.Path(str(path) + suffix)
+                destination = pathlib.Path(str(self.database_path) + suffix)
+                descriptor = os.open(source_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+                with os.fdopen(descriptor, 'rb') as source, destination.open('xb') as output:
+                    shutil.copyfileobj(source, output, 1024 * 1024)
+                destination.chmod(0o600)
+                require(digest(destination) == expected[1], 'Copied SQLite evidence bytes differ.')
+            require(sqlite_source_identity(path) == self.source_identity, 'Retained SQLite evidence changed during copying.')
+            verify_sqlite_wal(self.database_path)
+            # immutable=1 ignores WAL. Normal read-only SQLite may rebuild SHM,
+            # but it may do so only inside this private disposable copy.
+            self.connection = sqlite3.connect(self.database_path.as_uri() + '?mode=ro', uri=True)
+            self.connection.execute('pragma query_only=ON')
+            self.connection.execute('begin')
+        except BaseException:
+            if self.connection is not None:
+                self.connection.close()
+            self.temporary.cleanup()
+            raise
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def close(self):
+        if self.connection is None:
+            return
+        try:
+            self.connection.close()
+            self.connection = None
+            require(sqlite_source_identity(self.source_path) == self.source_identity, 'Retained SQLite evidence changed during verification.')
+        finally:
+            self.temporary.cleanup()
+
+
 def database(path, closed):
     require(path.is_file() and not path.is_symlink(), 'Expected an ordinary workspace database.')
     if closed:
-        for suffix in ('-wal', '-journal'):
-            extra = pathlib.Path(str(path) + suffix)
-            require(not extra.exists() or extra.stat().st_size == 0, 'A closed database still has an uncheckpointed journal.')
-    connection = sqlite3.connect(path.as_uri() + ('?mode=ro&immutable=1' if closed else '?mode=ro'), uri=True)
+        return CopiedDatabase(path)
+    connection = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
     connection.execute('pragma query_only=ON')
     connection.execute('begin')
     return connection
@@ -327,7 +457,7 @@ def bounded_json(path, maximum):
     return json.loads(path.read_bytes())
 
 
-def selected_workspace(root, expected_epoch=None):
+def selected_workspace(root, expected_epoch=None, closed=False):
     """Follow the reviewed workspace-host selection contract, then bind its epoch
     to the authenticated live acceptance. Never guess the active runtime by name.
     """
@@ -344,7 +474,7 @@ def selected_workspace(root, expected_epoch=None):
         require(proof.get('jobId') == value['recoveryId'] and re.fullmatch(r'[a-f0-9]{64}', proof.get('sourceHash', '')), 'Selected recovery proof changed.')
     marker = selected / 'edition3.identity'
     require(marker.is_file() and not marker.is_symlink() and marker.read_bytes() == b'private.novadream.edition3.preview\n', 'Selected workspace identity changed.')
-    with contextlib.closing(database(selected / 'workspace.sqlite', False)) as connection:
+    with contextlib.closing(database(selected / 'workspace.sqlite', closed)) as connection:
         require(connection.execute('pragma user_version').fetchone()[0] == 55, 'The selected workspace schema changed.')
         row = connection.execute("select value from meta where key='epoch'").fetchone()
         require(row is not None and isinstance(row[0], str) and str(uuid.UUID(row[0])) == row[0]
@@ -352,8 +482,8 @@ def selected_workspace(root, expected_epoch=None):
     return selected, row[0]
 
 
-def native_scope(root, expected_epoch=None):
-    selected, epoch = selected_workspace(root, expected_epoch)
+def native_scope(root, expected_epoch=None, closed=False):
+    selected, epoch = selected_workspace(root, expected_epoch, closed)
     native = selected / 'openclaw-runtime'
     require(native.resolve(strict=True) == native and native.is_dir(), 'Selected native runtime was redirected.')
     marker = native / 'edition3-runtime.identity'
@@ -591,7 +721,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
-    before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch)
+    before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
     require(static_sqlite_files(snapshot, selected, paths) == static_sqlite_files(live, selected, paths), 'An inactive database, archived store or nonactive cache changed.')
@@ -606,7 +736,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 # the shared database still owns current maintenance leases.
                 retired = {'state_leases'} if relative.name != 'openclaw.sqlite' else set()
                 require(old_tables - retired <= new_tables, 'A retained native table disappeared during migration.')
-                migrated_native_rows(before, after, old_tables, snapshot / relative, live / relative, node)
+                migrated_native_rows(before, after, old_tables, before.database_path, live / relative, node)
                 continue
             require(old_tables == new_tables, 'An unchanged native database changed its schema.')
             schema = lambda connection: Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))

@@ -31,15 +31,19 @@ export class SoftwareUpdates {
   private closed = false;
   constructor(private readonly workspace: UpdateWorkspace, private readonly host?: Pick<UpdateHostClient, 'call'>) {}
   status(readOnly = false): SoftwareUpdateStatus {
+    const settling=!!this.workspace.heldFor()&&this.workspace.heldFor()!==this.view?.holdFor;
     const installation = !this.host ? {supported:false,reason:'Updates are managed by this host’s administrator.'}
       : this.unavailable ? {supported:false,reason:'The update service is unavailable. Try again shortly.'}
       : readOnly ? {supported:false,reason:'Manage software updates from the owner’s workspace.'}
+      : settling ? {supported:false,reason:'Waiting for Assistant access to finish reconnecting.'}
       : this.view?.installation ?? {supported:false,reason:'Checking the host update service…'};
     return { installed:this.workspace.installed(), availability:this.unavailable ? 'error' : this.view?.availability ?? (this.host ? 'checking' : 'unavailable'),
       ...(this.view?.checkedAt ? {checkedAt:this.view.checkedAt}:{}), ...(this.view?.release ? {release:this.view.release}:{}),
       ...(this.view?.agentUpdate ? {agentUpdate:this.view.agentUpdate}:{}),
       ...(this.unavailable ? {error:'Could not reach the update service.'} : this.view?.error ? {error:this.view.error}:{}), installation,
-      ...(this.view?.job ? {job:this.view.job}:{}), ...(this.view?.blocker ? {blocker:this.view.blocker}:{}) };
+      ...(this.view?.job ? {job:settling&&['completed','restored','failed','cancelled'].includes(this.view.job.state)
+        ? {...this.view.job,state:'checking',message:'Checking Assistant access after the update.'}:this.view.job}:{}),
+      ...(settling?{blocker:this.view?.blocker??{code:'native_readiness',message:'Checking Assistant access after the update. Your saved work is kept.'}}:this.view?.blocker?{blocker:this.view.blocker}:{}) };
   }
   async start() { if (!this.host || this.closed) return; await this.refresh(); this.schedule(); }
   private schedule() { if (this.closed || !this.host) return; clearTimeout(this.timer); this.timer=setTimeout(()=>void this.refresh().finally(()=>this.schedule()),this.view?.holdFor || this.workspace.heldFor() || this.view?.job && !['completed','restored','failed','cancelled'].includes(this.view.job.state) ? 2000:30000); this.timer.unref(); }
@@ -95,6 +99,7 @@ export class SoftwareUpdates {
   async check(value:unknown) { const input=checkInput.parse(value);this.guard(input.epoch); await this.host!.call('check'); await this.refresh(); return this.status(); }
   async install(value:unknown) {
     const input=installInput.parse(value);this.guard(input.epoch); await this.refresh();this.guard(input.epoch);
+    if(this.workspace.heldFor()&&this.workspace.heldFor()!==this.view?.holdFor)throw new Fault(409,'update_rejected','Wait for Assistant access to finish reconnecting before another update.');
     let acknowledged:UpdateHostView;
     try{acknowledged=await this.host!.call<UpdateHostView>('install',{...input,currentCandidateId:this.workspace.installed().candidateId});}catch(error){if(error instanceof UpdateHostRejected)throw new Fault(409,'update_rejected',error.message);throw error;}
     await this.refresh();this.schedule();return {...this.status(),...(acknowledged.job?{job:acknowledged.job}:{})};

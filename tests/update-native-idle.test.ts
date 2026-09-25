@@ -34,10 +34,41 @@ function setup(t:TestContext){
     if(method==='gateway.suspend.resume'){resumes++;if(current&&current.suspensionId!==input.suspensionId)throw Error('wrong lease');const resumed=!!current;current=undefined;return {ok:true,status:'running',resumed} as T;}
     throw Error(method);
   }});
-  const runtime={updateIdentity:()=>owned,updateStartupBlockers:()=>[] as {code:string;message:string}[]};const lease=new NativeUpdateLease(store,runtime,factory,()=>time);store.setUpdateMaintenanceHeld(true);
+  let modelReady=true,catalogReads=0,writeScope=true;
+  const assistant={status:()=>({...state,grantedScopes:writeScope?['operator.read','operator.write']:['operator.read'],modelAuthReady:modelReady}),serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:owned.version}),async models(){catalogReads++;assert.equal(current,undefined,'Models must be read only after native resume');return [];}};
+  const runtime={updateIdentity:()=>owned,updateStartupBlockers:()=>[] as {code:string;message:string}[]};const lease=new NativeUpdateLease(store,runtime,factory,()=>time,assistant);store.setUpdateMaintenanceHeld(true);
   t.after(async()=>{await lease.close();store.close();rmSync(root,{recursive:true,force:true});});
-  return {root,store,lease,runtime,factory,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
+  return {root,store,lease,runtime,factory,assistant,modelReady:(ready:boolean)=>modelReady=ready,writeScope:(granted:boolean)=>writeScope=granted,catalogReads:()=>catalogReads,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
 }
+
+test('native resume retains a durable hold until real model readiness survives process recreation',async t=>{
+  const f=setup(t);await f.lease.acquire(f.job);f.modelReady(false);
+  assert.equal(f.catalogReads(),0);
+  assert.equal((await f.lease.release(f.job))[0].code,'native_readiness');
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'releasing');
+  assert.deepEqual(f.lease.pendingJobIds(),[f.job]);assert.equal(f.store.updateMaintenanceHeld,true);
+  const recreated=new NativeUpdateLease(f.store,f.runtime,f.factory,f.now,f.assistant);t.after(()=>recreated.close());
+  assert.deepEqual(recreated.pendingJobIds(),[f.job]);
+  assert.equal((await recreated.release(f.job))[0].code,'native_readiness');
+  f.modelReady(true);assert.deepEqual(await recreated.release(f.job),[]);
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'released');assert.deepEqual(recreated.pendingJobIds(),[]);
+  assert.equal(f.counts().prepares,1);assert.equal(f.catalogReads(),3);
+});
+
+test('post-resume readiness requires authenticated scopes and the same connection generation',async t=>{
+  const f=setup(t);await f.lease.acquire(f.job);f.writeScope(false);
+  assert.equal((await f.lease.release(f.job))[0].code,'native_readiness');assert.equal(f.catalogReads(),0);
+  f.writeScope(true);const models=f.assistant.models;f.assistant.models=async()=>{const result=await models();f.changeGeneration();return result;};
+  assert.equal((await f.lease.release(f.job))[0].code,'native_readiness');
+  assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'releasing');
+});
+
+test('a successor native process must prove model readiness without receiving an old resume',async t=>{
+  const f=setup(t);await f.lease.acquire(f.job);f.modelReady(false);f.restart();
+  assert.equal((await f.lease.release(f.job))[0].code,'native_readiness');assert.equal(f.counts().resumes,0);
+  assert.deepEqual(f.lease.pendingJobIds(),[f.job]);f.modelReady(true);
+  assert.deepEqual(await f.lease.release(f.job),[]);assert.equal(f.counts().resumes,0);
+});
 
 test('reviewed native versions must match the exact owned running process',async t=>{
   const f=setup(t);f.version('2026.9.6');f.reportVersion('2026.9.2');
@@ -69,7 +100,7 @@ test('native global lease renews and never uses terminal destruction or leaks ta
 });
 test('lost prepare reply and app helper restart recover and release only the original native lease',async t=>{
   const f=setup(t);f.drop();assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.deepEqual(f.lease.pendingJobIds(),[f.job]);
-  const resumed=new NativeUpdateLease(f.store,f.runtime,f.factory,f.now);t.after(()=>resumed.close());assert.equal(resumed.snapshot(f.job).nativeSuspended,false);
+  const resumed=new NativeUpdateLease(f.store,f.runtime,f.factory,f.now,f.assistant);t.after(()=>resumed.close());assert.equal(resumed.snapshot(f.job).nativeSuspended,false);
   assert.deepEqual(await resumed.release(f.job),[]);assert.equal(new Set(f.requests).size,1);assert.equal(f.counts().resumes,1);assert.equal(f.counts().systems,1);
 });
 test('native process replacement retires its old receipt without resuming the successor',async t=>{
@@ -96,7 +127,7 @@ test('closing during a late native prepare preserves its receipt without claimin
   const f=setup(t);let finish!:()=>void,entered!:()=>void;
   const enteredPromise=new Promise<void>(resolve=>entered=resolve),wait=new Promise<void>(resolve=>finish=resolve);
   const factory=()=>{const transport=f.factory(),request=transport.request;return {...transport,async request<T>(method:string,params:unknown):Promise<T>{const result=await request<T>(method,params);if(method==='gateway.suspend.prepare'){entered();await wait;}return result;}};};
-  const lease=new NativeUpdateLease(f.store,f.runtime,factory,f.now),pending=lease.acquire(f.job);await enteredPromise;
+  const lease=new NativeUpdateLease(f.store,f.runtime,factory,f.now,f.assistant),pending=lease.acquire(f.job);await enteredPromise;
   const closing=lease.close();finish();assert.equal((await pending)[0].code,'native_unknown');await closing;
   assert.equal(lease.snapshot(f.job).nativeSuspended,false);assert.deepEqual(lease.pendingJobIds(),[f.job]);
   assert.deepEqual(await f.lease.release(f.job),[]);

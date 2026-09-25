@@ -14,6 +14,7 @@ type Saved=z.infer<typeof savedSchema>;
 const key=(jobId:string)=>'update:native-lease:'+jobId;
 const methods=['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'];
 const unknown=():NativeUpdateBlocker[]=>[{code:'native_unknown',message:'Assistant update readiness could not be verified. Its existing work is kept.'}];
+const checking=():NativeUpdateBlocker[]=>[{code:'native_readiness',message:'Checking Assistant access after the update. Your saved work is kept.'}];
 const same=(a:Identity,b:Identity|undefined)=>!!b&&Object.keys(a).every(k=>a[k as keyof Identity]===b[k as keyof Identity]);
 
 /** Uses the reviewed OpenClaw versions' cooperative suspension contract.
@@ -29,7 +30,8 @@ export class NativeUpdateLease {
   private unsubscribe?:()=>void;
   private startupCheck?:{key:string;blockers:NativeUpdateBlocker[]};
   private closed=false;
-  constructor(private store:Store,private runtime:Pick<ManagedRuntime,'updateIdentity'|'updateStartupBlockers'>,private factory:()=>Transport,private now=Date.now){}
+  constructor(private store:Store,private runtime:Pick<ManagedRuntime,'updateIdentity'|'updateStartupBlockers'>,private factory:()=>Transport,private now=Date.now,
+    private assistant?:Pick<AssistantTransport,'status'|'models'|'serviceInfo'>){}
   private serial<T>(run:()=>Promise<T>):Promise<T>{const result=this.sequence.then(run,run);this.sequence=result.catch(()=>{});return result;}
   private read(jobId:string){const raw=this.store.internalRead(key(jobId));return raw===undefined?undefined:savedSchema.parse(raw);}
   private save(value:Saved){return this.store.internalWrite(key(value.jobId),value);}
@@ -47,6 +49,20 @@ export class NativeUpdateLease {
     const state=this.transport.status(),info=this.transport.serviceInfo?.();
     if(state.state!=='ready'||state.url!==owned.url||state.generation!==owned.generation||!state.grantedScopes.includes('operator.admin')||!state.grantedScopes.includes('operator.read')||!methods.every(m=>state.methods.includes(m))||info?.id!=='openclaw'||info.version!==owned.version)return;
     return this.transport;
+  }
+  private async readyAfterResume(owned:Identity){
+    if(!this.assistant||this.closed||!this.store.updateMaintenanceHeld)return false;
+    const matches=()=>{
+      const connection=this.assistant!.status(),agent=this.assistant!.serviceInfo?.();
+      return !this.closed&&this.store.updateMaintenanceHeld&&same(owned,this.runtime.updateIdentity())&&connection.state==='ready'
+        &&connection.url===owned.url&&connection.generation===owned.generation&&connection.grantedScopes.includes('operator.read')
+        &&connection.grantedScopes.includes('operator.write')&&agent?.id==='openclaw'&&agent.state==='ready'&&agent.version===owned.version;
+    };
+    if(!matches())return false;
+    // models.list is rejected while OpenClaw is suspended. Probe it only after
+    // confirmed resume, on the normal authenticated Assistant connection.
+    try{await this.assistant.models();}catch{return false;}
+    return matches()&&this.assistant.status().modelAuthReady;
   }
   snapshot(jobId:string|null){
     const value=this.verified,connection=this.transport?.status();
@@ -95,7 +111,14 @@ export class NativeUpdateLease {
     try{
       z.uuid().parse(jobId);let saved=this.read(jobId);if(!saved||saved.state==='released')return [];
       const owned=this.runtime.updateIdentity();if(!owned)return unknown();
-      if(!same(saved.identity,owned)){if(saved.identity.pid===owned.pid&&saved.identity.startedAt===owned.startedAt)return unknown();this.store.internalWrite(key(jobId)+':previous:'+saved.requestId,saved);this.save({...saved,state:'released'});return [];}
+      if(!same(saved.identity,owned)){
+        if(saved.identity.pid===owned.pid&&saved.identity.startedAt===owned.startedAt)return unknown();
+        this.store.internalWrite(key(jobId)+':previous:'+saved.requestId,saved);
+        // Never resume a successor with its predecessor's lease. The durable
+        // old receipt still keeps admission held until the new child is ready.
+        if(!await this.readyAfterResume(owned))return checking();
+        this.save({...saved,state:'released'});return [];
+      }
       const transport=await this.connection(owned);if(!transport)return unknown();
       if(!saved.suspensionId){
         // Recover an ambiguous prepare using its original identity; do not guess
@@ -108,6 +131,9 @@ export class NativeUpdateLease {
       const result=await transport.request('gateway.suspend.resume',{suspensionId:saved.suspensionId});
       z.object({ok:z.literal(true),status:z.literal('running'),resumed:z.boolean()}).strict().parse(result);
       if(!same(owned,this.runtime.updateIdentity()))return unknown();
+      // Keep "releasing" durable across app restart and failed catalog reads.
+      // The root result authorizes resume, not invented model authentication.
+      if(!await this.readyAfterResume(owned))return checking();
       this.save({...saved,state:'released'});return [];
     }catch{return unknown();}
   });}

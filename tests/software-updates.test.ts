@@ -64,6 +64,20 @@ test('restart with an orphaned own native lease reconciles it before clearing lo
  const updates=new SoftwareUpdates(f.workspace,f.host);await updates.refresh();assert.equal(f.workspace.native!.pendingJobIds().length,0);assert.equal(f.workspace.heldFor(),null);updates.close();
 });
 
+test('a root completion remains checking and refuses another install until local model readiness',async()=>{
+ const f=setup(),id=randomUUID();await f.workspace.native!.acquire(id);f.workspace.hold(id);
+ f.setView({availability:'current',installation:{supported:true},holdFor:null,job:{id,candidateId:next,state:'completed',message:'Update installed.',requestedAt:0,updatedAt:0}});
+ const original=f.workspace.native!.release;let entered!:()=>void,finish!:()=>void;
+ const began=new Promise<void>(resolve=>entered=resolve),wait=new Promise<void>(resolve=>finish=resolve);
+ f.workspace.native!.release=async()=>{entered();await wait;return [{code:'native_readiness',message:'Checking Assistant access.'}];};
+ const updates=new SoftwareUpdates(f.workspace,f.host),reading=updates.refresh();await began;
+ assert.equal(updates.status().job?.state,'checking');assert.equal(updates.status().installation.supported,false);
+ finish();await reading;assert.equal(f.workspace.heldFor(),id);assert.equal(updates.status().job?.state,'checking');
+ await assert.rejects(()=>updates.install({epoch:f.workspace.epoch(),candidateId:next,idempotencyKey:randomUUID(),when:'idle'}),/finish reconnecting/);
+ assert.equal(f.seen.some(call=>call.action==='install'),false);
+ f.workspace.native!.release=original;await updates.refresh();assert.equal(f.workspace.heldFor(),null);assert.equal(updates.status().job?.state,'completed');updates.close();
+});
+
 test('held installation renews its native lease on every heartbeat',async()=>{
  const f=setup(),id=randomUUID(),original=f.workspace.native!.acquire;let count=0;f.workspace.native!.acquire=async(id)=>{count++;return original(id);};
  f.setView({availability:'available',installation:{supported:true},holdFor:id,job:{id,candidateId:next,state:'checking',requestedAt:0,updatedAt:0}});

@@ -1,3 +1,9 @@
+## [1.13.4] — 2026-09-24
+
+- Verify that Nova's service account can run a staged agent update before pausing the app, including runtime folders retained from an interrupted attempt.
+- Separate held installation checks from post-restart model checks. Keep work paused and show Checking until the resumed Assistant proves it is ready.
+- Preserve committed native database journals during recovery verification without altering the retained recovery copy.
+
 ## [1.13.3] — 2026-09-24
 
 - Wait for brief account checks to settle during update verification, including before installation and when confirming that a stopped attempt changed nothing. Keep the existing timeout, saved-account checks and maintenance protection.

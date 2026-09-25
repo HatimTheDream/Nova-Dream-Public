@@ -327,6 +327,10 @@ class Driver:
         if not self.runtime_target.parent.exists():
             self.runtime_target.parent.mkdir(mode=0o755)
         protected(self.runtime_target.parent, True)
+        # The private runner umask must not hide public runtime packages from
+        # the service user. Validate root ownership before repairing either a
+        # fresh parent or one retained after an interrupted staging attempt.
+        self.runtime_target.parent.chmod(0o755)
         if self.runtime_target.exists() or self.runtime_target.is_symlink():
             self.verify_staged_runtime()
             return
@@ -381,9 +385,18 @@ class Driver:
         package = read_json(self.target_agent / 'package.json')
         require(package.get('name') == 'openclaw' and package.get('version') == self.to_engine
                 and digest(self.target_agent_node) == self.runtime['nodeSha256'], 'The runtime closure contains a different engine or Node binary.')
-        version = subprocess.check_output([str(self.target_agent_node), '--version'], text=True, timeout=10).strip()
-        require(version == 'v' + self.runtime['nodeVersion'], 'The staged agent Node runtime has a different version.')
+        self.verify_runtime_execution()
         self.target_runtime_identity = inventory(self.runtime_target)[0]
+
+    def verify_runtime_execution(self):
+        """Check the exact staged executable with the identity migration uses."""
+        import pwd
+        user = pwd.getpwnam(self.settings['serviceUser'])
+        version = subprocess.check_output([str(self.target_agent_node), '--version'], text=True, timeout=10,
+                                          user=user.pw_uid, group=user.pw_gid, extra_groups=[],
+                                          env={'PATH': str(self.target_agent_node.parent) + ':/usr/bin:/bin',
+                                               'HOME': user.pw_dir, 'LANG': 'C.UTF-8', 'NODE_DISABLE_COMPILE_CACHE': '1'}).strip()
+        require(version == 'v' + self.runtime['nodeVersion'], 'The staged agent Node runtime has a different version.')
 
     def switch_runtime(self, restoring=False):
         if self.runtime is None:
@@ -468,13 +481,15 @@ class Driver:
         agent = self.api('assistant/service')
         require(agent.get('id') == 'openclaw' and agent.get('state') == 'ready' and agent.get('version') == self.active_engine, 'The actual agent is not the expected reviewed version.')
         assistant = self.api('assistant/state')['connection']
-        if assistant.get('state') == 'ready' and assistant.get('modelAuthReady') is not True:
-            # The model catalog establishes authentication readiness lazily.
-            # Observe it under the already verified candidate/native barrier.
-            self.api('assistant/models')
-            assistant = self.api('assistant/state')['connection']
-        require(assistant.get('state') == 'ready' and assistant.get('modelAuthReady') is True
-                and 'operator.write' in assistant.get('grantedScopes', []), 'Assistant access is not ready.')
+        # This is held acceptance: a cold OpenClaw process permits only suspend
+        # controls, so models.list cannot establish model readiness yet. Keep
+        # the authenticated connection and granted scopes checks here. After
+        # the verified result, Nova durably retains local admission while it
+        # resumes this exact lease and proves real model access on that child.
+        require(assistant.get('state') == 'ready' and 'operator.read' in assistant.get('grantedScopes', [])
+                and 'operator.write' in assistant.get('grantedScopes', []), 'Assistant access is not authenticated.')
+        require(assistant.get('modelAuthReady') is True or guard.get('resumeReadinessRequired') is True,
+                'This installed app cannot verify cold model access after releasing the update hold.')
         accounts = self.api('accounts')['accounts']
         require(all(account.get('state') in {'connected', 'reconnect', 'disconnected'} for account in accounts), 'Account state is unsettled.')
         retained_accounts = sorted((item['id'], item['provider'], item['state'], tuple(sorted(item.get('scopes', [])))) for item in accounts)

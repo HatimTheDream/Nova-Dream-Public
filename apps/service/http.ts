@@ -196,7 +196,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const dictation = new DictationService(store, gateway);
   const calls = new VoiceCalls(store, gateway, assistant, voice);
   let mutationRequests=0;
-  const nativeUpdateLease=runtime?new NativeUpdateLease(store,runtime,()=>new Gateway(store,options.version,undefined,'update-control')):undefined;
+  const nativeUpdateLease=runtime?new NativeUpdateLease(store,runtime,()=>new Gateway(store,options.version,undefined,'update-control'),Date.now,gateway):undefined;
   // Saved native admission may outlive a workspace process. Reconcile that
   // original lease before allowing the replacement process to dispatch work.
   if(updateHost&&nativeUpdateLease?.pendingJobIds().length)store.setUpdateMaintenanceHeld(true);
@@ -322,7 +322,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if (remote && !phoneRouteAllowed(url.pathname, request.method ?? '')) throw new Fault(403, 'desktop_required', 'Manage host setup and connected devices in Settings on your computer.');
         if(url.pathname==='/api/software-update/acceptance'&&request.method==='GET'){
           if(surface!=='desktop'||store.recoveryEffectsPaused)throw new Fault(403,'local_only','Update acceptance is available only to the local host.');
-          return json(200,{candidateId:options.candidateId,epoch:store.epoch,heldFor:updateHold,maintenanceHeld:store.updateMaintenanceHeld,blockers:localUpdateBlockers(),agent:agentServiceInfo(gateway.serviceInfo?.()),nativeSuspended:nativeUpdateLease?.snapshot(updateHold).nativeSuspended??false});
+          return json(200,{candidateId:options.candidateId,epoch:store.epoch,heldFor:updateHold,maintenanceHeld:store.updateMaintenanceHeld,blockers:localUpdateBlockers(),agent:agentServiceInfo(gateway.serviceInfo?.()),nativeSuspended:nativeUpdateLease?.snapshot(updateHold).nativeSuspended??false,resumeReadinessRequired:!!nativeUpdateLease});
         }
         if(url.pathname==='/api/software-update'&&request.method==='GET')return json(200,softwareUpdates.status(remote||store.recoveryEffectsPaused));
         if(url.pathname.startsWith('/api/software-update/')&&request.method==='POST'){
