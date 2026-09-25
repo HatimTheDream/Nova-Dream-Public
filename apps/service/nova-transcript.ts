@@ -283,11 +283,12 @@ export class NovaTranscript {
     const cursor = this.store.internalRead<{ id: string }>('assistant:transcript-migration-cursor')?.id;
     const start = cursor ? (eligible.findIndex(c => c.id === cursor) + 1) % Math.max(1, eligible.length) : 0;
     for (let index = 0; index < eligible.length && budget > 0; index++) {
+      if (this.store.updateMaintenanceHeld) return;
       const conversation = eligible[(start + index) % eligible.length];
       this.migrate(conversation);
       let binding = this.binding(conversation, conversation.nativeId!);
       if (binding.complete && !binding.capture) continue;
-      const valid = () => epoch === this.store.epoch && this.available(conversation);
+      const valid = () => epoch === this.store.epoch && !this.store.updateMaintenanceHeld && this.available(conversation);
       try {
         if (!binding.capture) {
           budget--; const head = await read(conversation.id, 0); if (!valid() || head.nativeId !== binding.nativeId || head.retained) continue;

@@ -51,6 +51,62 @@ await withDoctorSqliteMaintenanceLock({env:process.env,operation:'reviewed Nova 
  await closeOpenClawStateDatabaseAsync();
 }});
 '''
+CODEX_SURFACE = 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
+CODEX_INSTALL = r'''
+import {pathToFileURL} from 'node:url';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+const root=process.argv[1], plugin=process.argv[2], surface=process.argv[3];
+const load=name=>import(pathToFileURL(join(root,'dist',name)).href);
+const {c:readConfigFileSnapshot}=await load('io.runtime-hPN4FOBi.mjs');
+const {installManagedPluginSource}=await load('management-install-DV30z_Uq.mjs');
+const {r:loadRecords}=await load('installed-plugin-index-record-reader-B3UvF50J.mjs');
+const {a:detectHealth}=await load('missing-configured-plugin-install-CFxe2oL4.mjs');
+const {r:replaceConfigFile}=await load('mutate-CgnqHZzJ.mjs');
+const {n:refreshPluginRegistry}=await load('registry-refresh-CrMs7Cpq.mjs');
+const {n:discoverPlugins}=await load('discovery-D_5mAUI7.mjs');
+const {closeOpenClawStateDatabaseAsync}=await load('openclaw-state-db-quM4UOZq.mjs');
+try {
+ const before=await loadRecords();
+ if(!before.codex || before.codex.version!=='2026.9.2')throw Error('The original Codex companion changed');
+ const originalConfig=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
+ const snapshot=await readConfigFileSnapshot();
+ const result=await installManagedPluginSource({
+  snapshot:{config:snapshot.sourceConfig??snapshot.config,baseHash:snapshot.hash,writeOptions:{}},env:process.env,
+  request:{source:'local',recordSource:'path',path:plugin,link:true,mode:'update'},
+  onCapabilityConsent:async review=>{
+   if(review.pluginId!=='codex'||review.reviewToken!==surface)throw Error('Unreviewed Codex capability surface');
+   return {reviewToken:surface};
+  },
+  // Nova owns the stopped-service transition. Retain the old package for
+  // paired recovery; upstream marks that former managed payload as retained.
+  deferRuntime:{record:value=>{if(value.operation!=='install'||value.pluginId!=='codex')throw Error('Unexpected plugin operation')},deferCleanup:()=>{}},
+  runtime:{log:()=>{},error:()=>{},exit:()=>{throw Error('Companion install stopped')}},
+  logger:{info:()=>{},warn:()=>{},error:()=>{}}
+ });
+ if(!result.ok)throw Error('The offline Codex companion was not installed');
+ const after=await loadRecords(), record=after.codex;
+ if(record.source!=='path'||record.installPath!==plugin||record.sourcePath!==plugin||record.version!=='2026.9.6'||record.acceptedSurfaceHash!==surface)throw Error('The Codex install record did not verify');
+ for(const [id,record] of Object.entries(before))if(id!=='codex'&&JSON.stringify(record)!==JSON.stringify(after[id]))throw Error('An unrelated plugin record changed');
+ if(Object.keys(before).length!==Object.keys(after).length)throw Error('The plugin inventory changed');
+ const config=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
+ // The installed index already discovers this payload. Keep Nova's existing
+ // generated-plugin path admission unchanged instead of adding a load path.
+ if(originalConfig.plugins?.load===undefined)delete config.plugins.load;
+ else config.plugins.load=structuredClone(originalConfig.plugins.load);
+ const current=await readConfigFileSnapshot();
+ await replaceConfigFile({nextConfig:config,baseHash:current.hash,writeOptions:{afterWrite:{mode:'none',reason:'Nova updater owns the stopped-service restart'}}});
+ await refreshPluginRegistry({configPath:process.env.OPENCLAW_CONFIG_PATH,reason:'source-changed',installRecords:after});
+ const finalConfig=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
+ if(JSON.stringify(finalConfig.plugins?.load)!==JSON.stringify(originalConfig.plugins?.load))throw Error('Plugin path admission changed');
+ const candidates=discoverPlugins({config:finalConfig,installRecords:after}).candidates.filter(candidate=>candidate.rootDir===plugin||candidate.packageDir===plugin);
+ if(candidates.length!==1||candidates[0].origin!=='global')throw Error('The installed Codex payload was not discovered');
+ const issues=await detectHealth({cfg:finalConfig,env:process.env});
+ if(issues.some(issue=>issue.pluginId==='codex'))throw Error('The Codex companion still requires repair');
+ console.log(JSON.stringify({companionInstalled:true,pluginVersion:'2026.9.6',codexVersion:'0.155.1'}));
+} finally { await closeOpenClawStateDatabaseAsync(); }
+process.exit(0);
+'''
 STARTUP_FILES = {'dist/service/apps/service/http.js', 'dist/service/apps/service/store.js',
                  'dist/service/apps/service/software-updates.js', 'dist/service/apps/service/runtime.js',
                  'dist/service/apps/service/update-native-startup.js', 'dist/service/apps/service/update-native-idle.js',
@@ -100,7 +156,8 @@ def runtime_members(archive_path, description):
         parts = name.split('/')
         require(name not in names and all(part not in ('', '.', '..') for part in parts)
                 and not pathlib.PurePosixPath(name).is_absolute()
-                and parts[0] in {'node', 'node_modules', 'package.json', 'package-lock.json'}
+                and parts[0] in {'node', 'node_modules', 'package.json', 'package-lock.json', 'companions'}
+                and (parts[0] != 'companions' or len(parts) == 1 or parts[1] == 'codex')
                 and (member.isdir() or member.isfile() or member.issym()) and not member.islnk(),
                 'Unsafe reviewed runtime archive entry.')
         require(not any('/'.join(parts[:index]) in links for index in range(1, len(parts))), 'Runtime entry follows an archive symlink.')
@@ -119,6 +176,14 @@ def runtime_members(archive_path, description):
     require(not any(any(name.startswith(link + '/') for name in names) for link in links), 'Runtime archive traverses a link.')
     require({'node/bin/node', 'node_modules/openclaw/package.json', 'node_modules/openclaw/openclaw.mjs',
              'package.json', 'package-lock.json'} <= names, 'The offline runtime closure is incomplete.')
+    if description.get('companion') is not None:
+        require({'companions/codex/package-lock.json', 'companions/codex/node_modules/openclaw',
+                 'companions/codex/node_modules/@openclaw/codex/package.json',
+                 'companions/codex/node_modules/@openclaw/codex/openclaw.plugin.json',
+                 'companions/codex/node_modules/@openai/codex/package.json',
+                 'companions/codex/node_modules/@openai/codex-linux-x64/package.json',
+                 'companions/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'} <= names,
+                'The offline Codex companion is incomplete.')
     return members
 
 
@@ -301,7 +366,7 @@ class Driver:
             require(self.from_engine == self.to_engine, 'An engine upgrade requires its reviewed offline runtime closure.')
             return
         require(set(runtime) == {'format', 'fromVersion', 'toVersion', 'archiveBytes', 'archiveSha256',
-                                 'expandedBytes', 'fileCount', 'nodeVersion', 'nodeSha256'}
+                                 'expandedBytes', 'fileCount', 'nodeVersion', 'nodeSha256', 'companion'}
                 and runtime['format'] == 1 and runtime['fromVersion'] == self.from_engine
                 and runtime['toVersion'] == self.to_engine and self.from_engine != self.to_engine
                 and runtime['nodeVersion'] == '24.21.0'
@@ -309,6 +374,11 @@ class Driver:
                 and all(type(runtime[key]) is int and runtime[key] > 0 for key in ('archiveBytes', 'expandedBytes', 'fileCount'))
                 and runtime['archiveBytes'] == signed['bytes'] <= RUNTIME_MAXIMUM
                 and runtime['archiveSha256'] == signed['sha256'], 'The reviewed runtime does not match this signed pair.')
+        companion = runtime['companion']
+        require(isinstance(companion, dict) and set(companion) == {'pluginVersion', 'codexVersion', 'packageLockSha256', 'binarySha256'}
+                and companion['pluginVersion'] == '2026.9.6' and companion['codexVersion'] == '0.155.1'
+                and all(isinstance(companion[key], str) and re.fullmatch('[a-f0-9]{64}', companion[key])
+                        for key in ('packageLockSha256', 'binarySha256')), 'The runtime companion is outside this reviewed pair.')
         require(self.agent.is_symlink() and self.agent_node.is_symlink() and self.agent != self.agent_node,
                 'Runtime replacement requires separately provisioned root-owned selectors.')
         self.runtime = runtime
@@ -320,6 +390,17 @@ class Driver:
         self.runtime_target = self.runtime_root / 'managed-updates' / ('openclaw-' + self.to_engine + '-' + runtime['archiveSha256'][:12])
         self.target_agent = self.runtime_target / 'node_modules' / 'openclaw'
         self.target_agent_node = self.runtime_target / 'node' / 'bin' / 'node'
+        self.target_codex = self.runtime_target / 'companions' / 'codex' / 'node_modules' / '@openclaw' / 'codex'
+
+    def runtime_storage_required(self):
+        if self.runtime is None:
+            return 0
+        if self.runtime_target.exists() or self.runtime_target.is_symlink():
+            # Only the complete signed closure can receive an allocation credit.
+            # Partial, redirected or altered retained staging fails verification.
+            self.verify_staged_runtime()
+            return 0
+        return self.runtime['expandedBytes'] + self.runtime['fileCount'] * 4096
 
     def stage_runtime(self):
         if self.runtime is None:
@@ -385,8 +466,25 @@ class Driver:
         package = read_json(self.target_agent / 'package.json')
         require(package.get('name') == 'openclaw' and package.get('version') == self.to_engine
                 and digest(self.target_agent_node) == self.runtime['nodeSha256'], 'The runtime closure contains a different engine or Node binary.')
+        self.verify_codex_companion()
         self.verify_runtime_execution()
         self.target_runtime_identity = inventory(self.runtime_target)[0]
+
+    def verify_codex_companion(self):
+        root = self.runtime_target / 'companions' / 'codex'
+        description = self.runtime['companion']
+        require(digest(root / 'package-lock.json') == description['packageLockSha256'], 'The Codex dependency lock changed.')
+        for relative, name, version in [('@openclaw/codex', '@openclaw/codex', description['pluginVersion']),
+                                        ('@openai/codex', '@openai/codex', description['codexVersion']),
+                                        ('@openai/codex-linux-x64', '@openai/codex', description['codexVersion'] + '-linux-x64')]:
+            package = read_json(root / 'node_modules' / relative / 'package.json')
+            require(package.get('name') == name and package.get('version') == version, 'The Codex companion package changed.')
+        link = root / 'node_modules' / 'openclaw'
+        require(link.is_symlink() and os.readlink(link) == '../../../node_modules/openclaw'
+                and link.resolve(strict=True) == self.target_agent, 'The Codex SDK link does not select the reviewed engine.')
+        self.target_codex_binary = root / 'node_modules' / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
+        protected(self.target_codex_binary)
+        require(digest(self.target_codex_binary) == description['binarySha256'], 'The Codex executable changed.')
 
     def verify_runtime_execution(self):
         """Check the exact staged executable with the identity migration uses."""
@@ -397,6 +495,11 @@ class Driver:
                                           env={'PATH': str(self.target_agent_node.parent) + ':/usr/bin:/bin',
                                                'HOME': user.pw_dir, 'LANG': 'C.UTF-8', 'NODE_DISABLE_COMPILE_CACHE': '1'}).strip()
         require(version == 'v' + self.runtime['nodeVersion'], 'The staged agent Node runtime has a different version.')
+        if self.runtime.get('companion') is not None:
+            version = subprocess.check_output([str(self.target_codex_binary), '--version'], text=True, timeout=10,
+                                              user=user.pw_uid, group=user.pw_gid, extra_groups=[],
+                                              env={'PATH': '/usr/bin:/bin', 'HOME': user.pw_dir, 'LANG': 'C.UTF-8'}).strip()
+            require(version == 'codex-cli ' + self.runtime['companion']['codexVersion'], 'The staged Codex runtime has a different version.')
 
     def switch_runtime(self, restoring=False):
         if self.runtime is None:
@@ -435,6 +538,13 @@ class Driver:
                             str(self.target_agent), json.dumps(agents, separators=(',', ':'))],
                            cwd=root, env=env, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
+        self.require_stopped()
+        self.controller_hold()
+        with (self.output / 'codex-companion-install.log').open('xb') as log:
+            subprocess.run([str(self.target_agent_node), '--input-type=module', '-e', CODEX_INSTALL,
+                            str(self.target_agent), str(self.target_codex), CODEX_SURFACE],
+                           cwd=root, env={**env, 'npm_config_offline': 'true'}, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
         self.require_stopped()
         self.controller_hold()
         native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine,
@@ -613,7 +723,7 @@ class Driver:
         baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
         if self.runtime is not None:
-            required += self.runtime['expandedBytes'] + self.runtime['fileCount'] * 4096
+            required += self.runtime_storage_required()
             # Native23 rebuilds payload tables in SQLite transactions. Preserve
             # rollback capacity separately from both replacement tables and WAL.
             native_bytes = sum((self.data / path).stat().st_size + sum(side.stat().st_size for side in

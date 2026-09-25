@@ -28,12 +28,16 @@ type Host = {
 };
 /** Plan proposals and implementation admission share the workspace's durable request receipts. */
 export class AssistantPlans {
+  private interruptedCountdowns: AssistantPlan[];
   constructor(private store: Store, private host: Host) {
     // A restart is not permission to launch overdue background research. Keep
     // the exact saved proposal and make every interrupted countdown explicit.
-    for (const item of store.internalList<AssistantPlan>('assistant:plan:')) {
-      if (item.epoch === store.epoch && item.kind === 'research' && item.autoStartAt && !item.approval) this.save({ ...item, revision: item.revision + 1, autoStartAt: undefined, autoStartRequestId: undefined, autoStartHeld: 'restarted', autoStartError: 'Automatic start paused after restarting. Review the plan and start when ready.' });
-    }
+    this.interruptedCountdowns = store.internalList<AssistantPlan>('assistant:plan:').filter(item => item.epoch === store.epoch && item.kind === 'research' && item.autoStartAt && !item.approval);
+    this.recoverInterruptedCountdowns();
+  }
+  private recoverInterruptedCountdowns() {
+    if (this.store.updateMaintenanceHeld) return;
+    for (const item of this.interruptedCountdowns.splice(0)) if (canonical(this.store.internalRead(key(item.id))) === canonical(item)) this.save({ ...item, revision: item.revision + 1, autoStartAt: undefined, autoStartRequestId: undefined, autoStartHeld: 'restarted', autoStartError: 'Automatic start paused after restarting. Review the plan and start when ready.' });
   }
   list() { return this.store.internalList<AssistantPlan>('assistant:plan:').filter(item => item.epoch === this.store.epoch && !this.store.internalRead(`assistant:removed:${item.conversationId}`)).map(item => ({ ...item, reviewDigest: this.reviewDigest(item) })); }
   private get(id: string) { const item = this.store.internalRead<AssistantPlan>(key(id)); if (!item || item.epoch !== this.store.epoch) throw new Fault(404, 'plan_missing', 'This plan is unavailable.'); return item; }
@@ -142,6 +146,7 @@ export class AssistantPlans {
   /** Called by the owning service's existing queue tick, with no new polling. */
   runAutomatic(now = Date.now()) {
     if (this.store.recoveryHeld || this.store.recoveryEffectsPaused || this.store.updateMaintenanceHeld) return;
+    this.recoverInterruptedCountdowns();
     for (const item of this.list()) {
       if (item.kind !== 'research' || item.state !== 'ready' || item.approval || !item.autoStartAt || !item.autoStartRequestId || item.autoStartHeld || !Number.isFinite(Date.parse(item.autoStartAt)) || Date.parse(item.autoStartAt) > now) continue;
       try {
@@ -154,6 +159,8 @@ export class AssistantPlans {
     }
   }
   pauseAutomatic() {
+    if (this.store.updateMaintenanceHeld) return;
+    this.recoverInterruptedCountdowns();
     for (const item of this.list()) if (item.kind === 'research' && item.autoStartAt && !item.approval) this.save({ ...item, revision: item.revision + 1, autoStartAt: undefined, autoStartRequestId: undefined, autoStartHeld: 'needs-review', autoStartError: 'Automatic start paused while the Assistant was disconnected. Review the plan and start when ready.' });
   }
   decide(device: string, raw: unknown, amend = false) {

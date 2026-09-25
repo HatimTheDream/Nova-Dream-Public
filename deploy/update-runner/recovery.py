@@ -5,6 +5,7 @@ on import. Recovery files are never used as the future live tree through links.
 """
 import contextlib
 from collections import Counter
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -94,6 +95,67 @@ NATIVE_96_RETAINED_TABLES = frozenset('''
 '''.split())
 NATIVE_96_DERIVED_TABLES = frozenset({'session_canonical_validation_pending', 'session_transcript_fts_rows'})
 NATIVE_VERSIONS = {'2026.9.2': (19, 15), '2026.9.6': (23, 18)}
+
+# Active embedded stores beneath the selected runtime only. Unknown database
+# names remain byte-preserved static files; these schemas may not migrate here.
+SQLX_MIGRATION_COLUMNS = 'version description installed_on success checksum execution_time'
+EMBEDDED_DATABASES = {
+    'receipts.sqlite': (2, {
+        'identity': 'id host_id', 'outcomes': 'attempt_id bytes payload', 'receipts': 'attempt_id epoch payload',
+    }),
+    'goals_1.sqlite': (0, {
+        '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+        'thread_goal_continuation_deferrals': 'thread_id',
+        'thread_goals': 'thread_id goal_id objective status token_budget tokens_used time_used_seconds created_at_ms updated_at_ms',
+    }),
+    'logs_2.sqlite': (0, {
+        '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+        'logs': 'id ts ts_nanos level target feedback_log_body module_path file line thread_id process_uuid estimated_bytes',
+    }),
+    'memories_1.sqlite': (0, {
+        '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+        'jobs': 'kind job_key status worker_id ownership_token started_at finished_at lease_until retry_at retry_remaining last_error input_watermark last_success_watermark',
+        'stage1_outputs': 'thread_id source_updated_at raw_memory rollout_summary rollout_slug generated_at usage_count last_usage selected_for_phase2 selected_for_phase2_source_updated_at',
+    }),
+    'queue_1.sqlite': (0, {
+        '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+        'queued_items': 'id thread_id payload_json queue_order created_at_ms updated_at_ms',
+        'queued_thread_revisions': 'revision thread_id',
+    }),
+    'state_5.sqlite': (0, {
+        '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+        'backfill_state': 'id status last_watermark last_success_at updated_at',
+        'external_agent_config_imports': 'import_id completed_at_ms successes failures provider_id',
+        'project_idempotency_keys': 'key project_id created_at_ms',
+        'project_roots': 'project_id position path',
+        'projects': 'id name metadata position created_at_ms updated_at_ms',
+        'remote_control_enrollments': 'websocket_url account_id app_server_client_name server_id environment_id server_name updated_at remote_control_enabled',
+        'rollout_migration_skipped_rollouts': 'migration_id rollout_path rollout_size_bytes rollout_modified_at_ns skip_reason skipped_at',
+        'rollout_migration_state': 'migration_id last_checked_thread_created_at last_checked_thread_id updated_at',
+        'thread_artifacts': 'id thread_id artifact_type identity_key payload created_at',
+        'thread_dynamic_tools': 'thread_id position name description input_schema defer_loading namespace',
+        'thread_sections': 'id name appearance',
+        'thread_spawn_edges': 'parent_thread_id child_thread_id status',
+        'threads': 'id rollout_path created_at updated_at source model_provider cwd title sandbox_policy approval_mode tokens_used has_user_event archived archived_at git_sha git_branch git_origin_url cli_version first_user_message agent_nickname agent_role memory_mode model reasoning_effort agent_path created_at_ms updated_at_ms thread_source preview recency_at recency_at_ms history_mode name is_pinned thread_section_id section_position section_entered_at_ms project_id',
+    }),
+}
+EMBEDDED_DATABASES_96 = {name: (version, dict(tables)) for name, (version, tables) in EMBEDDED_DATABASES.items()}
+EMBEDDED_DATABASES_96['memories_1.sqlite'][1]['consolidation_progress'] = 'singleton max_thread_count'
+EMBEDDED_DATABASES_96['state_5.sqlite'][1].pop('thread_artifacts')
+EMBEDDED_DATABASES_96['state_5.sqlite'][1]['thread_attachments'] = 'id thread_id attachment_type identity_key payload created_at'
+EMBEDDED_DATABASES_96['state_5.sqlite'][1]['threads'] += ' originator daybreak_enabled'
+# Exact SQLx migrations from openai/codex rust-v0.155.1, codex-rs/state/
+# migrations/{0053,0054,0055}_*.sql and memory_migrations/0002_*.sql.
+CODEX_SQL_MIGRATIONS = {
+    'memories_1.sqlite': [(2, 'consolidation progress', '18f0a8dd7fe9a847b30d719029066d7a78e0bc64310dc66e4f7708bad6f1a0a594c0dbd14fec1ccb410cd7ae75dd7b10',
+        'CREATE TABLE consolidation_progress (\n    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),\n    max_thread_count INTEGER NOT NULL DEFAULT 0\n);\nINSERT INTO consolidation_progress (singleton) VALUES (1);')],
+    'state_5.sqlite': [
+        (53, 'threads originator', 'e86ef7ccbcc891b1af27f6aedb26bfe36d79c9d405e48f302eb053cb57ff9b24dbeb0479b48b18e2076efb6bfc4a9287', 'ALTER TABLE threads ADD COLUMN originator TEXT;'),
+        (54, 'threads daybreak enabled', 'e62a9977d99c7eabf36b67b183d86443d062b0aa8d018c42d1299821de4bf59182e16494ab874fd2d4081ef510e759f1', 'ALTER TABLE threads ADD COLUMN daybreak_enabled BOOLEAN;'),
+        (55, 'thread attachments', '6daadc5527b3f57fa360c5d93199282ba54a42b7598558a9765bd6dcf11f555150fe678ed8163abb2e1861cb51d196c3',
+         'ALTER TABLE thread_artifacts RENAME TO thread_attachments;\nALTER TABLE thread_attachments RENAME COLUMN artifact_type TO attachment_type;\nDROP INDEX idx_thread_artifacts_thread_created_id;\nCREATE INDEX idx_thread_attachments_thread_created_id\n    ON thread_attachments(thread_id, created_at, id);'),
+    ],
+}
 
 
 class InsufficientStorage(RuntimeError):
@@ -536,6 +598,136 @@ def static_sqlite_files(root, selected, active):
     return result
 
 
+def embedded_database_paths(root, selected, active):
+    native = selected / 'openclaw-runtime'
+    candidates = {native / 'assignment-receipts' / 'receipts.sqlite'}
+    for relative in active:
+        if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}:
+            candidates.update(relative.parent / 'codex-home' / name for name in EMBEDDED_DATABASES if name != 'receipts.sqlite')
+    found = set()
+    for relative in candidates:
+        path = root / relative
+        if path.exists() or path.is_symlink():
+            require(path.is_file() and path.resolve(strict=True) == path, 'An active embedded database was redirected.')
+            for suffix in ('-wal', '-shm', '-journal'):
+                sidecar = pathlib.Path(str(path) + suffix)
+                if sidecar.exists() or sidecar.is_symlink():
+                    require(sidecar.is_file() and sidecar.resolve(strict=True) == sidecar, 'An active embedded database sidecar was redirected.')
+            found.add(relative)
+    return found
+
+
+def embedded_schema(connection, name, engine_version='2026.9.2'):
+    require(engine_version in NATIVE_VERSIONS and name in EMBEDDED_DATABASES, 'An embedded database has no reviewed schema.')
+    version, expected = EMBEDDED_DATABASES[name]
+    require(connection.execute('pragma quick_check').fetchone()[0] == 'ok', 'Embedded database integrity failed.')
+    require(connection.execute('pragma user_version').fetchone()[0] == version, 'An embedded database changed its reviewed version.')
+    tables = {row[0] for row in connection.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
+    # Codex initializes a dormant home on first use. The reviewed engine may
+    # therefore retain its old complete schema until that bounded migration.
+    if engine_version == '2026.9.6' and tables != expected.keys():
+        version, expected = EMBEDDED_DATABASES_96[name]
+    require(tables == expected.keys(), 'An embedded database contains an unreviewed table set.')
+    for table, columns in expected.items():
+        require([row[1] for row in connection.execute('pragma table_xinfo("' + table + '")')] == columns.split(), 'An embedded database contains unreviewed columns.')
+    return tables
+
+
+def migrated_embedded_database(before, after, name):
+    """Qualify only the four official Codex0.153.4 -> 0.155.1 migrations."""
+    migrations = CODEX_SQL_MIGRATIONS[name]
+    definitions = lambda db: Counter(db.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
+    with contextlib.closing(sqlite3.connect(':memory:')) as expected:
+        for kind in ('table', 'index', 'trigger', 'view'):
+            for (sql,) in before.execute("select sql from sqlite_schema where type=? and sql is not null and name not like 'sqlite_%'", (kind,)):
+                expected.execute(sql)
+        for _, _, _, sql in migrations:
+            expected.executescript(sql)
+        require(definitions(expected) == definitions(after), 'An embedded migration changed unreviewed schema definitions.')
+    previous, current = rows(before, '_sqlx_migrations'), rows(after, '_sqlx_migrations')
+    added = current - previous
+    require(previous <= current and sum(added.values()) == len(migrations), 'Retained embedded migration history changed.')
+    expected_migrations = {(version, description, checksum) for version, description, checksum, _ in migrations}
+    observed = set()
+    for row, count in added.items():
+        version, description, installed, success, checksum, duration = row
+        require(count == 1 and type(version) is int and isinstance(checksum, bytes) and len(checksum) == 48
+                and success == 1 and isinstance(installed, str) and 0 < len(installed) <= 128
+                and type(duration) is int and duration >= 0, 'An embedded migration receipt is invalid.')
+        observed.add((version, description, checksum.hex()))
+    require(observed == expected_migrations, 'An embedded migration is outside the reviewed Codex pair.')
+    if name == 'memories_1.sqlite':
+        require(rows(after, 'consolidation_progress') == Counter({(1, 0): 1}), 'New embedded consolidation state is not the migration default.')
+    else:
+        require(after.execute('select 1 from threads where originator is not null or daybreak_enabled is not null limit 1').fetchone() is None,
+                'New embedded thread fields are not the migration defaults.')
+    for table, columns in EMBEDDED_DATABASES[name][1].items():
+        if table == '_sqlx_migrations':
+            continue
+        target = 'thread_attachments' if table == 'thread_artifacts' else table
+        selected = [column.replace('artifact_type', 'attachment_type') if table == 'thread_artifacts' else column for column in columns.split()]
+        current = Counter(after.execute('select ' + ','.join('"' + column + '"' for column in selected) + ' from "' + target + '"'))
+        require(rows(before, table) == current, 'Retained embedded work or attachment bytes changed during migration.')
+
+
+def retained_embedded_databases(snapshot, live, selected, active, from_version='2026.9.2', to_version=None):
+    to_version = to_version or from_version
+    require(from_version == to_version or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Unreviewed embedded runtime migration.')
+    paths = embedded_database_paths(snapshot, selected, active)
+    require(paths == embedded_database_paths(live, selected, active), 'The active embedded database set changed.')
+    for relative in sorted(paths):
+        with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
+            tables = embedded_schema(before, relative.name, from_version)
+            newer = embedded_schema(after, relative.name, to_version)
+            if from_version != to_version and tables != newer and relative.name in CODEX_SQL_MIGRATIONS:
+                migrated_embedded_database(before, after, relative.name)
+                continue
+            require(tables == newer, 'An embedded database changed its tables.')
+            definitions = lambda connection: Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
+            require(definitions(before) == definitions(after), 'An embedded database changed its schema definitions.')
+            for table in tables:
+                require(list(before.execute('pragma table_xinfo("' + table + '")')) == list(after.execute('pragma table_xinfo("' + table + '")')), 'An embedded database changed its column definitions.')
+                old, new = rows(before, table), rows(after, table)
+                append_only = relative.name == 'logs_2.sqlite' and table == 'logs'
+                require(old <= new if append_only else old == new, 'Retained embedded work, receipts, history or configuration changed.')
+    return paths
+
+
+def retained_quarantine_cache(snapshot, live, selected, active, from_version, to_version):
+    relative = selected / 'openclaw-runtime' / 'state' / 'state' / 'openclaw-quarantine.sqlite'
+    old_path, new_path = snapshot / relative, live / relative
+    if to_version != '2026.9.6' or not (old_path.exists() or new_path.exists()):
+        return set()
+    require(new_path.is_file() and new_path.resolve(strict=True) == new_path, 'Native quarantine cache disappeared or was redirected.')
+    expected = {
+        'quarantined_databases': 'CREATE TABLE quarantined_databases ( path TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, reason TEXT NOT NULL, quarantined_at INTEGER NOT NULL, writer_app_version TEXT, verified_generation TEXT ) STRICT',
+        'agent_integrity_verifications': 'CREATE TABLE agent_integrity_verifications ( path TEXT NOT NULL PRIMARY KEY, dev TEXT NOT NULL, ino TEXT NOT NULL, app_version TEXT NOT NULL, verified_at INTEGER NOT NULL, clean_close INTEGER NOT NULL CHECK (clean_close IN (0, 1)) ) STRICT',
+    }
+    decisions = []
+    allowed_paths = {str(live / path) for path in active if path.name != 'openclaw.sqlite'}
+    for path, closed in ((old_path, True), (new_path, False)):
+        if not path.exists():
+            require(closed and from_version == '2026.9.2', 'A native quarantine cache is missing outside the reviewed transition.')
+            decisions.append(Counter()); continue
+        require(path.is_file() and path.resolve(strict=True) == path, 'Native quarantine cache was redirected.')
+        with contextlib.closing(database(path, closed)) as connection:
+            require(connection.execute('pragma user_version').fetchone()[0] == 2
+                    and connection.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native quarantine cache integrity or version changed.')
+            schema = {name: re.sub(r'\s+', ' ', sql).strip() for kind, name, sql in connection.execute("select type,name,sql from sqlite_schema where name not like 'sqlite_%'") if kind == 'table'}
+            require(schema == expected and connection.execute("select 1 from sqlite_schema where type!='table' and name not like 'sqlite_%' limit 1").fetchone() is None,
+                    'Native quarantine cache contains an unreviewed schema.')
+            decisions.append(rows(connection, 'quarantined_databases'))
+            cache = rows(connection, 'agent_integrity_verifications')
+            require(sum(cache.values()) <= 100, 'Native integrity cache exceeded its bound.')
+            for row in cache:
+                pathname, device, inode, version, checked_at, clean = row
+                require(pathname in allowed_paths and all(isinstance(value, str) and re.fullmatch('[0-9]+', value) for value in (device, inode))
+                        and version in {from_version, to_version} and type(checked_at) is int and 0 <= checked_at <= 9007199254740991
+                        and type(clean) is int and clean in (0, 1), 'Native integrity cache contains an unreviewed record.')
+    require(decisions[0] == decisions[1], 'Native quarantine decisions changed during the update.')
+    return {relative}
+
+
 def native_schema(connection, relative, version='2026.9.2'):
     require(version in NATIVE_VERSIONS, 'The native version has no reviewed data contract.')
     agent, shared = NATIVE_VERSIONS[version]
@@ -549,6 +741,9 @@ def native_schema(connection, relative, version='2026.9.2'):
 
 def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None):
     selected, epoch, paths = native_scope(root, expected_epoch)
+    for relative in sorted(embedded_database_paths(root, selected, paths)):
+        with contextlib.closing(database(root / relative, False)) as connection:
+            embedded_schema(connection, relative.name, version)
     for relative in sorted(paths):
         with contextlib.closing(database(root / relative, False)) as connection:
             tables = native_schema(connection, relative, version)
@@ -558,13 +753,152 @@ def native_preflight(root, expected_epoch=None, version='2026.9.2', target_versi
     return selected, epoch, paths
 
 
-def native_projected_rows(connection, table):
+def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None):
+    relative = selected / 'openclaw-runtime' / 'openclaw.json'
+    paths = (snapshot / relative, live / relative)
+    if not any(path.exists() or path.is_symlink() for path in paths):
+        return None
+    normalized, hashes = [], []
+    for path in paths:
+        require(path.resolve(strict=True) == path, 'The selected native configuration was redirected.')
+        value = bounded_json(path, 4 * 1024 * 1024)
+        require(isinstance(value, dict), 'Unexpected selected native configuration.')
+        hashes.append(digest(path))
+        # Nova owns this per-process proxy port and module admission token. Keep
+        # every other safety argument, endpoint, credential and setting exact.
+        arguments = value.get('browser', {}).get('extraArgs')
+        if isinstance(arguments, list):
+            for index, argument in enumerate(arguments):
+                match = re.fullmatch(r'--proxy-server=http://127\.0\.0\.1:([0-9]{1,5})', argument) if isinstance(argument, str) else None
+                if match and 0 < int(match[1]) <= 65535:
+                    arguments[index] = '--proxy-server=http://127.0.0.1:<owned-port>'
+        bridge = value.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
+        if isinstance(bridge, dict) and isinstance(bridge.get('token'), str) and re.fullmatch(r'[a-f0-9]{64}', bridge['token']):
+            bridge['token'] = '<owned-module-token>'
+        if (from_version, to_version) == ('2026.9.2', '2026.9.6'):
+            # The official configuration writer records these two completed
+            # migrations and removes the implicit empty main-agent entry.
+            # Actual model policy, permissions and all other settings remain
+            # in the exact comparison below.
+            meta = value.get('meta', {})
+            if isinstance(meta, dict):
+                expected_version = from_version if not normalized else to_version
+                if 'lastTouchedVersion' in meta:
+                    require(meta['lastTouchedVersion'] == expected_version, 'Native configuration has an unreviewed writer version.')
+                    del meta['lastTouchedVersion']
+                if 'lastTouchedAt' in meta:
+                    require(isinstance(meta['lastTouchedAt'], str) and re.fullmatch(r'[0-9]{4}-[0-9TZ:.+-]+', meta['lastTouchedAt']), 'Native configuration writer timestamp changed type.')
+                    del meta['lastTouchedAt']
+                migrations = meta.get('migrations', {})
+                if isinstance(migrations, dict):
+                    for name in ('modelPolicyAllowlist', 'utilityModelSeparation'):
+                        if name in migrations:
+                            require(migrations[name] is True, 'Native configuration migration marker is not complete.')
+                            del migrations[name]
+                    if not migrations:
+                        meta.pop('migrations', None)
+                if not meta:
+                    value.pop('meta', None)
+            agents = value.get('agents', {})
+            if isinstance(agents, dict) and isinstance(agents.get('entries'), dict):
+                if agents['entries'].get('main') == {}:
+                    del agents['entries']['main']
+                if not agents['entries']:
+                    del agents['entries']
+                if not agents:
+                    value.pop('agents', None)
+        normalized.append(value)
+    require(normalized[0] == normalized[1], 'Retained native configuration or account settings changed.')
+    return {'path': str(paths[1]), 'hashes': hashes}
+
+
+def native_boot_replacements(before, after, tables, configuration, from_version, to_version, node):
+    """Qualify only the two startup fingerprints and the selected config cache.
+    Return after-side field replacements; all other row fields stay exact.
+    """
+    result = {}
+    for table, key in (('schema_meta', 'meta_key'), ('config_health_entries', 'config_path')):
+        if table not in tables:
+            continue
+        names = [item[1] for item in before.execute('pragma table_info("' + table + '")')]
+        newer_names = [item[1] for item in after.execute('pragma table_info("' + table + '")')]
+        old = {dict(zip(names, row))[key]: dict(zip(names, row)) for row in rows(before, table)}
+        for row in rows(after, table):
+            value = dict(zip(newer_names, row)); previous = old.get(value[key])
+            if previous is None:
+                continue
+            replacements = {}
+            if table == 'schema_meta' and value[key] in {'startup-migrations', 'state-migrations'} and value.get('app_version') != previous.get('app_version'):
+                require(configuration is not None, 'Native startup fingerprint needs retained configuration proof.')
+                parts = []
+                for fingerprint in (previous.get('app_version'), value.get('app_version')):
+                    require(isinstance(fingerprint, str) and len(fingerprint) <= 512, 'Unexpected native startup fingerprint.')
+                    fields = fingerprint.split('\n')
+                    require(len(fields) == 6 and fields[1] == '3'
+                            and re.fullmatch(r'[0-9]{4}-[0-9TZ:.+-]+', fields[2])
+                            and all(re.fullmatch(r'[a-zA-Z0-9_-]{43}', field) for field in fields[3:5])
+                            and re.fullmatch(r'[a-f0-9]{64}', fields[5]), 'Unreviewed native startup fingerprint format.')
+                    parts.append(fields)
+                require(parts[0][0] == from_version, 'Saved native startup version changed.')
+                if parts[1][:3] != parts[0][:3]:
+                    require((from_version, to_version) == ('2026.9.2', '2026.9.6') and parts[1][0] == to_version and node is not None,
+                            'Native startup version or build changed outside the reviewed pair.')
+                    executable = pathlib.Path(node)
+                    require(executable.name == 'node' and executable.parent.name == 'bin' and executable.parent.parent.name == 'node', 'Unreviewed native runtime closure layout.')
+                    package = executable.parent.parent.parent / 'node_modules' / 'openclaw'
+                    require(bounded_json(package / 'package.json', 1024 * 1024).get('version') == to_version
+                            and bounded_json(package / 'dist' / 'build-info.json', 64 * 1024).get('builtAt') == parts[1][2],
+                            'Native startup build differs from the verified runtime package.')
+                replacements['app_version'] = previous['app_version']
+            if table == 'config_health_entries' and configuration is not None and value[key] == configuration['path']:
+                for field in ('last_known_good_json', 'last_promoted_good_json'):
+                    if value.get(field) == previous.get(field):
+                        continue
+                    observations = []
+                    for encoded, config_hash in zip((previous.get(field), value.get(field)), configuration['hashes']):
+                        require(isinstance(encoded, str) and len(encoded) <= 1024 * 1024, 'Unexpected native config observation.')
+                        observation = json.loads(encoded)
+                        require(isinstance(observation, dict) and observation.get('hash') == config_hash, 'Native config observation does not identify the retained configuration.')
+                        require(all(type(observation.get(name)) in (int, float) and math.isfinite(observation[name]) and observation[name] >= 0 for name in ('ctimeMs', 'mtimeMs'))
+                                and isinstance(observation.get('ino'), str) and re.fullmatch(r'[0-9]+', observation['ino'])
+                                and isinstance(observation.get('observedAt'), str) and re.fullmatch(r'[0-9]{4}-[0-9TZ:.+-]+', observation['observedAt']),
+                                'Native config observation types changed.')
+                        for name in ('ctimeMs', 'ino', 'mtimeMs', 'observedAt', 'hash'):
+                            require(name in observation, 'Native config observation format changed.')
+                            observation.pop(name)
+                        observations.append(observation)
+                    require(observations[0] == observations[1], 'Retained native config observation content changed.')
+                    replacements[field] = previous[field]
+                if replacements:
+                    replacements['updated_at_ms'] = previous['updated_at_ms']
+            if replacements:
+                result[(table, value[key])] = replacements
+    return result
+
+
+def native_boot_row(table, values, replacements):
+    key = 'meta_key' if table == 'schema_meta' else 'config_path' if table == 'config_health_entries' else None
+    return {**values, **replacements.get((table, values.get(key)), {})} if key else values
+
+
+def native_boot_rows(connection, table, replacements):
+    names = [item[1] for item in connection.execute('pragma table_info("' + table + '")')]
+    result = Counter()
+    for row, count in rows(connection, table).items():
+        value = native_boot_row(table, dict(zip(names, row)), replacements)
+        result[tuple(value[name] for name in names)] += count
+    return result
+
+
+def native_projected_rows(connection, table, replacements=None):
     names = [item[1] for item in connection.execute('pragma table_info("' + table + '")')]
     omitted = NATIVE_RECONNECT_COLUMNS[table]
     require(set(omitted) <= set(names), 'Reviewed native reconnect metadata changed its schema.')
     selected = [(index, name) for index, name in enumerate(names) if name not in omitted]
     result = Counter()
     for row, count in rows(connection, table).items():
+        value = native_boot_row(table, dict(zip(names, row)), replacements or {})
+        row = tuple(value[name] for name in names)
         values = []
         for index, name in selected:
             value = row[index]
@@ -648,9 +982,93 @@ def transcript_hashes(path, node):
     return Counter(hashes)
 
 
-def migrated_native_rows(before, after, tables, before_path, after_path, node):
+def retained_plugin_index(before, after, node):
+    """Permit the pinned offline Codex install and its rebuilt catalog only."""
+    names = ['state_key', 'value_json', 'updated_at_ms']
+    for connection in (before, after):
+        require([item[1] for item in connection.execute('pragma table_info(config_machine_state)')] == names,
+                'Native machine-state columns changed.')
+    old = {row[0]: row for row in rows(before, 'config_machine_state')}
+    new = {row[0]: row for row in rows(after, 'config_machine_state')}
+    key = 'plugins.installedIndex'
+    audit = 'config.lastTouchedAt'
+    if audit in old and audit in new and old[audit] != new[audit]:
+        for row in (old[audit], new[audit]):
+            require(isinstance(row[1], str) and len(row[1]) <= 64, 'Native configuration audit timestamp changed format.')
+            stamp = json.loads(row[1])
+            require(isinstance(stamp, str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z', stamp)
+                    and type(row[2]) is int and 0 <= row[2] <= 9007199254740991
+                    and round(datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp() * 1000) == row[2],
+                    'Native configuration audit timestamp is invalid.')
+        require(new[audit][2] >= old[audit][2], 'Native configuration audit timestamp moved backwards.')
+        new[audit] = old[audit]
+    require(set(old) == set(new) and all(old[name] == new[name] for name in old if name != key),
+            'Retained native machine configuration changed.')
+    if key not in old or old[key] == new[key]:
+        return
+    indexes, revisions = [], []
+    required = {'version', 'warning', 'hostContractVersion', 'compatRegistryVersion', 'migrationVersion',
+                'policyHash', 'generatedAtMs', 'installRecords', 'plugins', 'diagnostics'}
+    for row, version in ((old[key], '2026.9.2'), (new[key], '2026.9.6')):
+        require(isinstance(row[1], str) and len(row[1]) <= 16 * 1024 * 1024, 'Native plugin index exceeded its bound.')
+        value = json.loads(row[1])
+        require(isinstance(value, dict) and set(value) == {'revision', 'index'}
+                and type(value['revision']) is int and 0 <= value['revision'] <= 9007199254740991
+                and type(row[2]) is int and row[2] == value['revision'], 'Native plugin index revision is invalid.')
+        index = value['index']
+        require(isinstance(index, dict) and required <= set(index) <= required | {'workspaceDir', 'refreshReason'}
+                and type(index['version']) is int and index['version'] == 1
+                and type(index['migrationVersion']) is int and index['migrationVersion'] == 1
+                and index['hostContractVersion'] == version
+                and isinstance(index['warning'], str) and len(index['warning']) <= 1024
+                and all(isinstance(index[name], str) and re.fullmatch('[a-f0-9]{64}', index[name])
+                        for name in ('compatRegistryVersion', 'policyHash'))
+                and type(index['generatedAtMs']) is int and 0 <= index['generatedAtMs'] <= value['revision'],
+                'Native plugin index envelope changed.')
+        require(all(isinstance(index[name], str) and len(index[name]) <= 4096 for name in ('workspaceDir', 'refreshReason') if name in index)
+                and isinstance(index['installRecords'], dict) and len(index['installRecords']) <= 1024
+                and all(isinstance(name, str) and 0 < len(name) <= 256 and isinstance(record, dict)
+                        for name, record in index['installRecords'].items())
+                and all(isinstance(index[name], list) and len(index[name]) <= 4096
+                        and all(isinstance(item, dict) for item in index[name]) for name in ('plugins', 'diagnostics')),
+                'Native plugin index records changed format.')
+        indexes.append(index); revisions.append(value['revision'])
+    old_index, new_index = indexes
+    require(revisions[1] >= revisions[0] and old_index.get('workspaceDir') == new_index.get('workspaceDir')
+            and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
+    records, updated = old_index['installRecords'], new_index['installRecords']
+    require(set(records) == set(updated) and 'codex' in records
+            and all(records[name] == updated[name] for name in records if name != 'codex')
+            and records['codex'].get('version') == '2026.9.2', 'An unrelated native plugin installation changed.')
+    executable = pathlib.Path(node) if node is not None else None
+    require(executable is not None and executable.name == 'node' and executable.parent.name == 'bin'
+            and executable.parent.parent.name == 'node' and executable.resolve(strict=True) == executable,
+            'The Codex install needs the verified runtime closure.')
+    runtime = executable.parent.parent.parent
+    package = runtime / 'companions' / 'codex' / 'node_modules' / '@openclaw' / 'codex'
+    require(package.resolve(strict=True) == package
+            and bounded_json(runtime / 'node_modules' / 'openclaw' / 'package.json', 1024 * 1024).get('version') == '2026.9.6'
+            and bounded_json(package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
+            'The Codex install differs from the verified runtime package.')
+    record = updated['codex']
+    require(set(record) == {'source', 'sourcePath', 'installPath', 'version', 'installedAt', 'acceptedSurface', 'acceptedSurfaceHash', 'acceptedSurfaceAt'}
+            and record['source'] == 'path' and record['version'] == '2026.9.6'
+            and record['sourcePath'] == record['installPath'] == str(package)
+            and all(isinstance(record[name], str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z', record[name])
+                    for name in ('installedAt', 'acceptedSurfaceAt')),
+            'The Codex installation is outside the reviewed transition.')
+    surface = record['acceptedSurface']
+    require(isinstance(surface, dict) and record['acceptedSurfaceHash'] == 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
+            and hashlib.sha256(json.dumps(surface, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest() == record['acceptedSurfaceHash'],
+            'The Codex capability surface changed.')
+
+
+def migrated_native_rows(before, after, tables, before_path, after_path, node, boot_replacements=None):
     for table in tables:
         require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
+        if table == 'config_machine_state':
+            retained_plugin_index(before, after, node)
+            continue
         if table == 'transcript_events':
             require(transcript_hashes(before_path, node) <= transcript_hashes(after_path, node), 'Migrated native transcript bytes changed.')
             continue
@@ -677,6 +1095,8 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node):
             result = Counter()
             for row, count in rows(connection, table).items():
                 values = dict(zip(names, row))
+                if not old:
+                    values = native_boot_row(table, values, boot_replacements or {})
                 if table == 'session_nodes' and old and values.get('entry_valid') == 0:
                     # The official projection validates pending entries. A
                     # negative result is rejected; identity and JSON stay exact.
@@ -724,19 +1144,23 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
-    require(static_sqlite_files(snapshot, selected, paths) == static_sqlite_files(live, selected, paths), 'An inactive database, archived store or nonactive cache changed.')
+    configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version)
+    embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version)
+    quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version)
+    require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine) == static_sqlite_files(live, selected, paths | embedded | quarantine), 'An inactive database, archived store or nonactive cache changed.')
     for relative in sorted(before_paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
             old_tables = native_schema(before, relative, from_version)
             new_tables = native_schema(after, relative, to_version)
+            boot_replacements = native_boot_replacements(before, after, old_tables & new_tables, configuration, from_version, to_version, node)
             if migrating:
                 migration_preflight(before, old_tables)
                 # The pinned agent migration retires its old process lease table;
                 # the shared database still owns current maintenance leases.
                 retired = {'state_leases'} if relative.name != 'openclaw.sqlite' else set()
                 require(old_tables - retired <= new_tables, 'A retained native table disappeared during migration.')
-                migrated_native_rows(before, after, old_tables, before.database_path, live / relative, node)
+                migrated_native_rows(before, after, old_tables, before.database_path, live / relative, node, boot_replacements)
                 continue
             require(old_tables == new_tables, 'An unchanged native database changed its schema.')
             schema = lambda connection: Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
@@ -744,7 +1168,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
             for table in old_tables:
                 require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
-                if table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
-                    require(rows(before, table) <= rows(after, table), 'Retained native work, history, configuration or permissions changed.')
+                if table == 'config_machine_state':
+                    require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
+                elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
+                    require(rows(before, table) <= native_boot_rows(after, table, boot_replacements), 'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
-                    require(native_projected_rows(before, table) <= native_projected_rows(after, table), 'Retained native identity, account content or permissions changed.')
+                    require(native_projected_rows(before, table) <= native_projected_rows(after, table, boot_replacements), 'Retained native identity, account content or permissions changed.')

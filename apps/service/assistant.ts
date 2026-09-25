@@ -133,6 +133,9 @@ export class AssistantService {
   readonly removals: ConversationRemovals;
   readonly continuations: ConversationContinuation;
   private historyVersions: Record<string, number> = {};
+  private interruptedOperations: AssistantOperation[] = [];
+  private interruptedConversations: Conversation[] = [];
+  private reconnectPending = false;
   constructor(private store: Store, private gateway: AssistantTransport, artifactExchange?: typeof fetch, private accessControl?: Pick<SessionSettingsControl, 'request'>, private responseControl?: Pick<SessionSettingsControl, 'request'>) {
     this.researchProgress = new AssistantResearchProgress(store, { conversation: id => this.conversation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (this.closed || this.voiceBusy(conversation.id)) throw new Fault(409, 'research_unavailable', 'Reconnect the original research conversation.'); }, save: operation => this.saveOperation(operation) });
     this.plans = new AssistantPlans(store, { conversation: id => this.conversation(id), operation: id => this.operation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (conversation.archived || conversation.deleted || conversation.pendingSettings || this.voiceBusy(conversation.id)) throw new Fault(409, 'plan_unavailable', 'Restore and reconnect this chat before continuing its plan.'); }, save: operation => this.saveOperation(operation), dispatch: id => { void this.dispatch(id); } });
@@ -144,16 +147,35 @@ export class AssistantService {
       this.removals.assertAvailable(conversation.id);
       if (this.voiceBusy(conversation.id)) throw new Fault(409, 'voice_active', 'End the call before reconnecting this chat.');
     } });
-    for (const op of this.operations()) if (!terminal.has(op.state)) this.saveOperation({ ...op, state: 'unknown', error: 'The service restarted. Check the original run; it will not be dispatched again.' });
-    for (const conversation of this.conversations()) if (conversation.state === 'creating') this.saveConversation({ ...conversation, state: 'unknown', error: 'Creation was interrupted. Reconcile its original session identity.' });
+    this.interruptedOperations = this.operations().filter(op => !terminal.has(op.state) && (op.state !== 'unknown' || !op.error));
+    this.interruptedConversations = this.conversations().filter(conversation => conversation.state === 'creating');
+    this.recoverInterrupted();
     this.stopListening = gateway.subscribe(event => { void this.event(event).catch(() => undefined); });
     this.queueTimer = setInterval(() => this.runAutomaticQueues(), 750); this.queueTimer.unref?.();
   }
   close() { this.continuations.close(); this.removals.close(); this.closed = true; this.researchProgress.close(); clearInterval(this.queueTimer); this.stopListening(); this.artifactReader.close(); void this.officeReader.close(); }
+  private recoverInterrupted() {
+    if (this.closed || this.store.updateMaintenanceHeld) return;
+    // Capture only records present at startup. A deferred recovery must neither
+    // replace an existing unknown explanation nor overwrite a later native receipt.
+    for (const op of this.interruptedOperations.splice(0)) if (canonical(this.store.internalRead(operationKey(op.id))) === canonical(op)) this.saveOperation({ ...op, state: 'unknown', error: 'The service restarted. Check the original run; it will not be dispatched again.' });
+    for (const conversation of this.interruptedConversations.splice(0)) if (canonical(this.store.internalRead(conversationKey(conversation.id))) === canonical(conversation)) this.saveConversation({ ...conversation, state: 'unknown', error: 'Creation was interrupted. Reconcile its original session identity.' });
+  }
+  private reconcileAfterReconnect() {
+    if (this.closed || this.store.updateMaintenanceHeld || this.gateway.status().state !== 'ready') return;
+    this.recoverInterrupted();
+    this.reconnectPending = false;
+    for (const conversation of this.conversations().filter(c => !c.archived && c.state !== 'failed')) void this.reconcile(conversation.id).catch(() => undefined);
+  }
   private runAutomaticQueues() {
     if (this.closed) return;
+    // Only terminal receipts already awaited by this process may drain while
+    // held. Restored history has no such in-memory work to resume.
+    if (this.store.updateMaintenanceHeld) { this.reconcilePendingCompletions(); return; }
+    this.recoverInterrupted();
+    if (this.reconnectPending) this.reconcileAfterReconnect();
     if (this.gateway.status().state !== 'ready') { this.plans.pauseAutomatic(); return; }
-    if (!this.store.updateMaintenanceHeld) this.plans.runAutomatic();
+    this.plans.runAutomatic();
     if (!this.store.recoveryEffectsPaused && !this.transcriptMigration && Date.now() >= this.nextTranscriptMigration) {
       this.nextTranscriptMigration = Date.now() + 10000;
       const generation = this.gateway.status().generation;
@@ -161,22 +183,8 @@ export class AssistantService {
         .catch(() => undefined).finally(() => { this.transcriptMigration = undefined; });
       if (!this.artifactRetention) this.artifactRetention = this.retainTranscriptArtifacts().catch(() => undefined).finally(() => { this.artifactRetention = undefined; });
     }
-    for (const [id, check] of this.pendingCompletions) {
-      const operation = this.operations().find(item => item.id === id);
-      if (!operation || terminal.has(operation.state) || operation.state === 'unknown') { this.pendingCompletions.delete(id); continue; }
-      if (check.nextCheck > Date.now() || this.completionReads.has(operation.conversationId)) continue;
-      check.nextCheck = Date.now() + 2500;
-      this.completionReads.add(operation.conversationId);
-      void this.reconcile(operation.conversationId).then(history => {
-        if (this.closed) return;
-        const current = this.operations().find(item => item.id === id);
-        if (!current || terminal.has(current.state)) this.pendingCompletions.delete(id);
-        else if (history.inFlightRun?.runId === current.nativeRunId) check.lastActive = Date.now();
-        else if (Date.now() - check.lastActive > 30000) this.unconfirmedCompletion(current);
-      }).catch(() => { const current = !this.closed && this.operations().find(item => item.id === id); if (current) this.unconfirmedCompletion(current); else this.pendingCompletions.delete(id); }).finally(() => this.completionReads.delete(operation.conversationId));
-    }
+    this.reconcilePendingCompletions();
     const seen = new Set<string>();
-    if (this.store.updateMaintenanceHeld) return;
     for (const item of this.queue().filter(q => q.state === 'paused')) {
       if (seen.has(item.conversationId)) continue;
       seen.add(item.conversationId);
@@ -197,6 +205,23 @@ export class AssistantService {
         const current = this.queued(item.id);
         if (current.state === 'paused' && current.revision === item.revision) this.store.internalWrite(`assistant:queue:${item.id}`, { ...current, revision: current.revision + 1, automatic: false, autoError: reason instanceof Error ? reason.message : 'Review this queued message before continuing.', updatedAt: now() });
       }
+    }
+  }
+  private reconcilePendingCompletions() {
+    if (this.gateway.status().state !== 'ready') return;
+    for (const [id, check] of this.pendingCompletions) {
+      const operation = this.operations().find(item => item.id === id);
+      if (!operation || terminal.has(operation.state) || operation.state === 'unknown') { this.pendingCompletions.delete(id); continue; }
+      if (check.nextCheck > Date.now() || this.completionReads.has(operation.conversationId)) continue;
+      check.nextCheck = Date.now() + 2500;
+      this.completionReads.add(operation.conversationId);
+      void this.reconcile(operation.conversationId).then(history => {
+        if (this.closed) return;
+        const current = this.operations().find(item => item.id === id);
+        if (!current || terminal.has(current.state)) this.pendingCompletions.delete(id);
+        else if (history.inFlightRun?.runId === current.nativeRunId) check.lastActive = Date.now();
+        else if (Date.now() - check.lastActive > 30000) this.unconfirmedCompletion(current);
+      }).catch(() => { const current = !this.closed && this.operations().find(item => item.id === id); if (current) this.unconfirmedCompletion(current); else this.pendingCompletions.delete(id); }).finally(() => this.completionReads.delete(operation.conversationId));
     }
   }
   private unconfirmedCompletion(operation: AssistantOperation) {
@@ -519,12 +544,12 @@ export class AssistantService {
     }
   }
   async captureSavedHistories() {
-    if (this.store.recoveryEffectsPaused || this.gateway.status().state !== 'ready') return;
+    if (this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || this.gateway.status().state !== 'ready') return;
     const generation = this.gateway.status().generation;
     await this.savedHistory().capture(this.conversations().filter(c => c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }));
   }
   private synchronizeReading(id: string) {
-    if (this.closed || this.store.recoveryEffectsPaused || this.readingSyncs.has(id)) return;
+    if (this.closed || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || this.readingSyncs.has(id)) return;
     const conversation = this.conversation(id), status = this.gateway.status();
     if (status.state !== 'ready' || status.generation !== conversation.connectionGeneration) return;
     const setUnavailable = (unavailable: boolean) => {
@@ -542,6 +567,7 @@ export class AssistantService {
     return this.savedHistory().export(device, input, id => { this.removals.assertAvailable(id); return this.conversation(id); });
   }
   private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; resume?: boolean }): Promise<ConversationHistory> {
+    if (options.readOnly && this.store.updateMaintenanceHeld) throw new Fault(409, 'update_maintenance', 'Saved history refresh is paused while the update is prepared.');
     let conversation = this.conversation(id);
     if (conversation.forkSource && !conversation.forkSource.resolved) throw new Fault(409, 'fork_unconfirmed', 'The runtime has not confirmed this branch identity. The original chat and revised draft are kept.');
     this.assertConnection(conversation, false);
@@ -562,6 +588,10 @@ export class AssistantService {
     if (!nativeId || ((options.nativeId ?? conversation.nativeId) && nativeId !== (options.nativeId ?? conversation.nativeId))) throw new Fault(409, 'session_replaced', 'The native conversation was replaced. Existing work is kept; open a new conversation.');
     if (this.closed) throw new Fault(503, 'service_closed', 'The workspace service is closing.');
     this.assertConnection(conversation, false);
+    if (this.store.updateMaintenanceHeld) {
+      if (options.readOnly) throw new Fault(409, 'update_maintenance', 'Saved history refresh is paused while the update is prepared.');
+      options = { ...options, readOnly: true };
+    }
     if (!options.readOnly && !conversation.nativeId) conversation = this.saveConversation({ ...conversation, nativeId, state: 'ready', error: undefined });
     let messages: ConversationMessage[] = (Array.isArray(result.messages) ? result.messages : []).map((raw: any, index: number) => {
       const message = object(raw), meta = object(message.__openclaw), toolInfo = historyToolInfo(message);
@@ -605,15 +635,17 @@ export class AssistantService {
     }
     const complete = { ...history, nativeSettings, leafEntryId: history.leafEntryId ?? (typeof info.activeLeafEntryId === 'string' ? info.activeLeafEntryId : undefined) };
     if (!options.readOnly) this.store.internalWrite(`assistant:history:${id}`, complete);
-    const binding = nativeId === conversation.nativeId ? conversation : this.savedHistory().target(conversation, nativeId);
-    if (binding && this.savedHistory().observe({ ...conversation, ...binding }, complete, { source: 'native' })) this.historyVersions[id] = (this.historyVersions[id] ?? 0) + 1;
+    if (!this.store.updateMaintenanceHeld) {
+      const binding = nativeId === conversation.nativeId ? conversation : this.savedHistory().target(conversation, nativeId);
+      if (binding && this.savedHistory().observe({ ...conversation, ...binding }, complete, { source: 'native' })) this.historyVersions[id] = (this.historyVersions[id] ?? 0) + 1;
+    }
     return complete;
   }
   private async retainTranscriptArtifacts() {
     const epoch = this.store.epoch, generation = this.gateway.status().generation;
     let remaining = 2;
     for (const conversation of this.conversations()) {
-      if (this.closed || this.store.recoveryEffectsPaused || !remaining) return;
+      if (this.closed || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || !remaining) return;
       if (conversation.deleted || this.removals.pending(conversation.id)) continue;
       for (const message of this.savedHistory().messages(conversation)) for (const attachment of message.attachments) {
         if (!attachment.artifactId || attachment.localFile || attachment.size && attachment.size > 8 * 1024 * 1024) continue;
@@ -626,7 +658,7 @@ export class AssistantService {
         if ((this.artifactRetries.get(identity) ?? 0) > Date.now()) continue;
         this.artifactRetries.set(identity, Date.now() + 60000); remaining--;
         const check = async () => {
-          if (this.closed || epoch !== this.store.epoch || this.store.recoveryEffectsPaused) throw new Fault(409, 'transcript_changed', 'The saved conversation changed.');
+          if (this.closed || epoch !== this.store.epoch || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused) throw new Fault(409, 'transcript_changed', 'The saved conversation changed.');
           this.removals.assertAvailable(conversation.id);
           if (!this.savedHistory().messages(this.conversation(conversation.id)).some(m => matchesMessageSource(m, source, nativeId) && m.attachments.some(a => a.artifactId === source.artifactId))) throw new Fault(409, 'transcript_changed', 'The output source changed.');
         };
@@ -1087,16 +1119,17 @@ export class AssistantService {
     return history;
   }
   private async event(event: EventFrame) {
+    if (this.closed) return;
     if (event.event === 'e3.disconnected') { this.researchProgress.changed(); return; }
     if (event.event === 'e3.connected' || event.event === 'e3.history-gap') {
       this.researchProgress.changed();
       this.subscribed.clear();
-      for (const conversation of this.conversations().filter(c => !c.archived && c.state !== 'failed')) void this.reconcile(conversation.id).catch(() => undefined);
+      this.reconnectPending = true;
+      this.reconcileAfterReconnect();
       return;
     }
-    if (this.closed) return;
     const data = object(event.payload), runId = data.runId;
-    if (event.event === 'sessions.changed' && data.reason === 'chat.title') { const chat = this.conversations().find(c => c.autoTitle && c.nativeKey === data.sessionKey); if (chat) void this.history(chat.id).catch(() => undefined); }
+    if (event.event === 'sessions.changed' && data.reason === 'chat.title' && !this.store.updateMaintenanceHeld) { const chat = this.conversations().find(c => c.autoTitle && c.nativeKey === data.sessionKey); if (chat) void this.history(chat.id).catch(() => undefined); }
     if (event.event === 'session.message') {
       const conversation = this.conversations().find(c => c.nativeKey === data.sessionKey && c.connectionGeneration === this.gateway.status().generation && (!data.sessionId || data.sessionId === c.nativeId));
       if (conversation) { this.historyVersions[conversation.id] = (this.historyVersions[conversation.id] ?? 0) + 1; this.synchronizeReading(conversation.id); }

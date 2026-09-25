@@ -61,6 +61,33 @@ def fixture_native(root):
     (native / 'edition3-runtime.identity').write_bytes(b'edition3-owned-gateway\n')
 
 
+def fixture_embedded_databases(root):
+    fixture_native(root)
+    native = root / 'openclaw-runtime'
+    agent = native / 'state' / 'agents' / 'main' / 'agent'
+    agent.mkdir(parents=True)
+    with contextlib.closing(sqlite3.connect(agent / 'openclaw-agent.sqlite')) as connection:
+        connection.executescript('pragma user_version=19; create table session_nodes(id text primary key,entry_json text);')
+    paths = {}
+    for name, (version, tables) in recovery.EMBEDDED_DATABASES.items():
+        path = native / 'assignment-receipts' / name if name == 'receipts.sqlite' else agent / 'codex-home' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute('pragma user_version=' + str(version))
+            for table, columns in tables.items():
+                connection.execute('create table "' + table + '" (' + ','.join('"' + column + '" blob' for column in columns.split()) + ')')
+            if '_sqlx_migrations' in tables:
+                connection.execute("insert into _sqlx_migrations values(1,'retained migration',1,1,x'010203',5)")
+        paths[name] = path.relative_to(root)
+    with contextlib.closing(sqlite3.connect(root / paths['state_5.sqlite'])) as connection, connection:
+        connection.execute("insert into threads(id,title,first_user_message) values('thread','Saved title','Exact original writing — café')")
+    with contextlib.closing(sqlite3.connect(root / paths['receipts.sqlite'])) as connection, connection:
+        connection.executescript("insert into identity values('local','original-host');insert into receipts values('attempt','epoch',x'010203');insert into outcomes values('attempt',3,x'040506');")
+    with contextlib.closing(sqlite3.connect(root / paths['logs_2.sqlite'])) as connection, connection:
+        connection.execute("insert into logs(id,feedback_log_body) values(1,'Retained log')")
+    return paths
+
+
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-runner-fixture-')
@@ -282,6 +309,260 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             recovery.native_saved_state(before, live, epoch)
 
+    def test_active_embedded_databases_keep_complete_rows_and_allow_only_appended_logs(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        paths = fixture_embedded_databases(before)
+        shutil.copytree(before, live)
+        with contextlib.closing(sqlite3.connect(live / paths['goals_1.sqlite'])) as connection:
+            connection.executescript('pragma page_size=8192; vacuum;')
+        self.assertNotEqual(recovery.digest(before / paths['goals_1.sqlite']), recovery.digest(live / paths['goals_1.sqlite']))
+        with contextlib.closing(sqlite3.connect(live / paths['logs_2.sqlite'])) as connection, connection:
+            connection.execute("insert into logs(id,feedback_log_body) values(2,'New boot log')")
+        recovery.native_preflight(live)
+        recovery.native_saved_state(before, live)
+        mutations = [
+            ('logs_2.sqlite', "update logs set feedback_log_body='Rewritten history' where id=1"),
+            ('logs_2.sqlite', 'delete from logs where id=1'),
+            ('state_5.sqlite', "update threads set first_user_message='Changed writing'"),
+            ('state_5.sqlite', "insert into threads(id,title) values('extra','Unadmitted thread')"),
+            ('receipts.sqlite', "update receipts set payload=x'ff'"),
+            ('queue_1.sqlite', "insert into queued_items(id,payload_json) values('new','{}')"),
+            ('memories_1.sqlite', "insert into stage1_outputs(thread_id,raw_memory) values('new','Changed memory')"),
+            ('goals_1.sqlite', "insert into thread_goals(thread_id,objective) values('new','Changed goal')"),
+            ('logs_2.sqlite', "update _sqlx_migrations set checksum=x'ff'"),
+        ]
+        for name, sql in mutations:
+            with self.subTest(database=name, mutation=sql):
+                with contextlib.closing(sqlite3.connect(live / paths[name])) as connection:
+                    connection.execute('begin')
+                    connection.execute(sql)
+                    connection.commit()
+                with self.assertRaisesRegex(RuntimeError, 'Retained embedded'):
+                    recovery.native_saved_state(before, live)
+                shutil.copyfile(before / paths[name], live / paths[name])
+
+    def test_embedded_schema_and_location_changes_never_expand_the_static_exclusion(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        paths = fixture_embedded_databases(before)
+        extra = before / paths['state_5.sqlite'].parent / 'state_6.sqlite'
+        extra.write_bytes(b'Unreviewed static store')
+        archive = before / 'openclaw-runtime' / 'archive' / 'logs_2.sqlite'
+        archive.parent.mkdir(); archive.write_bytes(b'Closed archive stays exact')
+        shutil.copytree(before, live)
+        for relative in (extra.relative_to(before), archive.relative_to(before)):
+            with self.subTest(relative=str(relative)):
+                (live / relative).write_bytes(b'Changed static bytes')
+                with self.assertRaisesRegex(RuntimeError, 'inactive database'):
+                    recovery.native_saved_state(before, live)
+                shutil.copyfile(before / relative, live / relative)
+        for sql in ('create table unreviewed(id text)', 'alter table threads add column unknown text', 'pragma user_version=1'):
+            with self.subTest(schema=sql):
+                with contextlib.closing(sqlite3.connect(live / paths['state_5.sqlite'])) as connection:
+                    connection.executescript(sql)
+                with self.assertRaises(RuntimeError):
+                    recovery.native_preflight(live)
+                with self.assertRaises(RuntimeError):
+                    recovery.native_saved_state(before, live)
+                shutil.copyfile(before / paths['state_5.sqlite'], live / paths['state_5.sqlite'])
+        (live / paths['goals_1.sqlite']).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'embedded database set changed'):
+            recovery.native_saved_state(before, live)
+
+    def test_reviewed_codex_migrations_keep_nonempty_attachments_and_every_saved_column(self):
+        before, live = self.root / 'before', self.root / 'live'
+        paths = fixture_embedded_databases(before)
+        with contextlib.closing(sqlite3.connect(before / paths['state_5.sqlite'])) as connection, connection:
+            connection.execute('create index idx_thread_artifacts_thread_created_id on thread_artifacts(thread_id,created_at,id)')
+            connection.execute("insert into thread_artifacts values('attachment','thread','file','identity','Exact saved attachment',123)")
+        shutil.copytree(before, live)
+        active = recovery.native_scope(before)[2]
+        recovery.retained_embedded_databases(before, live, pathlib.Path('.'), active, '2026.9.2', '2026.9.6')
+        recovery.retained_embedded_databases(before, live, pathlib.Path('.'), active, '2026.9.6', '2026.9.6')
+        for name, migrations in recovery.CODEX_SQL_MIGRATIONS.items():
+            with contextlib.closing(sqlite3.connect(live / paths[name])) as connection, connection:
+                for version, description, checksum, sql in migrations:
+                    connection.executescript(sql)
+                    connection.execute('insert into _sqlx_migrations values(?,?,?,?,?,?)',
+                                       (version, description, '2026-09-25T00:00:00Z', 1, bytes.fromhex(checksum), 123))
+        args = (before, live, pathlib.Path('.'), active, '2026.9.2', '2026.9.6')
+        recovery.retained_embedded_databases(*args)
+        with self.assertRaises(RuntimeError):
+            recovery.retained_embedded_databases(before, live, pathlib.Path('.'), active, '2026.9.6', '2026.9.6')
+        future = self.root / 'future';shutil.copytree(live, future)
+        recovery.retained_embedded_databases(live, future, pathlib.Path('.'), active, '2026.9.6', '2026.9.6')
+        with contextlib.closing(sqlite3.connect(live / paths['state_5.sqlite'])) as connection:
+            recovery.embedded_schema(connection, 'state_5.sqlite', '2026.9.6')
+            with self.assertRaises(RuntimeError):recovery.embedded_schema(connection, 'state_5.sqlite', '2026.9.2')
+        cases = [
+            ('state_5.sqlite', "update threads set title='Changed writing'"),
+            ('state_5.sqlite', "update thread_attachments set payload='Changed attachment'"),
+            ('state_5.sqlite', "delete from thread_attachments"),
+            ('state_5.sqlite', "update threads set originator='unreviewed'"),
+            ('state_5.sqlite', "update threads set daybreak_enabled=1"),
+            ('state_5.sqlite', "update _sqlx_migrations set checksum=x'ff' where version=55"),
+            ('state_5.sqlite', "create table unreviewed(id text)"),
+            ('memories_1.sqlite', "update consolidation_progress set max_thread_count=1"),
+        ]
+        for name, statement in cases:
+            with self.subTest(database=name, statement=statement):
+                with contextlib.closing(sqlite3.connect(live / paths[name])) as connection, connection:
+                    connection.execute(statement)
+                with self.assertRaises(RuntimeError):recovery.retained_embedded_databases(*args)
+                shutil.copyfile(future / paths[name], live / paths[name])
+        with contextlib.closing(sqlite3.connect(future / paths['state_5.sqlite'])) as connection, connection:
+            connection.execute("update threads set originator='changed after install'")
+        with self.assertRaises(RuntimeError):
+            recovery.retained_embedded_databases(live, future, pathlib.Path('.'), active, '2026.9.6', '2026.9.6')
+
+    def test_quarantine_cache_never_changes_quarantine_decisions_or_admits_other_paths(self):
+        before, live = self.root / 'before', self.root / 'live'
+        before.mkdir();live.mkdir()
+        agent = pathlib.Path('openclaw-runtime/state/agents/main/agent/openclaw-agent.sqlite')
+        path = live / 'openclaw-runtime/state/state/openclaw-quarantine.sqlite';path.parent.mkdir(parents=True)
+        schema = '''pragma user_version=2;
+            CREATE TABLE quarantined_databases (path TEXT NOT NULL PRIMARY KEY,kind TEXT NOT NULL,reason TEXT NOT NULL,quarantined_at INTEGER NOT NULL,writer_app_version TEXT,verified_generation TEXT) STRICT;
+            CREATE TABLE agent_integrity_verifications (path TEXT NOT NULL PRIMARY KEY,dev TEXT NOT NULL,ino TEXT NOT NULL,app_version TEXT NOT NULL,verified_at INTEGER NOT NULL,clean_close INTEGER NOT NULL CHECK (clean_close IN (0, 1))) STRICT;'''
+        # Match the pinned writer's whitespace; constraints/types are otherwise
+        # validated by the production schema comparison, not just column names.
+        schema = schema.replace('(path', '( path').replace('verified_generation TEXT)', 'verified_generation TEXT )').replace('(0, 1)))', '(0, 1)) )').replace(',', ', ')
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
+            db.executescript(schema)
+            db.execute('insert into agent_integrity_verifications values(?,?,?,?,?,?)', (str(live / agent), '1', '2', '2026.9.6', 123, 0))
+        args = (before, live, pathlib.Path('.'), {agent}, '2026.9.2', '2026.9.6')
+        self.assertEqual(recovery.retained_quarantine_cache(*args), {path.relative_to(live)})
+        old = before / path.relative_to(live);old.parent.mkdir(parents=True);shutil.copyfile(path, old)
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
+            db.execute('update agent_integrity_verifications set verified_at=124,clean_close=1')
+        recovery.retained_quarantine_cache(before, live, pathlib.Path('.'), {agent}, '2026.9.6', '2026.9.6')
+        for statement, restore in [
+            ("insert into quarantined_databases values('/saved','agent','corrupt',1,'2026.9.6',null)", 'delete from quarantined_databases'),
+            ("update agent_integrity_verifications set path='/unrelated'", "update agent_integrity_verifications set path=" + "'" + str(live / agent).replace("'", "''") + "'")]:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:db.execute(statement)
+            with self.assertRaises(RuntimeError):recovery.retained_quarantine_cache(*args)
+            with contextlib.closing(sqlite3.connect(path)) as db, db:db.execute(restore)
+
+    def test_embedded_closed_wal_is_read_from_a_copy_and_live_sidecars_are_qualified_logically(self):
+        source, before, live = self.root / 'source', self.root / 'snapshot', self.root / 'live'
+        paths = fixture_embedded_databases(source)
+        with contextlib.closing(sqlite3.connect(source / paths['logs_2.sqlite'])) as writer:
+            writer.executescript("pragma journal_mode=wal;pragma wal_autocheckpoint=0;insert into logs(id,feedback_log_body) values(2,'Committed retained WAL log');")
+            shutil.copytree(source, before)
+        shutil.copytree(before, live)
+        original = {str(path.relative_to(before)): path.read_bytes() for path in before.rglob('*.sqlite*')}
+        with contextlib.closing(sqlite3.connect(live / paths['logs_2.sqlite'])) as writer:
+            writer.executescript("pragma wal_autocheckpoint=0;insert into logs(id,feedback_log_body) values(3,'New live WAL log');")
+            recovery.native_saved_state(before, live)
+        self.assertEqual(original, {str(path.relative_to(before)): path.read_bytes() for path in before.rglob('*.sqlite*')})
+
+    def test_native_boot_metadata_keeps_primary_schema_accounts_and_actual_config_exact(self):
+        before, live = self.root / 'snapshot', self.root / 'live'
+        fixture_native(before)
+        relative = pathlib.Path('openclaw-runtime/state/state/openclaw.sqlite')
+        (before / relative).parent.mkdir(parents=True)
+        config_relative = pathlib.Path('openclaw-runtime/openclaw.json')
+        config = {'browser': {'extraArgs': ['--proxy-server=http://127.0.0.1:12345', '--disable-quic']},
+                  'plugins': {'entries': {'edition3-workspace': {'config': {'token': 'a' * 64, 'authority': 'retained'}}}},
+                  'tools': {'web': {'search': {'provider': 'retained', 'apiKey': 'synthetic-original'}}}}
+        (before / config_relative).write_text(json.dumps(config))
+        fingerprint = '\n'.join(['2026.9.2', '3', '2026-09-05T15:22:41.651Z', 'a' * 43, 'b' * 43, 'c' * 64])
+        observation = {'hash': recovery.digest(before / config_relative), 'ctimeMs': 1, 'mtimeMs': 1, 'ino': '1',
+                       'observedAt': '2026-01-01T00:00:00Z', 'permissions': 'retained', 'unknownField': {'keep': True}}
+        with contextlib.closing(sqlite3.connect(before / relative)) as connection, connection:
+            connection.executescript('''pragma user_version=15;
+                create table schema_meta(meta_key text primary key,role text,schema_version integer,app_version text,created_at integer,updated_at integer);
+                create table config_health_entries(config_path text primary key,last_known_good_json text,last_promoted_good_json text,last_observed_suspicious_signature text,updated_at_ms integer);
+                create table user_profiles(id text primary key,name text);
+                insert into schema_meta values('primary','global',15,'2026.9.2',1,1);
+                insert into user_profiles values('original-account','retained');''')
+            connection.executemany('insert into schema_meta values(?,\'global\',3,?,1,1)', [(key, fingerprint) for key in ('startup-migrations', 'state-migrations')])
+            connection.execute('insert into config_health_entries values(?,?,?,null,1)', (str(live / config_relative), json.dumps(observation), json.dumps(observation)))
+        shutil.copytree(before, live)
+        config['browser']['extraArgs'][0] = '--proxy-server=http://127.0.0.1:54321'
+        config['plugins']['entries']['edition3-workspace']['config']['token'] = 'd' * 64
+        (live / config_relative).write_text(json.dumps(config))
+        updated = {**observation, 'hash': recovery.digest(live / config_relative), 'ctimeMs': 2, 'mtimeMs': 2, 'ino': '2', 'observedAt': '2026-01-02T00:00:00Z'}
+        current_fingerprint = '\n'.join(fingerprint.split('\n')[:3] + ['d' * 43, 'e' * 43, 'f' * 64])
+        with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+            connection.execute("update schema_meta set app_version=?,updated_at=2 where meta_key in ('startup-migrations','state-migrations')", (current_fingerprint,))
+            connection.execute('update config_health_entries set last_known_good_json=?,last_promoted_good_json=?,updated_at_ms=2', (json.dumps(updated), json.dumps(updated)))
+        recovery.native_saved_state(before, live)
+        good_db, good_config = (live / relative).read_bytes(), (live / config_relative).read_bytes()
+        for sql, args in [
+            ("update schema_meta set app_version='different' where meta_key='primary'", ()),
+            ("update schema_meta set app_version=? where meta_key='startup-migrations'", (current_fingerprint.replace('2026.9.2', '2026.9.6'),)),
+            ("update schema_meta set role='other-owner' where meta_key='state-migrations'", ()),
+            ("update user_profiles set name='changed account'", ()),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'hash': '0' * 64}),)),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'unknownField': {'keep': False}}),)),
+            ("update config_health_entries set last_observed_suspicious_signature='changed'", ()),
+        ]:
+            with self.subTest(sql=sql):
+                with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
+                    connection.execute(sql, args)
+                with self.assertRaises(RuntimeError):
+                    recovery.native_saved_state(before, live)
+                (live / relative).write_bytes(good_db)
+        for mutate in (
+            lambda value: value['tools']['web']['search'].update(apiKey='different credential'),
+            lambda value: value['browser']['extraArgs'].__setitem__(0, '--proxy-server=http://outside.example:54321'),
+            lambda value: value['browser']['extraArgs'].pop(),
+            lambda value: value['plugins']['entries']['edition3-workspace']['config'].update(authority='changed'),
+        ):
+            changed = json.loads(good_config); mutate(changed)
+            (live / config_relative).write_text(json.dumps(changed))
+            with self.assertRaisesRegex(RuntimeError, 'configuration or account'):
+                recovery.native_saved_state(before, live)
+        (live / config_relative).write_bytes(good_config)
+
+    def test_official_companion_config_normalization_preserves_model_and_permissions(self):
+        before, after = self.root / 'before-config', self.root / 'after-config'
+        for root in (before, after):
+            (root / 'openclaw-runtime').mkdir(parents=True)
+        original = {'agents': {'entries': {'main': {}}, 'defaults': {'model': {'primary': 'retained-model'}}},
+                    'plugins': {'load': {'paths': ['/retained-module']}, 'entries': {'codex': {'enabled': True}}},
+                    'tools': {'profile': 'coding'}, 'meta': {'lastTouchedVersion': '2026.9.2'}}
+        changed = json.loads(json.dumps(original))
+        del changed['agents']['entries']
+        changed['meta'] = {'lastTouchedVersion': '2026.9.6', 'migrations': {'modelPolicyAllowlist': True, 'utilityModelSeparation': True}}
+        (before / 'openclaw-runtime/openclaw.json').write_text(json.dumps(original))
+        target = after / 'openclaw-runtime/openclaw.json'
+        target.write_text(json.dumps(changed))
+        recovery.native_runtime_configuration(before, after, pathlib.Path('.'), '2026.9.2', '2026.9.6')
+        with self.assertRaises(RuntimeError):
+            recovery.native_runtime_configuration(before, after, pathlib.Path('.'), '2026.9.2', '2026.9.2')
+        for section, field, value in [('tools', 'profile', 'full'), ('plugins', 'load', {'paths': ['/unreviewed-module']})]:
+            rejected = json.loads(json.dumps(changed))
+            rejected[section][field] = value
+            target.write_text(json.dumps(rejected))
+            with self.assertRaises(RuntimeError):
+                recovery.native_runtime_configuration(before, after, pathlib.Path('.'), '2026.9.2', '2026.9.6')
+        changed['agents']['defaults']['model']['primary'] = 'different-model'
+        target.write_text(json.dumps(changed))
+        with self.assertRaises(RuntimeError):
+            recovery.native_runtime_configuration(before, after, pathlib.Path('.'), '2026.9.2', '2026.9.6')
+
+    def test_native_migration_checkpoint_requires_the_verified_target_runtime_build(self):
+        executable = self.root / 'runtime' / 'node' / 'bin' / 'node'
+        package = self.root / 'runtime' / 'node_modules' / 'openclaw'
+        (package / 'dist').mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps({'version': '2026.9.6'}))
+        build = '2026-09-19T18:19:30.000Z'
+        (package / 'dist' / 'build-info.json').write_text(json.dumps({'builtAt': build}))
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            schema = 'create table schema_meta(meta_key text primary key,role text,schema_version integer,app_version text,created_at integer,updated_at integer)'
+            old = '\n'.join(['2026.9.2', '3', '2026-09-05T15:22:41.651Z', 'a' * 43, 'b' * 43, 'c' * 64])
+            target = '\n'.join(['2026.9.6', '3', build, 'd' * 43, 'e' * 43, 'f' * 64])
+            for connection, fingerprint in ((before, old), (after, target)):
+                connection.execute(schema)
+                connection.execute("insert into schema_meta values('startup-migrations','global',3,?,1,1)", (fingerprint,))
+            args = (before, after, {'schema_meta'}, {'verified': True}, '2026.9.2', '2026.9.6', executable)
+            replacements = recovery.native_boot_replacements(*args)
+            self.assertEqual(recovery.native_projected_rows(before, 'schema_meta'), recovery.native_projected_rows(after, 'schema_meta', replacements))
+            for changed in (target.replace(build, '2026-09-20T00:00:00.000Z'), target.replace('2026.9.6', '2026.9.7'), target.replace('\n3\n', '\n4\n')):
+                after.execute('update schema_meta set app_version=?', (changed,))
+                with self.assertRaises(RuntimeError):
+                    recovery.native_boot_replacements(*args)
+
     def archive(self, names):
         path = self.root / 'app.tgz'
         with tarfile.open(path, 'w:gz') as archive:
@@ -482,6 +763,15 @@ class RunnerTests(unittest.TestCase):
                     output.addfile(member, io.BytesIO(content))
         return archive, {'fileCount': len(entries) + len(additional), 'expandedBytes': sum(len(value) for _, value in [*entries, *additional] if isinstance(value, bytes))}
 
+    def companion_entries(self):
+        root = 'companions/codex/'
+        return [(root + 'package-lock.json', b'{}'), (root + 'node_modules/openclaw', '../../../node_modules/openclaw'),
+                (root + 'node_modules/@openclaw/codex/package.json', b'{}'),
+                (root + 'node_modules/@openclaw/codex/openclaw.plugin.json', b'{}'),
+                (root + 'node_modules/@openai/codex/package.json', b'{}'),
+                (root + 'node_modules/@openai/codex-linux-x64/package.json', b'{}'),
+                (root + 'node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex', b'binary')]
+
     def test_offline_runtime_archive_bounds_and_internal_links(self):
         archive, description = self.runtime_archive([('node_modules/.bin/openclaw', '../openclaw/openclaw.mjs')])
         self.assertEqual(len(driver.runtime_members(archive, description)), 6)
@@ -498,10 +788,11 @@ class RunnerTests(unittest.TestCase):
 
     def test_runtime_archive_must_match_signed_bytes_and_hash(self):
         instance = self.instance()
-        archive, expansion = self.runtime_archive()
+        archive, expansion = self.runtime_archive(self.companion_entries())
         runtime = {'format': 1, 'fromVersion': '2026.9.2', 'toVersion': '2026.9.6', 'archiveBytes': archive.stat().st_size,
                    'archiveSha256': hashlib.sha256(archive.read_bytes()).hexdigest(), **expansion,
-                   'nodeVersion': '24.21.0', 'nodeSha256': 'd' * 64}
+                   'nodeVersion': '24.21.0', 'nodeSha256': 'd' * 64,
+                   'companion': {'pluginVersion': '2026.9.6', 'codexVersion': '0.155.1', 'packageLockSha256': 'b' * 64, 'binarySha256': 'c' * 64}}
         instance.from_engine, instance.to_engine = runtime['fromVersion'], runtime['toVersion']
         instance.pair, instance.release = {'runtime': runtime}, {'runtimeBundle': {'bytes': runtime['archiveBytes'], 'sha256': runtime['archiveSha256']}}
         instance.bundle, instance.runtime_root = self.root, self.root
@@ -509,12 +800,43 @@ class RunnerTests(unittest.TestCase):
         instance.agent_node = types.SimpleNamespace(is_symlink=lambda: True, distinct=True)
         with patch.object(driver, 'protected'):
             instance.validate_runtime()
+            runtime['companion']['codexVersion'] = '0.153.4'
+            with self.assertRaises(RuntimeError):
+                instance.validate_runtime()
+            runtime['companion']['codexVersion'] = '0.155.1'
             instance.release['runtimeBundle']['sha256'] = 'e' * 64
             with self.assertRaises(RuntimeError):
                 instance.validate_runtime()
             instance.release.pop('runtimeBundle')
             with self.assertRaises(RuntimeError):
                 instance.validate_runtime()
+
+    def test_runtime_companion_must_be_complete_and_confined(self):
+        archive, description = self.runtime_archive(self.companion_entries())
+        description['companion'] = {}
+        self.assertEqual(len(driver.runtime_members(archive, description)), 12)
+        for entries in [self.companion_entries()[:-1], [*self.companion_entries(), ('companions/other/payload', b'bad')],
+                        [(name, '../../../../outside' if isinstance(value, str) else value) for name, value in self.companion_entries()]]:
+            with self.subTest(entries=entries):
+                archive, description = self.runtime_archive(entries)
+                description['companion'] = {}
+                with self.assertRaises(RuntimeError):
+                    driver.runtime_members(archive, description)
+
+    def test_existing_runtime_allocation_credit_requires_full_verification(self):
+        instance = self.instance()
+        instance.runtime = {'expandedBytes': 100000, 'fileCount': 12}
+        instance.runtime_target = self.root / 'runtime'
+        with patch.object(instance, 'verify_staged_runtime') as verify:
+            self.assertEqual(instance.runtime_storage_required(), 100000 + 12 * 4096)
+            verify.assert_not_called()
+            instance.runtime_target.mkdir()
+            self.assertEqual(instance.runtime_storage_required(), 0)
+            verify.assert_called_once()
+            verify.side_effect = RuntimeError('Retained payload differs')
+            with self.assertRaises(RuntimeError):
+                instance.runtime_storage_required()
+        self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
 
     @unittest.skipUnless(sys.platform == 'linux', 'POSIX umask and directory traversal modes')
     def test_runtime_staging_repairs_only_a_validated_parent_under_private_umask(self):
@@ -557,6 +879,23 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(set(kwargs['env']), {'PATH', 'HOME', 'LANG', 'NODE_DISABLE_COMPILE_CACHE'})
             child.side_effect = PermissionError('Synthetic untraversable parent')
             with self.assertRaises(PermissionError):instance.verify_runtime_execution()
+        self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
+
+    def test_staged_codex_is_checked_as_service_user_before_migration(self):
+        instance = self.instance()
+        instance.settings = {'serviceUser': 'synthetic'}
+        instance.target_agent_node = self.root / 'node'
+        instance.target_codex_binary = self.root / 'codex'
+        instance.runtime = {'nodeVersion': '24.21.0', 'companion': {'codexVersion': '0.155.1'}}
+        user = types.SimpleNamespace(pw_uid=321, pw_gid=654, pw_dir=str(self.root))
+        with patch.dict(sys.modules, {'pwd': types.SimpleNamespace(getpwnam=lambda name: user)}), patch.object(driver.subprocess, 'check_output', side_effect=['v24.21.0\n', 'codex-cli 0.155.1\n']) as child:
+            instance.verify_runtime_execution()
+            args, kwargs = child.call_args
+            self.assertEqual(args[0], [str(instance.target_codex_binary), '--version'])
+            self.assertEqual((kwargs['user'], kwargs['group'], kwargs['extra_groups']), (321, 654, []))
+            child.side_effect = ['v24.21.0\n', 'codex-cli 0.153.4\n']
+            with self.assertRaises(RuntimeError):
+                instance.verify_runtime_execution()
         self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
 
     def test_migration_rejects_ambiguous_or_released_workshop_history(self):
@@ -624,6 +963,81 @@ class RunnerTests(unittest.TestCase):
                 after.execute(mutation)
                 with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
                 after.execute(restore)
+
+    def test_plugin_index_rebuild_retains_every_other_record_and_exact_codex_surface(self):
+        runtime = self.root / 'runtime'
+        node = runtime / 'node' / 'bin' / 'node'
+        node.parent.mkdir(parents=True); node.write_bytes(b'synthetic node')
+        package = runtime / 'companions' / 'codex' / 'node_modules' / '@openclaw' / 'codex'
+        engine = runtime / 'node_modules' / 'openclaw'
+        for path in (package, engine):
+            path.mkdir(parents=True)
+            (path / 'package.json').write_text('{"version":"2026.9.6"}')
+        tools = ['codex_endpoint_probe', 'codex_plugins', 'codex_session_interrupt', 'codex_session_read',
+                 'codex_session_send', 'codex_sessions_list', 'codex_threads']
+        surface = {'channels': [], 'providers': ['codex'], 'tools': tools,
+                   'contracts': ['mediaUnderstandingProviders: codex', 'migrationProviders: codex']
+                       + ['tools: ' + name for name in tools] + ['webSearchProviders: codex'],
+                   'hooks': [], 'mcpServers': [], 'cliCommands': ['codex'], 'cliBackends': [], 'skills': [], 'dangerousConfigFlags': []}
+        old = {'revision': 100, 'index': {'version': 1, 'warning': 'Generated catalog', 'hostContractVersion': '2026.9.2',
+               'compatRegistryVersion': 'a' * 64, 'migrationVersion': 1, 'policyHash': 'b' * 64, 'generatedAtMs': 99,
+               'workspaceDir': '/saved/workspace', 'installRecords': {'codex': {'source': 'npm', 'version': '2026.9.2'},
+               'retained-plugin': {'source': 'path', 'installPath': '/saved/plugin', 'opaque': {'retained': True}}},
+               'plugins': [{'pluginId': 'bundled', 'packageVersion': '2026.9.2'}], 'diagnostics': []}}
+        new = json.loads(json.dumps(old)); new['revision'] = 200
+        new['index'].update(hostContractVersion='2026.9.6', compatRegistryVersion='c' * 64, generatedAtMs=199,
+                            refreshReason='source-changed', plugins=[{'pluginId': 'bundled', 'packageVersion': '2026.9.6'}])
+        new['index']['installRecords']['codex'] = {'source': 'path', 'sourcePath': str(package), 'installPath': str(package),
+            'version': '2026.9.6', 'installedAt': '2026-09-25T03:34:49.714Z', 'acceptedSurface': surface,
+            'acceptedSurfaceHash': driver.CODEX_SURFACE, 'acceptedSurfaceAt': '2026-09-25T03:34:49.711Z'}
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            for connection, value in ((before, old), (after, new)):
+                connection.execute('create table config_machine_state(state_key text primary key,value_json text,updated_at_ms integer)')
+                connection.execute('insert into config_machine_state values(?,?,?)', ('plugins.installedIndex', json.dumps(value), value['revision']))
+                connection.execute("insert into config_machine_state values('retained-setting','{\"exact\":true}',7)")
+                stamp, updated = ('2026-09-25T00:00:00.000Z', 1790294400000) if connection is before else ('2026-09-25T00:00:01.000Z', 1790294401000)
+                connection.execute('insert into config_machine_state values(?,?,?)', ('config.lastTouchedAt', json.dumps(stamp), updated))
+            args = (before, after, {'config_machine_state'}, self.root / 'before', self.root / 'after', node)
+            recovery.migrated_native_rows(*args)
+            after.execute("update config_machine_state set value_json='\"not-a-timestamp\"' where state_key='config.lastTouchedAt'")
+            with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+            after.execute('update config_machine_state set value_json=? where state_key=?', (json.dumps('2026-09-25T00:00:01.000Z'), 'config.lastTouchedAt'))
+            mutations = [
+                lambda v: v['index']['installRecords']['retained-plugin'].update(opaque={'retained': False}),
+                lambda v: v['index']['installRecords'].pop('retained-plugin'),
+                lambda v: v['index']['installRecords']['codex'].update(source='npm'),
+                lambda v: v['index']['installRecords']['codex'].update(installPath='/other/codex'),
+                lambda v: v['index']['installRecords']['codex'].update(version='2026.9.7'),
+                lambda v: v['index']['installRecords']['codex'].update(unreviewed=True),
+                lambda v: v['index']['installRecords']['codex']['acceptedSurface']['tools'].append('unreviewed-tool'),
+                lambda v: v['index']['installRecords']['codex'].update(installedAt=123),
+                lambda v: v['index'].update(unreviewed=True),
+                lambda v: v['index'].update(workspaceDir='/other/workspace'),
+                lambda v: v.update(revision=True),
+                lambda v: v.update(revision=50),
+            ]
+            for mutation in mutations:
+                value = json.loads(json.dumps(new)); mutation(value)
+                after.execute('update config_machine_state set value_json=?,updated_at_ms=? where state_key=?',
+                              (json.dumps(value), value['revision'], 'plugins.installedIndex'))
+                with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+            after.execute('update config_machine_state set value_json=?,updated_at_ms=200 where state_key=?',
+                          (json.dumps(new), 'plugins.installedIndex'))
+            for statement, restore in [
+                ("update config_machine_state set value_json='{}' where state_key='retained-setting'", "update config_machine_state set value_json='{\"exact\":true}' where state_key='retained-setting'"),
+                ("insert into config_machine_state values('new-unreviewed-setting','{}',8)", "delete from config_machine_state where state_key='new-unreviewed-setting'")]:
+                after.execute(statement)
+                with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args)
+                after.execute(restore)
+            with self.assertRaises(RuntimeError):recovery.migrated_native_rows(*args[:-1], None)
+
+    def test_unchanged_plugin_index_needs_no_runtime_but_other_machine_rows_stay_exact(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            for connection in (before, after):
+                connection.executescript("create table config_machine_state(state_key text primary key,value_json text,updated_at_ms integer);insert into config_machine_state values('saved','exact',1);")
+            recovery.retained_plugin_index(before, after, None)
+            after.execute("update config_machine_state set updated_at_ms=2")
+            with self.assertRaises(RuntimeError):recovery.retained_plugin_index(before, after, None)
 
     @unittest.skipUnless(shutil.which('node'), 'Node required for native zstd transcript verification')
     def test_migrated_zstd_transcript_keeps_original_bytes_and_identity(self):

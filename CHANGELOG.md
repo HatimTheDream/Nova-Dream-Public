@@ -1,3 +1,9 @@
+## [1.13.5] — 2026-09-24
+
+- Keep Assistant startup, transcript refresh and automatic planning paused during software updates. Resume reconciliation after the update without replaying messages or rewriting already interrupted outcomes.
+- Verify embedded agent records and expected restart metadata without mistaking database checkpoints or appended diagnostic logs for lost saved work.
+- Include OpenClaw's matching agent plugin in the combined offline update. Verify its executable and retained settings, and reuse an already verified runtime without reserving its storage twice.
+
 ## [1.13.4] — 2026-09-24
 
 - Verify that Nova's service account can run a staged agent update before pausing the app, including runtime folders retained from an interrupted attempt.
