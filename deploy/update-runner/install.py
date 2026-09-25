@@ -810,8 +810,14 @@ class Driver:
 
     def retained_native(self):
         snapshot = self.recovery / 'workspace'
+        selected = self.current.resolve(strict=True)
+        require(selected in {self.prior, self.target}, 'Native retention requires the verified selected application.')
+        target = selected == self.target
+        manifest = candidate(selected, self.target_id if target else self.prior_id,
+                             self.release['novaVersion'] if target else self.release['compatibility']['fromNovaVersion'])
         native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
-                           self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None)
+                           self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None,
+                           app_releases=((self.prior, self.prior_manifest), (selected, manifest)))
         for path in snapshot.rglob('*.jsonl'):
             if 'openclaw-runtime' not in path.parts:
                 continue

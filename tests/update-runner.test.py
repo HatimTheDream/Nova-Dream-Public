@@ -546,6 +546,52 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             recovery.native_runtime_configuration(before, after, pathlib.Path('.'), '2026.9.2', '2026.9.6')
 
+    def test_generated_plugin_relocation_requires_exact_verified_release_artifacts_and_retains_settings(self):
+        before, after = self.root / 'before-plugins', self.root / 'after-plugins'
+        releases, configs = [], []
+        plugins = {'edition3-accounts': 'account-plugin', 'edition3-sources': 'source-plugin',
+                   'edition3-worker': 'worker-plugin', 'edition3-workspace': 'module-plugin'}
+        for label, workspace in (('prior', before), ('target', after)):
+            root = self.root / ('release-' + label)
+            manifest = {'artifacts': []}
+            config = {'plugins': {'load': {'paths': ['/retained-unrelated-plugin']}, 'entries': {}},
+                      'agents': {'defaults': {'model': {'primary': 'retained-model'}}}, 'tools': {'profile': 'coding'}}
+            for plugin_id, directory in plugins.items():
+                path = root / 'dist/service/apps/service' / directory
+                path.mkdir(parents=True)
+                for filename in ('index.js', 'package.json', 'openclaw.plugin.json'):
+                    file = path / filename
+                    file.write_text(label + ':' + plugin_id + ':' + filename)
+                    manifest['artifacts'].append({'path': file.relative_to(root).as_posix(), 'sha256': recovery.digest(file)})
+                config['plugins']['load']['paths'].append(str(path))
+                config['plugins']['entries'][plugin_id] = {'enabled': True, 'config': {'bundlePath': str(path), 'epoch': 'retained-epoch'}}
+            (workspace / 'openclaw-runtime').mkdir(parents=True)
+            (workspace / 'openclaw-runtime/openclaw.json').write_text(json.dumps(config))
+            releases.append((root, manifest));configs.append(config)
+        target = after / 'openclaw-runtime/openclaw.json'
+        args = (before, after, pathlib.Path('.'), '2026.9.2', '2026.9.6')
+        with self.assertRaises(RuntimeError):
+            recovery.native_runtime_configuration(*args)
+        recovery.native_runtime_configuration(*args, app_releases=releases)
+        # The observed eight-field relocation must not authorize policy edits,
+        # a new plugin, arbitrary roots, duplicates or additional load entries.
+        for mutation in (
+            lambda value: value['agents']['defaults']['model'].update(primary='changed-model'),
+            lambda value: value['tools'].update(profile='full'),
+            lambda value: value['plugins']['entries'].update(unreviewed={'enabled': True}),
+            lambda value: value['plugins']['entries']['edition3-worker']['config'].update(bundlePath='/outside/worker-plugin'),
+            lambda value: value['plugins']['load']['paths'].append('/outside/plugin'),
+            lambda value: value['plugins']['load']['paths'].append(value['plugins']['load']['paths'][1]),
+        ):
+            changed = json.loads(json.dumps(configs[1]));mutation(changed);target.write_text(json.dumps(changed))
+            with self.assertRaises(RuntimeError):
+                recovery.native_runtime_configuration(*args, app_releases=releases)
+        target.write_text(json.dumps(configs[1]))
+        file = releases[1][0] / 'dist/service/apps/service/worker-plugin/index.js'
+        file.write_text('changed plugin bytes')
+        with self.assertRaises(RuntimeError):
+            recovery.native_runtime_configuration(*args, app_releases=releases)
+
     def test_native_migration_checkpoint_requires_the_verified_target_runtime_build(self):
         executable = self.root / 'runtime' / 'node' / 'bin' / 'node'
         package = self.root / 'runtime' / 'node_modules' / 'openclaw'
@@ -568,6 +614,92 @@ class RunnerTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     recovery.native_boot_replacements(*args)
 
+    def test_pinned_missing_title_repair_preserves_explicit_names_content_and_activity(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            original = {'sessionId': 'session', 'status': 'done', 'updatedAt': 17}
+            for connection, title in ((before, None), (after, 'Retained transcript title')):
+                connection.executescript('create table session_nodes(session_key text primary key,current_session_id text,entry_json text,display_name text,status text,updated_at integer);create table session_windows(session_id text primary key,display_name text,updated_at integer);')
+                entry = {**original, **({'displayName': title} if title else {})}
+                connection.execute('insert into session_nodes values(?,?,?,?,?,?)', ('agent:main:kept', 'session', json.dumps(entry), title, 'done', 17))
+                connection.execute('insert into session_windows values(?,?,?)', ('session', title, 17))
+            tables = {'session_nodes', 'session_windows'}
+            with patch.object(recovery, 'derived_session_titles', return_value={'session': 'Retained transcript title'}):
+                replacements = recovery.native_title_replacements(before, after, tables, None)
+                self.assertEqual(replacements[('session_nodes', 'agent:main:kept')]['entry_json'], json.dumps(original))
+                self.assertIsNone(replacements[('session_windows', 'session')]['display_name'])
+                for patch_entry in ({'label': 'Explicit saved name'}, {'status': 'running'}, {'incognito': True}, {'updatedAt': 18}):
+                    after.execute('update session_nodes set entry_json=?', (json.dumps({**original, 'displayName': 'Retained transcript title', **patch_entry}),))
+                    with self.assertRaises(RuntimeError):
+                        recovery.native_title_replacements(before, after, tables, None)
+                after.execute('update session_nodes set entry_json=?', (json.dumps({**original, 'displayName': 'Retained transcript title'}),))
+                before.execute("update session_nodes set display_name='Explicit saved name'")
+                with self.assertRaises(RuntimeError):
+                    recovery.native_title_replacements(before, after, tables, None)
+                before.execute('update session_nodes set display_name=NULL')
+            with patch.object(recovery, 'derived_session_titles', return_value={'session': 'Unrelated title'}), self.assertRaises(RuntimeError):
+                recovery.native_title_replacements(before, after, tables, None)
+
+    def test_new_worker_attachment_table_requires_exact_schema_and_no_new_authority(self):
+        with contextlib.closing(sqlite3.connect(':memory:')) as connection:
+            connection.executescript('pragma user_version=18;' + recovery.WORKER_ATTACHMENTS_SCHEMA)
+            tables = {'worker_environment_session_attachments'}
+            self.assertEqual(recovery.native_schema(connection, pathlib.Path('openclaw.sqlite'), '2026.9.6', set()), tables)
+            connection.execute('insert into worker_environment_session_attachments values(?,?,?,?,?,?,?,?,?)', ('session','key','main',None,'environment',1,1,1,None))
+            with self.assertRaises(RuntimeError):
+                recovery.native_schema(connection, pathlib.Path('openclaw.sqlite'), '2026.9.6', set())
+            self.assertEqual(recovery.native_schema(connection, pathlib.Path('openclaw.sqlite'), '2026.9.6'), tables)
+            self.assertIn('worker_environment_session_attachments', recovery.NATIVE_96_RETAINED_TABLES)
+            connection.execute('delete from worker_environment_session_attachments')
+            connection.execute('alter table worker_environment_session_attachments add column unreviewed text')
+            with self.assertRaises(RuntimeError):
+                recovery.native_schema(connection, pathlib.Path('openclaw.sqlite'), '2026.9.6')
+
+    def test_generated_workshop_monitor_migration_preserves_user_settings_and_exact_scope(self):
+        runtime = self.root / 'workshop-runtime'
+        node = runtime / 'node/bin/node';node.parent.mkdir(parents=True);node.write_bytes(b'fixture node')
+        package = runtime / 'node_modules/openclaw';(package / 'dist').mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps({'version': '2026.9.6'}))
+        pins = {'load.kernel-bWRpwlYl.mjs': 'be846a42ef55a511f6b97958ebc6b48c49c3171ce3c6120e2f0e42f0f998a0b1',
+                'skill-collection-review-monitor-DnbqA4A4.mjs': '3d711142f949ee43a5364cf9abe534e7a2e6e11b2fb179e741ba1f0b82fa6146',
+                'maintenance-prompt-zOCiE9ju.mjs': 'd4b152601a17afcb323246f2dd2a5036a2a6181d9303193cdc94dc888bbdfa4d',
+                'scheduled-tool-policy-pqnwO5x1.mjs': '6ae8aee0f445d020c46004a4243c856c87f1f5d20f9421b22db4051c76931635',
+                'jobs-tool-policy-DBCUJ2uk.mjs': '6cd412b9b38218d5a8cbcfc451e3f9297d77eb6f3b54e7df641ed814131a31a5'}
+        for name in pins:(package / 'dist' / name).write_text('synthetic pinned module')
+        original_digest, original_hash = recovery.digest, hashlib.sha256
+        def digest(path):
+            return pins[path.name] if path.name in pins and path.read_text() == 'synthetic pinned module' else original_digest(path)
+        def hash_bytes(data=b''):
+            return types.SimpleNamespace(hexdigest=lambda:'73ff56de2590636d9dd52ead7a149052cd928f4b5b7462864e2b4c07047e48fe') if data == b'synthetic reviewed prompt' else original_hash(data)
+        old_job = {'id':'00000000-0000-4000-8000-000000000001','declarationKey':'skill-collection-review:main',
+                   'displayName':'Skill collection review (main)','agentId':'main','name':'skill-collection-review-main',
+                   'enabled':True,'createdAtMs':1000,'schedule':{'kind':'every','everyMs':604800000,'anchorMs':100},
+                   'sessionTarget':'main','wakeMode':'next-heartbeat','payload':{'kind':'skillCollectionReview'},'state':{}}
+        new_job = {**old_job,'id':'00000000-0000-4000-8000-000000000002','createdAtMs':900000000,'sessionTarget':'isolated',
+                   'payload':{'kind':'agentTurn','message':'synthetic reviewed prompt','toolsAllow':['ls','read','write','edit','apply_patch','exec','process']},
+                   'delivery':{'mode':'none'},'scheduledToolPolicy':{'version':1,'mode':'trusted'}}
+        schema = 'create table cron_jobs(store_key text,job_id text,declaration_key text,owner_agent_id text,name text,description text,enabled integer,agent_id text,payload_kind text,job_json text,state_json text,runtime_updated_at_ms integer,schedule_identity text,sort_order integer,updated_at integer)'
+        with contextlib.closing(sqlite3.connect(':memory:')) as before, contextlib.closing(sqlite3.connect(':memory:')) as after:
+            for connection, job, next_run in ((before,old_job,604800100),(after,new_job,1209600100)):
+                connection.execute(schema)
+                connection.execute('insert into cron_jobs values('+','.join('?' for _ in range(15))+')',
+                    ('store',job['id'],job['declarationKey'],None,job['name'],None,1,'main',job['payload']['kind'],json.dumps(job),json.dumps({'nextRunAtMs':next_run}),job['createdAtMs'],'retained schedule identity',0,job['createdAtMs']))
+            with patch.object(recovery,'digest',side_effect=digest),patch.object(recovery.hashlib,'sha256',side_effect=hash_bytes):
+                self.assertEqual(len(recovery.retained_collection_review_jobs(before,after,node)),1)
+                for mutate in (
+                    lambda job:job['payload'].update(message='different instructions'),
+                    lambda job:job['payload']['toolsAllow'].append('unreviewed-tool'),
+                    lambda job:job['schedule'].update(everyMs=1000),
+                    lambda job:job.update(enabled=False),
+                    lambda job:job.update(delivery={'mode':'announce'}),
+                    lambda job:job.update(state={'runningAtMs':1}),
+                    lambda job:job.update(scheduledToolPolicy={'version':1,'mode':'account'}),
+                ):
+                    changed=json.loads(json.dumps(new_job));mutate(changed)
+                    after.execute('update cron_jobs set job_json=?',(json.dumps(changed),))
+                    with self.assertRaises(RuntimeError):recovery.retained_collection_review_jobs(before,after,node)
+                after.execute('update cron_jobs set job_json=?',(json.dumps(new_job),))
+                after.execute("update cron_jobs set description='changed user field'")
+                with self.assertRaises(RuntimeError):recovery.retained_collection_review_jobs(before,after,node)
     def archive(self, names):
         path = self.root / 'app.tgz'
         with tarfile.open(path, 'w:gz') as archive:
@@ -668,6 +800,8 @@ class RunnerTests(unittest.TestCase):
 
     def test_retained_native_transcripts_may_append_but_cannot_lose_old_bytes(self):
         instance = self.instance()
+        instance.target = self.root / 'target'
+        instance.prior_manifest = {'artifacts': []}
         instance.recovery, instance.data = self.root / 'recovery', self.root / 'live'
         fixture_native(instance.recovery / 'workspace')
         fixture_native(instance.data)
@@ -678,9 +812,10 @@ class RunnerTests(unittest.TestCase):
         current = instance.data / native / original.name
         current.parent.mkdir(parents=True)
         current.write_bytes(original.read_bytes() + b'{"new":true}\n')
-        instance.retained_native()
+        with patch.object(driver, 'candidate', return_value=instance.prior_manifest):
+            instance.retained_native()
         current.write_bytes(b'{"saved":false}\n')
-        with self.assertRaises(RuntimeError):
+        with patch.object(driver, 'candidate', return_value=instance.prior_manifest), self.assertRaises(RuntimeError):
             instance.retained_native()
 
     def test_exact_app_and_native_barrier_are_required_by_acceptance(self):

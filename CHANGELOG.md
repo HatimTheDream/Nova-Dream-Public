@@ -1,3 +1,8 @@
+## [1.13.8] — 2026-09-25
+
+- Complete combined updates when verified Nova plugins move to the new installation folder, while preserving checks on saved settings, accounts, permissions and recovery data.
+- Recognize reviewed OpenClaw startup migrations for missing session titles and built-in maintenance jobs without allowing changes to user-created schedules or saved content.
+
 ## [1.13.7] — 2026-09-24
 
 - Recognize OpenClaw 2026.9.6's update-readiness response so combined updates can finish verification and resume Assistant access. Keep active work and unrecognized responses blocked.

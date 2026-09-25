@@ -91,7 +91,7 @@ NATIVE_96_RETAINED_TABLES = frozenset('''
     cron_run_trigger_state_retirements github_publication_session_lifecycles github_repository_publication_requests
     local_workspace_projections node_worker_launch_cleanup node_worker_prepared_workspaces
     operator_approval_standing_grant_generations session_repository_workspaces worktree_templates
-    session_input_completions session_transcript_cold_archives
+    session_input_completions session_transcript_cold_archives worker_environment_session_attachments
 '''.split())
 NATIVE_96_DERIVED_TABLES = frozenset({'session_canonical_validation_pending', 'session_transcript_fts_rows'})
 NATIVE_VERSIONS = {'2026.9.2': (19, 15), '2026.9.6': (23, 18)}
@@ -728,12 +728,32 @@ def retained_quarantine_cache(snapshot, live, selected, active, from_version, to
     return {relative}
 
 
-def native_schema(connection, relative, version='2026.9.2'):
+WORKER_ATTACHMENTS_SCHEMA = '''CREATE TABLE worker_environment_session_attachments (
+session_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, agent_id TEXT NOT NULL,
+session_lifecycle_revision TEXT, environment_id TEXT NOT NULL UNIQUE,
+generation INTEGER NOT NULL CHECK (generation >= 1), created_at_ms INTEGER NOT NULL,
+last_used_at_ms INTEGER NOT NULL, closed_at_ms INTEGER,
+FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+) STRICT'''
+
+
+def native_schema(connection, relative, version='2026.9.2', prior_tables=None):
     require(version in NATIVE_VERSIONS, 'The native version has no reviewed data contract.')
     agent, shared = NATIVE_VERSIONS[version]
     expected = agent if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'} else shared if relative.name == 'openclaw.sqlite' else None
     require(expected is not None and connection.execute('pragma user_version').fetchone()[0] == expected, 'An unreviewed native database needs separate recovery qualification.')
     tables = {item[0] for item in connection.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
+    attachment = 'worker_environment_session_attachments'
+    if version == '2026.9.6' and attachment in tables:
+        # The pinned worker store creates this lazy companion table at startup.
+        # Existing 9.6 attachments are retained by the normal row comparison.
+        sql = connection.execute('select sql from sqlite_schema where type=\'table\' and name=?', (attachment,)).fetchone()[0]
+        compact = lambda value: re.sub(r'\s+', '', value)
+        require(compact(sql) == compact(WORKER_ATTACHMENTS_SCHEMA),
+                'Native worker attachments need separate recovery qualification.')
+        if prior_tables is not None and attachment not in prior_tables:
+            require(connection.execute('select 1 from worker_environment_session_attachments limit 1').fetchone() is None,
+                    'Native worker attachments need separate recovery qualification.')
     known = NATIVE_KNOWN_TABLES | (NATIVE_96_RETAINED_TABLES | NATIVE_96_DERIVED_TABLES if version == '2026.9.6' else set())
     require(tables <= known, 'Native database coverage contains an unreviewed table.')
     return tables
@@ -753,7 +773,43 @@ def native_preflight(root, expected_epoch=None, version='2026.9.2', target_versi
     return selected, epoch, paths
 
 
-def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None):
+def retained_app_plugin_paths(configurations, app_releases):
+    """Qualify Nova's generated plugin relocation using candidate-verified roots
+    and manifests supplied by the driver. Unrelated load paths stay exact.
+    """
+    plugins = {'edition3-accounts': 'account-plugin', 'edition3-sources': 'source-plugin',
+               'edition3-worker': 'worker-plugin', 'edition3-workspace': 'module-plugin'}
+    require(isinstance(app_releases, (tuple, list)) and len(app_releases) == 2,
+            'Plugin relocation requires both verified application releases.')
+    for plugin_id, directory in plugins.items():
+        entries = [value.get('plugins', {}).get('entries', {}).get(plugin_id, {}) for value in configurations]
+        paths = [entry.get('config', {}).get('bundlePath') for entry in entries]
+        if paths[0] == paths[1]:
+            continue
+        relative = pathlib.Path('dist/service/apps/service') / directory
+        for index, ((root, manifest), path, entry) in enumerate(zip(app_releases, paths, entries)):
+            root = pathlib.Path(root)
+            expected_path = root / relative
+            require(root.resolve(strict=True) == root and path == str(expected_path)
+                    and entry.get('enabled') is True and expected_path.resolve(strict=True) == expected_path,
+                    'Native plugin path is outside its verified application release.')
+            prefix = relative.as_posix() + '/'
+            expected = {item['path']: item['sha256'] for item in manifest['artifacts'] if item['path'].startswith(prefix)}
+            require(expected and len(expected) <= 1000, 'The verified candidate lacks its generated plugin artifacts.')
+            actual = {}
+            for file in expected_path.rglob('*'):
+                require(not file.is_symlink() and (file.is_file() or file.is_dir()), 'A generated plugin artifact was redirected.')
+                if file.is_file():
+                    actual[file.relative_to(root).as_posix()] = digest(file)
+            require(actual == expected, 'Generated plugin bytes differ from the verified candidate artifacts.')
+            load = configurations[index]['plugins'].get('load', {}).get('paths')
+            require(isinstance(load, list) and load.count(path) == 1, 'The generated plugin load path is not uniquely retained.')
+            marker = '<verified-app-plugin:' + plugin_id + '>'
+            load[load.index(path)] = marker
+            entry['config']['bundlePath'] = marker
+
+
+def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None):
     relative = selected / 'openclaw-runtime' / 'openclaw.json'
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
@@ -809,15 +865,97 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
                 if not agents:
                     value.pop('agents', None)
         normalized.append(value)
+    if app_releases is not None:
+        retained_app_plugin_paths(normalized, app_releases)
     require(normalized[0] == normalized[1], 'Retained native configuration or account settings changed.')
     return {'path': str(paths[1]), 'hashes': hashes, 'byteSizes': byte_sizes}
+
+
+SESSION_TITLES = r'''
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
+const [path,dist]=process.argv.slice(1), sessions=JSON.parse(readFileSync(0,'utf8'));
+const {t:derive}=await import(pathToFileURL(dist+'/derive-goal-session-title-DILXsIfr.mjs'));
+const {n:project}=await import(pathToFileURL(dist+'/session-display-projection-bZOY074i.mjs'));
+const {i:message}=await import(pathToFileURL(dist+'/session-transcript-entry-message-COJ0koI7.mjs'));
+const {c:interSession}=await import(pathToFileURL(dist+'/input-provenance-C4tQegGN.mjs'));
+const db=new DatabaseSync(path,{readOnly:true});
+try {
+ const query=db.prepare('SELECT a.event_seq,a.message_position,e.event_json FROM session_transcript_active_events a JOIN transcript_events e ON e.session_id=a.session_id AND e.seq=a.event_seq WHERE a.session_id=? AND a.message_position IS NOT NULL ORDER BY a.message_position LIMIT 100');
+ const result={};
+ for(const session of sessions){
+  const rows=query.all(session);
+  if(rows.some((row,index)=>row.message_position!==index||typeof row.event_json!=='string')||rows.reduce((total,row)=>total+Buffer.byteLength(row.event_json),0)>65536)throw Error('Unsupported title transcript window');
+  for(const row of rows){
+   const value=message({event:JSON.parse(row.event_json),seq:row.event_seq,displayPosition:row.message_position}),shown=project(value);
+   if(shown?.role==='user'&&!interSession(value)){result[session]=derive(shown.text)??null;break;}
+  }
+ }
+ process.stdout.write(JSON.stringify(result));
+} finally {db.close();}
+'''
+
+
+def derived_session_titles(before, session_ids, node):
+    require(node is not None and len(session_ids) <= 1000, 'Native title repair needs its reviewed runtime and bounded sessions.')
+    executable = pathlib.Path(node)
+    require(executable.name == 'node' and executable.parent.name == 'bin' and executable.parent.parent.name == 'node',
+            'Unreviewed native title repair runtime layout.')
+    package = executable.parent.parent.parent / 'node_modules' / 'openclaw'
+    require(bounded_json(package / 'package.json', 1024 * 1024).get('version') == '2026.9.6', 'Native title repair runtime version changed.')
+    result = subprocess.check_output([str(node), '--input-type=module', '-e', SESSION_TITLES, str(before.database_path), str(package / 'dist')],
+                                     input=json.dumps(session_ids).encode(), stderr=subprocess.DEVNULL, timeout=30)
+    require(len(result) <= 1024 * 1024, 'Native title repair proof exceeded its bound.')
+    value = json.loads(result)
+    require(isinstance(value, dict) and set(value) <= set(session_ids), 'Native title repair returned unknown sessions.')
+    return value
+
+
+def native_title_replacements(before, after, tables, node):
+    if not {'session_nodes', 'session_windows'} <= tables:
+        return {}
+    def records(connection, table, key):
+        names = [item[1] for item in connection.execute('pragma table_info("' + table + '")')]
+        return {row[names.index(key)]: dict(zip(names, row)) for row in rows(connection, table)}
+    old = records(before, 'session_nodes', 'session_key')
+    new = records(after, 'session_nodes', 'session_key')
+    changes = []
+    for key, previous in old.items():
+        current = new.get(key)
+        if current is None or previous.get('display_name') == current.get('display_name'):
+            continue
+        prior_entry, entry = json.loads(previous['entry_json']), json.loads(current['entry_json'])
+        require(previous.get('display_name') is None and isinstance(current.get('display_name'), str)
+                and previous.get('status') != 'running' and prior_entry.get('status') != 'running'
+                and not prior_entry.get('incognito') and ':incognito:' not in key
+                and not any(isinstance(prior_entry.get(name), str) and prior_entry[name].strip() for name in ('label', 'displayName', 'subject', 'groupChannel', 'space')),
+                'Native title repair would replace an explicit name or active session.')
+        require('displayName' not in prior_entry and entry.get('displayName') == current['display_name']
+                and {name: value for name, value in entry.items() if name != 'displayName'} == prior_entry
+                and current['current_session_id'] == previous['current_session_id'], 'Native title repair changed retained session content.')
+        changes.append((key, previous, current))
+    if not changes:
+        return {}
+    titles = derived_session_titles(before, [old['current_session_id'] for _, old, _ in changes], node)
+    old_windows, new_windows = records(before, 'session_windows', 'session_id'), records(after, 'session_windows', 'session_id')
+    result = {}
+    for key, previous, current in changes:
+        session_id = previous['current_session_id']
+        require(titles.get(session_id) == current['display_name'], 'Native title repair does not match retained transcript derivation.')
+        result[('session_nodes', key)] = {'display_name': previous['display_name'], 'entry_json': previous['entry_json']}
+        require(session_id in old_windows and session_id in new_windows
+                and old_windows[session_id].get('display_name') is None
+                and new_windows[session_id].get('display_name') == current['display_name'], 'Native title window differs from its retained session.')
+        result[('session_windows', session_id)] = {'display_name': None}
+    return result
 
 
 def native_boot_replacements(before, after, tables, configuration, from_version, to_version, node):
     """Qualify only the two startup fingerprints and the selected config cache.
     Return after-side field replacements; all other row fields stay exact.
     """
-    result = {}
+    result = native_title_replacements(before, after, tables, node) if (from_version, to_version) == ('2026.9.2', '2026.9.6') else {}
     for table, key in (('schema_meta', 'meta_key'), ('config_health_entries', 'config_path')):
         if table not in tables:
             continue
@@ -880,7 +1018,7 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
 
 
 def native_boot_row(table, values, replacements):
-    key = 'meta_key' if table == 'schema_meta' else 'config_path' if table == 'config_health_entries' else None
+    key = {'schema_meta': 'meta_key', 'config_health_entries': 'config_path', 'session_nodes': 'session_key', 'session_windows': 'session_id'}.get(table)
     return {**values, **replacements.get((table, values.get(key)), {})} if key else values
 
 
@@ -1066,6 +1204,99 @@ def retained_plugin_index(before, after, node):
             'The Codex capability surface changed.')
 
 
+def retained_collection_review_jobs(before, after, node):
+    """Match only the reviewed 9.6 replacement of generated Workshop monitors.
+
+    User jobs continue through complete-row retention. The new monitor's exact
+    instructions and tool scope come from the verified official runtime.
+    """
+    names = lambda connection: [item[1] for item in connection.execute('pragma table_info(cron_jobs)')]
+    old_names, new_names = names(before), names(after)
+    previous = [dict(zip(old_names, row)) for row in rows(before, 'cron_jobs')]
+    current = [dict(zip(new_names, row)) for row in rows(after, 'cron_jobs')]
+    legacy = [row for row in previous if row['payload_kind'] == 'skillCollectionReview']
+    if not legacy:
+        return {}
+    executable = pathlib.Path(node) if node is not None else None
+    require(executable is not None and executable.name == 'node' and executable.parent.name == 'bin'
+            and executable.parent.parent.name == 'node' and executable.resolve(strict=True) == executable,
+            'Workshop monitor migration requires the verified runtime closure.')
+    package = executable.parent.parent.parent / 'node_modules/openclaw'
+    require(bounded_json(package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
+            'Workshop monitor migration requires the reviewed native version.')
+    for name, pin in {
+        'load.kernel-bWRpwlYl.mjs': 'be846a42ef55a511f6b97958ebc6b48c49c3171ce3c6120e2f0e42f0f998a0b1',
+        'skill-collection-review-monitor-DnbqA4A4.mjs': '3d711142f949ee43a5364cf9abe534e7a2e6e11b2fb179e741ba1f0b82fa6146',
+        'maintenance-prompt-zOCiE9ju.mjs': 'd4b152601a17afcb323246f2dd2a5036a2a6181d9303193cdc94dc888bbdfa4d',
+        'scheduled-tool-policy-pqnwO5x1.mjs': '6ae8aee0f445d020c46004a4243c856c87f1f5d20f9421b22db4051c76931635',
+        'jobs-tool-policy-DBCUJ2uk.mjs': '6cd412b9b38218d5a8cbcfc451e3f9297d77eb6f3b54e7df641ed814131a31a5',
+    }.items():
+        path = package / 'dist' / name
+        require(path.resolve(strict=True) == path and digest(path) == pin, 'Workshop monitor migration source changed.')
+    replacements = {}
+    job_keys = {'id', 'declarationKey', 'displayName', 'agentId', 'name', 'enabled', 'createdAtMs',
+                'schedule', 'sessionTarget', 'wakeMode', 'payload', 'state'}
+    for old in legacy:
+        agent_id = old['agent_id']
+        require(isinstance(agent_id, str) and re.fullmatch('[a-z0-9_-]+', agent_id)
+                and old['declaration_key'] == 'skill-collection-review:' + agent_id
+                and old['name'] == 'skill-collection-review-' + agent_id and old['description'] is None
+                and old['owner_agent_id'] is None and old['enabled'] == 1,
+                'Retired Workshop job is not the unchanged generated monitor.')
+        matching = [row for row in current if row['store_key'] == old['store_key']
+                    and row['declaration_key'] == old['declaration_key']]
+        require(len(matching) == 1, 'The generated Workshop monitor is missing or duplicated.')
+        new = matching[0]
+        old_job, new_job = json.loads(old['job_json']), json.loads(new['job_json'])
+        require(set(old_job) == job_keys and set(new_job) == job_keys | {'delivery', 'scheduledToolPolicy'}
+                and old_job['payload'] == {'kind': 'skillCollectionReview'}
+                and old_job['state'] == new_job['state'] == {}
+                and old_job['sessionTarget'] == 'main' and old_job['wakeMode'] == 'next-heartbeat'
+                and old_job['enabled'] is True and old_job['agentId'] == agent_id
+                and old_job['displayName'] == 'Skill collection review (' + agent_id + ')'
+                and old_job['name'] == old['name'] and old_job['declarationKey'] == old['declaration_key'],
+                'The retained Workshop monitor contains unreviewed user configuration.')
+        for record, job in ((old, old_job), (new, new_job)):
+            require(str(uuid.UUID(record['job_id'])) == record['job_id'] == job['id']
+                    and type(job['createdAtMs']) is int and 0 <= job['createdAtMs'] <= 9007199254740991,
+                    'The generated Workshop monitor identity changed format.')
+        payload = new_job['payload']
+        require(new['payload_kind'] == 'agentTurn' and isinstance(payload, dict)
+                and set(payload) == {'kind', 'message', 'toolsAllow'} and payload['kind'] == 'agentTurn'
+                and isinstance(payload['message'], str)
+                and hashlib.sha256(payload['message'].encode()).hexdigest() == '73ff56de2590636d9dd52ead7a149052cd928f4b5b7462864e2b4c07047e48fe'
+                and payload['toolsAllow'] == ['ls', 'read', 'write', 'edit', 'apply_patch', 'exec', 'process']
+                and new_job['delivery'] == {'mode': 'none'}
+                and new_job['scheduledToolPolicy'] == {'version': 1, 'mode': 'trusted'}
+                and new_job['sessionTarget'] == 'isolated'
+                and new_job['createdAtMs'] >= old_job['createdAtMs'],
+                'The replacement Workshop monitor differs from the reviewed native definition.')
+        retained = dict(new_job)
+        for name in ('delivery', 'scheduledToolPolicy'):
+            retained.pop(name)
+        for name in ('id', 'createdAtMs', 'payload', 'sessionTarget'):
+            retained[name] = old_job[name]
+        require(retained == old_job, 'The generated Workshop monitor changed its retained settings.')
+        schedule = old_job['schedule']
+        require(isinstance(schedule, dict) and set(schedule) == {'kind', 'everyMs', 'anchorMs'}
+                and schedule['kind'] == 'every' and schedule['everyMs'] == 604800000
+                and type(schedule['anchorMs']) is int and 0 <= schedule['anchorMs'] < schedule['everyMs'],
+                'The retained Workshop monitor schedule is outside the reviewed definition.')
+        old_state, new_state = json.loads(old['state_json']), json.loads(new['state_json'])
+        next_run = schedule['anchorMs'] + ((new_job['createdAtMs'] - schedule['anchorMs']) // schedule['everyMs'] + 1) * schedule['everyMs']
+        require(set(old_state) == {'nextRunAtMs'} and type(old_state['nextRunAtMs']) is int
+                and new_state == {'nextRunAtMs': next_run} and next_run >= old_state['nextRunAtMs']
+                and new['runtime_updated_at_ms'] == new['updated_at'] == new_job['createdAtMs'],
+                'The replacement Workshop monitor runtime state is outside the reviewed restart.')
+        mutable = {'job_id', 'payload_kind', 'job_json', 'state_json', 'runtime_updated_at_ms', 'updated_at'}
+        require(all(old[name] == new[name] for name in old_names if name not in mutable),
+                'The generated Workshop monitor changed unrelated saved fields.')
+        key = (new['store_key'], new['job_id'])
+        require(key not in replacements, 'The generated Workshop monitor replacement is ambiguous.')
+        replacements[key] = old
+    return replacements
+
+
 def migrated_native_rows(before, after, tables, before_path, after_path, node, boot_replacements=None):
     for table in tables:
         require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
@@ -1093,6 +1324,7 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
             allowed_versions = {old_meta[1], '2026.9.6'} if expected == 18 else {'2026.9.6'}
             require(new_meta is not None and new_meta[0] == expected and new_meta[1] in allowed_versions,
                     'Migrated native schema ownership does not identify the reviewed version.')
+        cron_replacements = retained_collection_review_jobs(before, after, node) if table == 'cron_jobs' else {}
         selected = [name for name in old_names if name not in removed | omitted]
         def projected(connection, names, old):
             result = Counter()
@@ -1100,6 +1332,8 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
                 values = dict(zip(names, row))
                 if not old:
                     values = native_boot_row(table, values, boot_replacements or {})
+                    if table == 'cron_jobs':
+                        values = cron_replacements.get((values['store_key'], values['job_id']), values)
                 if table == 'session_nodes' and old and values.get('entry_valid') == 0:
                     # The official projection validates pending entries. A
                     # negative result is rejected; identity and JSON stay exact.
@@ -1140,14 +1374,14 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
                 'Native migration did not retain saved work, history, configuration or permissions.')
 
 
-def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None):
+def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
-    configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version)
+    configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases)
     embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version)
     require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine) == static_sqlite_files(live, selected, paths | embedded | quarantine), 'An inactive database, archived store or nonactive cache changed.')
@@ -1155,7 +1389,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
             old_tables = native_schema(before, relative, from_version)
-            new_tables = native_schema(after, relative, to_version)
+            new_tables = native_schema(after, relative, to_version, old_tables if migrating else None)
             boot_replacements = native_boot_replacements(before, after, old_tables & new_tables, configuration, from_version, to_version, node)
             if migrating:
                 migration_preflight(before, old_tables)
