@@ -619,6 +619,49 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(changed=values), self.assertRaises(RuntimeError):
                 compare(**values)
 
+    def test_native_restart_receipt_binds_database_without_changing_session_contract(self):
+        path = self.root / 'agent.sqlite';path.touch();identity = path.stat()
+        relative = pathlib.Path('openclaw-runtime/state/agents/main/agent/openclaw-agent.sqlite')
+        old = json.dumps([1, 'main', '1:2', '100'])
+        valid = json.dumps([1, 'main', str(identity.st_dev) + ':' + str(identity.st_ino), '200'])
+        def check(receipt=valid, main_key='main'):
+            with contextlib.closing(sqlite3.connect(':memory:')) as a, contextlib.closing(sqlite3.connect(':memory:')) as b:
+                for db, value, key in ((a, old, 'main'), (b, receipt, main_key)):
+                    db.execute('create table session_key_contract(id integer primary key,main_key text,updated_at integer,canonical_ready text)')
+                    db.execute('insert into session_key_contract values(1,?,1,?)', (key, value))
+                return recovery.native_restart_rows(a, b, 'session_key_contract', relative, path, {})
+        self.assertEqual(next(iter(check())), (1, 'main', 1, old))
+        for receipt in (json.dumps([1, 'main', '1:2', '200']), json.dumps([1, 'other', str(identity.st_dev)+':'+str(identity.st_ino), '200']),
+                        json.dumps([1, 'main', str(identity.st_dev)+':'+str(identity.st_ino), 'invalid'])):
+            with self.subTest(receipt=receipt), self.assertRaises(RuntimeError):check(receipt)
+        with self.assertRaises(RuntimeError):check(main_key='changed-session-policy')
+
+    def test_native_restart_plugin_metadata_keeps_content_and_live_processes_strict(self):
+        columns = 'plugin_id text,namespace text,entry_key text,value_json text,created_at integer,expires_at integer'
+        identity = {'pid': 900000001, 'pgid': 900000001, 'startedAt': 'synthetic-ended-process'}
+        registration = json.dumps({'parent': identity, 'child': {**identity, 'commandFingerprint': 'a' * 64}})
+        process = ('codex', 'app-server-processes', '4bdc71e8-e691-4685-8977-56e3753c5cb1', registration, 1, None)
+        marker = ('codex', 'session-catalog-resident.' + 'a' * 64, 'complete', json.dumps({'version': 1, 'kind': 'complete'}), 1, None)
+        content = ('codex', 'session-catalog-resident.' + 'a' * 64, 'row:saved', json.dumps({'kind': 'row', 'content': 'saved'}), 1, None)
+        def check(old_process=process, new_marker=(*marker[:4], 2, None), new_content=content):
+            with contextlib.closing(sqlite3.connect(':memory:')) as a, contextlib.closing(sqlite3.connect(':memory:')) as b:
+                for db, values in ((a, [old_process, marker, content]), (b, [new_marker, new_content])):
+                    db.execute('create table plugin_state_entries(' + columns + ')')
+                    db.executemany('insert into plugin_state_entries values(?,?,?,?,?,?)', values)
+                result = recovery.native_restart_rows(a, b, 'plugin_state_entries', pathlib.Path('openclaw.sqlite'), self.root, {})
+                recovery.require(recovery.rows(a, 'plugin_state_entries') <= result, 'Retained plugin content changed.')
+        check()
+        live = json.dumps({'parent': {**identity, 'pid': os.getpid()}, 'child': identity})
+        if sys.platform == 'linux':
+            with self.assertRaises(RuntimeError):check(old_process=(*process[:3], live, 1, None))
+        for kwargs in (
+            {'new_marker': (*marker[:3], json.dumps({'kind': 'complete', 'version': 2}), 2, None)},
+            {'new_marker': (*marker[:4], 2, 100)},
+            {'new_content': (*content[:3], json.dumps({'kind': 'row', 'content': 'changed'}), 1, None)},
+            {'old_process': ('other-plugin', *process[1:])},
+            {'old_process': (*process[:3], json.dumps({'parent': identity, 'child': identity, 'saved': 'content'}), 1, None)}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(RuntimeError):check(**kwargs)
+
     def test_official_companion_config_normalization_preserves_model_and_permissions(self):
         before, after = self.root / 'before-config', self.root / 'after-config'
         for root in (before, after):

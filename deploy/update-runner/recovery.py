@@ -1039,6 +1039,67 @@ def native_boot_rows(connection, table, replacements):
     return result
 
 
+def native_restart_rows(before, after, table, relative, after_path, replacements):
+    """Qualify exact 9.6 process/file-generation metadata, never saved content."""
+    result = native_boot_rows(after, table, replacements)
+    if table not in {'session_key_contract', 'plugin_state_entries'}:
+        return result
+    columns = [item[1] for item in before.execute('pragma table_info("' + table + '")')]
+    old = rows(before, table)
+    if old <= result:
+        return result
+    if table == 'session_key_contract':
+        require(columns == ['id', 'main_key', 'updated_at', 'canonical_ready']
+                and relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}
+                and len(old) == len(result) == 1, 'Unreviewed native canonical receipt schema.')
+        previous, current = next(iter(old)), next(iter(result))
+        require(previous[0] == current[0] == 1 and previous[:3] == current[:3], 'Retained native session key contract changed.')
+        receipts = []
+        for encoded in (previous[3], current[3]):
+            require(isinstance(encoded, str) and len(encoded) <= 512, 'Unexpected native canonical receipt.')
+            value = json.loads(encoded)
+            require(isinstance(value, list) and len(value) == 4 and type(value[0]) is int and value[0] == 1
+                    and value[1] == relative.parts[-3] and isinstance(value[2], str) and re.fullmatch(r'[0-9]+:[0-9]+', value[2])
+                    and isinstance(value[3], str) and re.fullmatch(r'[0-9]{1,20}', value[3]), 'Unreviewed native canonical receipt format.')
+            receipts.append(value)
+        identity = after_path.stat()
+        require(after_path.is_file() and not after_path.is_symlink()
+                and receipts[1][2] == str(identity.st_dev) + ':' + str(identity.st_ino), 'Native canonical receipt belongs to another database.')
+        # Birth time is a generation hint; complete logical rows and quick_check
+        # still establish retention/integrity. Bind its companion inode exactly.
+        return old.copy()
+    require(columns == ['plugin_id', 'namespace', 'entry_key', 'value_json', 'created_at', 'expires_at'],
+            'Unreviewed native plugin state schema.')
+    current = {row[:3]: row for row in result}
+    for row, count in (old - result).items():
+        plugin, namespace, key, encoded, created, expires = row
+        if plugin != 'codex':
+            continue
+        newer = current.get(row[:3])
+        if re.fullmatch(r'session-catalog-resident\.[a-f0-9]{64}', namespace) and key == 'complete' and newer:
+            require(json.loads(encoded) == {'version': 1, 'kind': 'complete'} and newer[3] == encoded and newer[5] == expires
+                    and type(created) is int and type(newer[4]) is int and 0 <= created <= newer[4],
+                    'Retained Codex catalog marker content changed.')
+            del result[newer];result[row] = count
+        elif namespace == 'app-server-processes' and newer is None:
+            require(str(uuid.UUID(key)) == key and type(created) is int and created >= 0 and expires is None,
+                    'Unreviewed Codex process registration key.')
+            registration = json.loads(encoded)
+            require(isinstance(registration, dict) and set(registration) == {'parent', 'child'}, 'Unreviewed Codex process registration.')
+            for kind, process in registration.items():
+                require(isinstance(process, dict) and {'pid', 'pgid', 'startedAt'} <= set(process)
+                        and set(process) <= {'pid', 'pgid', 'startedAt'} | ({'commandFingerprint'} if kind == 'child' else set())
+                        and all(type(process.get(name)) is int and 0 < process[name] <= 9007199254740991 for name in ('pid', 'pgid'))
+                        and isinstance(process['startedAt'], str) and 0 < len(process['startedAt']) <= 64
+                        and ('commandFingerprint' not in process or isinstance(process['commandFingerprint'], str)
+                             and re.fullmatch(r'[a-f0-9]{64}', process['commandFingerprint'])), 'Unreviewed Codex process identity.')
+                process_path = pathlib.Path('/proc') / str(process['pid'])
+                require(not process_path.exists() or (process_path / 'stat').read_text().rsplit(')', 1)[1].split()[0] in {'Z', 'X'},
+                        'A removed Codex process registration still has a live owner.')
+            result[row] = count
+    return result
+
+
 def native_projected_rows(connection, table, replacements=None):
     names = [item[1] for item in connection.execute('pragma table_info("' + table + '")')]
     omitted = NATIVE_RECONNECT_COLUMNS[table]
@@ -1446,6 +1507,8 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 if table == 'config_machine_state':
                     require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
-                    require(rows(before, table) <= native_boot_rows(after, table, boot_replacements), 'Retained native work, history, configuration or permissions changed.')
+                    require(rows(before, table) <= (native_restart_rows(before, after, table, relative, live / relative, boot_replacements)
+                            if to_version == '2026.9.6' else native_boot_rows(after, table, boot_replacements)),
+                            'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
                     require(native_projected_rows(before, table) <= native_projected_rows(after, table, boot_replacements), 'Retained native identity, account content or permissions changed.')

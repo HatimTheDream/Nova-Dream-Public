@@ -1,3 +1,8 @@
+## [1.13.15] — 2026-09-25
+
+- Preserve strict saved-work verification while recognizing regenerated Codex process/cache records and physical file fingerprints after an independent recovery copy.
+- Includes the Assistant cold-start, trusted Codex component, accurate failure reporting, and bounded account-check fixes from 1.13.12–1.13.14.
+
 ## [1.13.14] — 2026-09-25
 
 - Keep account checks from spawning overlapping agent processes or running during updates; preserve sign-in and account routing.
