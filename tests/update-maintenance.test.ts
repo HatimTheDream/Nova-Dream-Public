@@ -164,6 +164,45 @@ test('retained uncertainty can reach native qualification without changing any s
   } finally { store.internalWrite = original; }
 }));
 
+test('unconfirmed direction retains its outcome after its exact original reply completed', () => fixture(async store => {
+  const { operation } = retainedHistory(store);
+  const parent = { ...operation, id: randomUUID(), requestId: randomUUID(), nativeRunId: randomUUID(), state: 'completed' };
+  const direction = { ...operation, steerTarget: parent.id };
+  store.internalWrite('assistant:operation:' + parent.id, parent);
+  store.internalWrite('assistant:operation:' + direction.id, direction);
+  const before = JSON.stringify(store.internalList('assistant:operation:'));
+  assert.deepEqual(updateMaintenanceBlockers(store), []);
+  assert.equal(JSON.stringify(store.internalList('assistant:operation:')), before);
+  for (const patch of [{ state: 'running' }, { state: 'unknown' }, { nativeRunId: null }, { steerTarget: 'another' }, { epoch: randomUUID() }, { conversationId: randomUUID() }, { nativeId: randomUUID() }, { nativeKey: 'other' }, { connectionGeneration: randomUUID() }]) {
+    store.internalWrite('assistant:operation:' + parent.id, { ...parent, ...patch });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'), JSON.stringify(patch));
+  }
+  store.internalWrite('assistant:operation:' + parent.id, parent);
+  store.internalWrite('assistant:operation:' + direction.id, { ...direction, cancelRequested: true });
+  assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'));
+}));
+
+test('ended old meeting keeps a stale stopping turn and its terminal cancelled assignment', () => fixture(async store => {
+  const { meeting } = retainedHistory(store);
+  const attempt = { id: randomUUID(), assignmentId: 'assignment:legacy-plan', epoch: meeting.epoch, state: 'cancelled' };
+  const retained = { ...meeting, next: 0, turns: [{ ...meeting.turns[0], state: 'stopping', attemptId: attempt.id }, ...Array.from({ length: 4 }, (_, i) => ({ planId: 'assignment:unstarted:' + i }))] };
+  store.internalWrite('hub:meeting:' + meeting.id, retained);
+  store.internalWrite('assignments:summary:' + attempt.id, attempt);
+  const before = JSON.stringify(store.internalRead('hub:meeting:' + meeting.id));
+  assert.deepEqual(updateMaintenanceBlockers(store), []);
+  assert.equal(JSON.stringify(store.internalRead('hub:meeting:' + meeting.id)), before);
+  for (const patch of [{ state: 'stopping' }, { state: 'unknown' }, { epoch: store.epoch }]) {
+    store.internalWrite('assignments:summary:' + attempt.id, { ...attempt, ...patch });
+    assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'meetings'), JSON.stringify(patch));
+  }
+  store.internalWrite('assignments:summary:' + attempt.id, attempt);
+  store.internalWrite('assignments:summary:other', { id: 'other', assignmentId: meeting.turns[0].planId, epoch: meeting.epoch, state: 'running' });
+  assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'meetings'));
+  store.internalWrite('assignments:summary:other', { id: 'other', assignmentId: meeting.turns[0].planId, epoch: meeting.epoch, state: 'returned' });
+  store.internalWrite('hub:meeting:' + meeting.id, { ...retained, epoch: store.epoch });
+  assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'meetings'));
+}));
+
 test('active, unbound, cancelling and steering Assistant work still blocks independently of age', () => fixture(async store => {
   const { operation, conversation } = retainedHistory(store), key = 'assistant:operation:' + operation.id;
   for (const patch of [{ state: 'prepared' }, { state: 'dispatching' }, { state: 'accepted' }, { state: 'running' }, { nativeRunId: null }, { nativeId: 'different' }, { connectionGeneration: 'different' }, { epoch: randomUUID() }, { cancelRequested: true }, { steerTarget: 'original' }]) {

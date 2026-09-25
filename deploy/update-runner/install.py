@@ -468,6 +468,11 @@ class Driver:
         agent = self.api('assistant/service')
         require(agent.get('id') == 'openclaw' and agent.get('state') == 'ready' and agent.get('version') == self.active_engine, 'The actual agent is not the expected reviewed version.')
         assistant = self.api('assistant/state')['connection']
+        if assistant.get('state') == 'ready' and assistant.get('modelAuthReady') is not True:
+            # The model catalog establishes authentication readiness lazily.
+            # Observe it under the already verified candidate/native barrier.
+            self.api('assistant/models')
+            assistant = self.api('assistant/state')['connection']
         require(assistant.get('state') == 'ready' and assistant.get('modelAuthReady') is True
                 and 'operator.write' in assistant.get('grantedScopes', []), 'Assistant access is not ready.')
         accounts = self.api('accounts')['accounts']

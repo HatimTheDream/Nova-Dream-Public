@@ -1,3 +1,8 @@
+## [1.13.2] — 2026-09-24
+
+- Allow software updates after historical interrupted steering and ended meetings when their exact related work has finished. Preserve those records and their original outcomes; active, uncertain or mismatched related work still blocks installation.
+- Refresh model availability after reconnecting so update verification can finish without opening Assistant manually.
+
 ## [1.13.1] — 2026-09-24
 
 - Check OpenClaw releases separately and show the installed and available versions. Keep a single compact action: Update Nova Dream, Update OpenClaw, or Update all when both change.

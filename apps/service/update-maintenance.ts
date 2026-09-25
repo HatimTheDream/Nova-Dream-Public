@@ -26,21 +26,29 @@ const terminalOperation = (state: unknown) => ['completed', 'failed', 'cancelled
 // saved record again. They do not establish its outcome or native idleness.
 // NativeUpdateLease must still hold the process-wide native suspension and
 // qualify its durable startup journals before the root updater can activate.
-function retainedAssistant(operation: Record<string, any>, conversations: Record<string, any>[], epoch: string) {
+function retainedAssistant(operation: Record<string, any>, operations: Record<string, any>[], conversations: Record<string, any>[], epoch: string) {
   const conversation = conversations.find(row => row.id === operation.conversationId);
+  const target = operation.steerTarget ? operations.find(row => row.id === operation.steerTarget) : undefined;
+  // Direction can remain unconfirmed after its original reply has finished.
+  // Retain both outcomes; only that exact terminal, non-steering parent qualifies.
+  const retainedDirection = !operation.steerTarget || text(operation.steerTarget) && target
+    && terminalOperation(target.state) && !target.steerTarget && text(target.nativeRunId)
+    && ['epoch', 'conversationId', 'nativeId', 'nativeKey', 'connectionGeneration'].every(key => target[key] === operation[key]);
   return operation.state === 'unknown' && operation.epoch === epoch
     && ['id', 'requestId', 'conversationId', 'nativeKey', 'nativeId', 'nativeRunId', 'connectionGeneration'].every(key => text(operation[key]))
-    && !operation.cancelRequested && !operation.steerTarget
+    && !operation.cancelRequested && retainedDirection
     && conversation?.state === 'ready' && !conversation.pendingSettings && !conversation.pendingResume
     && conversation.nativeId === operation.nativeId && conversation.nativeKey === operation.nativeKey
     && conversation.connectionGeneration === operation.connectionGeneration;
 }
 function retainedMeeting(meeting: Record<string, any>, assignments: Record<string, any>[], epoch: string) {
   // HubMeetings.advance only selects the current epoch. An ended old meeting
-  // with no retained assignment cannot restart its uncertain last speaker.
+  // whose retained assignments are terminal cannot restart its last speaker.
+  // Legacy turns can keep a prior plan ID; their exact attempt ID still binds.
   return text(meeting.epoch) && meeting.epoch !== epoch && meeting.state === 'ended' && Array.isArray(meeting.turns)
     && meeting.turns.every((turn: any) => turn && text(turn.planId)
-      && !assignments.some(attempt => attempt.assignmentId === turn.planId || text(turn.attemptId) && attempt.id === turn.attemptId));
+      && assignments.filter(attempt => attempt.assignmentId === turn.planId || text(turn.attemptId) && attempt.id === turn.attemptId)
+        .every(attempt => attempt.epoch === meeting.epoch && ['returned', 'failed', 'cancelled'].includes(attempt.state)));
 }
 function retainedMailDraft(head: Record<string, any>, epoch: string) {
   // MailDelivery skips older epochs at construction and owned() rejects them.
@@ -60,8 +68,8 @@ export function updateMaintenanceBlockers(store: Store, additional: Record<strin
   const states = (prefix: string, kind: string, terminal: string[], select = (row: any) => row) => {
     for (const row of list(prefix)) { const value = select(row); if (!value || typeof value.state !== 'string' || !terminal.includes(value.state)) add(kind); }
   };
-  const conversations = list('assistant:conversation:'), assignments = list('assignments:summary:');
-  for (const operation of list('assistant:operation:')) if (!terminalOperation(operation.state) && !retainedAssistant(operation, conversations, store.epoch)) add('assistant');
+  const conversations = list('assistant:conversation:'), assignments = list('assignments:summary:'), operations = list('assistant:operation:');
+  for (const operation of operations) if (!terminalOperation(operation.state) && !retainedAssistant(operation, operations, conversations, store.epoch)) add('assistant');
   for (const conversation of conversations) if (['creating', 'unknown'].includes(conversation.state) || conversation.pendingSettings || conversation.pendingResume) add('assistant-context');
   states('assistant:removal:', 'assistant-context', ['completed', 'rejected']);
   // Keep future autonomous dispatch sources out of a restart, even if their

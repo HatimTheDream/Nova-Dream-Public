@@ -367,6 +367,44 @@ class RunnerTests(unittest.TestCase):
         responses['assistant/service']['version'] = '2026.9.6'
         instance.acceptance('a' * 64, '1.13.0')
 
+    def test_acceptance_reads_lazy_model_catalog_without_weakening_authentication(self):
+        for authenticated in [True, False]:
+            with self.subTest(authenticated=authenticated):
+                instance = driver.Driver(self.root / 'request.json')
+                instance.active_engine = '2026.9.6'
+                instance.job_id, instance.client_candidate = 'job', 'a' * 64
+                health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.2', 'schemaVersion': 55, 'apiVersion': 1}
+                guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
+                connection = {'state': 'ready', 'modelAuthReady': False, 'grantedScopes': ['operator.write']}
+                responses = {'health': health, 'software-update/acceptance': guard,
+                             'assistant/service': {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.6'},
+                             'assistant/state': {'connection': connection}, 'accounts': {'accounts': []}}
+                calls = []
+                def api(path, session=False):
+                    self.assertFalse(session, 'Catalog refresh must be a read.')
+                    calls.append(path)
+                    if path == 'assistant/models':
+                        connection['modelAuthReady'] = authenticated
+                        return {'models': []}
+                    return responses[path]
+                instance.api = api
+                instance.controller_hold = lambda: calls.append('controller-hold')
+                if authenticated:
+                    self.assertEqual(instance.acceptance('a' * 64, '1.13.2')['epoch'], 'epoch')
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Assistant access is not ready'):
+                        instance.acceptance('a' * 64, '1.13.2')
+                self.assertEqual(calls[:7], ['health', 'software-update/acceptance', 'controller-hold', 'assistant/service', 'assistant/state', 'assistant/models', 'assistant/state'])
+                self.assertEqual(calls.count('assistant/models'), 1)
+                for change in [('guard', 'nativeSuspended', False), ('agent', 'version', 'unreviewed')]:
+                    row = guard if change[0] == 'guard' else responses['assistant/service']
+                    original, row[change[1]] = row[change[1]], change[2]
+                    calls.clear()
+                    with self.assertRaises(RuntimeError):
+                        instance.acceptance('a' * 64, '1.13.2')
+                    self.assertNotIn('assistant/models', calls)
+                    row[change[1]] = original
+
     def runtime_archive(self, additional=()):
         archive = self.root / 'runtime.tgz'
         entries = [('node/bin/node', b'node'), ('node_modules/openclaw/package.json', b'{}'),
