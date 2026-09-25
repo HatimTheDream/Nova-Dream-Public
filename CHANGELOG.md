@@ -1,3 +1,7 @@
+## [1.13.3] — 2026-09-24
+
+- Wait for brief account checks to settle during update verification, including before installation and when confirming that a stopped attempt changed nothing. Keep the existing timeout, saved-account checks and maintenance protection.
+
 ## [1.13.2] — 2026-09-24
 
 - Allow software updates after historical interrupted steering and ended meetings when their exact related work has finished. Preserve those records and their original outcomes; active, uncertain or mismatched related work still blocks installation.

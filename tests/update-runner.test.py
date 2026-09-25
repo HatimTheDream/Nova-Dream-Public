@@ -256,8 +256,8 @@ class RunnerTests(unittest.TestCase):
         instance.target_id, instance.prior_id = 'b' * 64, 'a' * 64
         instance.prior = self.root / 'prior'
         instance.current = types.SimpleNamespace(resolve=lambda strict: instance.prior)
-        instance.release = {'compatibility': {'fromNovaVersion': '1.12.11'}}
-        instance.acceptance = lambda *args: {'health': {'status': 'ready'}}
+        instance.release = {'compatibility': {'fromNovaVersion': '1.12.11'}, 'recovery': {'readinessTimeoutSeconds': 3}}
+        instance.acceptance = lambda *args: {'health': {'status': 'ready'}, 'accounts': [], 'epoch': 'saved-epoch'}
         instance.verify_configuration = lambda: None
         return instance
 
@@ -281,7 +281,7 @@ class RunnerTests(unittest.TestCase):
                 instance.result('unchanged')
         instance = self.instance()
         instance.acceptance = lambda *args: (_ for _ in ()).throw(RuntimeError('unknown health'))
-        with patch.object(driver, 'candidate'), self.assertRaises(RuntimeError):
+        with patch.object(driver, 'candidate'), patch.object(driver.time, 'monotonic', side_effect=[0, 1, 4]), patch.object(driver.time, 'sleep'), self.assertRaises(RuntimeError):
             instance.result('unchanged')
         self.assertFalse((self.root / 'result.json').exists())
 
@@ -538,6 +538,75 @@ class RunnerTests(unittest.TestCase):
             after.execute('update transcript_events set seq=2')
             after.commit()
             self.assertNotEqual(recovery.transcript_hashes(before_path, node), recovery.transcript_hashes(after_path, node))
+
+    def test_initial_idle_wait_allows_transient_account_activity_but_never_a_persistent_blocker(self):
+        class AfterInitialAcceptance(Exception):
+            pass
+        for perpetual in [False, True]:
+            with self.subTest(perpetual=perpetual):
+                instance = self.instance()
+                calls, stages, clock = [], [], [0]
+                instance.validate = lambda: None
+                def acceptance(*args):
+                    calls.append(args)
+                    if perpetual or len(calls) == 1:
+                        raise RuntimeError('Live work is not verified idle.')
+                    return {'health': {'status': 'ready'}, 'accounts': [], 'epoch': 'saved-epoch'}
+                def stage(value):
+                    stages.append(value)
+                    raise AfterInitialAcceptance()
+                instance.acceptance, instance.stage = acceptance, stage
+                instance.stage_app = lambda: self.fail('Initial readiness must precede staging.')
+                instance.service = instance.switch = lambda *_: self.fail('No service or pointer change is allowed.')
+                with patch.object(driver.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(driver.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                    with self.assertRaises(RuntimeError if perpetual else AfterInitialAcceptance):
+                        instance.run()
+                self.assertEqual(stages, [] if perpetual else ['preparing'])
+                self.assertEqual(len(calls), 3 if perpetual else 2)
+                self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
+
+    def test_pre_stop_idle_wait_keeps_guard_and_retained_accounts_and_epoch(self):
+        for changed in [None, 'accounts', 'epoch']:
+            with self.subTest(changed=changed):
+                instance = self.instance()
+                instance.release['manifestExpiresAt'] = 9999999999999
+                instance.recovery, instance.restore = self.root / 'recovery', self.root / 'restore'
+                instance.validate = lambda: None
+                calls, actions, clock = [], [], [0]
+                accepted = {'health': {'status': 'ready'}, 'accounts': [('saved', 'google')], 'epoch': 'saved-epoch'}
+                def acceptance(*args):
+                    calls.append(args)
+                    if len(calls) == 2:
+                        raise RuntimeError('Live work is not verified idle.')
+                    if changed and len(calls) > 1:
+                        return {**accepted, changed: [] if changed == 'accounts' else 'different-epoch'}
+                    return accepted
+                instance.acceptance = acceptance
+                instance.stage = lambda value: None
+                instance.stage_app = lambda: actions.append('stage-app')
+                instance.result = lambda outcome: actions.append(outcome)
+                instance.verify_configuration = lambda: (_ for _ in ()).throw(RuntimeError('Stop synthetic check before service mutation.'))
+                instance.service = instance.switch = lambda *_: self.fail('Synthetic check must never stop or switch.')
+                with patch.object(driver.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(driver.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                    instance.run()
+                self.assertEqual(actions, ['stage-app', 'unchanged'])
+                self.assertEqual(len(calls), 4 if changed else 3)
+                self.assertEqual(instance.recovery.exists(), changed is None)
+                if instance.recovery.exists():instance.recovery.rmdir()
+                self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
+
+    def test_unchanged_receipt_waits_for_transient_account_activity_without_relaxing_mutation_checks(self):
+        instance = self.instance()
+        calls, clock = [], [0]
+        def acceptance(*args):
+            calls.append(args)
+            if len(calls) == 1:raise RuntimeError('Live work is not verified idle.')
+            return {'health': {'status': 'ready'}, 'accounts': [], 'epoch': 'saved-epoch'}
+        instance.acceptance = acceptance
+        with patch.object(driver, 'candidate'), patch.object(driver, 'sync_dir'), patch.object(recovery, 'sync_dir'), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(driver.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(driver.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            instance.result('unchanged')
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(json.loads((self.root / 'result.json').read_bytes())['unchangedVerified'])
 
     def test_driver_preflight_failure_does_not_stop_and_stop_failure_never_claims_unchanged(self):
         def setup(fail):

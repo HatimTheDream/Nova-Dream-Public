@@ -697,7 +697,7 @@ class Driver:
             require(not self.stop_attempted and not self.switch_attempted and not self.switched and not self.workspace_mutated, 'An unchanged receipt cannot follow a mutation.')
             require(self.current.resolve(strict=True) == self.prior, 'The installed pointer changed.')
             candidate(self.prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
-            self.acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+            self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
             self.verify_configuration()
             payload.update(unchangedVerified=True, healthVerified=True,
                            reasonCode=getattr(self, 'preflight_reason', 'preflight_failed'),
@@ -755,13 +755,13 @@ class Driver:
 
     def run(self):
         self.validate()
-        self.before = self.acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+        self.before = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
         self.stage('preparing')
         try:
             self.stage_app()
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             require(not self.recovery.exists() and not self.restore.exists() and not self.restore.is_symlink(), 'A previous recovery attempt must be retained.')
-            self.acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+            self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
             self.recovery.mkdir(mode=0o700)
             self.verify_configuration()
             # A failed stop is an uncertain mutation, so it can never produce unchanged.
