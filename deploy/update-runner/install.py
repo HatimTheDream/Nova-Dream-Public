@@ -4,6 +4,7 @@ No operation runs on import. This driver deliberately supports unchanged
 app dependencies and schema55 only. Optional runtime closures are immutable,
 offline packages; no package manager, download or release selection runs here.
 """
+import ast
 import contextlib
 import fcntl
 import hashlib
@@ -576,7 +577,7 @@ class Driver:
         finally:
             client.close()
 
-    def acceptance(self, expected, version, require_idle=True):
+    def acceptance(self, expected, version, require_idle=True, *, restored_prior=False):
         health = self.api('health')
         require(health.get('status') == 'ready' and health.get('candidateId') == expected and health.get('version') == version
                 and health.get('schemaVersion') == 55 and health.get('apiVersion') == 1, 'Expected live candidate is not ready.')
@@ -598,7 +599,16 @@ class Driver:
         # resumes this exact lease and proves real model access on that child.
         require(assistant.get('state') == 'ready' and 'operator.read' in assistant.get('grantedScopes', [])
                 and 'operator.write' in assistant.get('grantedScopes', []), 'Assistant access is not authenticated.')
-        require(assistant.get('modelAuthReady') is True or guard.get('resumeReadinessRequired') is True,
+        # An older restored app has no post-resume catalog gate. Its cold
+        # catalog cannot be read under native suspension. Only the paired
+        # restoration path may accept its real authenticated, idle connection;
+        # saved/native/config verification still precedes the restored receipt.
+        restored_cold = (restored_prior and require_idle and self.before is not None
+                         and self.stop_attempted and self.workspace_mutated
+                         and expected == self.prior_id and version == self.release['compatibility']['fromNovaVersion']
+                         and self.active_engine == self.from_engine and self.current.resolve(strict=True) == self.prior
+                         and self.launched is not None and self.launched['candidateId'] == self.prior_id)
+        require(assistant.get('modelAuthReady') is True or guard.get('resumeReadinessRequired') is True or restored_cold,
                 'This installed app cannot verify cold model access after releasing the update hold.')
         accounts = self.api('accounts')['accounts']
         require(all(account.get('state') in {'connected', 'reconnect', 'disconnected'} for account in accounts), 'Account state is unsettled.')
@@ -786,11 +796,11 @@ class Driver:
         os.replace(pointer, self.current)
         sync_dir(self.current.parent)
 
-    def wait_acceptance(self, expected, version):
+    def wait_acceptance(self, expected, version, *, restored_prior=False):
         deadline = time.monotonic() + self.release['recovery']['readinessTimeoutSeconds']
         while time.monotonic() < deadline:
             try:
-                accepted = self.acceptance(expected, version)
+                accepted = self.acceptance(expected, version, restored_prior=True) if restored_prior else self.acceptance(expected, version)
                 require(self.before is None or accepted['accounts'] == self.before['accounts'], 'Retained account connections changed.')
                 require(self.before is None or accepted['epoch'] == self.before['epoch'], 'The selected workspace changed.')
                 return accepted
@@ -867,7 +877,7 @@ class Driver:
         self.stage('restarting')
         self.service('start')
         self.stage('checking')
-        accepted = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+        accepted = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'], restored_prior=True)
         saved_state(self.recovery / 'workspace', self.data, restored=True)
         self.retained_native()
         self.verify_configuration()
@@ -877,6 +887,28 @@ class Driver:
         os.replace(latest, self.recovery_root / 'latest-update.json')
         sync_dir(self.recovery_root)
         self.result('restored')
+
+    def record_failure(self, failure):
+        # Preserve the original cause before recovery. Only literal guard
+        # messages in this verified driver pair may enter the private receipt;
+        # subprocess output, dynamic exception text and commands never do.
+        with contextlib.suppress(Exception):
+            reason = 'The update failed before acceptance.'
+            if type(failure) is RuntimeError:
+                messages = set()
+                with contextlib.suppress(Exception):
+                    for name in ('install.py', 'recovery.py'):
+                        source = self.bundle / name
+                        require(source.stat().st_size <= 512 * 1024, 'Failure diagnostic source exceeded its bound.')
+                        for node in ast.walk(ast.parse(source.read_bytes())):
+                            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                                continue
+                            index = 1 if node.func.id == 'require' else 0 if node.func.id == 'RuntimeError' else None
+                            if index is not None and len(node.args) > index and isinstance(node.args[index], ast.Constant) and isinstance(node.args[index].value, str):
+                                messages.add(node.args[index].value)
+                if str(failure) in messages:
+                    reason = str(failure)
+            write_json(self.output / 'failure.json', {'errorType': type(failure).__name__, 'reason': reason})
 
     def run(self):
         self.validate()
@@ -927,6 +959,7 @@ class Driver:
             sync_dir(self.recovery_root)
             self.result('completed')
         except BaseException as failure:
+            self.record_failure(failure)
             if self.result_publication_started:
                 raise
             if self.switch_attempted:

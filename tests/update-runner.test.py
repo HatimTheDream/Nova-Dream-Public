@@ -465,8 +465,8 @@ class RunnerTests(unittest.TestCase):
                   'tools': {'web': {'search': {'provider': 'retained', 'apiKey': 'synthetic-original'}}}}
         (before / config_relative).write_text(json.dumps(config))
         fingerprint = '\n'.join(['2026.9.2', '3', '2026-09-05T15:22:41.651Z', 'a' * 43, 'b' * 43, 'c' * 64])
-        observation = {'hash': recovery.digest(before / config_relative), 'ctimeMs': 1, 'mtimeMs': 1, 'ino': '1',
-                       'observedAt': '2026-01-01T00:00:00Z', 'permissions': 'retained', 'unknownField': {'keep': True}}
+        observation = {'hash': recovery.digest(before / config_relative), 'bytes': (before / config_relative).stat().st_size, 'ctimeMs': 1, 'mtimeMs': 1, 'ino': '1',
+                       'observedAt': '2026-01-01T00:00:00Z', 'mode': 0o600, 'gatewayMode': 'local', 'permissions': 'retained', 'unknownField': {'keep': True}}
         with contextlib.closing(sqlite3.connect(before / relative)) as connection, connection:
             connection.executescript('''pragma user_version=15;
                 create table schema_meta(meta_key text primary key,role text,schema_version integer,app_version text,created_at integer,updated_at integer);
@@ -477,10 +477,11 @@ class RunnerTests(unittest.TestCase):
             connection.executemany('insert into schema_meta values(?,\'global\',3,?,1,1)', [(key, fingerprint) for key in ('startup-migrations', 'state-migrations')])
             connection.execute('insert into config_health_entries values(?,?,?,null,1)', (str(live / config_relative), json.dumps(observation), json.dumps(observation)))
         shutil.copytree(before, live)
-        config['browser']['extraArgs'][0] = '--proxy-server=http://127.0.0.1:54321'
+        config['browser']['extraArgs'][0] = '--proxy-server=http://127.0.0.1:4321'
         config['plugins']['entries']['edition3-workspace']['config']['token'] = 'd' * 64
         (live / config_relative).write_text(json.dumps(config))
-        updated = {**observation, 'hash': recovery.digest(live / config_relative), 'ctimeMs': 2, 'mtimeMs': 2, 'ino': '2', 'observedAt': '2026-01-02T00:00:00Z'}
+        updated = {**observation, 'hash': recovery.digest(live / config_relative), 'bytes': (live / config_relative).stat().st_size, 'ctimeMs': 2, 'mtimeMs': 2, 'ino': '2', 'observedAt': '2026-01-02T00:00:00Z'}
+        self.assertNotEqual(observation['bytes'], updated['bytes'], 'The permitted proxy port changes the exact config byte count.')
         current_fingerprint = '\n'.join(fingerprint.split('\n')[:3] + ['d' * 43, 'e' * 43, 'f' * 64])
         with contextlib.closing(sqlite3.connect(live / relative)) as connection, connection:
             connection.execute("update schema_meta set app_version=?,updated_at=2 where meta_key in ('startup-migrations','state-migrations')", (current_fingerprint,))
@@ -493,6 +494,10 @@ class RunnerTests(unittest.TestCase):
             ("update schema_meta set role='other-owner' where meta_key='state-migrations'", ()),
             ("update user_profiles set name='changed account'", ()),
             ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'hash': '0' * 64}),)),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'bytes': updated['bytes'] + 1}),)),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'bytes': True}),)),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'mode': 0o644}),)),
+            ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'gatewayMode': 'remote'}),)),
             ('update config_health_entries set last_known_good_json=?', (json.dumps({**updated, 'unknownField': {'keep': False}}),)),
             ("update config_health_entries set last_observed_suspicious_signature='changed'", ()),
         ]:
@@ -747,6 +752,63 @@ class RunnerTests(unittest.TestCase):
                         instance.acceptance('a' * 64, '1.13.2')
                     self.assertNotIn('assistant/models', calls)
                     row[change[1]] = original
+
+    def test_cold_legacy_readiness_is_accepted_only_for_this_runners_restored_prior_pair(self):
+        instance = self.instance()
+        del instance.acceptance
+        instance.release['compatibility']['fromNovaVersion'] = '1.13.2'
+        instance.client_candidate = instance.prior_id
+        instance.before = {'accounts': [], 'epoch': 'saved-epoch'}
+        instance.stop_attempted = instance.workspace_mutated = True
+        instance.launched = {'candidateId': instance.prior_id, 'notBeforeTicks': 100}
+        connection = {'state': 'ready', 'modelAuthReady': False, 'grantedScopes': ['operator.read', 'operator.write']}
+        guard = {'candidateId': instance.prior_id, 'heldFor': instance.job_id, 'maintenanceHeld': True,
+                 'nativeSuspended': True, 'blockers': [], 'epoch': 'saved-epoch'}
+        health = {'status': 'ready', 'candidateId': instance.prior_id, 'version': '1.13.2', 'schemaVersion': 55, 'apiVersion': 1}
+        agent = {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.2'}
+        responses = {'health': health, 'software-update/acceptance': guard, 'assistant/service': agent,
+                     'assistant/state': {'connection': connection}, 'accounts': {'accounts': []}}
+        calls = []
+        def api(path, session=False):
+            calls.append(path)
+            self.assertNotEqual(path, 'assistant/models', 'Cold native catalog remains inaccessible while suspended.')
+            return responses[path]
+        instance.api = api
+        instance.controller_hold = lambda: calls.append('controller-hold')
+        # The original preflight and target readiness remain strict, even with
+        # all rollback facts present. Compatibility requires the explicit path.
+        with self.assertRaisesRegex(RuntimeError, 'cannot verify cold model access'):
+            instance.acceptance(instance.prior_id, '1.13.2')
+        self.assertEqual(instance.wait_acceptance(instance.prior_id, '1.13.2', restored_prior=True)['epoch'], 'saved-epoch')
+        self.assertFalse(connection['modelAuthReady'], 'Readiness was not fabricated.')
+        self.assertFalse((self.root / 'result.json').exists(), 'Acceptance alone cannot publish a restored outcome.')
+        for field, changed in [('stop_attempted', False), ('workspace_mutated', False), ('before', None),
+                               ('launched', None), ('launched', {'candidateId': instance.target_id}), ('active_engine', '2026.9.6')]:
+            original = getattr(instance, field); setattr(instance, field, changed)
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                instance.acceptance(instance.prior_id, '1.13.2', restored_prior=True)
+            setattr(instance, field, original)
+        for row, field, changed in [(guard, 'heldFor', 'other-job'), (guard, 'nativeSuspended', False),
+                                    (guard, 'maintenanceHeld', False), (guard, 'blockers', [{'code': 'active-work'}]),
+                                    (connection, 'state', 'disconnected'), (connection, 'grantedScopes', ['operator.read']),
+                                    (connection, 'grantedScopes', ['operator.write']), (agent, 'version', '2026.9.6')]:
+            original = row[field]; row[field] = changed
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                instance.acceptance(instance.prior_id, '1.13.2', restored_prior=True)
+            row[field] = original
+        with self.assertRaises(RuntimeError):
+            instance.acceptance(instance.prior_id, '1.13.2', require_idle=False, restored_prior=True)
+        original_current = instance.current
+        instance.current = types.SimpleNamespace(resolve=lambda strict: self.root / 'other-app')
+        with self.assertRaises(RuntimeError):
+            instance.acceptance(instance.prior_id, '1.13.2', restored_prior=True)
+        instance.current = original_current
+        for row, field, changed in [(guard, 'epoch', 'different-epoch'), (responses['accounts'], 'accounts', [{'id': 'changed', 'provider': 'google', 'state': 'connected', 'scopes': []}])]:
+            original = row[field]; row[field] = changed
+            with patch.object(driver.time, 'monotonic', side_effect=[0, 1, 4]), patch.object(driver.time, 'sleep'), self.assertRaises(RuntimeError):
+                instance.wait_acceptance(instance.prior_id, '1.13.2', restored_prior=True)
+            row[field] = original
+        self.assertIn('controller-hold', calls)
 
     def runtime_archive(self, additional=()):
         archive = self.root / 'runtime.tgz'
@@ -1192,13 +1254,28 @@ class RunnerTests(unittest.TestCase):
         actions = []
         instance.service = lambda action: actions.append(action)
         instance.switch_runtime = lambda: actions.append('select-new-engine-and-node')
-        instance.migrate_runtime = lambda: (_ for _ in ()).throw(RuntimeError('migration rejected'))
+        failure_reason = 'Retained native config observation content changed.'
+        instance.migrate_runtime = lambda: (_ for _ in ()).throw(RuntimeError(failure_reason))
         instance.switch = lambda path: actions.append('app-pointer')
         instance.restore_prior = lambda: actions.append('restore-engine-node-and-workspace')
-        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
+        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
             instance.run()
         self.assertEqual(actions, ['stop', 'select-new-engine-and-node', 'restore-engine-node-and-workspace'])
         self.assertTrue(instance.switch_attempted)
+        self.assertEqual(json.loads((self.root / 'failure.json').read_bytes()), {'errorType': 'RuntimeError', 'reason': failure_reason})
+
+    def test_failure_receipt_never_exports_dynamic_error_text_or_prevents_recovery(self):
+        instance = self.instance()
+        path = self.root / 'failure.json'
+        for error in (RuntimeError('Private credential: synthetic-secret'), ValueError('Private command: synthetic-secret')):
+            with patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
+                instance.record_failure(error)
+            receipt = json.loads(path.read_bytes())
+            self.assertEqual(receipt, {'errorType': type(error).__name__, 'reason': 'The update failed before acceptance.'})
+            path.unlink()
+        with patch.object(driver, 'write_json', side_effect=OSError('No receipt space')):
+            instance.record_failure(RuntimeError('Expected live candidate is not ready.'))
+        self.assertFalse(path.exists())
 
     @unittest.skipUnless(sys.platform == 'linux' and pathlib.Path('/usr/bin/rsync').exists(), 'Requires Linux rsync/cp metadata support; no host service is used.')
     def test_linux_closed_snapshot_and_independent_restore_preserve_sparse_links_and_xattrs(self):

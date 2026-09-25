@@ -1,3 +1,8 @@
+## [1.13.6] — 2026-09-24
+
+- Complete combined app and agent updates without mistaking verified configuration-size changes for lost saved data.
+- Verify restored older versions without requiring model access while the agent is paused, and preserve the original failure reason for diagnosis.
+
 ## [1.13.5] — 2026-09-24
 
 - Keep Assistant startup, transcript refresh and automatic planning paused during software updates. Resume reconciliation after the update without replaying messages or rewriting already interrupted outcomes.

@@ -758,12 +758,13 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
         return None
-    normalized, hashes = [], []
+    normalized, hashes, byte_sizes = [], [], []
     for path in paths:
         require(path.resolve(strict=True) == path, 'The selected native configuration was redirected.')
         value = bounded_json(path, 4 * 1024 * 1024)
         require(isinstance(value, dict), 'Unexpected selected native configuration.')
         hashes.append(digest(path))
+        byte_sizes.append(path.stat().st_size)
         # Nova owns this per-process proxy port and module admission token. Keep
         # every other safety argument, endpoint, credential and setting exact.
         arguments = value.get('browser', {}).get('extraArgs')
@@ -809,7 +810,7 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
                     value.pop('agents', None)
         normalized.append(value)
     require(normalized[0] == normalized[1], 'Retained native configuration or account settings changed.')
-    return {'path': str(paths[1]), 'hashes': hashes}
+    return {'path': str(paths[1]), 'hashes': hashes, 'byteSizes': byte_sizes}
 
 
 def native_boot_replacements(before, after, tables, configuration, from_version, to_version, node):
@@ -855,15 +856,17 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
                     if value.get(field) == previous.get(field):
                         continue
                     observations = []
-                    for encoded, config_hash in zip((previous.get(field), value.get(field)), configuration['hashes']):
+                    for encoded, config_hash, config_bytes in zip((previous.get(field), value.get(field)), configuration['hashes'], configuration['byteSizes']):
                         require(isinstance(encoded, str) and len(encoded) <= 1024 * 1024, 'Unexpected native config observation.')
                         observation = json.loads(encoded)
                         require(isinstance(observation, dict) and observation.get('hash') == config_hash, 'Native config observation does not identify the retained configuration.')
+                        require(type(observation.get('bytes')) is int and observation['bytes'] == config_bytes,
+                                'Native config observation size does not match the retained configuration.')
                         require(all(type(observation.get(name)) in (int, float) and math.isfinite(observation[name]) and observation[name] >= 0 for name in ('ctimeMs', 'mtimeMs'))
                                 and isinstance(observation.get('ino'), str) and re.fullmatch(r'[0-9]+', observation['ino'])
                                 and isinstance(observation.get('observedAt'), str) and re.fullmatch(r'[0-9]{4}-[0-9TZ:.+-]+', observation['observedAt']),
                                 'Native config observation types changed.')
-                        for name in ('ctimeMs', 'ino', 'mtimeMs', 'observedAt', 'hash'):
+                        for name in ('ctimeMs', 'ino', 'mtimeMs', 'observedAt', 'hash', 'bytes'):
                             require(name in observation, 'Native config observation format changed.')
                             observation.pop(name)
                         observations.append(observation)
