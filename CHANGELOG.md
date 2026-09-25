@@ -1,3 +1,8 @@
+## [1.13.13] — 2026-09-25
+
+- Check full backup and recovery capacity after the agent has stopped and released temporary plugin copies. Keep staging reserves and restart the unchanged app if closed-state capacity is insufficient.
+- Includes the Assistant cold-start, accurate failure reporting and trusted Codex component fixes from 1.13.12.
+
 ## [1.13.12] — 2026-09-25
 
 - Keep Assistant preparation waiting through a cold agent startup, without retrying message sends or weakening duplicate-send protection.

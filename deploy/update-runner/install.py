@@ -26,7 +26,7 @@ import urllib.request
 import uuid
 
 sys.dont_write_bytecode = True
-from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, prepare_independent,
+from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, inode_ids, prepare_independent,
                       require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json)
 
 SOCKET = '/run/nova-update/control.sock'
@@ -249,12 +249,29 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise RuntimeError('Unexpected redirect from local acceptance.')
 
 
+def staging_capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes):
+    """Validate live topology while budgeting only allocations before stop."""
+    require(inode_ids(source_inodes).isdisjoint(inode_ids(baseline_inodes)), 'Live files already share recovery inodes.')
+    for relative, entry in source.items():
+        old = baseline.get(relative)
+        if entry['kind'] == 'file' and old and old.get('kind') == 'file':
+            comparable = lambda value: {key: item for key, item in value.items() if key != 'hardlink_group'}
+            require(comparable(entry) != comparable(old) or entry.get('hardlink_group') == old.get('hardlink_group'),
+                    'Changed hardlink topology requires a separately reviewed copy.')
+    required = candidate_bytes + RESERVE + 2 * ALLOWANCE
+    if free < required:
+        raise InsufficientStorage('Candidate staging and operating reserve do not fit.')
+    return {'phase': 'staging', 'freeBytes': free, 'candidateBytes': candidate_bytes,
+            'reserveBytes': RESERVE, 'allowanceBytes': 2 * ALLOWANCE, 'requiredFreeBytes': required}
+
+
 class Driver:
     def __init__(self, request_path):
         self.request_path = request_path
         self.output = request_path.parent
         self.bundle = pathlib.Path(__file__).resolve().parent
         self.stop_attempted = False
+        self.closed_capacity_restarted = False
         self.switched = False
         self.switch_attempted = False
         self.workspace_mutated = False
@@ -756,15 +773,17 @@ class Driver:
         source, source_inodes = inventory(self.data)
         baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
+        self.migration_storage_required = 0
         if self.runtime is not None:
             required += self.runtime_storage_required()
             # Native23 rebuilds payload tables in SQLite transactions. Preserve
             # rollback capacity separately from both replacement tables and WAL.
             native_bytes = sum((self.data / path).stat().st_size + sum(side.stat().st_size for side in
                                ((self.data / path).with_name(path.name + '-wal'),) if side.exists()) for path in native_paths)
-            required += 2 * native_bytes
+            self.migration_storage_required = 2 * native_bytes
+            required += self.migration_storage_required
             require(self.runtime_root.stat().st_dev == self.recovery_root.stat().st_dev, 'Runtime and recovery capacity require the same reviewed filesystem.')
-        plan = capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required)
+        plan = staging_capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required)
         require(self.releases.stat().st_dev == self.recovery_root.stat().st_dev, 'Candidate and recovery capacity need a separately reviewed filesystem plan.')
         write_json(self.output / 'capacity.json', plan)
         self.stage_runtime()
@@ -888,7 +907,7 @@ class Driver:
     def result(self, outcome):
         payload = {'format': 1, 'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id, 'outcome': outcome}
         if outcome == 'unchanged':
-            require(not self.stop_attempted and not self.switch_attempted and not self.switched and not self.workspace_mutated, 'An unchanged receipt cannot follow a mutation.')
+            require((not self.stop_attempted or self.closed_capacity_restarted) and not self.switch_attempted and not self.switched and not self.workspace_mutated, 'An unchanged receipt cannot follow a mutation.')
             require(self.current.resolve(strict=True) == self.prior, 'The installed pointer changed.')
             candidate(self.prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
             self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
@@ -970,6 +989,7 @@ class Driver:
         self.validate()
         self.before = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
         self.stage('preparing')
+        closed_capacity_rejected = False
         try:
             self.stage_app()
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
@@ -980,6 +1000,22 @@ class Driver:
             # A failed stop is an uncertain mutation, so it can never produce unchanged.
             self.stop_attempted = True
             self.service('stop')
+            self.require_stopped()
+            # The running native process owns disposable source captures.
+            # Full snapshot/restore capacity is authoritative only after exit
+            # has released them; no application or runtime switch occurred.
+            source, source_inodes = inventory(self.data)
+            baseline, baseline_inodes = inventory(self.baseline / 'workspace')
+            free = shutil.disk_usage(self.recovery_root).free
+            try:
+                plan = capacity(source, source_inodes, baseline, baseline_inodes, free, 0)
+                migration_bytes = getattr(self, 'migration_storage_required', 0)
+                if free < plan['requiredFreeBytes'] + migration_bytes:
+                    raise InsufficientStorage('Closed recovery, independent restore, migration and operating reserve do not fit.')
+            except InsufficientStorage:
+                closed_capacity_rejected = True
+                raise
+            write_json(self.output / 'closed-capacity.json', {**plan, 'nativeMigrationBytes': migration_bytes})
             self.require_stopped()
             snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped)
             saved_state(self.recovery / 'workspace', self.data, restored=True)
@@ -1021,6 +1057,14 @@ class Driver:
                 require(self.current.resolve(strict=True) == self.prior, 'The prior pointer changed unexpectedly.')
                 self.service('start')
                 self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+                if closed_capacity_rejected:
+                    require(not self.switch_attempted and not self.switched and not self.workspace_mutated,
+                            'Closed capacity rejection cannot follow a workspace or version change.')
+                    self.verify_configuration()
+                    self.closed_capacity_restarted = True
+                    self.preflight_reason = 'insufficient_storage'
+                    self.result('unchanged')
+                    return
                 # No paired restoration occurred. Keep the original job held for
                 # review instead of reporting a rollback or an unchanged attempt.
                 raise

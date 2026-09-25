@@ -109,6 +109,84 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             recovery.capacity(source, inodes, old, inodes, minimum, 512)
 
+    def test_live_staging_reserves_allocations_without_charging_regenerable_capture_recovery(self):
+        gb = 1024 ** 3
+        source = {'saved': {'kind': 'file'}, 'capture': {'kind': 'file'}}
+        old = {'saved': {'kind': 'file'}}
+        inodes = {'saved': {'device': 1, 'inode': 1, 'allocated': 4 * gb},
+                  'capture': {'device': 1, 'inode': 2, 'allocated': 3 * gb}}
+        old_inodes = {'saved': {'device': 1, 'inode': 3, 'allocated': 4 * gb}}
+        with self.assertRaises(recovery.InsufficientStorage):
+            recovery.capacity(source, inodes, old, old_inodes, 3 * gb, 32 * 1024 ** 2)
+        plan = driver.staging_capacity(source, inodes, old, old_inodes, 3 * gb, 32 * 1024 ** 2)
+        self.assertEqual(plan['requiredFreeBytes'], 32 * 1024 ** 2 + driver.RESERVE + 2 * driver.ALLOWANCE)
+        with self.assertRaises(recovery.InsufficientStorage):
+            driver.staging_capacity(source, inodes, old, old_inodes, plan['requiredFreeBytes'] - 1, 32 * 1024 ** 2)
+        with self.assertRaises(RuntimeError):
+            driver.staging_capacity(source, inodes, old, inodes, 3 * gb, 0)
+        with self.assertRaises(RuntimeError):
+            driver.staging_capacity({'saved': {'kind': 'file', 'hardlink_group': ['saved', 'other']}},
+                                    inodes, old, old_inodes, 3 * gb, 0)
+
+    def test_closed_capacity_precedes_snapshot_and_failure_restarts_unchanged_prior(self):
+        gb = 1024 ** 3
+        for insufficient in (False, True):
+            with self.subTest(insufficient=insufficient):
+                scope = self.root / str(insufficient);scope.mkdir()
+                instance = self.instance()
+                instance.output = scope
+                instance.data, instance.baseline = scope / 'data', scope / 'baseline'
+                instance.recovery_root = scope
+                instance.recovery, instance.restore = scope / 'recovery', scope / 'restore'
+                instance.target = scope / 'target'
+                instance.release.update(manifestExpiresAt=9999999999999, novaVersion='1.13.13')
+                instance.config_files = []
+                selected, running, free, actions, writes = [instance.prior], [True], [3 * gb], [], {}
+                instance.current = types.SimpleNamespace(resolve=lambda strict: selected[0])
+                instance.validate = instance.stage = lambda *args: None
+                instance.record_failure = lambda error: actions.append('capacity-rejected')
+                instance.controller_hold = lambda: None
+                instance.require_stopped = lambda: self.assertFalse(running[0])
+                saved_bytes = (7 if insufficient else 4) * gb
+                def inventory(path):
+                    if path == instance.baseline / 'workspace':
+                        return {'saved': {'kind': 'file'}}, {'saved': {'device': 1, 'inode': 3, 'allocated': saved_bytes}}
+                    entries = {'saved': {'kind': 'file'}}
+                    inodes = {'saved': {'device': 1, 'inode': 1, 'allocated': saved_bytes}}
+                    if path == instance.data and running[0]:
+                        entries['capture'] = {'kind': 'file'}
+                        inodes['capture'] = {'device': 1, 'inode': 2, 'allocated': 3 * gb}
+                    return entries, inodes
+                def stage_app():
+                    driver.staging_capacity(*inventory(instance.data), *inventory(instance.baseline / 'workspace'), free[0], 32 * 1024 ** 2)
+                    free[0] -= 32 * 1024 ** 2;actions.append('staged')
+                instance.stage_app = stage_app
+                def service(action):
+                    actions.append(action)
+                    if action == 'stop':free[0] += 3 * gb
+                    running[0] = action == 'start'
+                instance.service = service
+                def snapshot(*args):
+                    self.assertFalse(running[0]);self.assertIn(scope / 'closed-capacity.json', writes)
+                    actions.append('snapshot')
+                instance.switch_runtime = instance.migrate_runtime = lambda: None
+                instance.switch = lambda target: selected.__setitem__(0, target)
+                instance.settled_acceptance = lambda *args, **kwargs: {'health': {'ready': True}}
+                with patch.object(driver, 'inventory', side_effect=inventory), patch.object(driver.shutil, 'disk_usage', side_effect=lambda path: types.SimpleNamespace(free=free[0])), patch.object(driver, 'snapshot_closed', side_effect=snapshot), patch.object(driver, 'saved_state'), patch.object(driver, 'write_json', side_effect=lambda path, value: writes.__setitem__(path, value)), patch.object(driver, 'candidate'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
+                    instance.run()
+                receipt = writes[scope / 'result.ready.json']
+                self.assertEqual(receipt['outcome'], 'unchanged' if insufficient else 'completed')
+                if insufficient:
+                    self.assertEqual(actions, ['staged', 'stop', 'capacity-rejected', 'start'])
+                    self.assertFalse(instance.switch_attempted or instance.switched or instance.workspace_mutated)
+                    self.assertEqual(receipt['reasonCode'], 'insufficient_storage')
+                    self.assertNotIn('recoveryVerified', receipt)
+                    self.assertFalse((instance.recovery / 'workspace').exists())
+                else:
+                    self.assertEqual(actions, ['staged', 'stop', 'snapshot', 'start'])
+                    self.assertEqual(writes[scope / 'closed-capacity.json']['candidateBytes'], 0)
+                    self.assertEqual(writes[scope / 'closed-capacity.json']['independentRestoreBytes'], 4 * gb)
+
     def test_saved_sqlite_records_blobs_schemas_and_keys_survive(self):
         before, live = self.root / 'snapshot', self.root / 'live'
         fixture_database(before / 'workspace.sqlite')
@@ -918,14 +996,15 @@ class RunnerTests(unittest.TestCase):
                     self.assertEqual(path, scope)
                     minimum = driver.RESERVE + driver.ALLOWANCE
                     if not running[0]:
-                        free = minimum + independent - int(starts[0] == 1 and failure == 'persistent_growth')
+                        free = minimum + independent + (driver.ALLOWANCE if starts[0] == 0 else 0) - int(starts[0] == 1 and failure == 'persistent_growth')
                     else:
                         # Running scratch uses the restoration allocation, but
                         # must still leave the complete operating minimum.
                         self.assertEqual(starts[0], 2)
                         free = minimum - int(failure == 'operating_space')
                     return types.SimpleNamespace(free=free)
-                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', return_value=({}, {'snapshot': {'allocated': independent}})), patch.object(driver.shutil, 'disk_usage', side_effect=disk_usage), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
+                inventory = lambda path: ({}, {}) if path == instance.baseline / 'workspace' else ({}, {'snapshot': {'device': 1, 'inode': 2, 'allocated': independent}})
+                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', side_effect=inventory), patch.object(driver.shutil, 'disk_usage', side_effect=disk_usage), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
                     instance.run()
                 if failure:
                     self.assertEqual(actions[-2:], ['failure', 'original-paired-restore'])
@@ -1588,7 +1667,7 @@ export const close=async()=>{};
         instance.service = lambda action: actions.append(action)
         instance.switch = lambda path: (_ for _ in ()).throw(RuntimeError('pointer sync uncertain'))
         instance.restore_prior = lambda: actions.append('paired-restore')
-        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
+        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'write_json'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
             instance.run()
         self.assertEqual(actions, ['stop', 'paired-restore'])
         self.assertTrue(instance.switch_attempted)
