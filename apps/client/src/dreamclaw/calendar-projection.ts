@@ -24,7 +24,7 @@ export function projectCalendarEvent(event: CalendarDisplayEvent, state: HostCal
     startTime: event.interval.kind === 'instant' ? clockInZone(event.interval.start, state.range.timezone) : undefined,
     endTime: event.interval.kind === 'instant' ? clockInZone(event.interval.end, state.range.timezone) : undefined,
     notes: [event.notes, event.warning].filter(Boolean).join('\n\n'), location: event.location,
-    category: local?.value.category ?? event.workspaceCategory ?? (event.taskId || event.routineId ? 'work' : 'other'), source: event.contentId ? 'content' : event.taskId || event.routineId ? 'task' : event.sourceId === 'local' ? 'local' : source?.provider ?? 'local',
+    category: local?.value.category ?? event.workspaceCategory ?? (event.taskId || event.routineId ? 'work' : 'other'), source: event.contentId ? 'content' : event.routineId ? 'routines' : event.taskId ? 'task' : event.sourceId === 'local' ? 'local' : source?.provider ?? 'local',
     externalId: event.providerId, sourceAccount: source?.accountId, calendarId: source?.calendarId,
     calendarName: source?.name, sourceUrl: event.webLink,
     sourceRoute: event.contentId ? `/content?item=${encodeURIComponent(event.contentId)}` : event.taskId ? `/tasks?task=${encodeURIComponent(event.taskId)}` : event.routineId ? `/tasks?routine=${encodeURIComponent(event.routineId)}` : undefined,

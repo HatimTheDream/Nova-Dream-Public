@@ -69,7 +69,7 @@ export default function CalendarPage() {
     return counts;
   }, {}), [displayEvents]);
   const visibleSourceOptions = ALL_SOURCES.filter((source) =>
-    ['local', 'google', 'microsoft', 'task', 'content', 'automation'].includes(source) || sourceCounts[source] > 0,
+    ['local', 'google', 'microsoft', 'task', 'routines', 'content', 'automation'].includes(source) || sourceCounts[source] > 0,
   );
   const selectedDayEvents = useMemo(
     () => eventsForDate(displayEvents, toDateStr(selectedDate)),
@@ -194,10 +194,10 @@ export default function CalendarPage() {
               ) : (
                 <div className="dc-calendar-agenda mt-2 space-y-1.5">
                   {selectedDayEvents.map((event) => (
-                    <button key={event.id} type="button" onClick={() => handleEventClick(event)} className="dc-calendar-event-block dc-calendar-agenda-event preserve-case block w-full border border-aegis-border bg-aegis-elevated px-3 py-2 text-start hover:border-aegis-primary/35">
+                    <div key={event.id} className="dc-calendar-event-block dc-calendar-agenda-event preserve-case block w-full border border-aegis-border bg-aegis-elevated px-3 py-2 text-start">
                       <span className="block text-[13px] font-semibold text-aegis-text">{event.title}</span>
                       <span className="block text-[12px] text-aegis-text-dim">{event.allDay || !event.startTime ? 'All day' : `${event.startTime}${event.endTime ? `–${event.endTime}` : ''}`} · {event.source === 'local' ? 'Event' : SOURCE_META[event.source].label}</span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}

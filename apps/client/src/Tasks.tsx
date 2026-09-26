@@ -90,7 +90,8 @@ export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, acti
   const calendar = useTaskCalendar(snapshot, calendarFrom, !trash && (view !== 'Completed' || !!query.trim()));
   const completion = useCalendarCompletion(snapshot, refresh);
   const matchesEvent = (row: CalendarTaskRow) => (project === 'all' || (row.projectId ?? '') === project) && priority === 'all' && (status === 'all' || (completion.value(calendarCompletionTarget(row.event)).done ? status === 'done' : status === 'open')) && (!query.trim() || taskSearch({ title: row.event.title, notes: row.event.notes ?? '', planned: '', due: '', status: 'open' }, query));
-  const calendarRows = calendar.rows.filter(row => matchesEvent(row) && (view !== 'Today' || query.trim() || row.date <= today && row.last >= today));
+  const shownIds = new Set(shown.map(t => t.id));
+  const calendarRows = calendar.rows.filter(row => matchesEvent(row) && !(row.event.taskId && shownIds.has(row.event.taskId)) && (view !== 'Today' || query.trim() || row.date <= today && row.last >= today));
   const dailyIds = new Set((snapshot.taskState?.occurrences ?? []).filter(o => snapshot.routines?.some(r => r.id === o.routineId && cadenceGroup(r.value) === 'Daily')).map(o => o.taskId));
   const showCalendar = async (row: CalendarTaskRow, saved?: CalendarCompletion) => {
     try {
@@ -116,7 +117,8 @@ export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, acti
     const row: CalendarTaskRow = { key: `${record.event.sourceId}:${record.event.id}`, event: { ...record.event, notes: '', location: '', status: 'confirmed' }, date: dates.first, last: dates.last, group: 'One-offs', localId: record.localId, originalDate: record.originalDate, projectId: record.projectId };
     return { record, row };
   }).filter(({ row }) => matchesEvent(row));
-  const renderRoutine = (r: Entity<Routine>) => { const next = nextScheduled(r.value, dayInZone(r.value.timezone, clock)); return <article className="daily-task" key={r.id}><div className="task-row"><span className="task-kind-icon"><RefreshCw size={18}/></span><button className="task-open" title={r.value.title} onClick={() => setRoutine(r)}><strong>{r.value.title}</strong></button><span className="task-inline-note">{r.value.state === 'paused' ? 'Paused' : next ? taskDateLabel(next, today) : 'Finished'}</span></div></article>; };
+  const hiddenCount = Math.max(0, rows.length - limit) + (view === 'Completed' ? Math.max(0, completedEvents.length - limit) : 0);
+  const renderRoutine = (r: Entity<Routine>) => { const next = nextScheduled(r.value, dayInZone(r.value.timezone, clock)); return <article className="daily-task" key={r.id}><div className="task-row"><span className="task-kind-icon"><RefreshCw size={18}/></span><button className="task-open" title={r.value.title} aria-label={`Edit repeating task: ${r.value.title}`} onClick={() => setRoutine(r)}><strong>{r.value.title}</strong></button><span className="task-inline-note">{r.value.state === 'paused' ? 'Paused' : next ? taskDateLabel(next, today) : 'Finished'}</span></div></article>; };
   const group = (title: string, children: ReactNode[], collapsible = false) => children.length || !collapsible ? <section className="task-group" key={title} aria-label={title}>{collapsible ? <details open><summary><ChevronDown size={15}/><h2>{title}</h2><span className="count">{children.length}</span></summary>{children}</details> : <><div className="task-group-heading"><h2>{title}</h2><span className="count">{children.length}</span></div>{children}</>}</section> : null;
   const scheduledEvents = calendarRows.filter(row => row.last >= today && (row.event.interval.kind !== 'instant' || Date.parse(row.event.interval.end) >= clock));
   const seriesSeen = new Set<string>();
@@ -142,7 +144,7 @@ export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, acti
         {cadenceGroups.map(name => group(name, [...routines.filter(r => cadenceGroup(r.value) === name).map(renderRoutine), ...nextEvents.filter(e => e.group === name).map(row => renderEvent(row))], true))}
         {!rows.length && !routines.length && !calendarRows.length && <Empty title="Make room for what's ahead.">Add a scheduled task or a repeating routine.</Empty>}
       </>}
-      {(rows.length > limit || view === 'Completed' && completedEvents.length > limit) && <button className="task-show-more" onClick={() => setLimit(limit + 50)}>Show 50 more · {Math.max(0, rows.length - limit) + (view === 'Completed' ? Math.max(0, completedEvents.length - limit) : 0)} remaining</button>}
+      {hiddenCount > 0 && <button className="task-show-more" onClick={() => setLimit(limit + 50)}>Show {Math.min(50, hiddenCount)} more · {hiddenCount} remaining</button>}
     </section>
     {!trash && view === 'Scheduled' && <div className="task-calendar-range"><span>Calendar dates · {taskDateLabel(calendarFrom, today)}–{taskDateLabel(addDays(calendarFrom, 59), today)}</span><button aria-label="Previous calendar dates" disabled={!calendarOffset} onClick={() => setCalendarOffset(calendarOffset - 1)}>Previous</button><button aria-label="Next calendar dates" onClick={() => setCalendarOffset(calendarOffset + 1)}>Next</button></div>}
     {calendar.state && (calendar.state.eventsLimited || calendar.state.sources.some(s => s.selected && ['stale', 'unavailable'].includes(s.state))) && <p className="metadata">Some calendar dates are still syncing. <button className="text-button" onClick={openCalendar}>Open Calendar</button></p>}

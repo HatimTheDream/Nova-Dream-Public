@@ -273,3 +273,11 @@ test('response controls use a separate temporary authority limited to captured s
     await ordinary.configure('ws://127.0.0.1:59998', 'other'); await assert.rejects(control.request('sessions.patch', params), /original Assistant host/);
   } finally { await control.stop(); await ordinary.stop(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('model display names use the real product label, not internal codenames', async () => {
+  const { modelDisplayName } = await import('../apps/service/gateway.js');
+  assert.equal(modelDisplayName('openai/gpt-5.6-sol'), 'GPT-5.6');
+  assert.equal(modelDisplayName('openai/gpt-5.6-sol', 'Sol'), 'GPT-5.6');
+  assert.equal(modelDisplayName('unknown/model-id'), 'unknown/model-id');
+  assert.equal(modelDisplayName('other/model', 'Friendly Name'), 'Friendly Name');
+});

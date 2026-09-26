@@ -13,6 +13,7 @@ import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts'
 import { dayInZone } from '../../../packages/domain/tasks';
 import { calendarWindowIdentity, preparedCalendarWindow } from './calendar-window';
 import { readLocal, request, saveLocal } from './api';
+import { startPolling } from './polling';
 import CalendarPage from './dreamclaw/pages/Calendar';
 import { CalendarStoreProvider, createCalendarStore } from './dreamclaw/stores/calendarStore';
 import { createCalendarHost } from './dreamclaw/calendar-host';
@@ -75,7 +76,13 @@ function ConnectedCalendar({ snapshot, windowId, previousWindowId, editTask, ope
     })().catch(error=>{if(active)setTargetError(error instanceof Error?error.message:'This Calendar event could not be opened. Retry its saved identity.');});
     return()=>{active=false;controller.abort();};
   },[snapshot.deviceId,snapshot.epoch,windowId,store,targetAttempt]);
-  useEffect(() => { const timer = setInterval(() => { if (!document.hidden && !store.getState().loading) void store.getState().loadMonth(undefined, { background: true }); }, 4000); return () => { clearInterval(timer); void store.getState().cancelMonthLoad(); }; }, [store]);
+  useEffect(() => {
+    const stop = startPolling({
+      read: async () => { if (!store.getState().loading) await store.getState().loadMonth(undefined, { background: true }); },
+      interval: () => 4000,
+    });
+    return () => { stop(); void store.getState().cancelMonthLoad(); };
+  }, [store]);
   return <I18nextProvider i18n={calendarI18n}><CalendarStoreProvider store={store}><div className="dreamclaw-module calendar-module"><CalendarAccountSetup openSettings={openSettings}/>{targetError&&<div className="calendar-target-error" role="alert"><span>{targetError}</span><button onClick={()=>setTargetAttempt(value=>value+1)}>Retry opening event</button></div>}<CalendarPage/></div>{eventTask && <CalendarTaskEditor key={eventTask.row.key} row={eventTask.row} record={snapshot.calendarCompletions?.find(record => record.key === calendarCompletionKey(calendarCompletionTarget(eventTask.row.event)))} snapshot={snapshot} range={eventTask.state.range} generation={eventTask.state.sources.find(source => source.id === eventTask.row.event.sourceId)?.generation} close={() => setEventTask(null)} saved={() => { setEventTask(null); void store.getState().loadMonth(undefined, { background: true }); }} openCalendar={() => { const original = eventTask.original; setEventTask(null); store.getState().host.editor.getState().begin(original); }}/>}<ScopeChoice host={store.getState().host} epoch={snapshot.epoch}/></CalendarStoreProvider></I18nextProvider>;
 }
 function ScopeChoice({ host, epoch }: { host: CalendarHost; epoch: string }) {

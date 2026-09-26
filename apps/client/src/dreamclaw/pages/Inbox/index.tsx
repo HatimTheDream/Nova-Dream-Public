@@ -167,11 +167,14 @@ import {
   summarizeInboxAttachments,
   type InboxAttachmentKind,
 } from '@dreamclaw/services/inbox/attachmentPresentation';
+import { normalizeEmail, extractEmail, parseAddressList, isValidEmailAddress, sanitizeEmailHref, escapeHtml, buildManualSignatureHtml } from './inbox-address';
+import { formatMessageDate, formatThreadListDate, formatFollowUpDeadline, toCalendarDateValue, toCalendarTimeValue, ensureReplySubject } from './inbox-format';
+import { normalizeInboxBucket, normalizeInboxDensity, normalizeInboxCategoryFilter, bucketLabel, bucketDescription, bucketTone, providerTone, categoryLabel, triageCategoryLabel, categoryTone } from './inbox-classify';
 
-type InboxBucket = 'all' | 'safe_review' | 'urgent' | 'needs_reply' | 'waiting' | 'fyi';
-type InboxProvider = 'gmail' | 'microsoft';
-type InboxDensity = 'compact' | 'comfortable' | 'spacious';
-type InboxCategoryFilter = 'all' | 'account_billing_action_required' | 'updates_tools' | 'personal_outreach' | 'calendar_logistics' | 'promo_social' | 'other';
+export type InboxBucket = 'all' | 'safe_review' | 'urgent' | 'needs_reply' | 'waiting' | 'fyi';
+export type InboxProvider = 'gmail' | 'microsoft';
+export type InboxDensity = 'compact' | 'comfortable' | 'spacious';
+export type InboxCategoryFilter = 'all' | 'account_billing_action_required' | 'updates_tools' | 'personal_outreach' | 'calendar_logistics' | 'promo_social' | 'other';
 
 function InboxFolderIcon({ folder, size = 15 }: { folder: InboxMailFolder; size?: number }) {
   switch (folder) {
@@ -181,25 +184,6 @@ function InboxFolderIcon({ folder, size = 15 }: { folder: InboxMailFolder; size?
     case 'trash': return <Trash2 size={size} />;
     default: return <Inbox size={size} />;
   }
-}
-
-function normalizeInboxBucket(value?: string | null): InboxBucket {
-  return value === 'safe_review' || value === 'urgent' || value === 'needs_reply' || value === 'waiting' || value === 'fyi' ? value : 'all';
-}
-
-function normalizeInboxDensity(value?: string | null): InboxDensity {
-  return value === 'comfortable' || value === 'spacious' ? value : 'compact';
-}
-
-function normalizeInboxCategoryFilter(value?: string | null): InboxCategoryFilter {
-  return value === 'account_billing_action_required'
-    || value === 'updates_tools'
-    || value === 'personal_outreach'
-    || value === 'calendar_logistics'
-    || value === 'promo_social'
-    || value === 'other'
-    ? value
-    : 'all';
 }
 
 type ThreadDigestCommon = Pick<
@@ -284,59 +268,6 @@ function isPresentObject<T extends object>(value: T | null | undefined): value i
   return Boolean(value && typeof value === 'object');
 }
 
-function normalizeEmail(value: string): string {
-  return String(value || '').trim().toLowerCase();
-}
-
-function extractEmail(value: string): string {
-  const input = String(value || '').trim();
-  const angleMatch = input.match(/<([^>]+)>/);
-  if (angleMatch?.[1]) return normalizeEmail(angleMatch[1]);
-  const plainMatch = input.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return normalizeEmail(plainMatch?.[0] || input);
-}
-
-function escapeHtml(value: string): string {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function buildManualSignatureHtml(value?: string): string {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) return '';
-  return `<div dir="ltr">${escapeHtml(trimmed).replace(/\n/g, '<br>')}</div>`;
-}
-
-function parseAddressList(value: string): string[] {
-  return String(value || '')
-    .split(',')
-    .map((part) => extractEmail(part))
-    .filter(Boolean);
-}
-
-function formatMessageDate(value?: string): string {
-  if (!value) return 'Unknown time';
-  const normalized = String(value).trim();
-  const date = /^\d+$/.test(normalized) ? new Date(Number(normalized)) : new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function ensureReplySubject(subject: string): string {
-  const trimmed = String(subject || '').trim();
-  if (!trimmed) return 'Re: (no subject)';
-  return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
-}
-
 function classifyInboxBucket(
   thread: ThreadDigestCommon,
   safety = assessMailSafety(thread),
@@ -368,77 +299,6 @@ function classifyInboxBucket(
   return 'fyi';
 }
 
-function bucketLabel(bucket: InboxBucket): string {
-  switch (bucket) {
-    case 'safe_review': return 'Safe review';
-    case 'urgent': return 'Urgent';
-    case 'needs_reply': return 'Needs reply';
-    case 'waiting': return 'Waiting';
-    case 'fyi': return 'FYI';
-    default: return 'All';
-  }
-}
-
-function isValidEmailAddress(value: string): boolean {
-  return /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value);
-}
-
-function bucketDescription(bucket: InboxBucket): string {
-  switch (bucket) {
-    case 'safe_review': return 'Potential payment, sign-in, or sender risk';
-    case 'urgent': return 'Needs attention now';
-    case 'needs_reply': return 'Requires an outbound reply';
-    case 'waiting': return 'Waiting on someone else';
-    case 'fyi': return 'Read-only or low urgency';
-    default: return 'Show every loaded conversation';
-  }
-}
-
-function bucketTone(bucket: InboxBucket): string {
-  switch (bucket) {
-    case 'safe_review': return 'bg-orange-500/10 border-orange-500/25 text-orange-300';
-    case 'urgent': return 'bg-red-500/10 border-red-500/20 text-red-300';
-    case 'needs_reply': return 'bg-amber-500/10 border-amber-500/20 text-amber-300';
-    case 'waiting': return 'bg-sky-500/10 border-sky-500/20 text-sky-300';
-    case 'fyi': return 'bg-[rgb(var(--aegis-overlay)/0.04)] border-aegis-border text-aegis-text-dim';
-    default: return 'bg-aegis-primary/10 border-aegis-primary/20 text-aegis-primary';
-  }
-}
-
-function providerTone(provider: InboxProvider): string {
-  return provider === 'gmail'
-    ? 'border-red-400/20 bg-red-500/10 text-red-200'
-    : 'border-sky-400/20 bg-sky-500/10 text-sky-200';
-}
-
-function categoryLabel(category: InboxCategoryFilter): string {
-  switch (category) {
-    case 'account_billing_action_required': return 'Billing / action';
-    case 'updates_tools': return 'Updates / tools';
-    case 'personal_outreach': return 'Outreach';
-    case 'calendar_logistics': return 'Calendar';
-    case 'promo_social': return 'Promo / social';
-    case 'other': return 'Other';
-    default: return 'All categories';
-  }
-}
-
-function triageCategoryLabel(category: InboxCategoryFilter): string {
-  return category === 'all' ? 'All triage' : categoryLabel(category);
-}
-
-function categoryTone(category: InboxCategoryFilter): string {
-  switch (category) {
-    case 'account_billing_action_required': return 'border-red-500/20 bg-red-500/10 text-red-300';
-    case 'updates_tools': return 'border-sky-500/20 bg-sky-500/10 text-sky-300';
-    case 'personal_outreach': return 'border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-300';
-    case 'calendar_logistics': return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300';
-    case 'promo_social': return 'border-zinc-500/20 bg-zinc-500/10 text-zinc-300';
-    case 'other': return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text-dim';
-    default: return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text-dim';
-  }
-}
-
 function setLocalDeadline(base: Date, dayOffset: number, hour: number, minute = 0): Date {
   const deadline = new Date(base);
   deadline.setDate(deadline.getDate() + dayOffset);
@@ -453,16 +313,6 @@ function ensureFutureDeadline(candidate: Date, minimumLeadMinutes = 45): Date {
   next.setMinutes(0, 0, 0);
   next.setHours(next.getHours() + 1);
   return next;
-}
-
-function formatFollowUpDeadline(deadline: Date): string {
-  return deadline.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }
 
 function deriveFollowUpDeadline(thread: InboxThreadItem): Date {
@@ -494,14 +344,6 @@ function deriveFollowUpDeadline(thread: InboxThreadItem): Date {
     setLocalDeadline(now, isOlderThanDay ? 1 : 2, 11, 0),
     120,
   );
-}
-
-function toCalendarDateValue(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function toCalendarTimeValue(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 function buildFollowUpReminderTitle(thread: InboxThreadItem): string {
@@ -553,48 +395,6 @@ function buildMicrosoftCategoryOptions(categories: NativeMicrosoftMailCategoryOp
     }))
     .filter((category) => category.id.length > 0)
     .sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function formatThreadListDate(value?: string): string {
-  if (!value) return '';
-  const normalized = String(value).trim();
-  const date = /^\d+$/.test(normalized) ? new Date(Number(normalized)) : new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
-
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(date);
-  }
-
-  if (date.getFullYear() === now.getFullYear()) {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-    }).format(date);
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(date);
-}
-
-function sanitizeEmailHref(value: string): string | null {
-  const href = String(value || '').trim();
-  if (!href) return null;
-  if (href.startsWith('mailto:')) return href;
-  try {
-    const parsed = new URL(href);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString();
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 function normalizeAttachmentContentId(value?: string): string {

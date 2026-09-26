@@ -1,3 +1,19 @@
+## [1.13.16] — 2026-09-26
+
+Polish and professional-grade cleanup.
+
+- Calendar: add a Routines toggle in Sources and filters. Routine-derived events (birthdays, bills, trash day) are hidden by default so real appointments stand out; the choice is remembered.
+- Inbox: extract 24 pure helpers into inbox-address, inbox-format, and inbox-classify modules with 19 unit tests. No behavior changes.
+- Tasks: stop showing duplicate routine entries in the Scheduled view when the routine series is already listed.
+- Tasks: fix the "Show more" button to display the actual available count.
+- Agents: raise mobile touch targets to 44px in Agents and Contacts.
+- Assistant: display the model as GPT-5.6 instead of the internal codename.
+- Calendar: use the shared polling utility instead of a raw interval.
+- Inbox: surface errors when hiding a follow-up fails instead of swallowing them.
+- Remove dead Calendar and LocalEventEditor files.
+- Add CI workflow running quality checks and updater tests on main.
+- Prove schema-47 backups restore correctly.
+
 ## [1.13.15] — 2026-09-25
 
 - Preserve strict saved-work verification while recognizing regenerated Codex process/cache records and physical file fingerprints after an independent recovery copy.

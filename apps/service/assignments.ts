@@ -265,14 +265,14 @@ export class AssignmentService {
       const history = await this.gateway.request<{ sessionId?: string }>('chat.history', { sessionKey: value.sessionKey, limit: 1 });
       if (this.closing) return publicAttempt(this.read(id));
       value = this.read(id);
-      if (!history.sessionId || (receipt && history.sessionId !== receipt.sessionId) || (value.nativeSessionId && value.nativeSessionId !== history.sessionId)) throw new Fault(409, 'assignment_session_changed', 'The original native session no longer matches this result.');
-      if (receipt && (receipt.successfulToolNames.some(name => !Object.keys(value.capture.agent.value.access ?? {}).length || !['nova_read', 'nova_write', ...(value.nativeTools ?? [])].includes(name)) || receipt.sourceReplyDelivered)) return publicAttempt(this.save({ ...value, state: 'failed', nativeSessionId: receipt.sessionId, message: 'The native run ended outside its selected workspace tool contract. Its result was not accepted.' }));
+      if (!history.sessionId || (receipt && history.sessionId !== receipt.sessionId) || (value.nativeSessionId && value.nativeSessionId !== history.sessionId)) throw new Fault(409, 'assignment_session_changed', 'This result no longer matches the running session.');
+      if (receipt && (receipt.successfulToolNames.some(name => !Object.keys(value.capture.agent.value.access ?? {}).length || !['nova_read', 'nova_write', ...(value.nativeTools ?? [])].includes(name)) || receipt.sourceReplyDelivered)) return publicAttempt(this.save({ ...value, state: 'failed', nativeSessionId: receipt.sessionId, message: 'The agent used tools outside its assignment, so this result was not kept.' }));
       value = this.save({ ...value, nativeSessionId: history.sessionId, pendingResult: observation });
       return this.retainResult(value);
     } catch {
       if (this.closing) return publicAttempt(this.read(id));
       value = this.read(id);
-      return publicAttempt(this.save({ ...value, state: value.stopReason ? 'stopping' : 'unknown', message: value.stopReason ? 'Stop is pending. Reconnect the original runtime to confirm the outcome.' : 'The original native outcome could not be verified. Saved work is retained; no replacement was started.' }));
+      return publicAttempt(this.save({ ...value, state: value.stopReason ? 'stopping' : 'unknown', message: value.stopReason ? 'The stop is still being confirmed. Reconnect to check the outcome.' : 'The outcome could not be confirmed. Your saved work is kept; nothing else was started.' }));
     }
   }
   private retainResult(value: SavedAttempt): AssignmentAttempt {
@@ -282,9 +282,9 @@ export class AssignmentService {
       const file = reply || observation.status === 'ok' ? this.store.upload(value.deviceId, value.uploadRequestId, value.epoch, `assignment-${value.id}.md`, Buffer.from(text, 'utf8').toString('base64')) : undefined;
       const result = file ? { file, preview: text.slice(0, 4000), previewTruncated: text.length > 4000, disposition: reply?.disposition ?? 'empty' } : undefined;
       const { pendingResult, ...kept } = value;
-      return publicAttempt(this.save({ ...kept, ...(result ? { result } : {}), ...(receipt ? { terminal: { status: observation.status as 'ok' | 'error', turnId: receipt.turnId, provider: receipt.effective.provider, model: receipt.effective.model, ...(observation.stopReason ? { stopReason: observation.stopReason } : {}) } } : { failedExecution: { endedAt: observation.endedAt!, ...(observation.stopReason ? { stopReason: observation.stopReason } : {}) } }), state: observation.status === 'ok' ? 'returned' : value.stopReason ? 'cancelled' : 'failed', message: observation.status === 'ok' ? 'Returned for your review. The full result is saved.' : value.stopReason ? 'The native run ended after the stop request. Any returned text is saved.' : workerFailureMessage(observation.failureReason) }));
+      return publicAttempt(this.save({ ...kept, ...(result ? { result } : {}), ...(receipt ? { terminal: { status: observation.status as 'ok' | 'error', turnId: receipt.turnId, provider: receipt.effective.provider, model: receipt.effective.model, ...(observation.stopReason ? { stopReason: observation.stopReason } : {}) } } : { failedExecution: { endedAt: observation.endedAt!, ...(observation.stopReason ? { stopReason: observation.stopReason } : {}) } }), state: observation.status === 'ok' ? 'returned' : value.stopReason ? 'cancelled' : 'failed', message: observation.status === 'ok' ? 'Returned for your review. The full result is saved.' : value.stopReason ? 'Stopped before it finished. Anything it produced is saved.' : workerFailureMessage(observation.failureReason) }));
     } catch {
-      return publicAttempt(this.save({ ...value, state: 'unknown', message: 'The native run ended, but its complete result could not be saved as a file. Its captured reply is retained for another save attempt.' }));
+      return publicAttempt(this.save({ ...value, state: 'unknown', message: 'It finished, but the full result could not be saved yet. What it wrote is kept for another try.' }));
     }
   }
   async close() {

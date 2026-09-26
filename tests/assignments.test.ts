@@ -48,7 +48,7 @@ test('pending quota failures do not release work, and owner stop keeps precedenc
   const pending=await f.service.reconcile(started.id); assert.notEqual(pending.state,'failed'); assert.equal(f.service.state().canStart,false);
   f.service.stop(f.device,{requestId:randomUUID(),epoch:f.store.epoch,attemptId:started.id});
   f.gateway.observation={status:'error',endedAt:123,error:'insufficient_quota'};
-  const stopped=await f.service.reconcile(started.id); assert.equal(stopped.state,'cancelled'); assert.match(stopped.message,/stop request/);
+  const stopped=await f.service.reconcile(started.id); assert.equal(stopped.state,'cancelled'); assert.match(stopped.message,/Stopped before it finished/);
   assert.equal(f.gateway.nativeCalls.length,1);
 }));
 

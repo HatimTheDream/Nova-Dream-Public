@@ -35,6 +35,10 @@ export function RecoveryConnections({ review, epoch, deviceId, refresh, blocked,
     } finally { setBusy(false); }
   };
   if (!review.available && !review.completed) return null;
+  const recoveredWork = review.accounts + review.taskRoutines + review.agentRoutines + review.queuedMessages + review.savedConversations + review.unconfirmedRuns;
+  if (!recoveredWork) return <div className="backup-review"><h3>Connections after recovery</h3>
+    <p>This workspace is ready to set up. Connect your accounts in Settings → Accounts, then connect the Assistant in Settings → Assistant. Nothing was carried over, so there is nothing to reconnect.</p>
+  </div>;
   return <div className="backup-review"><h3>Connections after recovery</h3>
     {review.completed ? <p>Connection setup is available again. Sign into your accounts and connect the Assistant in Settings. Review paused routines before enabling them. Earlier chats and unconfirmed operations remain preserved.</p> : <>
       <p>This copy has {review.accounts} account connections, {review.taskRoutines + review.agentRoutines} active routines and {review.queuedMessages} queued messages. It preserves {review.savedConversations} conversations and {review.unconfirmedRuns} unconfirmed runs.</p>

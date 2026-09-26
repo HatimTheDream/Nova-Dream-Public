@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════
 
 export type EventCategory = 'work' | 'personal' | 'health' | 'social' | 'education' | 'other';
-export type EventSource = 'local' | 'memory' | 'ics' | 'google' | 'microsoft' | 'task' | 'content' | 'automation';
+export type EventSource = 'local' | 'memory' | 'ics' | 'google' | 'microsoft' | 'task' | 'routines' | 'content' | 'automation';
 export type ReminderStatus = 'pending' | 'scheduled' | 'fired' | 'failed' | 'none' | 'ready' | 'missed' | 'unavailable' | 'dismissed' | 'cancelled';
 export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly' | 'yearly';
 export type DeliveryChannel =
@@ -100,13 +100,14 @@ export const CAT_COLORS: Record<EventCategory, string> = {
 // All available categories for iteration
 export const ALL_CATEGORIES: EventCategory[] = ['work', 'personal', 'health', 'social', 'education', 'other'];
 
-export const ALL_SOURCES: EventSource[] = ['local', 'google', 'microsoft', 'task', 'content', 'automation', 'memory', 'ics'];
+export const ALL_SOURCES: EventSource[] = ['local', 'google', 'microsoft', 'task', 'routines', 'content', 'automation', 'memory', 'ics'];
 
 export const SOURCE_META: Record<EventSource, { label: string; color: string }> = {
   local: { label: 'Meetings', color: '#6D5DFC' },
   google: { label: 'Google', color: '#4285F4' },
   microsoft: { label: 'Outlook', color: '#2B78D4' },
   task: { label: 'Tasks', color: '#6C9FFF' },
+  routines: { label: 'Routines', color: '#7ED3A7' },
   content: { label: 'Content plans', color: '#A486FF' },
   automation: { label: 'Automations', color: '#4EC9B0' },
   memory: { label: 'Memory', color: '#E8B84E' },
@@ -129,10 +130,10 @@ export const DEFAULT_SETTINGS: CalendarSettings = {
   defaultDeliveryChannel: 'last',
 };
 
-// Default filter (show everything)
+// Default filter (show everything except routines, which can overwhelm the month view)
 export const DEFAULT_FILTER: CalendarFilter = {
   categories: [...ALL_CATEGORIES],
-  sources: [...ALL_SOURCES],
+  sources: ALL_SOURCES.filter(source => source !== 'routines'),
   search: '',
   showCompleted: false,
 };

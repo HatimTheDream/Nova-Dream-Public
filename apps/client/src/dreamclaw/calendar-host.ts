@@ -41,7 +41,7 @@ export function createCalendarHost({ snapshot, windowId, previousWindowId, navig
       return {
         calendars: state.sources, accountMessages: state.accountMessages,
         syncing: state.jobs.some(job => job.state === 'running'),
-        events: events.filter(event => !['task', 'content'].includes(event.source)), operationalEvents: events.filter(event => ['task', 'content'].includes(event.source)),
+        events: events.filter(event => !['task', 'routines', 'content'].includes(event.source)), operationalEvents: events.filter(event => ['task', 'routines', 'content'].includes(event.source)),
         queryState: partial ? 'partial' : 'ready',
         error: state.eventsLimited ? 'This calendar reached its event limit. Select fewer sources to see more.' : partial ? 'Some connected calendars need a refresh. Saved events remain visible.' : null,
         syncMode: providers.size > 1 ? 'connected' : providers.has('google') ? 'google' : providers.has('microsoft') ? 'microsoft' : 'local-only',

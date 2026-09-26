@@ -12,6 +12,9 @@ type DeviceToken = { token: string; scopes: string[] };
 type Client = Pick<GatewayClient, 'start' | 'stopAndWait' | 'request'>;
 type ModelCatalog = { models?: { id: string; name?: string; provider?: string; available?: boolean; reasoning?: boolean; tags?: string[]; thinkingLevels?: { id: string }[] }[] };
 const catalogSignature = (catalog: ModelCatalog) => JSON.stringify((catalog.models ?? []).map(({ id, provider, available, reasoning, thinkingLevels }) => ({ id, provider, available, reasoning, thinkingLevels })).sort((a, b) => `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`)));
+/** Internal model IDs that need a clean display label instead of the raw ID. */
+const modelDisplayNames: Record<string, string> = { 'openai/gpt-5.6-sol': 'GPT-5.6' };
+export const modelDisplayName = (id: string, name?: string) => modelDisplayNames[id] ?? (name && name !== id ? name : undefined) ?? id;
 export interface AssistantTransport {
   status(): AssistantConnection;
   serviceInfo?(): AgentServiceInfo;
@@ -175,7 +178,10 @@ export class Gateway implements AssistantTransport {
       result = await this.request<ModelCatalog>('models.list', { agentId: 'main', refresh: true }); check();
       this.discoveredCatalog = catalogSignature(result);
     }
-    const models = (result.models ?? []).filter(m => typeof m.id === 'string').map(model => ({ id: model.id.includes('/') ? model.id : `${model.provider}/${model.id}`, name: model.name ?? model.id, provider: model.provider ?? 'OpenClaw', reasoning: model.thinkingLevels?.map(level => level.id), isDefault: model.tags?.includes('default') === true, available: model.available === true }));
+    const models = (result.models ?? []).filter(m => typeof m.id === 'string').map(model => {
+      const id = model.id.includes('/') ? model.id : `${model.provider}/${model.id}`;
+      return { id, name: modelDisplayName(id, model.name), provider: model.provider ?? 'OpenClaw', reasoning: model.thinkingLevels?.map(level => level.id), isDefault: model.tags?.includes('default') === true, available: model.available === true };
+    });
     this.connection = { ...this.connection, modelAuthReady: models.some(model => model.available), message: models.some(model => model.available) ? 'OpenClaw and account models are ready.' : 'OpenClaw is connected. Sign in to ChatGPT through its model setup.' };
     return models;
   }
