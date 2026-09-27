@@ -32,6 +32,9 @@ export function useStartupEstimate(percent: number, complete: boolean, error: bo
     }
   }, [clock, percent, complete, error, timingKey, remember]);
   const raw = startupRemaining(clock.points, clock.elapsed(now), history);
-  shown.current = softenEstimate(shown.current, raw);
+  // Never blank a shown estimate mid-load: when progress stalls long enough
+  // that the math runs out of things to say, a frozen estimate still tells
+  // the owner the app is working, while a vanished one looks broken.
+  if (raw !== undefined) shown.current = softenEstimate(shown.current, raw);
   return startupWaitLabel(shown.current, complete);
 }

@@ -59,8 +59,10 @@ export function startupRemaining(points: StartupPoint[], elapsed: number, histor
   } else if (pace !== undefined) {
     // A first run extrapolates from its recent pace, not from the origin: the
     // bar is back-loaded (inbox preparation dominates the later percent), so a
-    // lifetime average would under-promise once the slow phase starts.
-    if (last.percent < 25 || last.ms < 2_000 || points.length < 3) return undefined;
+    // lifetime average would under-promise once the slow phase starts. The bar
+    // arrives in big jumps on fast devices, so the estimate appears as soon as
+    // there is meaningful progress rather than waiting for many samples.
+    if (last.percent < 5) return undefined;
     remaining = Math.min(maxDuration, (100 - last.percent) / pace);
   } else {
     return undefined;

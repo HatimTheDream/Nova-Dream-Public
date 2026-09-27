@@ -5,16 +5,26 @@ import { StartupClock, softenEstimate, startupHistory, startupRemaining, startup
 const at = 1_800_000_000_000;
 const previous: StartupTiming = { at, points: [{percent:0,ms:0},{percent:25,ms:2_000},{percent:80,ms:22_000},{percent:100,ms:30_000}] };
 
-test('first startup waits for preparation evidence and never turns time into progress', () => {
+test('first startup estimates from its early pace instead of waiting in silence', () => {
   const clock = new StartupClock(100);
   clock.observe(10, 1_100);
-  assert.equal(startupRemaining(clock.points, 1_000, []), undefined);
+  assert.equal(startupRemaining(clock.points, 1_000, []), 9_000);
   clock.observe(25, 2_100);
   assert.equal(startupRemaining(clock.points, 2_000, []), 5_000);
   assert.equal(startupRemaining(clock.points, 4_000, []), 3_000);
   assert.equal(clock.points.at(-1)?.percent, 25);
   assert.equal(startupRemaining(clock.points, 9_000, []), undefined);
   assert.equal(clock.points.at(-1)?.percent, 25);
+});
+
+test('a fast jump to mid-load still produces an estimate on a first run', () => {
+  // A new version has no timing history yet, and on a fast device the bar can
+  // jump from 0 to the forties in a single sample: the estimate must appear
+  // anyway instead of leaving the loading screen blank.
+  const points = [{ percent: 0, ms: 0 }, { percent: 43, ms: 800 }];
+  const remaining = startupRemaining(points, 800, []);
+  assert.ok(remaining !== undefined && remaining >= 1_000);
+  assert.equal(startupWaitLabel(remaining, false), 'about 5 seconds');
 });
 
 test('learned preparation timing accounts for slow later work instead of assuming a linear bar', () => {

@@ -1,3 +1,10 @@
+## [1.13.18] — 2026-09-27
+
+Fix the loading-screen estimate going blank on fresh installs.
+
+- The 1.13.17 estimator waited for 25% progress, two seconds, and three samples before showing anything; on fast devices the bar jumps straight to the forties in one sample, so first runs of a new version never saw an estimate at all. The estimate now appears as soon as there is meaningful progress and a measurable pace.
+- During a long stall the label used to vanish once the math ran out of things to say; it now holds the last estimate instead of disappearing, so the screen never looks dead while the app is still working.
+
 ## [1.13.17] — 2026-09-27
 
 Make the loading screen's time estimate actually trustworthy.
