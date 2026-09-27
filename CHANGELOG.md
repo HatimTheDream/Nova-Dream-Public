@@ -1,3 +1,12 @@
+## [1.14.1] — 2026-09-27
+
+The avatar builder is now actually modular, and the lynx is drawn the way the logo draws it.
+
+- Correction to 1.14.0: the 32 "module" portraits were baked illustrations, so changing a pattern, color, or clothing swapped the entire face at once. The avatar is now drawn live from independent layers: pattern, color, face, and clothing are separate, and picking one never changes the others. Every option button previews the real drawing it produces.
+- The Face layer is new and selectable on its own: Bold, Sharp, Soft, and Calm, each with its own eyes, brows, nose, and mouth. Previously saved avatars keep the face they had through a recorded migration.
+- The drawing follows the Nova Dream logo more faithfully: no outer face outline, the cream background and the implied face are one continuous surface, the face is carried by the ears, markings, eyes, brows, nose, mouth, and whiskers, and the shoulders and clothing span the full width at the bottom.
+- The 32 baked portrait files are removed; the avatar is a small vector drawing, so it also loads faster.
+
 ## [1.14.0] — 2026-09-27
 
 The lynx is now one square, drawn like the logo, and the avatar builder is truly modular.

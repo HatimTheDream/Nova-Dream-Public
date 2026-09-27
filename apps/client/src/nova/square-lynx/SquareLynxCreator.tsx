@@ -1,15 +1,16 @@
 import {
   createSquareLynxAppearance,
-  defaultSquareLynxAvatar,
+  defaultSquareLynxModules,
   resolveSquareLynxAppearance,
-  squareLynxAvatars,
+  squareLynxAvatarId,
   squareLynxClothingStyles,
   squareLynxColorways,
   squareLynxFaces,
   squareLynxPatterns,
-  type SquareLynxAvatar,
+  type SquareLynxModules,
 } from '../../../../../packages/domain/square-lynx';
-import { SquareLynx, squareLynxUrl } from './SquareLynx';
+import { SquareLynx } from './SquareLynx';
+import { SquareLynxSvg } from './SquareLynxSvg';
 import './square-lynx.css';
 
 export interface SquareLynxCreatorProps {
@@ -19,82 +20,54 @@ export interface SquareLynxCreatorProps {
   name: string;
 }
 
-type Module = Pick<SquareLynxAvatar, 'pattern' | 'colorway' | 'clothing'>;
-
-function currentModules(value: Record<string, unknown> | null): Module {
+function currentModules(value: Record<string, unknown> | null): SquareLynxModules {
   const resolved = resolveSquareLynxAppearance(value);
-  const avatar = resolved.status === 'ready'
-    ? resolved.avatar
-    : squareLynxAvatars.find(a => a.id === defaultSquareLynxAvatar)!;
-  return { pattern: avatar.pattern, colorway: avatar.colorway, clothing: avatar.clothing };
-}
-
-function avatarIdFor(modules: Module): string {
-  return `${modules.pattern}-${modules.colorway}-${modules.clothing}`;
+  if (resolved.status === 'ready') return resolved.modules;
+  return defaultSquareLynxModules;
 }
 
 /** One modular avatar builder, shared by agent creation and profile editing.
- *  Each module option previews the real illustration it produces. */
+ *  Pattern, color, face and clothing are independent layers: picking one never
+ *  changes the others. Each option previews the live artwork it produces. */
 export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProps) {
   const modules = currentModules(value);
-  const resolved = resolveSquareLynxAppearance(value);
-  const face = resolved.status === 'ready' ? resolved.avatar.face : 'bold';
-  const pick = (patch: Partial<Module>) => {
-    change({ ...createSquareLynxAppearance(avatarIdFor({ ...modules, ...patch })) });
+  const pick = (patch: Partial<SquareLynxModules>) => {
+    change({ ...createSquareLynxAppearance(squareLynxAvatarId({ ...modules, ...patch })) });
   };
+
+  const group = <K extends keyof SquareLynxModules>(
+    key: K,
+    legend: string,
+    choices: Record<SquareLynxModules[K], string>,
+  ) => (
+    <fieldset className="square-module">
+      <legend>{legend}</legend>
+      <div className="square-module-options">
+        {(Object.keys(choices) as (keyof typeof choices)[]).map(option => {
+          const preview = { ...modules, [key]: option } as SquareLynxModules;
+          const selected = modules[key] === option;
+          return (
+            <button type="button" key={option} className="square-option" aria-pressed={selected} onClick={() => pick({ [key]: option } as Partial<SquareLynxModules>)}>
+              <SquareLynxSvg modules={preview} />
+              <span>{choices[option]}</span>
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 
   return (
     <div className="square-creator">
       <div className="square-creator-preview">
         <SquareLynx appearance={value} size="creator" accessibility={{ mode: 'informative', label: `${name || 'Your'} square lynx avatar` }} />
-        <p className="metadata">{name || 'Your'} avatar · Face: {squareLynxFaces[face]}</p>
+        <p className="metadata">{name || 'Your'} avatar · {squareLynxPatterns[modules.pattern]} · {squareLynxColorways[modules.colorway]} · {squareLynxFaces[modules.face]} face · {squareLynxClothingStyles[modules.clothing]}</p>
       </div>
       <div className="square-creator-modules">
-        <fieldset className="square-module">
-          <legend>Pattern</legend>
-          <div className="square-module-options">
-            {(Object.keys(squareLynxPatterns) as (keyof typeof squareLynxPatterns)[]).map(pattern => {
-              const id = avatarIdFor({ ...modules, pattern });
-              const selected = modules.pattern === pattern;
-              return (
-                <button type="button" key={pattern} className="square-option" aria-pressed={selected} onClick={() => pick({ pattern })}>
-                  <img src={squareLynxUrl(id)} alt="" width={72} height={72} draggable={false} />
-                  <span>{squareLynxPatterns[pattern]}</span>
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-        <fieldset className="square-module">
-          <legend>Color</legend>
-          <div className="square-module-options">
-            {(Object.keys(squareLynxColorways) as (keyof typeof squareLynxColorways)[]).map(colorway => {
-              const id = avatarIdFor({ ...modules, colorway });
-              const selected = modules.colorway === colorway;
-              return (
-                <button type="button" key={colorway} className="square-option" aria-pressed={selected} onClick={() => pick({ colorway })}>
-                  <img src={squareLynxUrl(id)} alt="" width={72} height={72} draggable={false} />
-                  <span>{squareLynxColorways[colorway]}</span>
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-        <fieldset className="square-module">
-          <legend>Clothing</legend>
-          <div className="square-module-options">
-            {(Object.keys(squareLynxClothingStyles) as (keyof typeof squareLynxClothingStyles)[]).map(clothing => {
-              const id = avatarIdFor({ ...modules, clothing });
-              const selected = modules.clothing === clothing;
-              return (
-                <button type="button" key={clothing} className="square-option" aria-pressed={selected} onClick={() => pick({ clothing })}>
-                  <img src={squareLynxUrl(id)} alt="" width={72} height={72} draggable={false} />
-                  <span>{squareLynxClothingStyles[clothing]}</span>
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
+        {group('pattern', 'Pattern', squareLynxPatterns)}
+        {group('colorway', 'Color', squareLynxColorways)}
+        {group('face', 'Face', squareLynxFaces)}
+        {group('clothing', 'Clothing', squareLynxClothingStyles)}
       </div>
       <div className="button-row">
         <button type="button" className="text-button" onClick={() => change({ ...createSquareLynxAppearance() })}>Reset to Nova original</button>

@@ -6,7 +6,7 @@ export function PortraitPicker({ value, change, name }: { value: Record<string, 
   return (
     <div className="record-portrait-picker">
       <h3>Avatar</h3>
-      <p className="metadata">Build a square lynx in the Nova Dream style: pick a pattern, a color and clothing. Every combination is a real illustration.</p>
+      <p className="metadata">Build a square lynx in the Nova Dream style: pick a pattern, a color, a face and clothing. Each choice only changes its own layer.</p>
       <SquareLynxCreator value={value} change={change} name={name} />
     </div>
   );

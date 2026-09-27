@@ -1,11 +1,6 @@
-import { defaultSquareLynxAvatar, resolveSquareLynxAppearance } from '../../../../../packages/domain/square-lynx';
+import { defaultSquareLynxAvatar, defaultSquareLynxModules, parseSquareLynxAvatarId, resolveSquareLynxAppearance } from '../../../../../packages/domain/square-lynx';
+import { SquareLynxSvg } from './SquareLynxSvg';
 import './square-lynx.css';
-
-/** Avatar image URLs, bundled at build time. */
-const avatarUrls = import.meta.glob('./assets/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
-export function squareLynxUrl(avatarId: string): string {
-  return avatarUrls[`./assets/${avatarId}.webp`] ?? avatarUrls[`./assets/${defaultSquareLynxAvatar}.webp`];
-}
 
 export const SQUARE_LYNX_SIZES = { icon: 40, roster: 72, profile: 220, creator: 300, hub: 84 } as const;
 export type SquareLynxSize = keyof typeof SQUARE_LYNX_SIZES;
@@ -19,20 +14,24 @@ export interface SquareLynxProps {
   className?: string;
 }
 
-/** The square lynx avatar: one strict square, illustrated like the logo. */
+/** The square lynx avatar: one strict square, drawn live in the logo's hand.
+ *  Pattern, colorway, face and clothing are independent layers, so every saved
+ *  combination renders exactly as customized. */
 export function SquareLynx({ appearance, accessibility, size = 'roster', className }: SquareLynxProps) {
   const resolved = resolveSquareLynxAppearance(appearance);
-  const avatarId = resolved.status === 'ready' ? resolved.avatar.id : defaultSquareLynxAvatar;
-  const alt = accessibility.mode === 'informative' ? accessibility.label.trim() || 'Square lynx avatar' : '';
+  const modules = resolved.status === 'ready'
+    ? resolved.modules
+    : parseSquareLynxAvatarId(defaultSquareLynxAvatar) ?? defaultSquareLynxModules;
   const dimension = SQUARE_LYNX_SIZES[size];
   return (
-    <img
-      src={squareLynxUrl(avatarId)}
-      alt={alt}
-      width={dimension}
-      height={dimension}
-      draggable={false}
+    <span
+      role={accessibility.mode === 'informative' ? 'img' : undefined}
+      aria-label={accessibility.mode === 'informative' ? accessibility.label.trim() || 'Square lynx avatar' : undefined}
+      aria-hidden={accessibility.mode === 'decorative' ? true : undefined}
+      style={{ display: 'inline-block', width: dimension, height: dimension }}
       className={['square-lynx', `square-lynx-${size}`, className].filter(Boolean).join(' ')}
-    />
+    >
+      <SquareLynxSvg modules={modules} className="square-lynx-art" />
+    </span>
   );
 }

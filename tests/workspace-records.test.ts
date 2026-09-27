@@ -46,7 +46,7 @@ test('all missing module records share encrypted revisions, snapshots and retain
     const values: [RecordKind, string, RecordValue][] = [
       ['contact', 'contact:mina', contact()], ['content', 'content:brief', content()], ['agent', 'agent:nova', agent],
       ['assignment', 'assignment:review', { ...blankRecord('assignment', 'UTC'), title: 'Review brief', agentId: 'agent:nova', agentRevision: 1 } as Assignment],
-      ['profile', 'profile:owner', { name: 'Owner', position: 'Maker', about: 'Private profile', appearance: { ...createSquareLynxAppearance('stripes-red-collar') } }],
+      ['profile', 'profile:owner', { name: 'Owner', position: 'Maker', about: 'Private profile', appearance: { ...createSquareLynxAppearance('stripes-red-soft-collar') } }],
     ];
     for (const [kind, id, value] of values) { const command = f.command(kind, id, value); const saved = f.store.mutate('owner', command); assert.deepEqual(f.store.mutate('owner', command), saved); }
     f.restart();
