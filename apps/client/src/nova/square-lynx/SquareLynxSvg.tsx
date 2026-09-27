@@ -1,9 +1,15 @@
 import type { SquareLynxModules } from '../../../../../packages/domain/square-lynx';
 
-/** Layered vector lynx in the Nova Dream logo's hand. Pattern, colorway, face
- *  and clothing are independent SVG layers on one seamless cream ground — the
- *  face is never outlined, it is implied by ears, markings and features, just
- *  like the logo. Changing one module never changes the others. */
+/** Layered vector lynx built from the Nova Dream logo's measured proportions.
+ *  Pattern, colorway, face and clothing are independent SVG layers on one
+ *  seamless cream ground — the face is never outlined, it is implied by ears,
+ *  markings and features, just like the logo. Changing one module never
+ *  changes the others.
+ *
+ *  Logo measurements (400-space): iris 67px wide at (120,187)/(280,187),
+ *  brows are 40px+ thick bars at y 98-148, nose 57px wide at y 228-260,
+ *  forehead crown center spike y 14-127, cheek ruffs reach the frame edges,
+ *  suit mass starts y 344. */
 const BG = '#F6E9D2';
 const EAR = '#F3E5C8';
 const INK = '#26262B';
@@ -21,12 +27,12 @@ export const squareLynxMarkingColors: Record<SquareLynxModules['colorway'], stri
 function Ears({ color }: { color: string }) {
   return (
     <g>
-      <path d="M14 124 C18 60 40 26 70 10 C92 38 102 72 104 124 Z" fill={EAR} />
-      <path d="M386 124 C382 60 360 26 330 10 C308 38 298 72 296 124 Z" fill={EAR} />
-      <path d="M36 110 C40 72 50 48 66 34 C81 51 87 77 89 110 Z" fill={color} />
-      <path d="M364 110 C360 72 350 48 334 34 C319 51 313 77 311 110 Z" fill={color} />
-      <path d="M48 100 C52 74 58 58 68 48 C77 60 81 78 82 100 Z" fill="#FFFDF6" opacity={0.85} />
-      <path d="M352 100 C348 74 342 58 332 48 C323 60 319 78 318 100 Z" fill="#FFFDF6" opacity={0.85} />
+      <path d="M8 130 C12 62 36 24 72 6 C96 36 108 74 110 130 Z" fill={EAR} />
+      <path d="M392 130 C388 62 364 24 328 6 C304 36 292 74 290 130 Z" fill={EAR} />
+      <path d="M32 116 C37 76 48 50 66 34 C82 52 89 80 91 116 Z" fill={color} />
+      <path d="M368 116 C363 76 352 50 334 34 C318 52 311 80 309 116 Z" fill={color} />
+      <path d="M46 104 C51 78 57 62 68 52 C77 64 81 82 82 104 Z" fill="#FFFDF6" opacity={0.9} />
+      <path d="M354 104 C349 78 343 62 332 52 C323 64 319 82 318 104 Z" fill="#FFFDF6" opacity={0.9} />
     </g>
   );
 }
@@ -35,54 +41,51 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
   if (pattern === 'stripes') {
     return (
       <g fill={color}>
-        {/* Forehead crown: tall central teardrop with flanking curved blades */}
-        <path d="M200 16 C211 48 215 86 200 134 C185 86 189 48 200 16 Z" />
-        <path d="M158 40 C150 66 146 94 152 120 C138 100 132 70 140 44 C144 34 154 32 158 40 Z" />
-        <path d="M242 40 C250 66 254 94 248 120 C262 100 268 70 260 44 C256 34 246 32 242 40 Z" />
-        <path d="M118 78 C112 96 110 114 114 132 C104 118 100 98 106 80 C109 72 116 70 118 78 Z" />
-        <path d="M282 78 C288 96 290 114 286 132 C296 118 300 98 294 80 C291 72 284 70 282 78 Z" />
-        {/* Upper wing swooshes sweeping out from the eyes */}
-        <path d="M112 158 C80 140 48 128 18 128 C44 146 76 162 108 176 Z" />
-        <path d="M288 158 C320 140 352 128 382 128 C356 146 324 162 292 176 Z" />
-        {/* Mid blades */}
-        <path d="M100 208 C66 200 36 198 12 204 C40 216 70 224 100 230 Z" />
-        <path d="M300 208 C334 200 364 198 388 204 C360 216 330 224 300 230 Z" />
-        {/* Cheek ruffs: large layered commas */}
-        <path d="M92 244 C60 258 40 288 36 326 C58 308 78 282 96 258 Z" />
-        <path d="M108 268 C88 286 76 310 74 338 C92 322 104 298 114 276 Z" />
-        <path d="M308 244 C340 258 360 288 364 326 C342 308 322 282 304 258 Z" />
-        <path d="M292 268 C312 286 324 310 326 338 C308 322 296 298 286 276 Z" />
+        {/* Forehead crown: tall center spike, flanking blades (measured) */}
+        <path d="M200 14 C211 46 215 88 200 127 C185 88 189 46 200 14 Z" />
+        <path d="M158 47 C150 64 146 84 152 105 C140 92 136 68 143 50 C146 42 155 41 158 47 Z" />
+        <path d="M242 47 C250 64 254 84 248 105 C260 92 264 68 257 50 C254 42 245 41 242 47 Z" />
+        {/* Side swooshes flowing out from the eyes toward the frame edges */}
+        <path d="M104 160 C70 146 36 140 6 144 C36 160 68 172 100 182 Z" />
+        <path d="M296 160 C330 146 364 140 394 144 C364 160 332 172 300 182 Z" />
+        <path d="M92 214 C58 208 28 208 4 216 C32 228 62 234 92 238 Z" />
+        <path d="M308 214 C342 208 372 208 396 216 C368 228 338 234 308 238 Z" />
+        {/* Cheek ruffs: big layered commas reaching the edges (measured y 162-334) */}
+        <path d="M84 246 C48 262 22 294 14 334 C40 312 62 284 88 258 Z" />
+        <path d="M100 272 C78 292 64 318 62 348 C82 330 96 304 108 280 Z" />
+        <path d="M316 246 C352 262 378 294 386 334 C360 312 338 284 312 258 Z" />
+        <path d="M300 272 C322 292 336 318 338 348 C318 330 304 304 292 280 Z" />
       </g>
     );
   }
   if (pattern === 'spots') {
     return (
       <g fill={color}>
-        <path d="M200 34 L214 62 L200 90 L186 62 Z" />
-        <path d="M152 56 L162 76 L152 96 L142 76 Z" />
-        <path d="M248 56 L258 76 L248 96 L238 76 Z" />
-        <path d="M108 108 L122 130 L108 152 L94 130 Z" />
-        <path d="M292 108 L306 130 L292 152 L278 130 Z" />
-        <path d="M64 168 L80 192 L64 216 L48 192 Z" />
-        <path d="M336 168 L352 192 L336 216 L320 192 Z" />
-        <path d="M52 248 L68 272 L52 296 L36 272 Z" />
-        <path d="M348 248 L364 272 L348 296 L332 272 Z" />
-        <path d="M84 300 L96 320 L84 340 L72 320 Z" />
-        <path d="M316 300 L328 320 L316 340 L304 320 Z" />
-        <path d="M128 232 L136 246 L128 260 L120 246 Z" />
-        <path d="M272 232 L280 246 L272 260 L264 246 Z" />
+        <path d="M200 30 L216 62 L200 94 L184 62 Z" />
+        <path d="M150 52 L162 74 L150 96 L138 74 Z" />
+        <path d="M250 52 L262 74 L250 96 L238 74 Z" />
+        <path d="M100 100 L116 124 L100 148 L84 124 Z" />
+        <path d="M300 100 L316 124 L300 148 L284 124 Z" />
+        <path d="M48 170 L66 196 L48 222 L30 196 Z" />
+        <path d="M352 170 L370 196 L352 222 L334 196 Z" />
+        <path d="M36 250 L54 276 L36 302 L18 276 Z" />
+        <path d="M364 250 L382 276 L364 302 L346 276 Z" />
+        <path d="M70 310 L84 332 L70 354 L56 332 Z" />
+        <path d="M330 310 L344 332 L330 354 L316 332 Z" />
+        <path d="M124 240 L132 254 L124 268 L116 254 Z" />
+        <path d="M276 240 L284 254 L276 268 L268 254 Z" />
       </g>
     );
   }
   if (pattern === 'blaze') {
     return (
       <g fill={color}>
-        <path d="M200 24 C208 60 210 100 200 142 C190 100 192 60 200 24 Z" />
-        <path d="M200 142 L216 170 L200 198 L184 170 Z" />
-        <path d="M120 120 C106 138 98 160 98 186 C110 170 120 150 130 130 Z" />
-        <path d="M280 120 C294 138 302 160 302 186 C290 170 280 150 270 130 Z" />
-        <path d="M96 200 C78 220 66 244 62 272 C78 254 92 232 104 212 Z" />
-        <path d="M304 200 C322 220 334 244 338 272 C322 254 308 232 296 212 Z" />
+        <path d="M200 22 C209 58 211 100 200 142 C189 100 191 58 200 22 Z" />
+        <path d="M200 142 L217 172 L200 202 L183 172 Z" />
+        <path d="M118 118 C104 138 96 162 96 190 C110 172 121 150 131 128 Z" />
+        <path d="M282 118 C296 138 304 162 304 190 C290 172 279 150 269 128 Z" />
+        <path d="M92 198 C74 220 62 246 58 276 C76 256 90 232 102 210 Z" />
+        <path d="M308 198 C326 220 338 246 342 276 C324 256 310 232 298 210 Z" />
       </g>
     );
   }
@@ -90,39 +93,41 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
 }
 
 function Features({ face }: { face: SquareLynxModules['face'] }) {
-  const muzzle = <ellipse cx={200} cy={282} rx={58} ry={30} fill="#FFFDF8" opacity={0.4} />;
-  const noseBridge = <path d="M200 232 L200 248" stroke={INK} strokeWidth={5} strokeLinecap="round" />;
+  const muzzle = <ellipse cx={200} cy={290} rx={62} ry={32} fill="#FFFDF8" opacity={0.4} />;
+  /** Logo eye: big. Iris 67px wide, thick upper liner, white sclera ring. */
+  const eye = (cx: number, cy: number, irisR: number, lidDrop: number) => (
+    <g>
+      <ellipse cx={cx} cy={cy} rx={irisR + 8} ry={irisR + 10} fill="#fff" />
+      <circle cx={cx} cy={cy + 3} r={irisR} fill={IRIS} />
+      <circle cx={cx} cy={cy + 3} r={irisR * 0.52} fill="#1b1b1f" />
+      <circle cx={cx - irisR * 0.3} cy={cy - irisR * 0.35} r={irisR * 0.24} fill="#fff" />
+      <path
+        d={`M${cx - irisR - 8} ${cy - lidDrop} Q${cx} ${cy - irisR - 18} ${cx + irisR + 8} ${cy - lidDrop}`}
+        stroke={INK} strokeWidth={14} fill="none" strokeLinecap="round"
+      />
+    </g>
+  );
+  /** Logo nose: big rounded triangle with bridge line. */
   const nose = (
     <g>
-      {noseBridge}
-      <path d="M178 252 Q200 242 222 252 Q218 272 200 277 Q182 272 178 252 Z" fill={INK} />
+      <path d="M200 228 L200 246" stroke={INK} strokeWidth={7} strokeLinecap="round" />
+      <path d="M172 250 Q200 240 228 250 Q224 272 200 278 Q176 272 172 250 Z" fill={INK} />
     </g>
   );
-  const whiskers = (
-    <g stroke={INK} strokeWidth={2.5} strokeLinecap="round" opacity={0.7}>
-      <path d="M146 264 L108 256" /><path d="M146 276 L110 276" /><path d="M148 288 L116 296" />
-      <path d="M254 264 L292 256" /><path d="M254 276 L290 276" /><path d="M252 288 L284 296" />
-    </g>
-  );
-  /** Big logo-style eye: white sclera, thick liner, amber iris, pupil, catchlight. */
-  const eye = (cx: number, cy: number, rx: number, ry: number, lidY: number) => (
-    <g>
-      <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="#fff" />
-      <circle cx={cx} cy={cy + 4} r={rx * 0.62} fill={IRIS} />
-      <circle cx={cx} cy={cy + 4} r={rx * 0.34} fill="#1b1b1f" />
-      <circle cx={cx - rx * 0.2} cy={cy - ry * 0.25} r={rx * 0.16} fill="#fff" />
-      <path d={`M${cx - rx} ${lidY} Q${cx} ${lidY - 26} ${cx + rx} ${lidY}`} stroke={INK} strokeWidth={10} fill="none" strokeLinecap="round" />
-    </g>
+  /** Logo mouth: w-smile under the nose. */
+  const smile = (
+    <path d="M200 278 C196 294 182 300 168 294 M200 278 C204 294 218 300 232 294"
+      stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
   );
   if (face === 'bold') {
     return (
       <g>
         {muzzle}
-        {eye(134, 196, 37, 41, 182)}{eye(266, 196, 37, 41, 182)}
-        <path d="M92 142 Q134 108 180 134" stroke={INK} strokeWidth={13} fill="none" strokeLinecap="round" />
-        <path d="M220 134 Q266 108 308 142" stroke={INK} strokeWidth={13} fill="none" strokeLinecap="round" />
-        {nose}{whiskers}
-        <path d="M200 277 C196 290 184 296 172 290 M200 277 C204 290 216 296 228 290" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
+        {eye(120, 187, 33, 22)}{eye(280, 187, 33, 22)}
+        {/* Thick brow bars (measured y 98-148) */}
+        <path d="M78 118 Q120 92 164 112 Q168 126 162 138 Q120 120 84 136 Q74 128 78 118 Z" fill={INK} />
+        <path d="M322 118 Q280 92 236 112 Q232 126 238 138 Q280 120 316 136 Q326 128 322 118 Z" fill={INK} />
+        {nose}{smile}
       </g>
     );
   }
@@ -130,13 +135,11 @@ function Features({ face }: { face: SquareLynxModules['face'] }) {
     return (
       <g>
         {muzzle}
-        {eye(134, 198, 35, 33, 186)}{eye(266, 198, 35, 33, 186)}
-        <path d="M96 130 L178 150" stroke={INK} strokeWidth={12} strokeLinecap="round" />
-        <path d="M304 130 L222 150" stroke={INK} strokeWidth={12} strokeLinecap="round" />
-        <path d="M99 182 L126 176" stroke={INK} strokeWidth={7} strokeLinecap="round" />
-        <path d="M301 182 L274 176" stroke={INK} strokeWidth={7} strokeLinecap="round" />
-        {nose}{whiskers}
-        <path d="M180 292 Q200 286 220 292" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
+        {eye(120, 190, 30, 18)}{eye(280, 190, 30, 18)}
+        <path d="M80 104 L166 128 L162 142 L76 118 Z" fill={INK} />
+        <path d="M320 104 L234 128 L238 142 L324 118 Z" fill={INK} />
+        {nose}
+        <path d="M176 296 Q200 290 224 296" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
       </g>
     );
   }
@@ -144,40 +147,40 @@ function Features({ face }: { face: SquareLynxModules['face'] }) {
     return (
       <g>
         {muzzle}
-        <ellipse cx={134} cy={198} rx={31} ry={35} fill="#fff" />
-        <ellipse cx={266} cy={198} rx={31} ry={35} fill="#fff" />
-        <circle cx={134} cy={202} r={20} fill={IRIS} />
-        <circle cx={266} cy={202} r={20} fill={IRIS} />
-        <circle cx={134} cy={202} r={10} fill="#1b1b1f" />
-        <circle cx={266} cy={202} r={10} fill="#1b1b1f" />
-        <circle cx={128} cy={195} r={5} fill="#fff" />
-        <circle cx={260} cy={195} r={5} fill="#fff" />
-        <path d="M103 184 Q134 160 165 184" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
-        <path d="M235 184 Q266 160 297 184" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
-        <path d="M106 148 Q134 132 162 144" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
-        <path d="M238 144 Q266 132 294 148" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
-        {nose}{whiskers}
-        <path d="M176 284 Q200 302 224 284" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
+        <ellipse cx={120} cy={192} rx={38} ry={42} fill="#fff" />
+        <ellipse cx={280} cy={192} rx={38} ry={42} fill="#fff" />
+        <circle cx={120} cy={196} r={28} fill={IRIS} />
+        <circle cx={280} cy={196} r={28} fill={IRIS} />
+        <circle cx={120} cy={196} r={14} fill="#1b1b1f" />
+        <circle cx={280} cy={196} r={14} fill="#1b1b1f" />
+        <circle cx={112} cy={187} r={7} fill="#fff" />
+        <circle cx={272} cy={187} r={7} fill="#fff" />
+        <path d="M82 178 Q120 152 158 178" stroke={INK} strokeWidth={11} fill="none" strokeLinecap="round" />
+        <path d="M242 178 Q280 152 318 178" stroke={INK} strokeWidth={11} fill="none" strokeLinecap="round" />
+        <path d="M88 128 Q120 110 152 124" stroke={INK} strokeWidth={11} fill="none" strokeLinecap="round" />
+        <path d="M248 124 Q280 110 312 128" stroke={INK} strokeWidth={11} fill="none" strokeLinecap="round" />
+        {nose}
+        <path d="M172 288 Q200 308 228 288" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
       </g>
     );
   }
   return (
     <g>
       {muzzle}
-      <ellipse cx={134} cy={202} rx={33} ry={26} fill="#fff" />
-      <ellipse cx={266} cy={202} rx={33} ry={26} fill="#fff" />
-      <circle cx={134} cy={206} r={18} fill={IRIS} />
-      <circle cx={266} cy={206} r={18} fill={IRIS} />
-      <circle cx={134} cy={206} r={9} fill="#1b1b1f" />
-      <circle cx={266} cy={206} r={9} fill="#1b1b1f" />
-      <circle cx={128} cy={200} r={4.5} fill="#fff" />
-      <circle cx={260} cy={200} r={4.5} fill="#fff" />
-      <path d="M101 192 Q134 172 167 192" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
-      <path d="M233 192 Q266 172 299 192" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
-      <path d="M104 142 L164 142" stroke={INK} strokeWidth={8} strokeLinecap="round" />
-      <path d="M236 142 L296 142" stroke={INK} strokeWidth={8} strokeLinecap="round" />
-      {nose}{whiskers}
-      <path d="M184 290 Q200 295 216 290" stroke={INK} strokeWidth={6} fill="none" strokeLinecap="round" />
+      <ellipse cx={120} cy={196} rx={38} ry={32} fill="#fff" />
+      <ellipse cx={280} cy={196} rx={38} ry={32} fill="#fff" />
+      <circle cx={120} cy={200} r={26} fill={IRIS} />
+      <circle cx={280} cy={200} r={26} fill={IRIS} />
+      <circle cx={120} cy={200} r={13} fill="#1b1b1f" />
+      <circle cx={280} cy={200} r={13} fill="#1b1b1f" />
+      <circle cx={112} cy={192} r={6} fill="#fff" />
+      <circle cx={272} cy={192} r={6} fill="#fff" />
+      <path d="M82 186 Q120 164 158 186" stroke={INK} strokeWidth={12} fill="none" strokeLinecap="round" />
+      <path d="M242 186 Q280 164 318 186" stroke={INK} strokeWidth={12} fill="none" strokeLinecap="round" />
+      <path d="M86 124 L154 124" stroke={INK} strokeWidth={11} strokeLinecap="round" />
+      <path d="M246 124 L314 124" stroke={INK} strokeWidth={11} strokeLinecap="round" />
+      {nose}
+      <path d="M180 294 Q200 300 220 294" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
     </g>
   );
 }
@@ -186,21 +189,21 @@ function Clothing({ style, color }: { style: SquareLynxModules['clothing']; colo
   if (style === 'tie') {
     return (
       <g>
-        <path d="M0 400 L0 338 Q100 318 200 330 Q300 318 400 338 L400 400 Z" fill="#232327" />
-        <path d="M168 330 L200 366 L232 330 L222 322 L200 340 L178 322 Z" fill="#fff" />
-        <path d="M168 330 L124 400 L162 400 L188 348 Z" fill="#2E2E34" />
-        <path d="M232 330 L276 400 L238 400 L212 348 Z" fill="#2E2E34" />
-        <path d="M190 340 L210 340 L206 354 L194 354 Z" fill={color} />
-        <path d="M194 354 L206 354 L210 386 L200 398 L190 386 Z" fill={color} />
+        <path d="M0 400 L0 344 Q100 328 200 338 Q300 328 400 344 L400 400 Z" fill="#232327" />
+        <path d="M166 338 L200 376 L234 338 L222 328 L200 348 L178 328 Z" fill="#fff" />
+        <path d="M166 338 L120 400 L160 400 L188 356 Z" fill="#2E2E34" />
+        <path d="M234 338 L280 400 L240 400 L212 356 Z" fill="#2E2E34" />
+        <path d="M190 348 L210 348 L206 362 L194 362 Z" fill={color} />
+        <path d="M194 362 L206 362 L211 392 L200 400 L189 392 Z" fill={color} />
       </g>
     );
   }
   return (
     <g>
-      <path d="M0 400 L0 346 Q200 328 400 346 L400 400 Z" fill="#2E3D5C" />
-      <path d="M158 336 L200 368 L242 336 L232 326 L200 354 L168 326 Z" fill="#46587E" />
-      <path d="M158 336 L200 368 L184 400 L142 400 Z" fill="#24304A" />
-      <path d="M242 336 L200 368 L216 400 L258 400 Z" fill="#24304A" />
+      <path d="M0 400 L0 352 Q200 336 400 352 L400 400 Z" fill="#2E3D5C" />
+      <path d="M156 342 L200 376 L244 342 L232 332 L200 360 L168 332 Z" fill="#46587E" />
+      <path d="M156 342 L200 376 L182 400 L138 400 Z" fill="#24304A" />
+      <path d="M244 342 L200 376 L218 400 L262 400 Z" fill="#24304A" />
     </g>
   );
 }
