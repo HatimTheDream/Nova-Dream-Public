@@ -1,3 +1,10 @@
+## [1.13.21] — 2026-09-27
+
+Keep the loading bar moving for the whole startup.
+
+- The bar used to freeze at 43% through the long inbox message-preload phase, then jump to 100. It now paces itself against this device's startup timing history: real progress always leads, and during stalls a history-paced floor keeps the bar creeping instead of freezing, capped at 95% until real completion.
+- One exponential approach smooths both jumps and creep into a single steady motion, and the display never moves backward. Reduced motion still snaps to real progress with no creep.
+
 ## [1.13.20] — 2026-09-27
 
 Make the loading screen's finish actually visible.

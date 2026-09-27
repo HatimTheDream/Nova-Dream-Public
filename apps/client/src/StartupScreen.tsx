@@ -17,7 +17,7 @@ export function StartupScreen({ appIcon = readCachedAppIcon(), download, complet
     <NovaAppMark choice={choice} className="startup-logo" alt="Nova Dream logo" width="112" height="112"/>
     <div className="startup-copy"><h1 id="startup-title">Nova Dream</h1><p role={error ? 'alert' : 'status'}>{error || playfulStartupSubtitle(reached.current)}</p></div>
     <div className="startup-meter">
-      <LoadingProgress percent={percent} label="Nova Dream loading" paused={!!error}/>
+      <LoadingProgress percent={percent} label="Nova Dream loading" paused={!!error} timingKey={timingKey} complete={complete}/>
       {!error && <p className="startup-estimate" aria-label="Estimated time remaining">{estimate}</p>}
     </div>
     {error && reconnect && <button className="primary" onClick={reconnect}>Reconnect</button>}

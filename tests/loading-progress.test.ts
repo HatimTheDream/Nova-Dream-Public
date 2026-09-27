@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { workspaceLoadingPercent, playfulStartupSubtitle, easeOutCubic } from '../apps/client/src/loading-progress';
+import { workspaceLoadingPercent, playfulStartupSubtitle, pacedPercent, estimatedTotalMs, approachValue } from '../apps/client/src/loading-progress';
 import { inboxLoadingPercent } from '../apps/client/src/inbox-startup-progress';
 
 test('workspace progress keeps one denominator and completes only with an accepted workspace', () => {
@@ -31,15 +31,37 @@ test('startup keeps playful copy while preparation continues after the transfer'
   for (const percent of [0,15,55,95,100]) assert.doesNotMatch(playfulStartupSubtitle(percent), /inbox|mail|account|session|bytes/i);
 });
 
-test('eased startup progress starts and lands exactly on the reported value', () => {
-  assert.equal(easeOutCubic(0), 0);
-  assert.equal(easeOutCubic(1), 1);
-  // Ease-out front-loads: halfway through the sweep covers most of the distance.
-  const mid = easeOutCubic(0.5);
-  assert.ok(mid > 0.5 && mid < 1, `expected front-loaded midpoint, got ${mid}`);
-  // Monotonic and clamped outside 0..1.
-  const samples = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1].map(easeOutCubic);
-  assert.deepEqual(samples, [...samples].sort((a, b) => a - b));
-  assert.equal(easeOutCubic(-0.5), 0);
-  assert.equal(easeOutCubic(1.5), 1);
+test('paced progress climbs steadily and never claims completion', () => {
+  assert.equal(pacedPercent(0, 20_000), 0);
+  assert.equal(pacedPercent(-100, 20_000), 0);
+  assert.equal(pacedPercent(10_000, 20_000), 47.5);
+  // The cap reserves the finish for real completion, however slow the run.
+  assert.equal(pacedPercent(20_000, 20_000), 95);
+  assert.equal(pacedPercent(120_000, 20_000), 95);
+  // Degenerate inputs pace nothing.
+  assert.equal(pacedPercent(10_000, 0), 0);
+  assert.equal(pacedPercent(10_000, -5), 0);
+});
+
+test('estimated total takes the median run duration', () => {
+  const run = (ms: number) => ({ at: Date.now(), points: [{ percent: 0, ms: 0 }, { percent: 100, ms }] });
+  assert.equal(estimatedTotalMs([run(18_000), run(22_000), run(20_000)]), 20_000);
+  assert.equal(estimatedTotalMs([run(20_000)]), 20_000);
+  assert.equal(estimatedTotalMs([]), undefined);
+  assert.equal(estimatedTotalMs([{ at: Date.now(), points: [] }]), undefined);
+});
+
+test('approachValue converges without overshoot and never regresses', () => {
+  // A frame moves toward the goal but never past it.
+  const step = approachValue(0, 100, 16.7);
+  assert.ok(step > 0 && step < 100, `expected partial approach, got ${step}`);
+  // ~2 seconds of frames settles onto the goal.
+  let shown = 0;
+  for (let i = 0; i < 120; i++) shown = approachValue(shown, 100, 16.7);
+  assert.ok(shown > 99.9 && shown <= 100, `expected convergence, got ${shown}`);
+  // A goal below the display snaps instead of easing backward.
+  assert.equal(approachValue(60, 40, 16.7), 40);
+  assert.equal(approachValue(60, 60, 16.7), 60);
+  // No time passing changes nothing.
+  assert.equal(approachValue(30, 100, 0), 30);
 });
