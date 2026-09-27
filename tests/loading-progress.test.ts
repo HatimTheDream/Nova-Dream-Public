@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { workspaceLoadingPercent, playfulStartupSubtitle, pacedPercent, estimatedTotalMs, approachValue } from '../apps/client/src/loading-progress';
+import { workspaceLoadingPercent, playfulStartupSubtitle, pacedPercent, estimatedTotalMs, approachValue, historicalPercent, expectedPercent, paceInfo } from '../apps/client/src/loading-progress';
+import type { StartupTiming } from '../apps/client/src/startup-estimate';
 import { inboxLoadingPercent } from '../apps/client/src/inbox-startup-progress';
 
 test('workspace progress keeps one denominator and completes only with an accepted workspace', () => {
@@ -64,4 +65,39 @@ test('approachValue converges without overshoot and never regresses', () => {
   assert.equal(approachValue(60, 60, 16.7), 60);
   // No time passing changes nothing.
   assert.equal(approachValue(30, 100, 0), 30);
+});
+
+test('historicalPercent follows the median run curve', () => {
+  const run = (at: number, samples: [number, number][]): StartupTiming =>
+    ({ at, points: samples.map(([percent, ms]) => ({ percent, ms })) });
+  const history = [
+    run(3, [[0, 0], [43, 2000], [100, 20000]]),
+    run(2, [[0, 0], [43, 4000], [100, 24000]]),
+    run(1, [[0, 0], [43, 2000], [100, 16000]]),
+  ];
+  assert.equal(historicalPercent(history, 0), 0);
+  // At 2s the runs read 43, 21.5 and 43: the median is 43.
+  assert.equal(historicalPercent(history, 2000), 43);
+  // Finished runs hold 100 past their end.
+  assert.equal(historicalPercent(history, 60000), 100);
+  assert.equal(historicalPercent([], 5000), undefined);
+  assert.equal(historicalPercent(history, -1), undefined);
+});
+
+test('expectedPercent caps the historical curve below completion', () => {
+  const run = (at: number, samples: [number, number][]): StartupTiming =>
+    ({ at, points: samples.map(([percent, ms]) => ({ percent, ms })) });
+  const history = [run(1, [[0, 0], [100, 10000]])];
+  const pace = { totalMs: 10000, history };
+  assert.equal(expectedPercent(pace, 0), 0);
+  assert.equal(expectedPercent(pace, 5000), 50);
+  // The curve reads 100 past the end; only real completion may show it.
+  assert.equal(expectedPercent(pace, 20000), 95);
+  // Without history the bar ramps steadily over the pace.
+  assert.equal(expectedPercent({ totalMs: 20000, history: [] }, 10000), 47.5);
+});
+
+test('paceInfo falls back to the default pace without stored history', () => {
+  // Node has no localStorage; the scan throws and is caught.
+  assert.deepEqual(paceInfo(undefined), { totalMs: 20000, history: [] });
 });

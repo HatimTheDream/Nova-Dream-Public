@@ -1,3 +1,11 @@
+## [1.13.22] — 2026-09-27
+
+One smooth bar from 0 to 100, and an honest countdown.
+
+- The bar now follows this device's historical startup curve instead of a straight ramp: the old linear pace sat uselessly below real progress for seconds (the visible freeze at 43), while the real curve tracks the long inbox phase. Real progress can still pull the bar ahead; the display never moves backward and never passes 95 until real completion.
+- The chase is slower while loading so the early jumps blend into one continuous sweep, and quick on completion so the finish registers before the handoff.
+- The time estimate counts down the same historical pace the bar follows, so the two never disagree: "about 20 seconds" ticks down instead of freezing on "about 5 seconds", and past the expected finish it reads "almost there" while the bar parks at 95.
+
 ## [1.13.21] — 2026-09-27
 
 Keep the loading bar moving for the whole startup.

@@ -1,18 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { readLocal, saveLocal } from './api';
-import { StartupClock, softenEstimate, startupHistory, startupRemaining, startupWaitLabel } from './startup-estimate';
+import { paceInfo } from './loading-progress';
+import { StartupClock, startupHistory, startupWaitLabel } from './startup-estimate';
 
 export function useStartupEstimate(percent: number, complete: boolean, error: boolean, timingKey?: string, remember = true) {
   const [clock] = useState(() => new StartupClock(performance.now()));
   const [now, setNow] = useState(() => performance.now());
-  const [history, setHistory] = useState(() => startupHistory(timingKey ? readLocal(timingKey) : undefined, Date.now()));
   const saved = useRef(false), previousKey = useRef(timingKey);
-  const shown = useRef<number | undefined>(undefined);
   useEffect(() => {
+    // A new key means a new run: don't let the old run's points pollute it.
     if (previousKey.current && previousKey.current !== timingKey) clock.interrupt();
     previousKey.current = timingKey;
-    shown.current = undefined;
-    setHistory(startupHistory(timingKey ? readLocal(timingKey) : undefined, Date.now()));
   }, [clock, timingKey]);
   useEffect(() => {
     const tick = () => setNow(performance.now());
@@ -31,10 +29,11 @@ export function useStartupEstimate(percent: number, complete: boolean, error: bo
       if (sample) saveLocal(timingKey, [...startupHistory(readLocal(timingKey), Date.now()), sample].slice(-5));
     }
   }, [clock, percent, complete, error, timingKey, remember]);
-  const raw = startupRemaining(clock.points, clock.elapsed(now), history);
-  // Never blank a shown estimate mid-load: when progress stalls long enough
-  // that the math runs out of things to say, a frozen estimate still tells
-  // the owner the app is working, while a vanished one looks broken.
-  if (raw !== undefined) shown.current = softenEstimate(shown.current, raw);
-  return startupWaitLabel(shown.current, complete);
+  // The estimate counts down the same historical pace the bar follows, so the
+  // two never disagree. Past the expected finish the app is nearly there by
+  // construction (the bar parks at 95), so say so instead of going silent.
+  const pace = useMemo(() => paceInfo(timingKey), [timingKey]);
+  if (error || complete) return '';
+  const remaining = pace.totalMs - clock.elapsed(now);
+  return remaining > 0 ? startupWaitLabel(remaining, false) : 'almost there';
 }

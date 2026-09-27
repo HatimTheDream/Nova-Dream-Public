@@ -37,6 +37,23 @@ export function estimatedTotalMs(history: StartupTiming[]): number | undefined {
   return totals[Math.floor(totals.length / 2)];
 }
 
+/** Median percent reached `elapsedMs` into past runs: the startup's
+ *  historical curve. Each run is interpolated linearly between its samples;
+ *  runs that already finished hold 100. */
+export function historicalPercent(history: StartupTiming[], elapsedMs: number): number | undefined {
+  if (!history.length || !(elapsedMs >= 0)) return undefined;
+  const at = history.map(run => {
+    const points = run.points;
+    let i = 0;
+    while (i < points.length - 1 && points[i + 1].ms < elapsedMs) i++;
+    const a = points[i], b = points[i + 1];
+    if (!b || b.ms <= a.ms || elapsedMs <= a.ms) return a.percent;
+    return a.percent + (b.percent - a.percent) * (elapsedMs - a.ms) / (b.ms - a.ms);
+  });
+  at.sort((x, y) => x - y);
+  return at[Math.floor(at.length / 2)];
+}
+
 /** Where the bar should be `elapsedMs` into the run at its historical pace.
  *  Capped below completion: only real completion may show 100. */
 export function pacedPercent(elapsedMs: number, totalMs: number): number {
@@ -53,12 +70,18 @@ export function approachValue(shown: number, goal: number, dtMs: number, timeCon
   return shown + (goal - shown) * (1 - Math.exp(-dtMs / timeConstantMs));
 }
 
-/** Resolve this device's pace: the versioned timing history first, then the
- *  most recent run from any version, then the default. */
-export function paceTotalMs(timingKey: string | undefined): number {
+export type PaceInfo = { totalMs: number; history: StartupTiming[] };
+
+/** Resolve this device's startup pace: the versioned timing history first,
+ *  then the most recent run from any version, then a steady default. */
+export function paceInfo(timingKey: string | undefined): PaceInfo {
+  const fromHistory = (history: StartupTiming[]): PaceInfo | undefined => {
+    const totalMs = estimatedTotalMs(history);
+    return totalMs ? { totalMs, history } : undefined;
+  };
   if (timingKey) {
-    const total = estimatedTotalMs(startupHistory(readLocal(timingKey), Date.now()));
-    if (total) return total;
+    const own = fromHistory(startupHistory(readLocal(timingKey), Date.now()));
+    if (own) return own;
   }
   let best: StartupTiming[] | undefined, bestAt = 0;
   try {
@@ -70,5 +93,13 @@ export function paceTotalMs(timingKey: string | undefined): number {
       if (history.length && at > bestAt) { bestAt = at; best = history; }
     }
   } catch { /* storage unavailable: fall through to the default */ }
-  return estimatedTotalMs(best ?? []) ?? defaultPaceMs;
+  return fromHistory(best ?? []) ?? { totalMs: defaultPaceMs, history: [] };
+}
+
+/** Where the bar should be `elapsedMs` into the run: the median historical
+ *  curve when past runs exist, otherwise a steady ramp over the pace. Capped
+ *  below completion: only real completion may show 100. */
+export function expectedPercent(pace: PaceInfo, elapsedMs: number): number {
+  const curve = historicalPercent(pace.history, elapsedMs);
+  return Math.min(95, curve ?? pacedPercent(elapsedMs, pace.totalMs));
 }

@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { approachValue, pacedPercent, paceTotalMs } from './loading-progress';
+import { approachValue, expectedPercent, paceInfo } from './loading-progress';
 
-// The bar moves continuously from 0 to 100: real progress always leads, and
-// during stalls a history-paced floor keeps the bar creeping instead of
-// freezing. One exponential approach smooths both jumps and creep into a
-// single steady motion; the display never moves backward.
+// The bar moves continuously from 0 to 100 along this device's historical
+// startup curve, with real progress able to pull it ahead. One exponential
+// approach smooths everything into a single steady motion: the chase is
+// deliberately slow so early jumps blend into one sweep instead of whipping,
+// and quick on completion so the finish registers before the handoff. The
+// display never moves backward and never claims near-completion early.
 function useSteadyPercent(target: number | undefined, timingKey: string | undefined, complete: boolean, paused: boolean): number | undefined {
   const [shown, setShown] = useState(0);
   const shownRef = useRef(0);
   const realRef = useRef(0);
   if (target !== undefined) realRef.current = Math.max(realRef.current, target);
   const hasTarget = target !== undefined;
-  const pace = useMemo(() => paceTotalMs(timingKey), [timingKey]);
+  const pace = useMemo(() => paceInfo(timingKey), [timingKey]);
   const startRef = useRef(0);
   if (startRef.current === 0) startRef.current = performance.now();
   const reduceMotion = useMemo(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches, []);
@@ -22,13 +24,12 @@ function useSteadyPercent(target: number | undefined, timingKey: string | undefi
       const dt = now - last; last = now;
       const real = realRef.current;
       // The paced floor runs only while work is outstanding, unpaused, and
-      // motion is welcome. It never claims near-completion before the real
-      // thing: the cap reserves the finish for actual completion.
+      // motion is welcome.
       const floor = !complete && !paused && !reduceMotion
-        ? Math.max(real, pacedPercent(now - startRef.current, pace))
+        ? Math.max(real, expectedPercent(pace, now - startRef.current))
         : real;
       const goal = complete ? 100 : floor;
-      const next = reduceMotion ? goal : approachValue(shownRef.current, goal, dt);
+      const next = reduceMotion ? goal : approachValue(shownRef.current, goal, dt, complete ? 200 : 600);
       if (next !== shownRef.current) { shownRef.current = next; setShown(next); }
       raf = requestAnimationFrame(tick);
     };
