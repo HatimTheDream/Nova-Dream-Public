@@ -41,39 +41,41 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
   if (pattern === 'stripes') {
     return (
       <g fill={color}>
-        {/* Forehead crown: tall center spike, flanking blades (measured) */}
-        <path d="M200 14 C211 46 215 88 200 127 C185 88 189 46 200 14 Z" />
-        <path d="M158 47 C150 64 146 84 152 105 C140 92 136 68 143 50 C146 42 155 41 158 47 Z" />
-        <path d="M242 47 C250 64 254 84 248 105 C260 92 264 68 257 50 C254 42 245 41 242 47 Z" />
-        {/* Side swooshes flowing out from the eyes toward the frame edges */}
-        <path d="M104 160 C70 146 36 140 6 144 C36 160 68 172 100 182 Z" />
-        <path d="M296 160 C330 146 364 140 394 144 C364 160 332 172 300 182 Z" />
-        <path d="M92 214 C58 208 28 208 4 216 C32 228 62 234 92 238 Z" />
-        <path d="M308 214 C342 208 372 208 396 216 C368 228 338 234 308 238 Z" />
-        {/* Cheek ruffs: big layered commas reaching the edges (measured y 162-334) */}
-        <path d="M84 246 C48 262 22 294 14 334 C40 312 62 284 88 258 Z" />
-        <path d="M100 272 C78 292 64 318 62 348 C82 330 96 304 108 280 Z" />
-        <path d="M316 246 C352 262 378 294 386 334 C360 312 338 284 312 258 Z" />
-        <path d="M300 272 C322 292 336 318 338 348 C318 330 304 304 292 280 Z" />
+        {/* Forehead crown: plump petal center, crescent blades leaning outward */}
+        <path d="M200 12 C214 38 220 78 200 128 C180 78 186 38 200 12 Z" />
+        <path d="M154 52 C130 66 116 100 122 140 C126 162 136 180 148 190 C140 162 140 124 150 92 C153 76 155 62 154 52 Z" />
+        <path d="M246 52 C270 66 284 100 278 140 C274 162 264 180 252 190 C260 162 260 124 250 92 C247 76 245 62 246 52 Z" />
+        {/* Side swooshes: curved bands flowing from the eyes to the frame edges */}
+        <path d="M112 158 C76 142 40 136 6 142 C40 156 76 168 110 182 C114 174 114 166 112 158 Z" />
+        <path d="M288 158 C324 142 360 136 394 142 C360 156 324 168 290 182 C286 174 286 166 288 158 Z" />
+        <path d="M100 214 C64 206 30 206 4 216 C32 230 66 238 98 244 C102 234 102 224 100 214 Z" />
+        <path d="M300 214 C336 206 370 206 396 216 C368 230 334 238 302 244 C298 234 298 224 300 214 Z" />
+        {/* Cheek ruffs: layered fat commas, plump outer curve tapering inward */}
+        <path d="M98 240 C56 252 26 286 20 328 C22 336 30 338 38 332 C56 318 70 296 84 272 C90 260 94 248 98 240 Z" />
+        <path d="M112 268 C90 286 74 312 72 344 C92 326 106 302 118 278 C120 272 116 267 112 268 Z" />
+        <path d="M84 296 C62 312 48 336 46 364 C64 348 78 326 92 304 C94 298 89 294 84 296 Z" />
+        <path d="M302 240 C344 252 374 286 380 328 C378 336 370 338 362 332 C344 318 330 296 316 272 C310 260 306 248 302 240 Z" />
+        <path d="M288 268 C310 286 326 312 328 344 C308 326 294 302 282 278 C280 272 284 267 288 268 Z" />
+        <path d="M316 296 C338 312 352 336 354 364 C336 348 322 326 308 304 C306 298 311 294 316 296 Z" />
       </g>
     );
   }
   if (pattern === 'spots') {
     return (
       <g fill={color}>
-        <path d="M200 30 L216 62 L200 94 L184 62 Z" />
-        <path d="M150 52 L162 74 L150 96 L138 74 Z" />
-        <path d="M250 52 L262 74 L250 96 L238 74 Z" />
-        <path d="M100 100 L116 124 L100 148 L84 124 Z" />
-        <path d="M300 100 L316 124 L300 148 L284 124 Z" />
-        <path d="M48 170 L66 196 L48 222 L30 196 Z" />
-        <path d="M352 170 L370 196 L352 222 L334 196 Z" />
-        <path d="M36 250 L54 276 L36 302 L18 276 Z" />
-        <path d="M364 250 L382 276 L364 302 L346 276 Z" />
-        <path d="M70 310 L84 332 L70 354 L56 332 Z" />
-        <path d="M330 310 L344 332 L330 354 L316 332 Z" />
-        <path d="M124 240 L132 254 L124 268 L116 254 Z" />
-        <path d="M276 240 L284 254 L276 268 L268 254 Z" />
+        <path d="M200 30 C208 44 210 58 200 72 C190 58 192 44 200 30 Z" />
+        <path d="M150 52 C156 62 157 72 150 82 C143 72 144 62 150 52 Z" />
+        <path d="M250 52 C256 62 257 72 250 82 C243 72 244 62 250 52 Z" />
+        <path d="M100 100 C108 114 110 128 100 142 C90 128 92 114 100 100 Z" />
+        <path d="M300 100 C308 114 310 128 300 142 C290 128 292 114 300 100 Z" />
+        <path d="M48 170 C58 186 60 202 48 218 C36 202 38 186 48 170 Z" />
+        <path d="M352 170 C362 186 364 202 352 218 C340 202 342 186 352 170 Z" />
+        <path d="M36 250 C46 266 48 282 36 298 C24 282 26 266 36 250 Z" />
+        <path d="M364 250 C374 266 376 282 364 298 C352 282 354 266 364 250 Z" />
+        <path d="M70 310 C77 321 78 332 70 343 C62 332 63 321 70 310 Z" />
+        <path d="M330 310 C337 321 338 332 330 343 C322 332 323 321 330 310 Z" />
+        <path d="M124 240 C129 248 130 256 124 264 C118 256 119 248 124 240 Z" />
+        <path d="M276 240 C281 248 282 256 276 264 C270 256 271 248 276 240 Z" />
       </g>
     );
   }
@@ -81,11 +83,11 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
     return (
       <g fill={color}>
         <path d="M200 22 C209 58 211 100 200 142 C189 100 191 58 200 22 Z" />
-        <path d="M200 142 L217 172 L200 202 L183 172 Z" />
-        <path d="M118 118 C104 138 96 162 96 190 C110 172 121 150 131 128 Z" />
-        <path d="M282 118 C296 138 304 162 304 190 C290 172 279 150 269 128 Z" />
-        <path d="M92 198 C74 220 62 246 58 276 C76 256 90 232 102 210 Z" />
-        <path d="M308 198 C326 220 338 246 342 276 C324 256 310 232 298 210 Z" />
+        <path d="M200 142 C206 156 207 168 200 182 C193 168 194 156 200 142 Z" />
+        <path d="M118 118 C104 138 96 162 96 190 C110 172 121 150 131 128 C127 122 122 118 118 118 Z" />
+        <path d="M282 118 C296 138 304 162 304 190 C290 172 279 150 269 128 C273 122 278 118 282 118 Z" />
+        <path d="M92 198 C74 220 62 246 58 276 C76 256 90 232 102 210 C99 204 95 200 92 198 Z" />
+        <path d="M308 198 C326 220 338 246 342 276 C324 256 310 232 298 210 C301 204 305 200 308 198 Z" />
       </g>
     );
   }
@@ -94,16 +96,17 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
 
 function Features({ face }: { face: SquareLynxModules['face'] }) {
   const muzzle = <ellipse cx={200} cy={290} rx={62} ry={32} fill="#FFFDF8" opacity={0.4} />;
-  /** Logo eye: big. Iris 67px wide, thick upper liner, white sclera ring. */
+  /** Logo eye: big. Iris 67px wide, thick liner hugging the upper eye,
+   *  white sclera ring, large pupil, catchlight on the pupil's upper-left. */
   const eye = (cx: number, cy: number, irisR: number, lidDrop: number) => (
     <g>
       <ellipse cx={cx} cy={cy} rx={irisR + 8} ry={irisR + 10} fill="#fff" />
       <circle cx={cx} cy={cy + 3} r={irisR} fill={IRIS} />
       <circle cx={cx} cy={cy + 3} r={irisR * 0.52} fill="#1b1b1f" />
-      <circle cx={cx - irisR * 0.3} cy={cy - irisR * 0.35} r={irisR * 0.24} fill="#fff" />
+      <circle cx={cx - irisR * 0.28} cy={cy - irisR * 0.28} r={irisR * 0.26} fill="#fff" />
       <path
-        d={`M${cx - irisR - 8} ${cy - lidDrop} Q${cx} ${cy - irisR - 18} ${cx + irisR + 8} ${cy - lidDrop}`}
-        stroke={INK} strokeWidth={14} fill="none" strokeLinecap="round"
+        d={`M${cx - irisR - 10} ${cy - lidDrop} Q${cx} ${cy - irisR - 20} ${cx + irisR + 10} ${cy - lidDrop}`}
+        stroke={INK} strokeWidth={17} fill="none" strokeLinecap="round"
       />
     </g>
   );
