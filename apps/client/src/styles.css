@@ -213,13 +213,15 @@
   .startup-copy p { margin:12px 0 0; font-size:14px; line-height:1.65; color:var(--muted); overflow-wrap:anywhere; }
   .startup-progress { width:min(280px,100%); }
   .startup-track { height:8px; overflow:hidden; border-radius:999px; background:var(--line); }
-  .startup-fill { display:block; height:100%; border-radius:inherit; background:var(--brand-red); transition:width 180ms ease-out; }
-  .startup-track[aria-valuenow="100"] .startup-fill { transition:none; }
+  .startup-fill { display:block; height:100%; border-radius:inherit; background:var(--brand-red); }
+  .startup-handoff { position:relative; }
+  .startup-handoff>.startup-screen { position:absolute; inset:0; z-index:5; }
+  .startup-screen.is-leaving { opacity:0; transition:opacity 380ms ease; pointer-events:none; }
   .startup-progress .startup-percent { margin:12px 0 0; font-size:13px; line-height:1.5; font-weight:580; font-variant-numeric:tabular-nums; color:var(--text); }
   .startup-amount { margin:5px 0 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; color:var(--muted); }
   .startup-progress.is-indeterminate .startup-fill { animation:startup-wait 1.4s ease-in-out infinite alternate; }
   @keyframes startup-wait { from { opacity:.25; } to { opacity:.65; } }
-  @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } .startup-progress.is-indeterminate .startup-fill { animation:none; } }
+  @media (prefers-reduced-motion:reduce) { .startup-fill { transition:none; } .startup-progress.is-indeterminate .startup-fill { animation:none; } .startup-screen.is-leaving { transition:none; } }
   .search-input { flex-direction:row; align-items:center; gap:10px; }
   .search-input input { flex:1; min-width:0; }
   .search-results { padding-top:18px; max-height:55dvh; overflow:auto; }

@@ -13,3 +13,12 @@ export function playfulStartupSubtitle(percent: number) {
   if (percent > 0) return 'Gathering your good ideas…';
   return 'Stretching our paws…';
 }
+
+// Startup phases report in coarse chunks (one inbox update can jump the bar
+// from 10 to 43), so the loading bar eases toward each reported value instead
+// of snapping. Ease-out front-loads the motion so the sweep feels responsive
+// and then settles gently onto the reported number.
+export function easeOutCubic(t: number): number {
+  const clamped = Math.min(1, Math.max(0, t));
+  return 1 - Math.pow(1 - clamped, 3);
+}

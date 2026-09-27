@@ -1,3 +1,11 @@
+## [1.13.19] — 2026-09-27
+
+Make the loading screen feel smooth instead of jumpy.
+
+- The progress bar eases toward each reported value over about two thirds of a second, so coarse startup phases (like the jump straight to 43%) sweep instead of snapping. The percentage label rides the same easing so the number and the bar never disagree.
+- When loading finishes, the bar completes to 100%, the screen holds briefly so the finish registers, then crossfades into the app instead of teleporting.
+- Both respect the reduced-motion setting: with it on, progress snaps and the handoff is instant, as before.
+
 ## [1.13.18] — 2026-09-27
 
 Fix the loading-screen estimate going blank on fresh installs.

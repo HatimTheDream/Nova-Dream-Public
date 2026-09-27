@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { workspaceLoadingPercent, playfulStartupSubtitle } from '../apps/client/src/loading-progress';
+import { workspaceLoadingPercent, playfulStartupSubtitle, easeOutCubic } from '../apps/client/src/loading-progress';
 import { inboxLoadingPercent } from '../apps/client/src/inbox-startup-progress';
 
 test('workspace progress keeps one denominator and completes only with an accepted workspace', () => {
@@ -29,4 +29,17 @@ test('startup keeps playful copy while preparation continues after the transfer'
   assert.equal(workspaceLoadingPercent({ loadedBytes: 1000, totalBytes: 1000, complete: true }, false, 72), 72);
   assert.equal(workspaceLoadingPercent(undefined, false, 100), 99);
   for (const percent of [0,15,55,95,100]) assert.doesNotMatch(playfulStartupSubtitle(percent), /inbox|mail|account|session|bytes/i);
+});
+
+test('eased startup progress starts and lands exactly on the reported value', () => {
+  assert.equal(easeOutCubic(0), 0);
+  assert.equal(easeOutCubic(1), 1);
+  // Ease-out front-loads: halfway through the sweep covers most of the distance.
+  const mid = easeOutCubic(0.5);
+  assert.ok(mid > 0.5 && mid < 1, `expected front-loaded midpoint, got ${mid}`);
+  // Monotonic and clamped outside 0..1.
+  const samples = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1].map(easeOutCubic);
+  assert.deepEqual(samples, [...samples].sort((a, b) => a - b));
+  assert.equal(easeOutCubic(-0.5), 0);
+  assert.equal(easeOutCubic(1.5), 1);
 });
