@@ -15,6 +15,9 @@ const MARKING: Record<SquareLynxModules['colorway'], string> = {
   gold: '#D9A41B',
 };
 
+/** Accent color per colorway, for swatch-style option controls. */
+export const squareLynxMarkingColors: Record<SquareLynxModules['colorway'], string> = MARKING;
+
 function Ears({ color }: { color: string }) {
   return (
     <g>
@@ -22,6 +25,8 @@ function Ears({ color }: { color: string }) {
       <path d="M386 124 C382 60 360 26 330 10 C308 38 298 72 296 124 Z" fill={EAR} />
       <path d="M36 110 C40 72 50 48 66 34 C81 51 87 77 89 110 Z" fill={color} />
       <path d="M364 110 C360 72 350 48 334 34 C319 51 313 77 311 110 Z" fill={color} />
+      <path d="M48 100 C52 74 58 58 68 48 C77 60 81 78 82 100 Z" fill="#FFFDF6" opacity={0.85} />
+      <path d="M352 100 C348 74 342 58 332 48 C323 60 319 78 318 100 Z" fill="#FFFDF6" opacity={0.85} />
     </g>
   );
 }
@@ -30,32 +35,54 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
   if (pattern === 'stripes') {
     return (
       <g fill={color}>
-        <path d="M200 30 C209 58 211 86 200 122 C189 86 191 58 200 30 Z" />
-        <path d="M156 42 C168 64 172 90 165 118 C155 92 151 68 156 42 Z" />
-        <path d="M244 42 C232 64 228 90 235 118 C245 92 249 68 244 42 Z" />
-        <path d="M98 204 C60 222 36 256 28 304 C58 278 84 246 102 216 Z" />
-        <path d="M82 262 C54 280 40 308 36 342 C60 320 76 294 90 266 Z" />
-        <path d="M302 204 C340 222 364 256 372 304 C342 278 316 246 298 216 Z" />
-        <path d="M318 262 C346 280 360 308 364 342 C340 320 324 294 310 266 Z" />
+        {/* Forehead crown: tall central teardrop with flanking curved blades */}
+        <path d="M200 16 C211 48 215 86 200 134 C185 86 189 48 200 16 Z" />
+        <path d="M158 40 C150 66 146 94 152 120 C138 100 132 70 140 44 C144 34 154 32 158 40 Z" />
+        <path d="M242 40 C250 66 254 94 248 120 C262 100 268 70 260 44 C256 34 246 32 242 40 Z" />
+        <path d="M118 78 C112 96 110 114 114 132 C104 118 100 98 106 80 C109 72 116 70 118 78 Z" />
+        <path d="M282 78 C288 96 290 114 286 132 C296 118 300 98 294 80 C291 72 284 70 282 78 Z" />
+        {/* Upper wing swooshes sweeping out from the eyes */}
+        <path d="M112 158 C80 140 48 128 18 128 C44 146 76 162 108 176 Z" />
+        <path d="M288 158 C320 140 352 128 382 128 C356 146 324 162 292 176 Z" />
+        {/* Mid blades */}
+        <path d="M100 208 C66 200 36 198 12 204 C40 216 70 224 100 230 Z" />
+        <path d="M300 208 C334 200 364 198 388 204 C360 216 330 224 300 230 Z" />
+        {/* Cheek ruffs: large layered commas */}
+        <path d="M92 244 C60 258 40 288 36 326 C58 308 78 282 96 258 Z" />
+        <path d="M108 268 C88 286 76 310 74 338 C92 322 104 298 114 276 Z" />
+        <path d="M308 244 C340 258 360 288 364 326 C342 308 322 282 304 258 Z" />
+        <path d="M292 268 C312 286 324 310 326 338 C308 322 296 298 286 276 Z" />
       </g>
     );
   }
   if (pattern === 'spots') {
     return (
       <g fill={color}>
-        <path d="M200 44 l14 18 -14 18 -14 -18 Z" /><path d="M164 62 l12 15 -12 15 -12 -15 Z" /><path d="M236 62 l12 15 -12 15 -12 -15 Z" />
-        <path d="M200 96 l11 14 -11 14 -11 -14 Z" />
-        <path d="M76 220 l13 16 -13 16 -13 -16 Z" /><path d="M64 268 l12 15 -12 15 -12 -15 Z" /><path d="M92 300 l11 14 -11 14 -11 -14 Z" />
-        <path d="M324 220 l13 16 -13 16 -13 -16 Z" /><path d="M336 268 l12 15 -12 15 -12 -15 Z" /><path d="M308 300 l11 14 -11 14 -11 -14 Z" />
+        <path d="M200 34 L214 62 L200 90 L186 62 Z" />
+        <path d="M152 56 L162 76 L152 96 L142 76 Z" />
+        <path d="M248 56 L258 76 L248 96 L238 76 Z" />
+        <path d="M108 108 L122 130 L108 152 L94 130 Z" />
+        <path d="M292 108 L306 130 L292 152 L278 130 Z" />
+        <path d="M64 168 L80 192 L64 216 L48 192 Z" />
+        <path d="M336 168 L352 192 L336 216 L320 192 Z" />
+        <path d="M52 248 L68 272 L52 296 L36 272 Z" />
+        <path d="M348 248 L364 272 L348 296 L332 272 Z" />
+        <path d="M84 300 L96 320 L84 340 L72 320 Z" />
+        <path d="M316 300 L328 320 L316 340 L304 320 Z" />
+        <path d="M128 232 L136 246 L128 260 L120 246 Z" />
+        <path d="M272 232 L280 246 L272 260 L264 246 Z" />
       </g>
     );
   }
   if (pattern === 'blaze') {
     return (
       <g fill={color}>
-        <path d="M208 30 L188 84 L202 84 L186 128 L216 76 L202 76 Z" />
-        <path d="M88 210 L56 252 L74 252 L52 300 L104 240 L84 240 Z" />
-        <path d="M312 210 L344 252 L326 252 L348 300 L296 240 L316 240 Z" />
+        <path d="M200 24 C208 60 210 100 200 142 C190 100 192 60 200 24 Z" />
+        <path d="M200 142 L216 170 L200 198 L184 170 Z" />
+        <path d="M120 120 C106 138 98 160 98 186 C110 170 120 150 130 130 Z" />
+        <path d="M280 120 C294 138 302 160 302 186 C290 170 280 150 270 130 Z" />
+        <path d="M96 200 C78 220 66 244 62 272 C78 254 92 232 104 212 Z" />
+        <path d="M304 200 C322 220 334 244 338 272 C322 254 308 232 296 212 Z" />
       </g>
     );
   }
@@ -63,36 +90,39 @@ function Markings({ pattern, color }: { pattern: SquareLynxModules['pattern']; c
 }
 
 function Features({ face }: { face: SquareLynxModules['face'] }) {
-  const nose = <path d="M182 254 Q200 245 218 254 Q214 272 200 276 Q186 272 182 254 Z" fill={INK} />;
-  const whiskers = (
-    <g stroke={INK} strokeWidth={2.5} strokeLinecap="round" opacity={0.75}>
-      <path d="M148 262 L112 254" /><path d="M148 272 L114 272" />
-      <path d="M252 262 L288 254" /><path d="M252 272 L286 272" />
-    </g>
-  );
-  const muzzle = <ellipse cx={200} cy={272} rx={44} ry={24} fill="#FFFDF8" opacity={0.35} />;
-  const eyeWhite = (cx: number, narrowed: boolean) => (
-    <ellipse cx={cx} cy={190} rx={36} ry={narrowed ? 32 : 40} fill="#fff" />
-  );
-  const iris = (cx: number) => (
+  const muzzle = <ellipse cx={200} cy={282} rx={58} ry={30} fill="#FFFDF8" opacity={0.4} />;
+  const noseBridge = <path d="M200 232 L200 248" stroke={INK} strokeWidth={5} strokeLinecap="round" />;
+  const nose = (
     <g>
-      <circle cx={cx} cy={195} r={22} fill={IRIS} />
-      <circle cx={cx} cy={195} r={11} fill="#1b1b1f" />
-      <circle cx={cx - 7} cy={187} r={5.5} fill="#fff" />
+      {noseBridge}
+      <path d="M178 252 Q200 242 222 252 Q218 272 200 277 Q182 272 178 252 Z" fill={INK} />
     </g>
   );
-  const lid = (cx: number) => (
-    <path d={`M${cx - 36} 182 Q${cx} 150 ${cx + 36} 182`} stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
+  const whiskers = (
+    <g stroke={INK} strokeWidth={2.5} strokeLinecap="round" opacity={0.7}>
+      <path d="M146 264 L108 256" /><path d="M146 276 L110 276" /><path d="M148 288 L116 296" />
+      <path d="M254 264 L292 256" /><path d="M254 276 L290 276" /><path d="M252 288 L284 296" />
+    </g>
+  );
+  /** Big logo-style eye: white sclera, thick liner, amber iris, pupil, catchlight. */
+  const eye = (cx: number, cy: number, rx: number, ry: number, lidY: number) => (
+    <g>
+      <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="#fff" />
+      <circle cx={cx} cy={cy + 4} r={rx * 0.62} fill={IRIS} />
+      <circle cx={cx} cy={cy + 4} r={rx * 0.34} fill="#1b1b1f" />
+      <circle cx={cx - rx * 0.2} cy={cy - ry * 0.25} r={rx * 0.16} fill="#fff" />
+      <path d={`M${cx - rx} ${lidY} Q${cx} ${lidY - 26} ${cx + rx} ${lidY}`} stroke={INK} strokeWidth={10} fill="none" strokeLinecap="round" />
+    </g>
   );
   if (face === 'bold') {
     return (
       <g>
         {muzzle}
-        {eyeWhite(138, false)}{eyeWhite(262, false)}{iris(138)}{iris(262)}{lid(138)}{lid(262)}
-        <path d="M100 140 Q138 112 178 136" stroke={INK} strokeWidth={10} fill="none" strokeLinecap="round" />
-        <path d="M222 136 Q262 112 300 140" stroke={INK} strokeWidth={10} fill="none" strokeLinecap="round" />
+        {eye(134, 196, 37, 41, 182)}{eye(266, 196, 37, 41, 182)}
+        <path d="M92 142 Q134 108 180 134" stroke={INK} strokeWidth={13} fill="none" strokeLinecap="round" />
+        <path d="M220 134 Q266 108 308 142" stroke={INK} strokeWidth={13} fill="none" strokeLinecap="round" />
         {nose}{whiskers}
-        <path d="M200 276 C200 288 188 292 177 285 M200 276 C200 288 212 292 223 285" stroke={INK} strokeWidth={6} fill="none" strokeLinecap="round" />
+        <path d="M200 277 C196 290 184 296 172 290 M200 277 C204 290 216 296 228 290" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
       </g>
     );
   }
@@ -100,11 +130,13 @@ function Features({ face }: { face: SquareLynxModules['face'] }) {
     return (
       <g>
         {muzzle}
-        {eyeWhite(138, true)}{eyeWhite(262, true)}{iris(138)}{iris(262)}{lid(138)}{lid(262)}
-        <path d="M102 128 L176 148" stroke={INK} strokeWidth={10} strokeLinecap="round" />
-        <path d="M298 128 L224 148" stroke={INK} strokeWidth={10} strokeLinecap="round" />
+        {eye(134, 198, 35, 33, 186)}{eye(266, 198, 35, 33, 186)}
+        <path d="M96 130 L178 150" stroke={INK} strokeWidth={12} strokeLinecap="round" />
+        <path d="M304 130 L222 150" stroke={INK} strokeWidth={12} strokeLinecap="round" />
+        <path d="M99 182 L126 176" stroke={INK} strokeWidth={7} strokeLinecap="round" />
+        <path d="M301 182 L274 176" stroke={INK} strokeWidth={7} strokeLinecap="round" />
         {nose}{whiskers}
-        <path d="M182 290 Q200 284 218 290" stroke={INK} strokeWidth={6} fill="none" strokeLinecap="round" />
+        <path d="M180 292 Q200 286 220 292" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
       </g>
     );
   }
@@ -112,35 +144,40 @@ function Features({ face }: { face: SquareLynxModules['face'] }) {
     return (
       <g>
         {muzzle}
-        <ellipse cx={138} cy={192} rx={30} ry={34} fill="#fff" />
-        <ellipse cx={262} cy={192} rx={30} ry={34} fill="#fff" />
-        {iris(138)}{iris(262)}
-        <path d="M108 182 Q138 158 168 182" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
-        <path d="M232 182 Q262 158 292 182" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
-        <path d="M112 148 Q138 134 164 146" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
-        <path d="M236 146 Q262 134 288 148" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
+        <ellipse cx={134} cy={198} rx={31} ry={35} fill="#fff" />
+        <ellipse cx={266} cy={198} rx={31} ry={35} fill="#fff" />
+        <circle cx={134} cy={202} r={20} fill={IRIS} />
+        <circle cx={266} cy={202} r={20} fill={IRIS} />
+        <circle cx={134} cy={202} r={10} fill="#1b1b1f" />
+        <circle cx={266} cy={202} r={10} fill="#1b1b1f" />
+        <circle cx={128} cy={195} r={5} fill="#fff" />
+        <circle cx={260} cy={195} r={5} fill="#fff" />
+        <path d="M103 184 Q134 160 165 184" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
+        <path d="M235 184 Q266 160 297 184" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
+        <path d="M106 148 Q134 132 162 144" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
+        <path d="M238 144 Q266 132 294 148" stroke={INK} strokeWidth={8} fill="none" strokeLinecap="round" />
         {nose}{whiskers}
-        <path d="M178 282 Q200 300 222 282" stroke={INK} strokeWidth={6} fill="none" strokeLinecap="round" />
+        <path d="M176 284 Q200 302 224 284" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
       </g>
     );
   }
   return (
     <g>
       {muzzle}
-      <ellipse cx={138} cy={198} rx={32} ry={27} fill="#fff" />
-      <ellipse cx={262} cy={198} rx={32} ry={27} fill="#fff" />
-      <circle cx={138} cy={202} r={18} fill={IRIS} />
-      <circle cx={262} cy={202} r={18} fill={IRIS} />
-      <circle cx={138} cy={202} r={9} fill="#1b1b1f" />
-      <circle cx={262} cy={202} r={9} fill="#1b1b1f" />
-      <circle cx={132} cy={196} r={4.5} fill="#fff" />
-      <circle cx={256} cy={196} r={4.5} fill="#fff" />
-      <path d="M106 190 Q138 172 170 190" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
-      <path d="M230 190 Q262 172 294 190" stroke={INK} strokeWidth={7} fill="none" strokeLinecap="round" />
-      <path d="M108 142 L168 142" stroke={INK} strokeWidth={7} strokeLinecap="round" />
-      <path d="M232 142 L292 142" stroke={INK} strokeWidth={7} strokeLinecap="round" />
+      <ellipse cx={134} cy={202} rx={33} ry={26} fill="#fff" />
+      <ellipse cx={266} cy={202} rx={33} ry={26} fill="#fff" />
+      <circle cx={134} cy={206} r={18} fill={IRIS} />
+      <circle cx={266} cy={206} r={18} fill={IRIS} />
+      <circle cx={134} cy={206} r={9} fill="#1b1b1f" />
+      <circle cx={266} cy={206} r={9} fill="#1b1b1f" />
+      <circle cx={128} cy={200} r={4.5} fill="#fff" />
+      <circle cx={260} cy={200} r={4.5} fill="#fff" />
+      <path d="M101 192 Q134 172 167 192" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
+      <path d="M233 192 Q266 172 299 192" stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />
+      <path d="M104 142 L164 142" stroke={INK} strokeWidth={8} strokeLinecap="round" />
+      <path d="M236 142 L296 142" stroke={INK} strokeWidth={8} strokeLinecap="round" />
       {nose}{whiskers}
-      <path d="M186 288 Q200 292 214 288" stroke={INK} strokeWidth={5} fill="none" strokeLinecap="round" />
+      <path d="M184 290 Q200 295 216 290" stroke={INK} strokeWidth={6} fill="none" strokeLinecap="round" />
     </g>
   );
 }
@@ -149,21 +186,21 @@ function Clothing({ style, color }: { style: SquareLynxModules['clothing']; colo
   if (style === 'tie') {
     return (
       <g>
-        <path d="M0 400 L0 340 Q100 320 200 332 Q300 320 400 340 L400 400 Z" fill="#232327" />
-        <path d="M174 332 L226 332 L200 378 Z" fill="#fff" />
-        <path d="M174 332 L132 400 L168 400 L192 350 Z" fill="#2E2E34" />
-        <path d="M226 332 L268 400 L232 400 L208 350 Z" fill="#2E2E34" />
-        <path d="M192 338 L208 338 L205 350 L195 350 Z" fill={color} />
-        <path d="M195 350 L205 350 L209 384 L200 394 L191 384 Z" fill={color} />
+        <path d="M0 400 L0 338 Q100 318 200 330 Q300 318 400 338 L400 400 Z" fill="#232327" />
+        <path d="M168 330 L200 366 L232 330 L222 322 L200 340 L178 322 Z" fill="#fff" />
+        <path d="M168 330 L124 400 L162 400 L188 348 Z" fill="#2E2E34" />
+        <path d="M232 330 L276 400 L238 400 L212 348 Z" fill="#2E2E34" />
+        <path d="M190 340 L210 340 L206 354 L194 354 Z" fill={color} />
+        <path d="M194 354 L206 354 L210 386 L200 398 L190 386 Z" fill={color} />
       </g>
     );
   }
   return (
     <g>
-      <path d="M0 400 L0 348 Q200 330 400 348 L400 400 Z" fill="#2E3D5C" />
-      <path d="M160 338 L200 368 L240 338 L240 326 L200 352 L160 326 Z" fill="#46587E" />
-      <path d="M160 338 L200 368 L186 400 L146 400 Z" fill="#24304A" />
-      <path d="M240 338 L200 368 L214 400 L254 400 Z" fill="#24304A" />
+      <path d="M0 400 L0 346 Q200 328 400 346 L400 400 Z" fill="#2E3D5C" />
+      <path d="M158 336 L200 368 L242 336 L232 326 L200 354 L168 326 Z" fill="#46587E" />
+      <path d="M158 336 L200 368 L184 400 L142 400 Z" fill="#24304A" />
+      <path d="M242 336 L200 368 L216 400 L258 400 Z" fill="#24304A" />
     </g>
   );
 }

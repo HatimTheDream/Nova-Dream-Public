@@ -1,3 +1,10 @@
+## [1.14.2] — 2026-09-27
+
+The lynx now matches the logo's richness, and the creator is simpler to use.
+
+- The artwork is redrawn with the logo's density: a forehead crown of teardrops and curved blades, wing swooshes and layered cheek ruffs for stripes, big detailed eyes with liner and catchlights, and a nose with the logo's bridge line. The face is still never outlined; it stays implied by ears, markings, and features on the seamless cream ground.
+- The creator is streamlined: one layer at a time behind Pattern / Color / Face / Clothing tabs, with the live preview always on top. Color is now four simple swatches instead of four full portraits, since the preview already shows the result.
+
 ## [1.14.1] — 2026-09-27
 
 The avatar builder is now actually modular, and the lynx is drawn the way the logo draws it.
