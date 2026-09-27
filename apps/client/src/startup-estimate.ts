@@ -21,34 +21,71 @@ function timeAt(points: StartupPoint[], percent: number) {
 }
 const median = (values: number[]) => { const sorted = [...values].sort((a,b) => a-b); return sorted[Math.floor(sorted.length / 2)]; };
 
-/** Estimate a deadline at an observed advance; clock ticks never manufacture progress. */
+/** Progress speed (percent per millisecond) across the most recent `span`
+ *  percent. A local window tracks phase changes: a quick download followed by
+ *  slow inbox preparation should not be averaged into one lifetime pace. */
+function recentPace(points: StartupPoint[], span = 10): number | undefined {
+  const last = points.at(-1)!;
+  const from = Math.max(0, last.percent - span);
+  const elapsed = last.ms - timeAt(points, from), advanced = last.percent - from;
+  return elapsed > 0 && advanced > 0 ? advanced / elapsed : undefined;
+}
+
+/** Median progress speed across past runs over the same percent window, so the
+ *  current run is compared against history doing the same phase of work. */
+function historyPace(history: StartupTiming[], from: number, to: number): number | undefined {
+  const paces: number[] = [];
+  for (const run of history) {
+    const elapsed = timeAt(run.points, to) - timeAt(run.points, from);
+    if (elapsed > 0) paces.push((to - from) / elapsed);
+  }
+  return paces.length ? median(paces) : undefined;
+}
+
+/** Estimate remaining milliseconds. History anchors the estimate and the
+ *  current run's recent pace scales it; clock ticks never manufacture progress. */
 export function startupRemaining(points: StartupPoint[], elapsed: number, history: StartupTiming[]): number | undefined {
   const last = points.at(-1)!;
   if (last.percent >= 100) return 0;
   if (elapsed - last.ms > 15_000) return undefined;
-  let remaining: number;
+  const pace = recentPace(points);
+  let remaining: number | undefined;
   if (history.length) {
-    const expectedElapsed = median(history.map(run => timeAt(run.points, last.percent)));
+    const from = Math.max(0, last.percent - 10);
+    const expected = pace === undefined ? undefined : historyPace(history, from, last.percent);
     const expectedRemaining = median(history.map(run => run.points.at(-1)!.ms - timeAt(run.points, last.percent)));
-    const pace = expectedElapsed >= 2_000 && last.ms >= 2_000 ? Math.max(.5, Math.min(3, last.ms / expectedElapsed)) : 1;
-    remaining = expectedRemaining * pace;
-  } else {
-    // A first run needs an observed preparation advance, not just a few downloaded bytes.
+    const ratio = pace !== undefined && expected ? Math.max(.5, Math.min(3, pace / expected)) : 1;
+    remaining = expectedRemaining / ratio;
+  } else if (pace !== undefined) {
+    // A first run extrapolates from its recent pace, not from the origin: the
+    // bar is back-loaded (inbox preparation dominates the later percent), so a
+    // lifetime average would under-promise once the slow phase starts.
     if (last.percent < 25 || last.ms < 2_000 || points.length < 3) return undefined;
-    remaining = last.ms * (100 - last.percent) / last.percent;
+    remaining = Math.min(maxDuration, (100 - last.percent) / pace);
+  } else {
+    return undefined;
   }
-  const left = remaining - (elapsed - last.ms);
+  const left = Math.round(remaining - (elapsed - last.ms));
   return left >= 1_000 ? left : undefined;
 }
 
 export function startupWaitLabel(remaining: number | undefined, complete: boolean) {
   if (complete) return '0 seconds';
   if (remaining === undefined || !Number.isFinite(remaining) || remaining <= 0) return '';
-  const total = Math.ceil(remaining / 1_000);
-  const hours = Math.floor(total / 3_600), minutes = Math.floor(total % 3_600 / 60), seconds = total % 60;
-  return [[hours, 'hour'], [minutes, 'minute'], [seconds, 'second']]
-    .filter(([value]) => value)
-    .map(([value, unit]) => `${value} ${unit}${value === 1 ? '' : 's'}`).join(' ');
+  // Round to the nearest five seconds: the number is an estimate, and
+  // one-second precision would promise more certainty than the math has.
+  const total = Math.max(5, Math.round(remaining / 5_000) * 5);
+  if (total < 60) return `about ${total} seconds`;
+  const minutes = Math.round(total / 60);
+  return minutes === 1 ? 'about 1 minute' : `about ${minutes} minutes`;
+}
+
+/** Ease bad news in: when a new sample revises the wait upward, approach it
+ *  over a few ticks instead of jumping. Good news (a shorter wait) and first
+ *  sightings apply immediately so the countdown stays live. */
+export function softenEstimate(previous: number | undefined, raw: number | undefined): number | undefined {
+  if (raw === undefined || previous === undefined || raw <= previous) return raw;
+  return previous + (raw - previous) / 2;
 }
 
 export class StartupClock {

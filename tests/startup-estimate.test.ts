@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { StartupClock, startupHistory, startupRemaining, startupWaitLabel, type StartupTiming } from '../apps/client/src/startup-estimate';
+import { StartupClock, softenEstimate, startupHistory, startupRemaining, startupWaitLabel, type StartupTiming } from '../apps/client/src/startup-estimate';
 
 const at = 1_800_000_000_000;
 const previous: StartupTiming = { at, points: [{percent:0,ms:0},{percent:25,ms:2_000},{percent:80,ms:22_000},{percent:100,ms:30_000}] };
@@ -10,8 +10,8 @@ test('first startup waits for preparation evidence and never turns time into pro
   clock.observe(10, 1_100);
   assert.equal(startupRemaining(clock.points, 1_000, []), undefined);
   clock.observe(25, 2_100);
-  assert.equal(startupRemaining(clock.points, 2_000, []), 6_000);
-  assert.equal(startupRemaining(clock.points, 4_000, []), 4_000);
+  assert.equal(startupRemaining(clock.points, 2_000, []), 5_000);
+  assert.equal(startupRemaining(clock.points, 4_000, []), 3_000);
   assert.equal(clock.points.at(-1)?.percent, 25);
   assert.equal(startupRemaining(clock.points, 9_000, []), undefined);
   assert.equal(clock.points.at(-1)?.percent, 25);
@@ -22,7 +22,7 @@ test('learned preparation timing accounts for slow later work instead of assumin
   assert.equal(startupRemaining(current, 2_000, [previous]), 28_000);
   assert.equal(startupRemaining(current, 7_000, [previous]), 23_000);
   assert.equal(startupRemaining([...current,{percent:80,ms:22_000}], 22_000, [previous]), 8_000);
-  assert.equal(startupRemaining([...current,{percent:80,ms:33_000}], 33_000, [previous]), 12_000);
+  assert.equal(startupRemaining([...current,{percent:80,ms:33_000}], 33_000, [previous]), 12_400);
 });
 
 test('stalled and overdue estimates stop promising seconds while a resumed advance recalculates', () => {
@@ -53,14 +53,15 @@ test('stored history rejects malformed, future, old and non-monotonic data and k
   assert.deepEqual(startupHistory(runs,at),runs.slice(-5));
 });
 
-test('wait uses only numerical durations with second precision and no false zero', () => {
+test('wait labels estimates honestly with five-second precision and no false zero', () => {
   assert.equal(startupWaitLabel(undefined,false),'');
-  assert.equal(startupWaitLabel(1_000,false),'1 second');
-  assert.equal(startupWaitLabel(4_000,false),'4 seconds');
-  assert.equal(startupWaitLabel(12_001,false),'13 seconds');
-  assert.equal(startupWaitLabel(60_000,false),'1 minute');
-  assert.equal(startupWaitLabel(68_000,false),'1 minute 8 seconds');
-  assert.equal(startupWaitLabel(3_665_000,false),'1 hour 1 minute 5 seconds');
+  assert.equal(startupWaitLabel(1_000,false),'about 5 seconds');
+  assert.equal(startupWaitLabel(4_000,false),'about 5 seconds');
+  assert.equal(startupWaitLabel(12_001,false),'about 10 seconds');
+  assert.equal(startupWaitLabel(18_000,false),'about 20 seconds');
+  assert.equal(startupWaitLabel(60_000,false),'about 1 minute');
+  assert.equal(startupWaitLabel(68_000,false),'about 1 minute');
+  assert.equal(startupWaitLabel(150_000,false),'about 3 minutes');
   assert.equal(startupWaitLabel(0,false),'');
   assert.equal(startupWaitLabel(0,true),'0 seconds');
 });
@@ -68,8 +69,22 @@ test('wait uses only numerical durations with second precision and no false zero
 test('displayed duration moves down and up as elapsed time and observed speed change', () => {
   const current = [{percent:0,ms:0},{percent:25,ms:2_000}];
   const label = (points: typeof current, elapsed: number) => startupWaitLabel(startupRemaining(points,elapsed,[previous]),false);
-  assert.equal(label(current,2_000),'28 seconds');
-  assert.equal(label(current,3_000),'27 seconds');
-  assert.equal(label([...current,{percent:30,ms:5_000}],5_000),'35 seconds');
-  assert.equal(label([...current,{percent:80,ms:10_000}],10_000),'4 seconds');
+  assert.equal(label(current,2_000),'about 30 seconds');
+  assert.equal(label(current,3_000),'about 25 seconds');
+  assert.equal(label([...current,{percent:30,ms:5_000}],5_000),'about 40 seconds');
+  assert.equal(label([...current,{percent:80,ms:10_000}],10_000),'about 5 seconds');
+});
+
+test('upward estimate revisions ease in while shorter waits apply immediately', () => {
+  assert.equal(softenEstimate(undefined, 20_000), 20_000);
+  assert.equal(softenEstimate(10_000, 8_000), 8_000);
+  assert.equal(softenEstimate(10_000, 10_000), 10_000);
+  assert.equal(softenEstimate(10_000, 20_000), 15_000);
+  assert.equal(softenEstimate(10_000, undefined), undefined);
+});
+
+test('history still anchors an estimate before the first progress sample', () => {
+  const remaining = startupRemaining([{percent:0,ms:0}], 500, [previous]);
+  assert.equal(remaining, 29_500);
+  assert.equal(startupWaitLabel(remaining, false), 'about 30 seconds');
 });

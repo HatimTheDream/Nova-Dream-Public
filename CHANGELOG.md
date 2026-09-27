@@ -1,3 +1,13 @@
+## [1.13.17] — 2026-09-27
+
+Make the loading screen's time estimate actually trustworthy.
+
+- Startup estimate now compares the current run's recent pace against past runs over the same progress window, so a fast download no longer masks a slow inbox phase (or vice versa).
+- First launches (no timing history yet) extrapolate from recent pace instead of a lifetime average, which used to under-promise once the back-loaded inbox preparation began.
+- Timing history is now scoped per app version, so an update's changed startup profile no longer inherits stale estimates from the previous release.
+- Upward revisions ease in over a few ticks instead of jumping; shorter waits still apply instantly so the countdown stays live.
+- The label now reads "about 20 seconds" (five-second precision) instead of promising one-second accuracy the math never had.
+
 ## [1.13.16] — 2026-09-26
 
 Polish and professional-grade cleanup.
