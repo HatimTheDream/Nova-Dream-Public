@@ -63,11 +63,11 @@ function AppUpdate({ initial = false }: { initial?: boolean }) {
 export function App() {
   const workspace = useWorkspace();
   const [startupComplete, setStartupComplete] = useState(false);
-  const [finishing, setFinishing] = useState(false);
+  const [handoff, setHandoff] = useState<'loading' | 'finishing' | 'leaving'>('loading');
   const [preparation, setPreparation] = useState<number>();
   const [startupError, setStartupError] = useState(''), [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    setStartupComplete(false); setFinishing(false); setStartupError('');
+    setStartupComplete(false); setHandoff('loading'); setStartupError('');
     if (!workspace.snapshot || workspace.access?.requiresPairing) { setPreparation(undefined); return; }
     let active = true, first = 0, second = 0;
     const snapshot = workspace.snapshot;
@@ -75,7 +75,7 @@ export function App() {
     const parts = { modules: 0, inbox: 0, views: 0, art: 0 };
     const report = () => { if (active) setPreparation(Math.min(99, Math.floor(10 + parts.modules * 15 + parts.inbox * 60 + parts.views * 10 + parts.art * 5))); };
     report();
-    if (restricted) { setPreparation(100); setFinishing(true); return; }
+    if (restricted) { setPreparation(100); setHandoff('finishing'); return; }
     void (async () => {
       await preloadModules((done, total) => { parts.modules = total ? done / total : 1; report(); });
       parts.modules = 1; report();
@@ -86,24 +86,33 @@ export function App() {
       ]);
       if (!active) return;
       setPreparation(100);
-      first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { if (active) setFinishing(true); }); });
+      first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { if (active) setHandoff('finishing'); }); });
     })().catch(() => { if (active) setStartupError('A few things could not get ready. Reconnect and try again.'); });
     return () => { active = false; cancelAnimationFrame(first); cancelAnimationFrame(second); };
   }, [workspace.snapshot?.epoch, workspace.snapshot?.deviceId, workspace.access?.requiresPairing, attempt]);
-  // Once preparation reports 100 the bar eases to full; hold the completed
-  // screen briefly so the finish registers, then hand off to the workspace
-  // with a crossfade instead of an instant swap.
+  // The handoff runs in sequence so the finish is unmissable: the bar eases
+  // to 100 and holds long enough to register, then the startup screen
+  // crossfades over the mounted workspace instead of vanishing mid-frame.
+  // With reduced motion there is no sweep or fade, but the completed bar
+  // still holds briefly before the instant swap.
   useEffect(() => {
-    if (!finishing || startupComplete) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setStartupComplete(true); return; }
-    const timer = setTimeout(() => setStartupComplete(true), 650);
+    if (handoff === 'loading' || startupComplete) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (handoff === 'finishing') {
+      const timer = setTimeout(() => {
+        if (reduceMotion) setStartupComplete(true);
+        else setHandoff('leaving');
+      }, reduceMotion ? 500 : 950);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => setStartupComplete(true), 420);
     return () => clearTimeout(timer);
-  }, [finishing, startupComplete]);
+  }, [handoff, startupComplete]);
   if (workspace.access?.requiresPairing) return <Suspense fallback={<ModuleLoading module="Phone pairing"/>}><PhonePairingScreen paired={workspace.reconnect}/></Suspense>;
   if (!workspace.snapshot && workspace.updateRequired) return <main className="startup"><AppUpdate initial/></main>;
   if (!workspace.snapshot || !startupComplete) {
-    const screen = <StartupScreen appIcon={startupAppIcon(workspace.snapshot, workspace.snapshot ? readLocal<StartupIconJournal>(`e3:journal:${workspace.snapshot.deviceId}:layout:${retainedWindowId}`) : undefined, readCachedAppIcon())} timingKey={workspace.snapshot ? `nova:startup-timings:v2:${__E3_VERSION__}:${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}` : undefined} rememberTiming={workspace.online && !workspace.access?.recovery && !workspace.access?.recoveryLocal} complete={preparation === 100} preparation={preparation} phase={workspace.startupPhase} download={workspace.download} error={startupError || workspace.error} reconnect={() => { if (workspace.snapshot) setAttempt(value => value + 1); else void workspace.reconnect(); }} leaving={finishing}/>;
-    if (finishing && workspace.snapshot) {
+    const screen = <StartupScreen appIcon={startupAppIcon(workspace.snapshot, workspace.snapshot ? readLocal<StartupIconJournal>(`e3:journal:${workspace.snapshot.deviceId}:layout:${retainedWindowId}`) : undefined, readCachedAppIcon())} timingKey={workspace.snapshot ? `nova:startup-timings:v2:${__E3_VERSION__}:${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}` : undefined} rememberTiming={workspace.online && !workspace.access?.recovery && !workspace.access?.recoveryLocal} complete={preparation === 100} preparation={preparation} phase={workspace.startupPhase} download={workspace.download} error={startupError || workspace.error} reconnect={() => { if (workspace.snapshot) setAttempt(value => value + 1); else void workspace.reconnect(); }} leaving={handoff === 'leaving'}/>;
+    if (handoff === 'leaving' && workspace.snapshot) {
       return <div className="startup-handoff">
         <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>
         {screen}

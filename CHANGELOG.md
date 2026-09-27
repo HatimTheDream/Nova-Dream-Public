@@ -1,3 +1,10 @@
+## [1.13.20] — 2026-09-27
+
+Make the loading screen's finish actually visible.
+
+- 1.13.19's handoff had the right idea but the timing overlapped: the "hold at 100%" ran concurrently with the bar's final sweep, and the fading screen unmounted the instant the timer fired, so the crossfade never played and the ending still felt like a teleport. The handoff is now sequential: the bar eases to 100, holds so the completed state registers, then crossfades over the already-mounted app before the loading screen unmounts.
+- With reduced motion on there is still no sweep or fade, but the completed bar now holds briefly before the instant swap instead of vanishing mid-frame.
+
 ## [1.13.19] — 2026-09-27
 
 Make the loading screen feel smooth instead of jumpy.
