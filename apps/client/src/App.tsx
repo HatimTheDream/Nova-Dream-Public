@@ -82,7 +82,6 @@ export function App() {
       await Promise.all([
         restricted ? Promise.resolve() : import('./OriginalInbox').then(module => module.prepareInboxStartup(snapshot, progress => { parts.inbox = inboxLoadingPercent(progress) / 100; report(); })),
         restricted ? Promise.resolve() : prepareInitialViews(snapshot).then(() => { parts.views = 1; report(); }),
-        import('./nova/lynx-pixel/compositor').then(module => module.loadPixelAssets()).then(() => { parts.art = 1; report(); }),
       ]);
       if (!active) return;
       setPreparation(100);

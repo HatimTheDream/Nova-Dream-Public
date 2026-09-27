@@ -1,3 +1,12 @@
+## [1.14.0] — 2026-09-27
+
+The lynx is now one square, drawn like the logo, and the avatar builder is truly modular.
+
+- Replaces the bust portraits, pixel walkers, and 3D renders with a single square avatar system: 32 geometric flat-vector lynx illustrations in the exact style of the Nova Dream logo, where the background and the face are one continuous surface and the shoulders span the full width of the square at the bottom.
+- The new creator is genuinely modular instead of a fixed catalog: pick a pattern (stripes, spots, blaze, solid), a color (red, teal, purple, gold), and clothing (tie or collared shirt), and every module option previews the real illustration it produces. The same creator serves agent creation and profile editing.
+- In the Agent Hub, agents now move as their square portraits: the squares themselves glide between rooms, bob gently when idle, and lean into the walk when moving. Team list, inspector, profile, and records pages all show the square avatars.
+- Previously saved portrait and pixel appearances are not silently migrated or destroyed: unknown recipes resolve as unconfigured and fall back to the Nova original, with the saved data retained.
+
 ## [1.13.22] — 2026-09-27
 
 One smooth bar from 0 to 100, and an honest countdown.

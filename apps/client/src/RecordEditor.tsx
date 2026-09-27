@@ -7,7 +7,7 @@ import { blankRecord, recordSchemas, recordTitle, type RecordKind, type RecordVa
 import { Conflict } from './ui';
 import { retainedWindowId, useRetained } from './useWorkspace';
 import { readLocal, saveLocal } from './api';
-import { createLynxAppearance } from '../../../packages/domain/lynx-appearance';
+import { createSquareLynxAppearance } from '../../../packages/domain/square-lynx';
 import { AgentAccessFields, RecordFields } from './RecordFields';
 import type { AgentDesign } from '../../../packages/domain/workspace-records';
 import { RecordConnections } from './RecordConnections';
@@ -16,7 +16,7 @@ import { ContactPhoto } from './ContactPhoto';
 import { ContentFiles } from './ContentFiles';
 
 export function RecordEditor({ onSaved, compact = false, requestPublication, kind, id, entity, snapshot, refresh, editTask, close, removeDraft, openSource, openContent, openEmail }: { onSaved?: () => void; compact?: boolean; openEmail?: (source: MailContactSource) => Promise<void>; requestPublication?: string; openSource?: (source: ContentOutputSource) => void; openContent?: (id: string) => void; kind: RecordKind; id: string; entity?: Entity<RecordValue>; snapshot: Snapshot; refresh: () => Promise<void>; editTask: (task: Entity<Task>) => void; close?: () => void; removeDraft?: () => void }) {
-  const [initial] = useState(() => { const blank = blankRecord(kind, snapshot.layout?.value.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone); return kind === 'agent' ? { ...blank, appearance: createLynxAppearance() } : blank; });
+  const [initial] = useState(() => { const blank = blankRecord(kind, snapshot.layout?.value.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone); return kind === 'agent' ? { ...blank, appearance: createSquareLynxAppearance() } : blank; });
   const stepKey = `e3:agent-creator-step:${snapshot.deviceId}:${id}:${retainedWindowId}`;
   const [agentStep, setAgentStep] = useState<'identity' | 'appearance' | 'work'>(() => { const value = readLocal<string>(stepKey); return value === 'appearance' || value === 'work' ? value : 'identity'; });
   const chooseStep = (step: typeof agentStep) => { setAgentStep(step); saveLocal(stepKey, step); };

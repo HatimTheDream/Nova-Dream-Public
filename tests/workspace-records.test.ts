@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../apps/service/store.js';
 import type { Command, Entity, Task } from '../packages/domain/contracts.js';
 import { blankRecord, contentSchema, type RecordKind, type RecordValue, type Contact, type Content, type Assignment } from '../packages/domain/workspace-records.js';
-import { createPortraitRecipe, resolvePortraitRecipe } from '../apps/client/src/nova/lynx-portrait/recipe.js';
+import { createSquareLynxAppearance, resolveSquareLynxAppearance } from '../packages/domain/square-lynx.js';
 import { contentFile } from '../apps/client/src/record-files.js';
 import { startServer } from '../apps/service/http.js';
 
@@ -42,11 +42,11 @@ test('saved record HTTP routes retain origin/client/session guards and strict re
 
 test('all missing module records share encrypted revisions, snapshots and retained history after restart', () => {
   const f = fixture(); try {
-    const agent = { ...blankRecord('agent', 'UTC'), name: 'Nova', position: 'Research lead', appearance: { ...createPortraitRecipe('nova-original') } } as RecordValue;
+    const agent = { ...blankRecord('agent', 'UTC'), name: 'Nova', position: 'Research lead', appearance: { ...createSquareLynxAppearance() } } as RecordValue;
     const values: [RecordKind, string, RecordValue][] = [
       ['contact', 'contact:mina', contact()], ['content', 'content:brief', content()], ['agent', 'agent:nova', agent],
       ['assignment', 'assignment:review', { ...blankRecord('assignment', 'UTC'), title: 'Review brief', agentId: 'agent:nova', agentRevision: 1 } as Assignment],
-      ['profile', 'profile:owner', { name: 'Owner', position: 'Maker', about: 'Private profile', appearance: { ...createPortraitRecipe('james-original') } }],
+      ['profile', 'profile:owner', { name: 'Owner', position: 'Maker', about: 'Private profile', appearance: { ...createSquareLynxAppearance('stripes-red-collar') } }],
     ];
     for (const [kind, id, value] of values) { const command = f.command(kind, id, value); const saved = f.store.mutate('owner', command); assert.deepEqual(f.store.mutate('owner', command), saved); }
     f.restart();
@@ -130,7 +130,7 @@ test('future portrait data survives unrelated edits without replacement, and fut
     const profile = { name: 'Owner', position: 'Maker', about: '', appearance };
     f.save('profile', 'profile:owner', profile); f.save('profile', 'profile:owner', { ...profile, name: 'New name' }, 1); f.restart();
     assert.deepEqual(f.store.readEntity('profile', 'profile:owner')?.value.appearance, appearance);
-    const resolved = resolvePortraitRecipe(appearance); assert.notEqual(resolved.status, 'ready'); assert.deepEqual(resolved.source, appearance);
+    const resolved = resolveSquareLynxAppearance(appearance); assert.notEqual(resolved.status, 'ready'); assert.deepEqual(resolved.source, appearance);
     const db = new DatabaseSync(join(f.path, 'workspace.sqlite')); db.exec('PRAGMA user_version=999'); db.close();
     const before = readFileSync(join(f.path, 'workspace.sqlite')); assert.throws(() => new Store(f.path), /newer Nova Dream/); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
   } finally { f.close(); }

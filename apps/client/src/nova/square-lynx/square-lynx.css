@@ -1,0 +1,98 @@
+/* Square lynx avatars: one strict square, illustrated like the Nova Dream logo. */
+
+.square-lynx {
+  display: block;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 18%;
+  background: #f6f1e2;
+  user-select: none;
+}
+.square-lynx-icon { width: 40px; height: 40px; }
+.square-lynx-roster { width: 72px; height: 72px; }
+.square-lynx-profile { width: 220px; height: 220px; }
+.square-lynx-creator { width: 300px; height: 300px; }
+.square-lynx-hub { width: 84px; height: 84px; border-radius: 20%; box-shadow: 0 6px 18px rgba(30, 25, 15, .18); }
+
+/* ---- Modular creator ---- */
+.square-creator {
+  display: grid;
+  gap: 1.25rem;
+}
+.square-creator-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+}
+.square-creator-modules {
+  display: grid;
+  gap: 1rem;
+}
+.square-module {
+  border: 1px solid var(--border, #e5ddc9);
+  border-radius: 12px;
+  padding: .75rem .9rem 1rem;
+  margin: 0;
+}
+.square-module > legend {
+  padding: 0 .5rem;
+  font-weight: 600;
+}
+.square-module-options {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: .6rem;
+}
+.square-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .35rem;
+  padding: .5rem .25rem;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  font-size: .8rem;
+}
+.square-option img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 16%;
+}
+.square-option:hover { border-color: var(--border, #e5ddc9); }
+.square-option[aria-pressed="true"] {
+  border-color: var(--accent, #b3261e);
+  background: color-mix(in srgb, var(--accent, #b3261e) 7%, transparent);
+}
+.square-option span { text-align: center; line-height: 1.2; }
+
+/* ---- Hub sprites: the squares themselves move ---- */
+.square-hub-sprite {
+  display: inline-block;
+  animation: square-float 3.2s ease-in-out infinite;
+  transition: transform .25s ease;
+}
+.square-hub-walk { animation: square-glide .7s ease-in-out infinite; }
+.square-hub-selected .square-lynx-hub {
+  outline: 3px solid var(--accent, #b3261e);
+  outline-offset: 3px;
+}
+@keyframes square-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes square-glide {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-4px) rotate(2deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .square-hub-sprite { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .square-module-options { grid-template-columns: repeat(2, 1fr); }
+  .square-lynx-creator { width: 240px; height: 240px; }
+}
