@@ -1,4 +1,6 @@
-import { defaultSquareLynxAvatar, defaultSquareLynxModules, parseSquareLynxAvatarId, resolveSquareLynxAppearance } from '../../../../../packages/domain/square-lynx';
+import { resolveSquareLynxAppearance } from '../../../../../packages/domain/square-lynx';
+import { defaultMascotAppearance, resolveMascotAppearance } from '../../../../../packages/domain/mascot-appearance';
+import { MascotSvg } from './MascotSvg';
 import { SquareLynxSvg } from './SquareLynxSvg';
 import './square-lynx.css';
 
@@ -14,14 +16,11 @@ export interface SquareLynxProps {
   className?: string;
 }
 
-/** The square lynx avatar: one strict square, drawn live in the logo's hand.
- *  Pattern, colorway, face and clothing are independent layers, so every saved
- *  combination renders exactly as customized. */
+/** New recipes use the approved creator artwork. Existing square lynx recipes
+ * retain their original renderer until explicitly edited and saved. */
 export function SquareLynx({ appearance, accessibility, size = 'roster', className }: SquareLynxProps) {
-  const resolved = resolveSquareLynxAppearance(appearance);
-  const modules = resolved.status === 'ready'
-    ? resolved.modules
-    : parseSquareLynxAvatarId(defaultSquareLynxAvatar) ?? defaultSquareLynxModules;
+  const resolved = resolveMascotAppearance(appearance);
+  const legacy = resolved.status === 'unsupported' ? resolveSquareLynxAppearance(appearance) : undefined;
   const dimension = SQUARE_LYNX_SIZES[size];
   return (
     <span
@@ -31,7 +30,9 @@ export function SquareLynx({ appearance, accessibility, size = 'roster', classNa
       style={{ display: 'inline-block', width: dimension, height: dimension }}
       className={['square-lynx', `square-lynx-${size}`, className].filter(Boolean).join(' ')}
     >
-      <SquareLynxSvg modules={modules} className="square-lynx-art" />
+      {legacy?.status === 'ready'
+        ? <SquareLynxSvg modules={legacy.modules} className="square-lynx-art" />
+        : <MascotSvg appearance={resolved.status === 'ready' ? resolved.appearance : defaultMascotAppearance} className="square-lynx-art" />}
     </span>
   );
 }

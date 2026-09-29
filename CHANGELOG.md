@@ -1,3 +1,13 @@
+## [1.15.0] — 2026-09-28
+
+Create a Nova mascot with the approved illustrated artwork and more independent choices.
+
+- The shared profile and agent creator now offers eight faces, eight marking patterns, eight outfits, and three glasses styles plus no glasses. Six starter looks and eight palettes make it easy to begin; fur, markings, eyes, clothing, and accents can also be colored individually.
+- Preview each choice immediately, inspect small chat sizes and activity poses, shuffle with locks, undo or redo changes, reset, and download a look recipe. Appearance changes remain in the existing draft until Save changes is used.
+- Existing saved square lynx avatars retain their original artwork until explicitly edited. New recipes use a validated catalog, persist through the existing encrypted records, and render consistently throughout profiles, records, and the Agent Hub.
+- Reconciles release metadata and changelog validation so both source repositories can publish the same numbered update.
+- Patches the mail composition/parsing dependencies to clear the newly reported Nodemailer security advisory.
+
 ## [1.14.2] — 2026-09-27
 
 The lynx now matches the logo's richness, and the creator is simpler to use.
