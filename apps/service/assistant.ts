@@ -42,6 +42,19 @@ const terminal = new Set(['completed', 'failed', 'cancelled']);
 const now = () => new Date().toISOString();
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const object = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+// This runtime persists input custody by the caller's chat.send idempotency key.
+// Custody proves admission, not execution or completion. Other versions need a
+// separately verified contract before their request IDs can be used as run IDs.
+const inputReceiptRuntime = '2026.9.6';
+const inputReceiptLimit = 50;
+type ReconciliationHistory = ConversationHistory & { inputReceipts?: unknown };
+const hasInputReceipt = (receipts: unknown, runId: string) => {
+  if (!Array.isArray(receipts) || receipts.length > inputReceiptLimit) return false;
+  const matches = receipts.map(object).filter(receipt => receipt.runId === runId);
+  if (matches.length !== 1) return false;
+  const receipt = matches[0];
+  return receipt.state === 'pending' || receipt.state === 'consumed' && typeof receipt.consumedByEventId === 'string' && receipt.consumedByEventId.length > 0;
+};
 const textOf = (message: any): string => typeof message?.content === 'string' ? message.content : Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === 'text' || ['tool', 'toolResult'].includes(message.role) && part?.type === 'toolResult').map((part: any) => typeof part.text === 'string' ? part.text : typeof part.content === 'string' ? part.content : Array.isArray(part.content) ? part.content.filter((p: any) => p?.type === 'text' && typeof p.text === 'string').map((p: any) => p.text).join('\n') : '').join('\n') : typeof message?.text === 'string' ? message.text : '';
 // Read-time compatibility for the exact Plan envelope emitted before 1.10.3.
 // Keep this historical wording frozen; current dispatch still uses current guidance.
@@ -158,7 +171,10 @@ export class AssistantService {
     if (this.closed || this.store.updateMaintenanceHeld) return;
     // Capture only records present at startup. A deferred recovery must neither
     // replace an existing unknown explanation nor overwrite a later native receipt.
-    for (const op of this.interruptedOperations.splice(0)) if (canonical(this.store.internalRead(operationKey(op.id))) === canonical(op)) this.saveOperation({ ...op, state: 'unknown', error: 'The service restarted. Check the original run; it will not be dispatched again.' });
+    for (const op of this.interruptedOperations.splice(0)) if (canonical(this.store.internalRead(operationKey(op.id))) === canonical(op)) this.saveOperation({ ...op,
+      // dispatching is saved synchronously before chat.send crosses the boundary.
+      state: op.state === 'prepared' && !op.nativeRunId ? 'failed' : 'unknown',
+      error: op.state === 'prepared' && !op.nativeRunId ? 'The service restarted before this message was sent. The original input is kept.' : 'The service restarted. Check the original run; it will not be dispatched again.' });
     for (const conversation of this.interruptedConversations.splice(0)) if (canonical(this.store.internalRead(conversationKey(conversation.id))) === canonical(conversation)) this.saveConversation({ ...conversation, state: 'unknown', error: 'Creation was interrupted. Reconcile its original session identity.' });
   }
   private reconcileAfterReconnect() {
@@ -375,6 +391,18 @@ export class AssistantService {
     if (!value) throw new Fault(404, 'operation_missing', 'This operation is unavailable.');
     return value;
   }
+  private currentOperation(captured: AssistantOperation, conversation: Conversation): AssistantOperation | undefined {
+    if (this.closed || captured.epoch !== this.store.epoch || this.removals.removed(conversation.id)) return;
+    const status = this.gateway.status(), currentConversation = this.store.internalRead<Conversation>(conversationKey(conversation.id));
+    if (status.state !== 'ready' || status.generation !== conversation.connectionGeneration || !currentConversation || currentConversation.deleted
+      || currentConversation.nativeKey !== conversation.nativeKey || currentConversation.nativeId !== conversation.nativeId
+      || currentConversation.connectionGeneration !== conversation.connectionGeneration) return;
+    const current = this.store.internalRead<AssistantOperation>(operationKey(captured.id));
+    if (!current || current.requestId !== captured.requestId || current.epoch !== captured.epoch || current.conversationId !== conversation.id
+      || current.nativeKey !== conversation.nativeKey || current.nativeId !== conversation.nativeId || current.connectionGeneration !== conversation.connectionGeneration
+      || current.nativeKey !== captured.nativeKey || current.nativeId !== captured.nativeId || current.connectionGeneration !== captured.connectionGeneration) return;
+    return current;
+  }
   private assertConnection(conversation?: Conversation, write = true) {
     if (conversation) this.removals.assertAvailable(conversation.id);
     if (write && conversation?.pendingResume) throw new Fault(409, 'continuation_pending', 'Check this chat’s pending connection before starting new work. Your draft is kept.');
@@ -566,9 +594,10 @@ export class AssistantService {
   exportRetainedTranscript(device: string, input: unknown) {
     return this.savedHistory().export(device, input, id => { this.removals.assertAvailable(id); return this.conversation(id); });
   }
-  private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; resume?: boolean }): Promise<ConversationHistory> {
+  private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; resume?: boolean; inputRunIds?: string[] }): Promise<ReconciliationHistory> {
     if (options.readOnly && this.store.updateMaintenanceHeld) throw new Fault(409, 'update_maintenance', 'Saved history refresh is paused while the update is prepared.');
     let conversation = this.conversation(id);
+    const epoch = this.store.epoch;
     if (conversation.forkSource && !conversation.forkSource.resolved) throw new Fault(409, 'fork_unconfirmed', 'The runtime has not confirmed this branch identity. The original chat and revised draft are kept.');
     this.assertConnection(conversation, false);
     if (!this.subscribed.has(conversation.nativeKey) && this.gateway.status().methods.includes('sessions.messages.subscribe')) {
@@ -578,7 +607,7 @@ export class AssistantService {
     }
     // The public API permits sessionId only for an exact message anchor.
     // Ordinary history reads verify the returned incarnation before use.
-    let result = await this.gateway.request<Record<string, any>>('chat.history', { sessionKey: conversation.nativeKey, ...(options.messageId && conversation.nativeId ? { sessionId: options.nativeId ?? conversation.nativeId } : {}), limit: 100, maxChars: 300000, ...(options.messageId ? { messageId: options.messageId } : {}), ...(options.offset !== undefined ? { offset: options.offset } : {}) });
+    let result = await this.gateway.request<Record<string, any>>('chat.history', { sessionKey: conversation.nativeKey, ...(options.messageId && conversation.nativeId ? { sessionId: options.nativeId ?? conversation.nativeId } : {}), limit: 100, maxChars: 300000, ...(options.messageId ? { messageId: options.messageId } : {}), ...(options.offset !== undefined ? { offset: options.offset } : {}), ...(options.inputRunIds?.length ? { inputRunIds: options.inputRunIds } : {}) });
     if (options.resume && options.messageId) result = await locateHistoryPosition(result, options.messageId, async offset => {
       this.assertConnection(conversation, false);
       const page = await this.gateway.request<Record<string, any>>('chat.history', { sessionKey: conversation.nativeKey, limit: 100, maxChars: 300000, offset });
@@ -588,6 +617,8 @@ export class AssistantService {
     if (!nativeId || ((options.nativeId ?? conversation.nativeId) && nativeId !== (options.nativeId ?? conversation.nativeId))) throw new Fault(409, 'session_replaced', 'The native conversation was replaced. Existing work is kept; open a new conversation.');
     if (this.closed) throw new Fault(503, 'service_closed', 'The workspace service is closing.');
     this.assertConnection(conversation, false);
+    const currentBinding = this.conversation(id);
+    if (epoch !== this.store.epoch || currentBinding.nativeKey !== conversation.nativeKey || currentBinding.nativeId !== conversation.nativeId || currentBinding.connectionGeneration !== conversation.connectionGeneration) throw new Fault(409, 'session_replaced', 'The conversation changed while its history was being checked. Existing work is kept.');
     if (this.store.updateMaintenanceHeld) {
       if (options.readOnly) throw new Fault(409, 'update_maintenance', 'Saved history refresh is paused while the update is prepared.');
       options = { ...options, readOnly: true };
@@ -639,7 +670,7 @@ export class AssistantService {
       const binding = nativeId === conversation.nativeId ? conversation : this.savedHistory().target(conversation, nativeId);
       if (binding && this.savedHistory().observe({ ...conversation, ...binding }, complete, { source: 'native' })) this.historyVersions[id] = (this.historyVersions[id] ?? 0) + 1;
     }
-    return complete;
+    return options.inputRunIds?.length ? { ...complete, inputReceipts: result.sessionId === conversation.nativeId ? result.inputReceipts : undefined } : complete;
   }
   private async retainTranscriptArtifacts() {
     const epoch = this.store.epoch, generation = this.gateway.status().generation;
@@ -947,12 +978,20 @@ export class AssistantService {
       const receipt = await this.gateway.request<{ runId?: string; status?: string }>('chat.send', params);
       if (this.closed) return;
       if (typeof receipt.runId !== 'string') throw new Error('Missing native run identity');
-      operation = this.saveOperation({ ...this.operation(id), nativeRunId: receipt.runId, state: 'accepted' });
+      const currentOperation = this.currentOperation(operation, conversation);
+      if (!currentOperation || terminal.has(currentOperation.state) || currentOperation.nativeRunId && currentOperation.nativeRunId !== receipt.runId) return;
+      // A concurrent status check may already have recovered this receipt and
+      // observed running work. A delayed acknowledgement cannot downgrade it.
+      operation = currentOperation.nativeRunId ? currentOperation : this.saveOperation({ ...currentOperation, nativeRunId: receipt.runId, state: 'accepted', error: undefined });
       for (const event of this.earlyEvents.get(receipt.runId) ?? []) await this.event(event);
       this.earlyEvents.delete(receipt.runId);
     } catch (error) {
       if (this.closed) return;
-      operation = this.operation(id);
+      const current = this.operation(id), conversation = this.store.internalRead<Conversation>(conversationKey(operation.conversationId));
+      if (current.epoch !== this.store.epoch || current.requestId !== operation.requestId || current.nativeKey !== operation.nativeKey || current.nativeId !== operation.nativeId
+        || current.connectionGeneration !== operation.connectionGeneration || !conversation || conversation.nativeKey !== current.nativeKey || conversation.nativeId !== current.nativeId
+        || conversation.connectionGeneration !== current.connectionGeneration || terminal.has(current.state) || current.nativeRunId) return;
+      operation = current;
       const rejected = error instanceof GatewayClientRequestError && error.gatewayCode === 'INVALID_REQUEST';
       const beforeSend = operation.state === 'prepared';
       this.saveOperation({ ...operation, state: beforeSend || rejected ? 'failed' : 'unknown', error: beforeSend ? error instanceof Fault ? error.message : 'The Assistant could not prepare this reply. Your message was not sent. Review the saved input and try again.' : rejected ? 'OpenClaw rejected this request before admission. The original input is kept for review.' : 'OpenClaw has not confirmed the outcome. Check the original run; it will not be sent again.' });
@@ -1095,24 +1134,42 @@ export class AssistantService {
   }
   async reconcile(id: string) {
     const conversation = this.conversation(id);
-    const history = await this.history(id);
+    const operations = this.operations().filter(op => op.conversationId === id && (!terminal.has(op.state) || !op.effectiveModel));
+    const recoverInputs = !this.store.updateMaintenanceHeld && this.gateway.serviceInfo?.().version === inputReceiptRuntime;
+    const inputRunIds = recoverInputs ? [...new Set(operations.filter(op => !op.nativeRunId && ['dispatching', 'unknown'].includes(op.state)
+      && op.requestId.length > 0 && op.requestId.length <= 256 && this.currentOperation(op, conversation)).map(op => op.requestId))].slice(0, inputReceiptLimit) : [];
+    // Receipt lookup shares the ordinary bounded history read. The wire API
+    // forbids sessionId without messageId, so readHistory checks its returned
+    // incarnation before exposing either history or input custody evidence.
+    const history: ReconciliationHistory = inputRunIds.length ? await this.readHistory(id, { inputRunIds }) : await this.history(id);
     if (conversation.pendingSettings && history.nativeSettings) {
       const pending = conversation.pendingSettings, actual = history.nativeSettings;
       const matches = (pending.permissionMode === undefined || pending.permissionMode === actual.permissionMode && !actual.permissionModePending) && (pending.pinned === undefined || pending.pinned === actual.pinned) && (pending.unread === undefined || pending.unread === actual.unread) && (pending.title === undefined || pending.title === actual.title) && (pending.archived === undefined || pending.archived === actual.archived) && (pending.model === undefined || pending.model === actual.model) && (pending.thinking === undefined || nativeThinking(pending.thinking) === (actual.thinking ?? null)) && (pending.fastMode === undefined || pending.fastMode === (actual.fastMode ?? null));
       if (matches) this.settleSettings(conversation.id, pending.requestId);
     }
-    for (const operation of this.operations().filter(op => op.conversationId === id && (!terminal.has(op.state) || !op.effectiveModel))) {
-      if (operation.epoch !== this.store.epoch || operation.connectionGeneration !== conversation.connectionGeneration) continue;
+    for (const captured of operations) {
+      let operation = this.currentOperation(captured, conversation);
+      if (!operation) continue;
+      if (!operation.nativeRunId && !terminal.has(operation.state) && inputRunIds.includes(operation.requestId)
+        && !this.store.updateMaintenanceHeld && this.gateway.serviceInfo?.().version === inputReceiptRuntime) {
+        const expected = operation.requestId;
+        const active = history.inFlightRun?.runId === expected || history.activeRunIds?.includes(expected) === true;
+        if (active || hasInputReceipt(history.inputReceipts, expected)) {
+          operation = this.saveOperation({ ...operation, nativeRunId: expected,
+            ...(active ? { state: 'running' as const, error: undefined } : {}) });
+        }
+      }
       const exact = history.inFlightRun?.runId === operation.nativeRunId ? history.inFlightRun : null;
-      if (exact) this.saveOperation({ ...operation, state: 'running', text: exact.text });
+      if (exact) this.saveOperation({ ...operation, state: 'running', text: exact.text, error: undefined });
+      else if (operation.nativeRunId && history.activeRunIds?.includes(operation.nativeRunId)) this.saveOperation({ ...operation, state: 'running', error: undefined });
       else if (operation.nativeRunId && this.gateway.status().methods.includes('agent.wait')) {
         const receipt = await this.gateway.request<Record<string, any>>('agent.wait', { runId: operation.nativeRunId, timeoutMs: 0 });
-        if (this.closed) return history;
-        this.assertConnection(conversation, false);
+        const current = this.currentOperation(operation, conversation);
+        if (!current || current.nativeRunId !== operation.nativeRunId) continue;
         const proof = object(receipt.terminalReceipt), reply = object(receipt.terminalReply);
         if (receipt.runId !== operation.nativeRunId || proof.runId !== operation.nativeRunId || proof.sessionId !== operation.nativeId || !['ok', 'error'].includes(receipt.status)) continue;
         const effective = object(proof.effective);
-        this.saveOperation({ ...this.operation(operation.id), state: receipt.status === 'ok' ? 'completed' : 'failed', text: typeof reply.text === 'string' ? reply.text : operation.text, error: receipt.status === 'error' ? 'OpenClaw confirmed this run failed. The original input is kept.' : undefined, effectiveModel: typeof effective.provider === 'string' && typeof effective.model === 'string' ? `${effective.provider}/${effective.model}` : undefined, nativeTurnId: typeof proof.turnId === 'string' ? proof.turnId : undefined });
+        this.saveOperation({ ...current, state: receipt.status === 'ok' ? 'completed' : 'failed', text: typeof reply.text === 'string' ? reply.text : current.text, error: receipt.status === 'error' ? 'OpenClaw confirmed this run failed. The original input is kept.' : undefined, effectiveModel: typeof effective.provider === 'string' && typeof effective.model === 'string' ? `${effective.provider}/${effective.model}` : undefined, nativeTurnId: typeof proof.turnId === 'string' ? proof.turnId : undefined });
       }
       // An idle session alone cannot prove a particular unknown send succeeded or failed.
     }

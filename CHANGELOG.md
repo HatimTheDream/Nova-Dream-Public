@@ -1,3 +1,8 @@
+## [1.15.3] — 2026-09-29
+
+- Lets Assistant Check status recover an interrupted request's native identity from an exact saved input receipt on the supported runtime, without sending the message again. A pending or consumed input is still unconfirmed until the original run supplies execution or completion evidence.
+- Distinguishes requests interrupted before sending from requests with an uncertain outcome, while preserving their writing, captured context and attachments. Recovery respects update holds, replaced sessions and late responses.
+
 ## [1.15.2] — 2026-09-29
 
 - Preserves newer queued-message writing while reconciling an earlier save, and retains routine drafts when browser storage is unavailable. Routine descriptions now accurately explain the saved agent capabilities.
