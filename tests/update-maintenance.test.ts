@@ -164,6 +164,20 @@ test('retained uncertainty can reach native qualification without changing any s
   } finally { store.internalWrite = original; }
 }));
 
+test('retained unknown with an explicit null run identity can reach native qualification unchanged', () => fixture(async store => {
+  const { operation, rows } = retainedHistory(store);
+  store.internalWrite('assistant:operation:' + operation.id, { ...operation, nativeRunId: null });
+  const before = Object.keys(rows).map(key => JSON.stringify(store.internalRead(key)));
+  const original = store.internalWrite;
+  store.internalWrite = (() => { throw Error('Readiness must not write saved records.'); }) as typeof store.internalWrite;
+  try {
+    assert.deepEqual(updateMaintenanceBlockers(store), []);
+    store.setUpdateMaintenanceHeld(true);
+    assert.deepEqual(updateMaintenanceBlockers(store), []);
+    assert.deepEqual(Object.keys(rows).map(key => JSON.stringify(store.internalRead(key))), before);
+  } finally { store.internalWrite = original; }
+}));
+
 test('unconfirmed direction retains its outcome after its exact original reply completed', () => fixture(async store => {
   const { operation } = retainedHistory(store);
   const parent = { ...operation, id: randomUUID(), requestId: randomUUID(), nativeRunId: randomUUID(), state: 'completed' };
@@ -178,6 +192,8 @@ test('unconfirmed direction retains its outcome after its exact original reply c
     assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'), JSON.stringify(patch));
   }
   store.internalWrite('assistant:operation:' + parent.id, parent);
+  store.internalWrite('assistant:operation:' + direction.id, { ...direction, nativeRunId: null });
+  assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'), 'A direction with no native identity still blocks.');
   store.internalWrite('assistant:operation:' + direction.id, { ...direction, cancelRequested: true });
   assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'));
 }));
@@ -205,12 +221,12 @@ test('ended old meeting keeps a stale stopping turn and its terminal cancelled a
 
 test('active, unbound, cancelling and steering Assistant work still blocks independently of age', () => fixture(async store => {
   const { operation, conversation } = retainedHistory(store), key = 'assistant:operation:' + operation.id;
-  for (const patch of [{ state: 'prepared' }, { state: 'dispatching' }, { state: 'accepted' }, { state: 'running' }, { nativeRunId: null }, { nativeId: 'different' }, { connectionGeneration: 'different' }, { epoch: randomUUID() }, { cancelRequested: true }, { steerTarget: 'original' }]) {
-    store.internalWrite(key, { ...operation, createdAt: '2000-01-01T00:00:00Z', ...patch });
+  for (const nativeRunId of [operation.nativeRunId, null]) for (const patch of [{ state: 'prepared' }, { state: 'dispatching' }, { state: 'accepted' }, { state: 'running' }, { nativeRunId: undefined }, { nativeRunId: '' }, { nativeRunId: 0 }, { id: '' }, { requestId: '' }, { conversationId: '' }, { nativeKey: 'different' }, { nativeId: 'different' }, { connectionGeneration: 'different' }, { epoch: randomUUID() }, { cancelRequested: true }, { steerTarget: 'original' }]) {
+    store.internalWrite(key, { ...operation, nativeRunId, createdAt: '2000-01-01T00:00:00Z', ...patch });
     assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant'), JSON.stringify(patch));
   }
-  store.internalWrite(key, operation);
-  for (const patch of [{ state: 'unknown' }, { pendingSettings: { requestId: randomUUID() } }, { pendingResume: { requestId: randomUUID() } }]) {
+  for (const nativeRunId of [operation.nativeRunId, null]) for (const patch of [{ state: 'unknown' }, { pendingSettings: { requestId: randomUUID() } }, { pendingResume: { requestId: randomUUID() } }]) {
+    store.internalWrite(key, { ...operation, nativeRunId });
     store.internalWrite('assistant:conversation:' + conversation.id, { ...conversation, ...patch });
     assert.ok(updateMaintenanceBlockers(store).some(row => row.kind === 'assistant-context'));
   }
@@ -241,7 +257,8 @@ test('only a parked older-epoch draft creation qualifies, never live or multi-st
 }));
 
 test('automatic sources and accepted effects still block alongside qualified historical records', () => fixture(async store => {
-  retainedHistory(store);
+  const { operation } = retainedHistory(store);
+  store.internalWrite('assistant:operation:' + operation.id, { ...operation, nativeRunId: null });
   store.internalWrite('assistant:queue:future', { state: 'paused', automatic: true });
   store.internalWrite('assistant:plan:future', { kind: 'research', state: 'ready', autoStartAt: '2099-01-01T00:00:00Z', autoStartRequestId: randomUUID() });
   store.internalWrite('agent-routines:item:future', { value: { enabled: true }, nextAt: Date.parse('2099-01-01T00:00:00Z') });

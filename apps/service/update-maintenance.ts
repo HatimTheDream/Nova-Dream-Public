@@ -35,7 +35,10 @@ function retainedAssistant(operation: Record<string, any>, operations: Record<st
     && terminalOperation(target.state) && !target.steerTarget && text(target.nativeRunId)
     && ['epoch', 'conversationId', 'nativeId', 'nativeKey', 'connectionGeneration'].every(key => target[key] === operation[key]);
   return operation.state === 'unknown' && operation.epoch === epoch
-    && ['id', 'requestId', 'conversationId', 'nativeKey', 'nativeId', 'nativeRunId', 'connectionGeneration'].every(key => text(operation[key]))
+    && ['id', 'requestId', 'conversationId', 'nativeKey', 'nativeId', 'connectionGeneration'].every(key => text(operation[key]))
+    // An explicit null retains uncertainty; it is not authority to resend.
+    // Keep malformed identities and unconfirmed directions outside this case.
+    && (text(operation.nativeRunId) || operation.nativeRunId === null && !operation.steerTarget)
     && !operation.cancelRequested && retainedDirection
     && conversation?.state === 'ready' && !conversation.pendingSettings && !conversation.pendingResume
     && conversation.nativeId === operation.nativeId && conversation.nativeKey === operation.nativeKey

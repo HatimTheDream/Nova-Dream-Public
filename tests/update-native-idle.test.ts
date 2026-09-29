@@ -143,9 +143,9 @@ test('reviewed native versions must match the exact owned running process',async
   assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).identity.version,'2026.9.6');
 });
 
-test('qualified uncertain history still requires a native hold and verified restart journals',async t=>{
+for (const nativeRunId of [randomUUID(), null]) test(`qualified uncertain history with ${nativeRunId === null ? 'no' : 'a known'} native identity still requires a native hold and verified restart journals`,async t=>{
   const f=setup(t),conversation={id:randomUUID(),state:'ready',nativeKey:'agent:main:kept',nativeId:randomUUID(),connectionGeneration:randomUUID()};
-  const operation={id:randomUUID(),requestId:randomUUID(),epoch:f.store.epoch,conversationId:conversation.id,nativeKey:conversation.nativeKey,nativeId:conversation.nativeId,connectionGeneration:conversation.connectionGeneration,nativeRunId:randomUUID(),state:'unknown',input:'Original kept input',context:{digest:'original'}};
+  const operation={id:randomUUID(),requestId:randomUUID(),epoch:f.store.epoch,conversationId:conversation.id,nativeKey:conversation.nativeKey,nativeId:conversation.nativeId,connectionGeneration:conversation.connectionGeneration,nativeRunId,state:'unknown',input:'Original kept input',context:{digest:'original'}};
   f.store.internalWrite('assistant:conversation:'+conversation.id,conversation);f.store.internalWrite('assistant:operation:'+operation.id,operation);
   const before=JSON.stringify(f.store.internalRead('assistant:operation:'+operation.id));
   assert.deepEqual(updateMaintenanceBlockers(f.store),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);

@@ -88,14 +88,36 @@ test('pending input receipt establishes identity but does not claim execution or
   assert.equal(f.gateway.calls.some(call => ['chat.send', 'chat.abort'].includes(call.method)), false);
 });
 
+test('unknown without a native identity is never replayed by restart, reconnect, timer or duplicate submission', async t => {
+  const f = fixture(t), original = f.start();
+  const submission = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, draftId: f.draft.id, draftRevision: f.draft.revision, projectRevision: 0 };
+  const submitted = original.submit(f.device, submission);
+  for (let n = 0; n < 30 && original.operations().find(op => op.id === submitted.id)?.state !== 'unknown'; n++) await flush();
+  const retained = original.operations().find(op => op.id === submitted.id)!;
+  assert.equal(retained.state, 'unknown'); assert.equal(retained.nativeRunId, null);
+  original.close(); f.store.setUpdateMaintenanceHeld(true); const restored = f.start();
+  const drafts = f.store.snapshot(f.device).drafts;
+  assert.equal(updateMaintenanceBlockers(f.store).some(blocker => blocker.kind === 'assistant'), false);
+  t.mock.timers.tick(1500); await flush();
+  f.store.setUpdateMaintenanceHeld(false);
+  for (const listener of f.gateway.listeners) listener({ type: 'event', event: 'e3.connected', payload: { generation: f.gateway.generation } });
+  t.mock.timers.tick(1500); await flush(); await restored.reconcile(f.conversation.id);
+  assert.equal(restored.submit(f.device, submission).id, retained.id);
+  await assert.rejects(async () => restored.submit(f.device, { ...submission, requestId: randomUUID() }), /existing run|reconcile/i);
+  assert.deepEqual(restored.operations().find(op => op.id === retained.id), retained);
+  assert.deepEqual(f.store.snapshot(f.device).drafts, drafts);
+  assert.equal(f.gateway.calls.filter(call => call.method === 'chat.send').length, 1);
+  assert.equal(f.gateway.calls.some(call => call.method === 'chat.abort'), false);
+});
+
 for (const invalid of ['missing', 'wrong-run', 'malformed-state', 'consumed-without-event', 'duplicate']) {
-  test(`receipt recovery rejects ${invalid} proof and retains the update blocker`, async t => {
+  test(`receipt recovery rejects ${invalid} proof without inventing an outcome`, async t => {
     const f = fixture(t); f.seed(); const service = f.start();
     const valid = { runId: f.operation.requestId, state: 'consumed', consumedByEventId: 'input-event' };
     f.gateway.receipts = invalid === 'missing' ? [] : invalid === 'wrong-run' ? [{ ...valid, runId: randomUUID() }] : invalid === 'malformed-state' ? [{ ...valid, state: 'complete' }] : invalid === 'consumed-without-event' ? [{ runId: valid.runId, state: 'consumed' }] : [valid, valid];
     await service.reconcile(f.conversation.id);
     assert.deepEqual(service.operations()[0], f.operation);
-    assert.ok(updateMaintenanceBlockers(f.store).some(blocker => blocker.kind === 'assistant'));
+    assert.equal(updateMaintenanceBlockers(f.store).some(blocker => blocker.kind === 'assistant'), false, 'Retained uncertainty permits separate native qualification, not a terminal outcome.');
     assert.equal(f.gateway.calls.some(call => ['chat.send', 'chat.abort'].includes(call.method)), false);
   });
 }

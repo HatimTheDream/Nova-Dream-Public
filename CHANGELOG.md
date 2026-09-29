@@ -1,3 +1,7 @@
+## [1.15.4] — 2026-09-29
+
+- Allows an otherwise fully identified, unconfirmed Assistant request with no native run ID to remain safely preserved during an update. The original input and uncertain outcome stay unchanged; native suspension and startup checks still decide whether updating is safe.
+
 ## [1.15.3] — 2026-09-29
 
 - Lets Assistant Check status recover an interrupted request's native identity from an exact saved input receipt on the supported runtime, without sending the message again. A pending or consumed input is still unconfirmed until the original run supplies execution or completion evidence.
