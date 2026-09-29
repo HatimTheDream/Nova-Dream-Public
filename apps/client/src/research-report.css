@@ -6,7 +6,7 @@
 .research-report-title > svg { color: var(--muted); flex-shrink: 0; }
 .research-report-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
 .research-report-actions, .research-report-footer, .research-reader-tabs { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
-:root button.research-report-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); box-shadow: none; transform: none; font: inherit; font-size: 12px; line-height: 1.4; }
+:root button.research-report-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 5px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); box-shadow: none; transform: none; font: inherit; font-size: 12px; line-height: 1.4; }
 :root button.research-report-action:hover, :root button.research-report-action[aria-pressed="true"] { background: var(--line); color: var(--text); }
 :root button.research-report-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .research-report-body { padding: 12px 26px 16px; min-width: 0; overflow-wrap: anywhere; max-height: 26rem; overflow: auto; }

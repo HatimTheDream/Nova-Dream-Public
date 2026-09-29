@@ -9,6 +9,8 @@ import {ContentWriting} from './ContentWriting';
 import {ContentFiles} from './ContentFiles';
 import {ContentTiming} from './ContentTiming';
 import {ContentLibrary} from './ContentLibrary';
+import {ContentTagsInput} from './ContentTagsInput';
+export {ContentTagsInput} from './ContentTagsInput';
 import {ContentReviews} from './ContentReviews';
 import {ContentAgentWork} from './ContentAgentWork';
 import {ContentVersions} from './ContentVersions';
@@ -18,11 +20,6 @@ import {exportContent} from './record-files';
 import {readLocal,saveLocal} from './api';
 import './content-workspace.css';
 
-export function ContentTagsInput({value,onChange}:{value:string[];onChange:(tags:string[])=>void}){
- const [raw,setRaw]=useState(value.join(', ')),known=useRef(JSON.stringify(value));
- useEffect(()=>{const encoded=JSON.stringify(value);if(encoded!==known.current){known.current=encoded;setRaw(value.join(', '));}},[value]);
- return <input maxLength={1000} value={raw} placeholder="Separate tags with commas" onChange={e=>{setRaw(e.target.value);const tags=[...new Set(e.target.value.split(',').map(t=>t.trim()).filter(Boolean))].slice(0,20);known.current=JSON.stringify(tags);onChange(tags);}}/>;
-}
 export default function ContentEditor({id,entity,snapshot,refresh,editTask,close,removeDraft,openSource,openAssistantSettings,requestPublication}:{id:string;entity?:Entity<Content>;snapshot:Snapshot;refresh:()=>Promise<void>;editTask:(t:Entity<Task>)=>void;close:()=>void;removeDraft:()=>void;openSource:(s:ContentOutputSource)=>void;openAssistantSettings?:()=>void;requestPublication?:string}){
  const [initial]=useState(()=>blankRecord('content',snapshot.layout.value.timezone) as Content),editor=useRetained<Content>('content',id,initial,entity,snapshot,refresh,{autoSave:false});
  const tabKey=`e3:content-tab:${snapshot.deviceId}:${id}`, [tab,setTab]=useState<'write'|'agents'|'review'|'versions'>(()=>readLocal(tabKey)??'write'),[error,setError]=useState(''),[filesPending,setFilesPending]=useState(false),[librarySeed,setLibrarySeed]=useState<Content>(),[exporting,setExporting]=useState(false);

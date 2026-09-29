@@ -1,15 +1,55 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { File, Folder, List, Device, Plus, X, PanelRightClose } from './icons';
 import { viewTitle, type WorkspaceTab } from './workspace-tabs';
 import './conversation-context.css';
-export function AssistantSidePanel({ tabs, active, visible, expanded, select, closeTab, addTab, expand, close, children }: { tabs: WorkspaceTab[]; active: string; visible: boolean; expanded: boolean; select: (id: string) => void; closeTab: (id: string) => void; addTab: () => void; expand: () => void; close: () => void; children: ReactNode }) {
+export function AssistantSidePanel({ tabs, active, visible, expanded, select, closeTab, addTab, expand, close, fallbackFocus, children }: { tabs: WorkspaceTab[]; active: string; visible: boolean; expanded: boolean; select: (id: string) => void; closeTab: (id: string) => void; addTab: () => void; expand: () => void; close: () => void; fallbackFocus?: () => HTMLElement | null; children: ReactNode }) {
   const panel = useRef<HTMLElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const fallback = useRef(fallbackFocus); fallback.current = fallbackFocus;
+  const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 1100px)').matches);
+  const overlay = visible && (narrow || expanded);
+  useEffect(() => { const query = matchMedia('(max-width: 1100px)'); const change = () => setNarrow(query.matches); query.addEventListener('change', change); return () => query.removeEventListener('change', change); }, []);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => { const opener = returnFocus.current; requestAnimationFrame(() => {
+      const target = opener?.isConnected && opener.getClientRects().length && !opener.closest('[inert]') ? opener : fallback.current?.();
+      if (target?.isConnected && target.getClientRects().length && !target.closest('[inert]')) target.focus();
+    }); };
+  }, [visible]);
+  useLayoutEffect(() => {
+    if (!overlay || !panel.current) return;
+    // A docked workspace can become modal while writing elsewhere. Transfer
+    // focus before making that background inert, and return there on close.
+    // Layout timing precedes the organization rail's passive resize focus.
+    if (!panel.current.contains(document.activeElement)) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      panel.current.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus();
+    }
+    const previous: [HTMLElement, boolean][] = [];
+    // In overlay mode, every background branch is inert. Walk the ancestor
+    // chain so the shell navigation cannot receive focus behind the dialog.
+    for (let branch: HTMLElement | null = panel.current; branch?.parentElement; branch = branch.parentElement) {
+      for (const sibling of branch.parentElement.children) if (sibling !== branch && sibling instanceof HTMLElement) { previous.push([sibling, sibling.inert]); sibling.inert = true; }
+      if (branch.parentElement === document.body) break;
+    }
+    return () => { for (const [element, inert] of previous) element.inert = inert; };
+  }, [overlay]);
   useEffect(() => { if (visible) panel.current?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus(); }, [visible, active]);
   const focusSelected = () => requestAnimationFrame(() => panel.current?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus());
-  return <aside ref={panel} hidden={!visible} className={`assistant-context-panel assistant-tabbed-panel ${expanded ? 'workspace-expanded' : ''}`} aria-label="Workspace" onKeyDown={event => {
+  return <aside ref={panel} hidden={!visible} role={overlay ? 'dialog' : undefined} aria-modal={overlay || undefined} className={`assistant-context-panel assistant-tabbed-panel ${expanded ? 'workspace-expanded' : ''}`} aria-label="Workspace" onKeyDown={event => {
+    if (event.defaultPrevented || event.target instanceof HTMLElement && event.target.closest('dialog[open]')) return;
     if (event.key === 'Escape') { event.preventDefault(); close(); }
-    if (event.key === 'Tab' && matchMedia('(max-width: 1100px)').matches) {
-      const controls = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]),a[href],summary,input,select,[tabindex="0"]') ?? []).filter(n => n.getClientRects().length);
+    if (event.key === 'Tab' && overlay) {
+      const controls = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]),a[href],summary,input:not(:disabled):not([type="hidden"]),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]') ?? []).filter(n => {
+        if (!n.getClientRects().length || n.closest('[inert]') || getComputedStyle(n).visibility !== 'visible') return false;
+        // Closed disclosure contents can retain boxes in Chromium, but cannot
+        // receive keyboard focus. Only their direct summary stays in the loop.
+        for (let ancestor = n.parentElement; ancestor && ancestor !== panel.current; ancestor = ancestor.parentElement) {
+          if (ancestor instanceof HTMLDetailsElement && !ancestor.open && !ancestor.querySelector(':scope > summary')?.contains(n)) return false;
+        }
+        return true;
+      });
       const first = controls[0], last = controls.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

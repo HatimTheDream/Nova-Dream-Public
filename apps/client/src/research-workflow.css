@@ -6,7 +6,7 @@
 .research-step-mark { border:1.5px solid var(--muted); border-radius:50%; width:15px; height:15px; flex:0 0 15px; margin-top:3px; display:grid; place-items:center; }
 .research-steps [data-state="active"] .research-step-mark { border-top-color:transparent; animation:research-turn 1.1s linear infinite; }
 .research-steps [data-state="complete"] .research-step-mark { border-color:transparent; }
-:root button.research-control { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:7px 11px; border:0; background:transparent; color:var(--text); border-radius:9px; box-shadow:none; transform:none; font:inherit; font-size:12px; }
+:root button.research-control { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-width:44px; min-height:44px; padding:7px 11px; border:0; background:transparent; color:var(--text); border-radius:9px; box-shadow:none; transform:none; font:inherit; font-size:12px; }
 :root button.research-control:hover { background:var(--line); }
 :root button.research-start { background:var(--text); color:var(--surface); }
 :root button.research-control:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
@@ -26,7 +26,7 @@
 .research-progress-row { display:flex; align-items:center; gap:12px; min-height:36px; }
 .research-progress { flex:1; min-width:0; height:4px; overflow:hidden; border-radius:2px; background:var(--line); }
 :root button.research-update { flex-shrink:0; border:1px solid var(--line); border-radius:999px; }
-:root button.research-stop { flex:0 0 40px; width:40px; height:40px; padding:0; border-radius:50%; background:var(--line); }
+:root button.research-stop { flex:0 0 44px; width:44px; height:44px; padding:0; border-radius:50%; background:var(--line); }
 .research-progress-fill { display:block; height:100%; background:var(--text); transition:width .2s linear; }
 .research-plan-details { margin:-8px 0 14px; color:var(--muted); }
 .research-plan-details > summary { cursor:pointer; width:fit-content; border-radius:4px; }
@@ -41,4 +41,4 @@
 .research-recovery { display:flex; flex-wrap:wrap; gap:8px; }
 @keyframes research-turn { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .research-steps [data-state="active"] .research-step-mark { animation:none; } .research-progress-fill { transition:none; } }
-@media(max-width:600px) { .research-workflow { padding:15px 13px; border-radius:14px; } .research-workflow h3 { font-size:14px; } .research-steps { gap:12px; margin:18px 0; } :root button.research-control { min-height:40px; padding:8px; } }
+@media(max-width:600px) { .research-workflow { padding:15px 13px; border-radius:14px; } .research-workflow h3 { font-size:14px; } .research-steps { gap:12px; margin:18px 0; } :root button.research-control { min-height:44px; padding:8px; } }

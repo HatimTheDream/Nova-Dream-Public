@@ -15,3 +15,13 @@
 @media(max-width:720px){.address-book-rows>div{flex-wrap:wrap;gap:6px}.address-book-rows select{margin-left:30px;max-width:calc(100% - 30px)}.contact-sync-conflict fieldset{grid-template-columns:1fr}.address-book-footer .button-row{flex-wrap:wrap}.address-link .section-heading{flex-wrap:wrap}}
 .crm-profile-line label{flex-direction:row}.crm-profile-line label select{margin:0}.address-select-page,.address-book-rows>div>label,.contact-sync-conflict label{flex-direction:row}.address-select-page input[type=checkbox],.address-book-rows input[type=checkbox],.contact-sync-conflict input[type=radio]{width:16px;height:16px;min-height:16px;padding:0;margin:0;flex:none;align-self:center}.address-select-page{min-height:32px}.address-book-rows>div>label{min-height:38px}
 @media(max-width:720px){.contacts-heading>div:first-child{flex-wrap:nowrap;gap:8px}.contacts-heading h1{font-size:18px}.contacts-heading .crm-section-select{max-width:104px;padding:5px 18px 5px 8px}.contacts-heading>.button-row{flex-wrap:nowrap;gap:6px}.contacts-heading>.button-row>button:first-child{font-size:0;width:44px;min-width:44px;min-height:44px;padding:7px}.contacts-heading>.button-row>button:first-child svg{width:18px;height:18px}}
+
+/* Wrap by the space left beside the app rail, including narrow desktop panes. */
+.contacts-heading { flex-wrap: wrap; min-width: 0; }
+.contacts-heading > div:first-child { flex: 1 1 230px; min-width: 0; flex-wrap: wrap; }
+.contacts-heading > .button-row { flex: 0 0 auto; max-width: 100%; margin-left: auto; }
+.contacts-heading .crm-section-select { min-width: 0; }
+/* Keep both search and sort readable when the directory is a narrow column. */
+.contacts-directory .contacts-search { flex-wrap: wrap; }
+.contacts-directory .contacts-search .search-input { flex: 1 1 160px; width: auto; }
+.contacts-directory .contacts-sort { flex: 1 1 128px; width: auto; }

@@ -12,7 +12,9 @@ export function AssistantOrganizationRailFrame({ open, width, setWidth, onToggle
   const railRef = useRef<HTMLElement>(null);
   useEffect(() => { if (!resizeState.current) setDraftWidth(clampAssistantRailWidth(width)); }, [width]);
   useEffect(() => {
-    if (wasOpen.current && !open) document.querySelector<HTMLButtonElement>('[data-assistant-sidebar-toggle]')?.focus();
+    // Responsive hiding must not take focus from the composer or a workspace
+    // that has just become modal. Restore only focus lost from this rail.
+    if (wasOpen.current && !open && (document.activeElement === document.body || railRef.current?.contains(document.activeElement))) document.querySelector<HTMLButtonElement>('[data-assistant-sidebar-toggle]')?.focus();
     else if (!wasOpen.current && open && document.activeElement === document.body) railRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
     wasOpen.current = open;
   }, [open]);

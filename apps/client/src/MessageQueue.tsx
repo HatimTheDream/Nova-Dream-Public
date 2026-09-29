@@ -8,6 +8,7 @@ import { formatSaved } from './ui';
 import { ComposerMenu } from './ComposerMenu';
 import { MoreHorizontal, Queue, Trash2 } from './icons';
 import './message-queue.css';
+import { saveRetainedQueueEdit, type QueueEditRequest } from './queue-edit-request';
 
 export function messageQueueSummary(items: QueuedMessage[]) {
   const waiting = items.filter(item => item.state === 'paused');
@@ -102,17 +103,29 @@ function QueueMessageText({ text, status, quietStatus }: { text: string; status:
   return <div className="queue-entry-writing"><button type="button" className="queue-entry-preview" aria-expanded={expanded} title={expanded ? 'Collapse queued message' : 'Read queued message'} onClick={() => setExpanded(value => !value)}><span className={quietStatus ? 'sr-only' : 'queue-entry-status'}>{status}</span>{quietStatus ? null : ' · '}{text ? `${preview}${shortened ? '…' : ''}` : 'Attachment message'}</button>{expanded && <p className="queue-entry-full preserve-lines">{text || 'Attachment message'}</p>}</div>;
 }
 
-function QueueEditor({ item, epoch, refresh, close }: { item: QueuedMessage; epoch: string; refresh: () => Promise<void>; close: () => void }) {
+export function QueueEditor({ item, epoch, refresh, close }: { item: QueuedMessage; epoch: string; refresh: () => Promise<void>; close: () => void }) {
   const key = `e3:queue-writing:${epoch}:${item.id}`;
-  const [text, setText] = useState(() => readLocal<string>(key) ?? item.input), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const intentKey = `${key}:request`;
+  const [pending, setPending] = useState(() => readLocal<QueueEditRequest>(intentKey));
+  const [text, setText] = useState(() => readLocal<string>(key) ?? pending?.input ?? item.input), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const save = async () => {
-    const intentKey = `${key}:request`;
-    const input = readLocal<object>(intentKey) ?? { requestId: crypto.randomUUID(), epoch, queueId: item.id, expectedRevision: item.revision, input: text };
-    if (!saveLocal(intentKey, input)) { setError('Free browser storage before saving this revision.'); return; }
+    if (busy) return;
     setBusy(true); setError('');
-    try { await request('assistant/queue/edit', input); localStorage.removeItem(intentKey); localStorage.removeItem(key); await refresh(); close(); }
-    catch (e) { if (e instanceof ApiError && ['queue_changed', 'empty_message'].includes(e.code)) localStorage.removeItem(intentKey); setError(e instanceof Error ? e.message : 'Revision not confirmed.'); await refresh(); }
+    try {
+      const result = await saveRetainedQueueEdit({
+        read: () => pending ?? readLocal<QueueEditRequest>(intentKey),
+        keep: input => { const kept = saveLocal(intentKey, input ?? null); if (kept) setPending(input); return kept; },
+        send: input => request('assistant/queue/edit', input),
+      }, { requestId: crypto.randomUUID(), epoch, queueId: item.id, expectedRevision: item.revision, input: text });
+      setPending(result.pending); setError(result.error);
+      await refresh();
+      if (result.confirmed) {
+        if (text === result.confirmed.input) { if (saveLocal(key, null)) close(); else setError('The edit was saved. Free browser storage before closing this retained draft.'); }
+        else setError('The original save is confirmed. Your newer writing is kept; review and save it separately.');
+      }
+    }
+    catch (e) { setError(e instanceof Error ? e.message : 'Queue status could not refresh. Your writing is kept.'); }
     finally { setBusy(false); }
   };
-  return <form onSubmit={e => { e.preventDefault(); void save(); }}><textarea autoFocus aria-label="Edit queued message" value={text} maxLength={100000} disabled={busy} onChange={e => { setText(e.target.value); if (!saveLocal(key, e.target.value)) setError('This revision is only kept in this window.'); }}/><div className="button-row"><button disabled={busy} type="submit">Save changes</button><button type="button" disabled={busy} onClick={close}>Keep for later</button></div>{error && <p className="field-error" role="alert">{error}</p>}</form>;
+  return <form onSubmit={e => { e.preventDefault(); void save(); }}><textarea autoFocus aria-label="Edit queued message" value={text} maxLength={100000} disabled={busy || !!pending} onChange={e => { setText(e.target.value); if (!saveLocal(key, e.target.value)) setError('This revision is only kept in this window.'); }}/>{pending && <p className="metadata" role="status">The original save is unconfirmed. Check it before changing this message.</p>}<div className="button-row"><button disabled={busy} type="submit">{busy ? 'Saving…' : pending ? 'Reconcile save' : 'Save changes'}</button><button type="button" disabled={busy} onClick={() => { if (saveLocal(key, text)) close(); else setError('Keep this editor open until this writing can be saved on your device.'); }}>Keep for later</button></div>{error && <p className="field-error" role="alert">{error}</p>}</form>;
 }

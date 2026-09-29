@@ -25,6 +25,11 @@ import { readLocal, saveLocal } from './api';
 
 type NewRoutineDraft = Entity<Routine> & { quickSource?: { id: string; title: string } };
 type Props = { openCalendar: () => void; routineTarget: { id: string; nonce: string } | null; clearRoutineTarget: () => void; snapshot: Snapshot; newTask: (defaults?: Partial<Task>) => void; editTask: (task: Entity<Task>) => void; changeStatus: (task: Entity<Task>, status: Task['status']) => void; refresh: () => Promise<void>; actions: ReturnType<typeof useTaskActions> };
+export function TaskEmptyState({ destination, searching, filtered, calendarStatus, clearFilters }: { destination: string; searching: boolean; filtered: boolean; calendarStatus: 'loading' | 'unavailable' | 'ready'; clearFilters: () => void }) {
+  const title = searching ? 'No saved tasks match your search.' : filtered ? 'No tasks match these filters.' : destination === 'Trash' ? 'Trash is empty.' : destination === 'Completed' ? 'No completed tasks yet.' : destination === 'Daily' ? 'No daily tasks for today.' : destination === 'To-dos' ? 'No to-dos for today.' : "Make room for what's ahead.";
+  const description = calendarStatus === 'loading' ? 'Calendar items are still loading.' : calendarStatus === 'unavailable' ? 'Calendar items could not be checked. Your saved tasks are available.' : searching || filtered ? 'Try another search or clear the filters.' : destination === 'Trash' ? 'Tasks you move to Trash will appear here.' : destination === 'Completed' ? 'Tasks and calendar events you complete will appear here.' : destination === 'Daily' ? 'Daily repeating tasks appear here when scheduled.' : 'Add a task to plan what comes next.';
+  return <div role="status"><Empty title={title} action={(searching || filtered) ? <button type="button" onClick={clearFilters}>Clear search and filters</button> : undefined}>{description}</Empty></div>;
+}
 export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, actions, openCalendar, routineTarget, clearRoutineTarget }: Props) {
   const [view, setView] = useState<TaskDestination>(() => { const kept = readLocal<string>('e3:task-view'); return kept === 'Upcoming' ? 'Scheduled' : kept === 'History' ? 'Completed' : taskDestinations.includes(kept as TaskDestination) ? kept as TaskDestination : 'Today'; });
   const [trash, setTrash] = useState(false), [calendarError, setCalendarError] = useState('');
@@ -119,7 +124,8 @@ export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, acti
   }).filter(({ row }) => matchesEvent(row));
   const hiddenCount = Math.max(0, rows.length - limit) + (view === 'Completed' ? Math.max(0, completedEvents.length - limit) : 0);
   const renderRoutine = (r: Entity<Routine>) => { const next = nextScheduled(r.value, dayInZone(r.value.timezone, clock)); return <article className="daily-task" key={r.id}><div className="task-row"><span className="task-kind-icon"><RefreshCw size={18}/></span><button className="task-open" title={r.value.title} aria-label={`Edit repeating task: ${r.value.title}`} onClick={() => setRoutine(r)}><strong>{r.value.title}</strong></button><span className="task-inline-note">{r.value.state === 'paused' ? 'Paused' : next ? taskDateLabel(next, today) : 'Finished'}</span></div></article>; };
-  const group = (title: string, children: ReactNode[], collapsible = false) => children.length || !collapsible ? <section className="task-group" key={title} aria-label={title}>{collapsible ? <details open><summary><ChevronDown size={15}/><h2>{title}</h2><span className="count">{children.length}</span></summary>{children}</details> : <><div className="task-group-heading"><h2>{title}</h2><span className="count">{children.length}</span></div>{children}</>}</section> : null;
+  const emptyState = (destination: string) => <TaskEmptyState destination={destination} searching={!!query.trim()} filtered={project !== 'all' || priority !== 'all' || status !== 'all'} calendarStatus={trash || (view === 'Completed' && !query.trim()) ? 'ready' : calendar.error ? 'unavailable' : calendar.state ? 'ready' : 'loading'} clearFilters={() => { setQuery(''); setProject('all'); setPriority('all'); setStatus('all'); resetSelection(); }}/>;
+  const group = (title: string, children: ReactNode[], collapsible = false) => children.length || !collapsible ? <section className="task-group" key={title} aria-label={title}>{collapsible ? <details open><summary><ChevronDown size={15}/><h2>{title}</h2><span className="count">{children.length}</span></summary>{children}</details> : <><div className="task-group-heading"><h2>{title}</h2><span className="count">{children.length}</span></div>{children.length ? children : emptyState(title)}</>}</section> : null;
   const scheduledEvents = calendarRows.filter(row => row.last >= today && (row.event.interval.kind !== 'instant' || Date.parse(row.event.interval.end) >= clock));
   const seriesSeen = new Set<string>();
   const nextEvents = scheduledEvents.filter(row => { const id = row.repeatKey ?? (row.localId && row.group !== 'One-offs' ? row.localId : row.key); if (seriesSeen.has(id)) return false; seriesSeen.add(id); return true; });
@@ -142,7 +148,7 @@ export function Tasks({ snapshot, newTask, editTask, changeStatus, refresh, acti
       </> : <>
         {group('One-offs', [...shown.map(renderTask), ...nextEvents.filter(e => e.group === 'One-offs').map(row => renderEvent(row))], true)}
         {cadenceGroups.map(name => group(name, [...routines.filter(r => cadenceGroup(r.value) === name).map(renderRoutine), ...nextEvents.filter(e => e.group === name).map(row => renderEvent(row))], true))}
-        {!rows.length && !routines.length && !calendarRows.length && <Empty title="Make room for what's ahead.">Add a scheduled task or a repeating routine.</Empty>}
+        {!rows.length && !routines.length && !nextEvents.length && emptyState('Scheduled')}
       </>}
       {hiddenCount > 0 && <button className="task-show-more" onClick={() => setLimit(limit + 50)}>Show {Math.min(50, hiddenCount)} more · {hiddenCount} remaining</button>}
     </section>

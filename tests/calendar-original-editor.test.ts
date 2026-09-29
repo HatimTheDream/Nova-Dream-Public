@@ -18,6 +18,23 @@ function setup(t: TestContext, draft?: EventDraft) {
 }
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('the Calendar add entry creates a new draft only when empty and otherwise resumes the saved event identity', t => {
+  setup(t, { id: 'saved-event', epoch: 'epoch', revision: 7, value });
+  const retained = createCalendarEditor(options);
+  retained.getState().close();
+  retained.getState().begin(undefined, new Date(2099, 10, 2, 12));
+  assert.equal(retained.getState().open, true);
+  assert.equal(retained.getState().draft!.id, 'saved-event');
+  assert.equal(retained.getState().draft!.revision, 7);
+  assert.deepEqual(retained.getState().draft!.value, value);
+  const fresh = createCalendarEditor({ ...options, windowId: 'empty-window' });
+  fresh.getState().begin(undefined, new Date(2099, 10, 2, 12));
+  assert.equal(fresh.getState().open, true);
+  assert.equal(fresh.getState().draft!.revision, 0);
+  assert.equal(formForDraft(fresh.getState().draft!).date, '2099-11-02');
+  assert.notEqual(fresh.getState().draft!.id, 'saved-event');
+});
+
 test('original modal resumes legacy writing, keeps raw fields and preserves the rest of the calendar journal', t => {
   const records = setup(t, { id: 'event', epoch: 'epoch', revision: 0, value });
   const first = createCalendarEditor(options);

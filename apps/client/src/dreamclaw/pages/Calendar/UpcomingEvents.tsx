@@ -7,9 +7,10 @@ import { MapPin, Repeat } from '@dreamclaw/components/icons';
 import { useCalendarStore } from '@dreamclaw/stores/calendarStore';
 import { ReminderBadge } from './ReminderBadge';
 import { toDateStr, getEventColor, filterCalendarEvents } from './calendarUtils';
+import type { CalendarEvent } from './calendarTypes';
 
 interface UpcomingEventsProps {
-  onEventClick: (event: any) => void;
+  onEventClick: (event: CalendarEvent) => void;
   maxItems?: number;
 }
 
@@ -43,30 +44,31 @@ export function UpcomingEvents({ onEventClick, maxItems = 8 }: UpcomingEventsPro
         const color = getEventColor(ev);
 
         return (
-          <div
+          <button type="button"
             key={ev.id}
+            data-calendar-event-id={ev.id}
             onClick={() => onEventClick(ev)}
-            className="dc-calendar-event-block p-2.5 bg-aegis-card border border-aegis-border hover:border-aegis-primary/30 hover:bg-aegis-primary-surface transition-all cursor-pointer"
+            className="dc-calendar-event-block preserve-case block w-full text-start p-2.5 bg-aegis-card border border-aegis-border hover:border-aegis-primary/30 hover:bg-aegis-primary-surface transition-all cursor-pointer"
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold font-mono" style={{ color }}>
-                <div className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+            <span className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold font-mono" style={{ color }}>
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
                 {ev.startTime || 'All day'} · {dateStr}
-              </div>
-              <div className="flex items-center gap-0.5">
+              </span>
+              <span className="flex items-center gap-0.5">
                 {ev.recurrence && <Repeat size={9} style={{ color }} />}
                 <ReminderBadge status={ev.reminderStatus} size="sm" />
-              </div>
-            </div>
-            <div className="text-[13px] font-medium text-aegis-text mt-0.5">
+              </span>
+            </span>
+            <span className="block text-[13px] font-medium text-aegis-text mt-0.5">
               {ev.title || 'Untitled event'}
-            </div>
+            </span>
             {ev.location && (
-              <div className="flex items-center gap-0.5 text-[11px] text-aegis-text-dim mt-0.5">
+              <span className="flex items-center gap-0.5 text-[11px] text-aegis-text-dim mt-0.5">
                 <MapPin size={10} className="shrink-0" /> {ev.location}
-              </div>
+              </span>
             )}
-          </div>
+          </button>
         );
       })}
     </div>

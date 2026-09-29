@@ -24,6 +24,7 @@ export function AssignmentRuns({ entity, snapshot, dirty, refresh, openContent }
   const key = `e3:assignment-start:${snapshot.deviceId}:${snapshot.epoch}:${entity.id}:${retainedWindowId}`;
   const [pending, setPending] = useState<AssignmentStart | undefined>(() => readLocal(key));
   const [state, setState] = useState<AssignmentState>(), [busy, setBusy] = useState(false), [error, setError] = useState(''), [rejected, setRejected] = useState(false);
+  const [readError, setReadError] = useState('');
   const [detail, setDetail] = useState<string>();
   const [unresolved, setUnresolved] = useState<AssignmentAttempt>();
   const [older, setOlder] = useState<AssignmentAttempt[]>([]), [olderCursor, setOlderCursor] = useState<string | null>();
@@ -31,13 +32,13 @@ export function AssignmentRuns({ entity, snapshot, dirty, refresh, openContent }
   const load = async () => {
     const id = ++sequence.current;
     const next = await request<AssignmentState>(`assignments/state?assignmentId=${encodeURIComponent(entity.id)}`);
-    if (mounted.current && id === sequence.current) setState(next);
+    if (mounted.current && id === sequence.current) { setState(next); setReadError(''); }
     return next;
   };
   useEffect(() => {
     mounted.current = true; let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { await load(); } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : 'Assignment status could not load.'); }
+      try { await load(); } catch (reason) { if (mounted.current) setReadError(reason instanceof Error ? reason.message : 'Assignment status could not load.'); }
       finally { if (mounted.current) timer = setTimeout(() => void poll(), 3000); }
     };
     void poll(); return () => { mounted.current = false; sequence.current++; clearTimeout(timer); };
@@ -90,9 +91,10 @@ export function AssignmentRuns({ entity, snapshot, dirty, refresh, openContent }
     {!state?.canStart && <p role="status" className="metadata">{state?.reason ?? 'Connecting to assignment status…'}</p>}
     {activeElsewhere && <article className="assignment-attempt"><strong>{activeElsewhere.title} · {labels[activeElsewhere.state]}</strong><p>{activeElsewhere.message}</p><AssignmentTime attempt={activeElsewhere}/><div className="button-row"><button disabled={busy} onClick={() => void act(activeElsewhere, 'check')}>Check current assignment</button><button disabled={busy} onClick={() => void act(activeElsewhere, 'stop')}>Stop current assignment</button>{canReview(activeElsewhere) && <button disabled={busy} onClick={() => setUnresolved(activeElsewhere)}>Review unresolved attempt</button>}</div></article>}
     {error && <p role="alert" className="field-error">{error}</p>}
+    {readError && <p role="status" className="field-error">{readError}</p>}
     {(approvals.error || approvals.state?.message) && <p role="status">{approvals.error || approvals.state?.message}</p>}
     {rejected && <button disabled={busy} onClick={() => { if (saveLocal(key, null)) { setPending(undefined); setRejected(false); setError(''); void load().catch(() => undefined); } }}>Review current plan</button>}
-    {!attempts.length && <p className="metadata">No attempts yet. Each run keeps its own saved inputs and result.</p>}
+    {!attempts.length && <p className="metadata" role={!state ? 'status' : undefined}>{!state ? readError ? 'Attempt history is unavailable. Reconnecting…' : 'Loading attempt history…' : 'No attempts yet. Each run keeps its own saved inputs and result.'}</p>}
     {attempts.map(attempt => <article key={attempt.id} className="assignment-attempt"><div className="section-heading"><strong>{assignmentNeedsApproval(attempt, approvals.state?.items ?? []) ? 'Needs approval' : labels[attempt.state]}</strong><span className="metadata">{new Date(attempt.createdAt).toLocaleString()}</span></div><p className="metadata">Plan v{attempt.assignmentRevision} · {attempt.agentName} v{attempt.agentRevision}{attempt.terminal ? ` · ${attempt.terminal.model}` : ''}</p><p role="status">{attempt.message}</p><AssignmentTime attempt={attempt}/>
       <AssignmentApprovalTray attempt={attempt} epoch={snapshot.epoch} state={approvals.state} refresh={approvals.refresh}/><ModuleActionTray assignmentId={attempt.id} epoch={snapshot.epoch} refreshWorkspace={refresh} working={!assignmentTerminal(attempt.state) && !attempt.stopReason}/>{attempt.result && <><pre className="assignment-result">{attempt.result.preview || (attempt.result.disposition === 'silent' ? 'The agent returned no visible reply.' : 'No text was returned.')}</pre>{attempt.result.previewTruncated && <p className="metadata">Preview shortened. The download contains the complete result.</p>}</>}
       {attempt.unresolvedReview && !assignmentTerminal(attempt.state) && <p className="notice">Kept unresolved after your review. You can start another assignment; check this original attempt again to recover any later result.</p>}

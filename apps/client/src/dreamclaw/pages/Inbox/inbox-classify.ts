@@ -43,19 +43,19 @@ export function bucketDescription(bucket: InboxBucket): string {
 
 export function bucketTone(bucket: InboxBucket): string {
   switch (bucket) {
-    case 'safe_review': return 'bg-orange-500/10 border-orange-500/25 text-orange-300';
-    case 'urgent': return 'bg-red-500/10 border-red-500/20 text-red-300';
-    case 'needs_reply': return 'bg-amber-500/10 border-amber-500/20 text-amber-300';
-    case 'waiting': return 'bg-sky-500/10 border-sky-500/20 text-sky-300';
-    case 'fyi': return 'bg-[rgb(var(--aegis-overlay)/0.04)] border-aegis-border text-aegis-text-dim';
-    default: return 'bg-aegis-primary/10 border-aegis-primary/20 text-aegis-primary';
+    case 'safe_review': return 'bg-orange-500/10 border-orange-500/25 text-aegis-text';
+    case 'urgent': return 'bg-red-500/10 border-red-500/20 text-aegis-text';
+    case 'needs_reply': return 'bg-amber-500/10 border-amber-500/20 text-aegis-text';
+    case 'waiting': return 'bg-sky-500/10 border-sky-500/20 text-aegis-text';
+    case 'fyi': return 'bg-[rgb(var(--aegis-overlay)/0.04)] border-aegis-border text-aegis-text';
+    default: return 'bg-aegis-primary/10 border-aegis-primary/20 text-aegis-text';
   }
 }
 
 export function providerTone(provider: InboxProvider): string {
   return provider === 'gmail'
-    ? 'border-red-400/20 bg-red-500/10 text-red-200'
-    : 'border-sky-400/20 bg-sky-500/10 text-sky-200';
+    ? 'border-red-400/20 bg-red-500/10 text-aegis-text'
+    : 'border-sky-400/20 bg-sky-500/10 text-aegis-text';
 }
 
 export function categoryLabel(category: InboxCategoryFilter): string {
@@ -76,12 +76,12 @@ export function triageCategoryLabel(category: InboxCategoryFilter): string {
 
 export function categoryTone(category: InboxCategoryFilter): string {
   switch (category) {
-    case 'account_billing_action_required': return 'border-red-500/20 bg-red-500/10 text-red-300';
-    case 'updates_tools': return 'border-sky-500/20 bg-sky-500/10 text-sky-300';
-    case 'personal_outreach': return 'border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-300';
-    case 'calendar_logistics': return 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300';
-    case 'promo_social': return 'border-zinc-500/20 bg-zinc-500/10 text-zinc-300';
-    case 'other': return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text-dim';
-    default: return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text-dim';
+    case 'account_billing_action_required': return 'border-red-500/20 bg-red-500/10 text-aegis-text';
+    case 'updates_tools': return 'border-sky-500/20 bg-sky-500/10 text-aegis-text';
+    case 'personal_outreach': return 'border-fuchsia-500/20 bg-fuchsia-500/10 text-aegis-text';
+    case 'calendar_logistics': return 'border-cyan-500/20 bg-cyan-500/10 text-aegis-text';
+    case 'promo_social': return 'border-zinc-500/20 bg-zinc-500/10 text-aegis-text';
+    case 'other': return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text';
+    default: return 'border-aegis-border bg-[rgb(var(--aegis-overlay)/0.04)] text-aegis-text';
   }
 }

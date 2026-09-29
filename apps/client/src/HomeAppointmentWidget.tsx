@@ -16,7 +16,6 @@ export function upcomingAppointments(events: CalendarDisplayEvent[], timezone: s
 export function nextAppointment(events: CalendarDisplayEvent[], timezone: string, now: number) { return upcomingAppointments(events, timezone, now)[0]; }
 
 export function HomeAppointmentWidget({ epoch, deviceId, timezone, now, size, openCalendar }: { epoch: string; deviceId: string; timezone: string; now: number; size?: HomeWidget['size']; openCalendar: () => void }) {
-  const compact = size === 'compact';
   const today = dayInZone(timezone, now), until = addDays(today, 30);
   const identity = `${epoch}:${deviceId}:${today}:${timezone}`;
   const [result, setResult] = useState<{ identity: string; state: CalendarState }>();
@@ -40,6 +39,11 @@ export function HomeAppointmentWidget({ epoch, deviceId, timezone, now, size, op
   }, [identity]);
   const state = result?.identity === identity ? result.state : undefined;
   const error = failure?.identity === identity ? failure.message : '';
+  return <HomeAppointmentContent state={state} error={error} timezone={timezone} now={now} size={size} openCalendar={openCalendar}/>;
+}
+
+export function HomeAppointmentContent({ state, error = '', timezone, now, size, openCalendar }: { state?: CalendarState; error?: string; timezone: string; now: number; size?: HomeWidget['size']; openCalendar: () => void }) {
+  const compact = size === 'compact', today = dayInZone(timezone, now);
   const upcoming = state ? upcomingAppointments(state.events, timezone, now) : [];
   const next = upcoming[0];
   const incomplete = state && (state.eventsLimited || state.sources.some(source => source.selected && source.state !== 'ready') || state.selection.sourceIds.some(id => !state.sources.some(source => source.id === id)) || state.accountMessages.some(account => account.limited));
@@ -56,7 +60,7 @@ export function HomeAppointmentWidget({ epoch, deviceId, timezone, now, size, op
         {!compact && <p className="home-appointment-status">{item.start <= now ? item.event.interval.kind === 'date' ? 'Today’s event' : 'Happening now' : index === 0 ? 'Coming up' : 'Later'}{item.event.status === 'tentative' ? ' · Tentative' : ''}</p>}
         {size === 'large' && item.event.location && <p className="home-appointment-location" title={item.event.location}>{item.event.location}</p>}
       </div>)}</div>
-    </> : <><h3>{state ? compact ? 'No upcoming event' : 'No upcoming event in the saved calendar' : error ? 'Calendar unavailable' : 'Loading your schedule…'}</h3>{state && !compact && <p>Looking 30 days ahead in the calendars you have selected.</p>}</>}
+    </> : <><h3 role="status">{error || incomplete ? state ? 'Schedule needs refreshing' : 'Calendar unavailable' : state ? compact ? 'No upcoming event' : 'No upcoming event in the saved calendar' : 'Loading your schedule…'}</h3>{state && !compact && <p>Looking 30 days ahead in the calendars you have selected.</p>}</>}
     {!compact && (error || incomplete) && <p className="home-save-notice">{error || 'Some calendar data needs refreshing. Open Calendar to check for changes.'}</p>}
     <div className="home-actions"><button className="home-action" onClick={openCalendar}>Open Calendar</button></div>
   </div>;

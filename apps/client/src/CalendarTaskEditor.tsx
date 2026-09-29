@@ -9,7 +9,7 @@ import { ApiError, readLocal, request, saveLocal } from './api';
 import { Dialog } from './ui';
 import { CalendarDays, Save } from './icons';
 type Draft = { value: Task; revision: number; pending?: CalendarCompletionCommand; epoch: string };
-export function CalendarTaskEditor({ row, snapshot, record, range, generation, close, saved, openCalendar }: { row: CalendarTaskRow; snapshot: Snapshot; record?: CalendarCompletion; range: CalendarRange; generation?: string; close(): void; saved(): void; openCalendar(): void }) {
+export function CalendarTaskEditor({ row, snapshot, record, range, generation, close, saved, openCalendar }: { row: CalendarTaskRow; snapshot: Snapshot; record?: CalendarCompletion; range: CalendarRange; generation?: string; close(): void; saved(record: CalendarCompletion): void; openCalendar(): void }) {
   const key = `e3:event-task:${snapshot.epoch}:${snapshot.deviceId}:${row.key}`;
   const [draft, setDraft] = useState<Draft>(() => readLocal<Draft>(key) ?? { revision: record?.revision ?? 0, epoch: snapshot.epoch, value: { title: row.event.title, notes: row.event.notes ?? '', planned: row.date, due: '', status: record?.done ? 'done' : 'open', checklist: record?.checklist ?? [] } });
   const ref = useRef(draft); ref.current = draft;
@@ -20,7 +20,7 @@ export function CalendarTaskEditor({ row, snapshot, record, range, generation, c
     const command = ref.current.pending ?? { requestId: crypto.randomUUID(), epoch: ref.current.epoch, target: calendarCompletionTarget(row.event), generation, range, expectedRevision: ref.current.revision, done: ref.current.value.status === 'done', checklist: ref.current.value.checklist };
     if (!saveLocal(key, { ...ref.current, pending: command })) { setError('Free browser storage before saving this checklist.'); return; }
     persist({ ...ref.current, pending: command }); setBusy(true); setError('');
-    try { await request('tasks/calendar-completion', command); localStorage.removeItem(key); saved(); }
+    try { const confirmed = await request<CalendarCompletion>('tasks/calendar-completion', command); localStorage.removeItem(key); saved(confirmed); }
     catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Your checklist save is not confirmed.');
       if (reason instanceof ApiError && reason.code === 'calendar_completion_changed') setConflict(reason.current as unknown as CalendarCompletion);

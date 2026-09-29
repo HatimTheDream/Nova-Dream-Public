@@ -795,7 +795,7 @@
 .task-history-notes { white-space:pre-wrap; overflow-wrap:anywhere; }
 
 .tasks-workspace .daily-task .task-row { min-height:48px; flex-wrap:nowrap; }
-.tasks-workspace .daily-task .task-open { box-shadow:none; background:transparent; min-width:0; min-height:44px; display:flex; align-items:center; flex-direction:row; }
+.tasks-workspace .daily-task .task-open { box-shadow:none; background:transparent; min-width:0; min-height:44px; display:flex; align-items:flex-start; flex-direction:column; justify-content:center; gap:2px; }
 .tasks-workspace .daily-task .task-open strong { display:block; width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500; }
 @media(max-width:650px) { .tasks-workspace .task-list { padding-inline:12px; }.task-editor .dialog-footer { bottom:-18px; } }
 /* Task feedback must not shift the row the owner just checked. */

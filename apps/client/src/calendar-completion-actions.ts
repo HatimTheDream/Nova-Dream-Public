@@ -1,4 +1,10 @@
-import type { CalendarCompletion, CalendarCompletionCommand } from '../../../packages/domain/calendar-completion';
+import { calendarCompletionKey, type CalendarCompletion, type CalendarCompletionCommand } from '../../../packages/domain/calendar-completion';
+export function latestCalendarCompletion(target: CalendarCompletionCommand['target'], records: readonly CalendarCompletion[], confirmed: readonly CalendarCompletion[] = []): CalendarCompletion | undefined {
+  const key = calendarCompletionKey(target);
+  let latest: CalendarCompletion | undefined;
+  for (const record of [...records, ...confirmed]) if (record.key === key && (!latest || record.revision > latest.revision)) latest = record;
+  return latest;
+}
 export type CompletionJournal = { pending?: CalendarCompletionCommand; confirmed?: CalendarCompletion; error?: string };
 export function createCalendarCompletionActions(options: { initial?: CompletionJournal; persist(value: CompletionJournal): boolean; send(command: CalendarCompletionCommand): Promise<CalendarCompletion>; refresh(): Promise<void>; changed(): void }) {
   let state = options.initial ?? {}, busy = false;

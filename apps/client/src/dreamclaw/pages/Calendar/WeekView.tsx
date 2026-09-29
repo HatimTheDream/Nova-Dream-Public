@@ -9,7 +9,7 @@ import { useCalendarStore } from '@dreamclaw/stores/calendarStore';
 import { EventCard } from './EventCard';
 import {
   getWeekDates, eventsForDate, toDateStr, isSameDay,
-  getTimelineHours, getDayName, getEventDuration, filterCalendarEvents,
+  getTimelineHours, getDayName, filterCalendarEvents,
 } from './calendarUtils';
 import type { CalendarEvent } from './calendarTypes';
 import { originalTimelineRows } from '@dreamclaw/calendar-timeline';
@@ -51,7 +51,9 @@ export function WeekView({ onDateClick, onEventClick }: WeekViewProps) {
   );
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div ref={scrollRef} className="dc-calendar-week-scroll" role="region" aria-label="Week schedule" tabIndex={0}>
+      <div className="dc-calendar-week-content">
+      <div className="dc-calendar-week-heading">
       {/* Day headers */}
       <div className="grid shrink-0 border-b border-aegis-border bg-aegis-surface-solid"
         style={{ gridTemplateColumns: '60px repeat(7, 1fr)' }}>
@@ -83,9 +85,9 @@ export function WeekView({ onDateClick, onEventClick }: WeekViewProps) {
           {eventsForDate(filteredEvents, toDateStr(date)).filter(event => event.allDay || !event.startTime).map(event => <EventCard key={event.id} event={event} variant="compact" onClick={() => onEventClick(event)}/>)}
         </div>)}
       </div>}
+      </div>
 
       {/* Timeline */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="grid relative" style={{
           gridTemplateColumns: '60px repeat(7, 1fr)',
           height: hours.length * HOUR_HEIGHT,

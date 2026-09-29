@@ -1,3 +1,14 @@
+## [1.15.2] — 2026-09-29
+
+- Preserves newer queued-message writing while reconciling an earlier save, and retains routine drafts when browser storage is unavailable. Routine descriptions now accurately explain the saved agent capabilities.
+- Improves Assistant workspace keyboard focus, tool-preview behavior, loading states and recovered-error feedback. Workspace and research controls have usable minimum target sizes.
+- Shows ongoing work and pending input in the chat list, keeps draft markers visible, and distinguishes unconfirmed status from active work using the existing run state.
+- Makes calendar events keyboard accessible, repairs month-grid semantics and keeps narrow week views readable with contained scrolling. Calendar clearly labels continuation of kept event drafts and immediately reopens event checklists with their latest confirmed save. Tasks, appointment widgets and repository selection provide clearer empty, loading and unavailable states.
+- Protects unsaved content templates from archiving, preserves spaces in template tags, explains invalid organization fields and restores keyboard focus in narrow Contacts views. Inbox panes can be resized with the keyboard, and reply fields have accessible labels.
+- Fixes narrow Contacts toolbar clipping and singular counts, and improves mascot, Agent Hub and Inbox contrast while preserving the existing visual design.
+
+- Keeps Contacts search and sorting readable in narrow columns, and adapts the Assistant sidebar header so every action remains reachable.
+
 ## [1.15.1] — 2026-09-28
 
 - Simplifies the mascot creator into compact previous/next selectors with one visible choice per feature and a live character preview. Controls sit beside the preview when space permits and stack underneath in narrower windows.

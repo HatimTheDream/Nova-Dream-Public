@@ -7,22 +7,22 @@ import { startPolling } from './polling';
 import { Square } from './icons';
 import './assistant-activity.css';
 
-export function AssistantActivityPanel({ operation, open, show, close, stop, available, container }: { operation?: AssistantOperation; open: boolean; show: () => void; close: () => void; stop: () => Promise<void>; available: (value: boolean) => void; container?: HTMLElement | null }) {
+export function AssistantActivityPanel({ operation, open, stop, available, container }: { operation?: AssistantOperation; open: boolean; show: () => void; close: () => void; stop: () => Promise<void>; available: (value: boolean) => void; container?: HTMLElement | null }) {
   const [view, setView] = useState<AssistantObservation | null>(null), [error, setError] = useState('');
   const [stopping, setStopping] = useState(false);
-  const announced = useRef<string | null>(null), callbacks = useRef({ show, available }); callbacks.current = { show, available };
+  const observed = useRef<string | null>(null), callbacks = useRef({ available }); callbacks.current = { available };
   const working = !!operation && !['completed', 'failed', 'cancelled'].includes(operation.state);
   const active = working && operation?.state !== 'unknown';
   const toolEvidence = operation?.tools?.map(tool => `${tool.id}:${tool.state}`).join('|');
   useEffect(() => {
-    setView(null); setError(''); announced.current = null; callbacks.current.available(false);
+    setView(null); setError(''); observed.current = null; callbacks.current.available(false);
   }, [operation?.id]);
   useEffect(() => {
     if (!operation) return;
     let alive = true, found = false;
     // The state response signals late images. Keep a bounded first-view fallback
     // for older hosts without that hint; a closed view never leaves an idle loop.
-    const discoverUntil = !announced.current ? Date.now() + 6000 : 0;
+    const discoverUntil = !observed.current ? Date.now() + 6000 : 0;
     const abort = new AbortController();
     const end = startPolling({ read: async () => {
       try {
@@ -30,7 +30,9 @@ export function AssistantActivityPanel({ operation, open, show, close, stop, ava
         if (!alive) return;
         found = !!next;
         callbacks.current.available(!!next); setView(current => current?.id === next?.id ? current : next); setError('');
-        if (next && !announced.current) { announced.current = next.id; callbacks.current.show(); }
+        // Discovery enables the existing Live tool view action; it never opens
+        // a tab or moves focus away from writing the next message.
+        if (next) observed.current = next.id;
       } catch (e) { if (alive) setError(e instanceof Error ? e.message : 'View updates paused.'); return false; }
     }, interval: () => open && active ? 1000 : !found && Date.now() < discoverUntil ? 1500 : null, hiddenInterval: null });
     return () => { alive = false; end(); abort.abort(); };

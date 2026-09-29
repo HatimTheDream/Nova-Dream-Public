@@ -1,6 +1,7 @@
 import { LoadingRing } from './ModuleLoading';
 import { CalendarTaskEditor } from './CalendarTaskEditor';
-import { calendarCompletionKey, calendarCompletionTarget } from '../../../packages/domain/calendar-completion';
+import { calendarCompletionTarget, type CalendarCompletion } from '../../../packages/domain/calendar-completion';
+import { latestCalendarCompletion } from './calendar-completion-actions';
 import type { CalendarTaskRow } from './task-calendar-rows';
 import type { CalendarState as SharedCalendarState } from '../../../packages/domain/calendar';
 import type { CalendarEvent as OriginalEvent } from './dreamclaw/pages/Calendar/calendarTypes';
@@ -26,15 +27,19 @@ import './dreamclaw/styles.css';
 import './calendar-presentation.css';
 import { CalendarAccountSetup } from './AccountSetup';
 
-type Props = { snapshot: Snapshot; online: boolean; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void };
+type Props = { snapshot: Snapshot; online: boolean; refresh(): Promise<void>; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void };
 type View = { day: string; view: CalendarSettings['defaultView']; filter?: CalendarFilter };
 export default function OriginalCalendar(props: Props) {
   const [identity, setIdentity] = useState(preparedCalendarWindow);
   useEffect(() => { let live = true; void Promise.all([calendarWindowIdentity(), calendarI18nReady]).then(([identity]) => { if (live) setIdentity(identity); }); return () => { live = false; }; }, []);
   return identity ? <ConnectedCalendar key={`${props.snapshot.deviceId}:${identity.id}:${props.snapshot.epoch}:${props.snapshot.layout.value.timezone}`} {...props} windowId={identity.id} previousWindowId={identity.previous}/> : <main className="page-scroll"><LoadingRing label="Opening your calendar…"/></main>;
 }
-function ConnectedCalendar({ snapshot, windowId, previousWindowId, editTask, openSettings, openInbox, openContent, editRoutine }: Props & { windowId: string; previousWindowId?: string }) {
+function ConnectedCalendar({ snapshot, windowId, previousWindowId, refresh, editTask, openSettings, openInbox, openContent, editRoutine }: Props & { windowId: string; previousWindowId?: string }) {
   const [eventTask, setEventTask] = useState<{ row: CalendarTaskRow; state: SharedCalendarState; original: OriginalEvent } | null>(null);
+  const [confirmedCompletions, setConfirmedCompletions] = useState<CalendarCompletion[]>([]);
+  useEffect(() => {
+    setConfirmedCompletions(current => current.length ? current.filter(record => (latestCalendarCompletion(record.target, snapshot.calendarCompletions ?? [])?.revision ?? -1) < record.revision) : current);
+  }, [snapshot.calendarCompletions]);
   const live = useRef({ snapshot, editTask, openSettings, openInbox, openContent, editRoutine });
   live.current = { snapshot, editTask, openSettings, openInbox, openContent, editRoutine };
   const [store] = useState(() => {
@@ -83,7 +88,7 @@ function ConnectedCalendar({ snapshot, windowId, previousWindowId, editTask, ope
     });
     return () => { stop(); void store.getState().cancelMonthLoad(); };
   }, [store]);
-  return <I18nextProvider i18n={calendarI18n}><CalendarStoreProvider store={store}><div className="dreamclaw-module calendar-module"><CalendarAccountSetup openSettings={openSettings}/>{targetError&&<div className="calendar-target-error" role="alert"><span>{targetError}</span><button onClick={()=>setTargetAttempt(value=>value+1)}>Retry opening event</button></div>}<CalendarPage/></div>{eventTask && <CalendarTaskEditor key={eventTask.row.key} row={eventTask.row} record={snapshot.calendarCompletions?.find(record => record.key === calendarCompletionKey(calendarCompletionTarget(eventTask.row.event)))} snapshot={snapshot} range={eventTask.state.range} generation={eventTask.state.sources.find(source => source.id === eventTask.row.event.sourceId)?.generation} close={() => setEventTask(null)} saved={() => { setEventTask(null); void store.getState().loadMonth(undefined, { background: true }); }} openCalendar={() => { const original = eventTask.original; setEventTask(null); store.getState().host.editor.getState().begin(original); }}/>}<ScopeChoice host={store.getState().host} epoch={snapshot.epoch}/></CalendarStoreProvider></I18nextProvider>;
+  return <I18nextProvider i18n={calendarI18n}><CalendarStoreProvider store={store}><div className="dreamclaw-module calendar-module"><CalendarAccountSetup openSettings={openSettings}/>{targetError&&<div className="calendar-target-error" role="alert"><span>{targetError}</span><button onClick={()=>setTargetAttempt(value=>value+1)}>Retry opening event</button></div>}<CalendarPage/></div>{eventTask && <CalendarTaskEditor key={eventTask.row.key} row={eventTask.row} record={latestCalendarCompletion(calendarCompletionTarget(eventTask.row.event), snapshot.calendarCompletions ?? [], confirmedCompletions)} snapshot={snapshot} range={eventTask.state.range} generation={eventTask.state.sources.find(source => source.id === eventTask.row.event.sourceId)?.generation} close={() => setEventTask(null)} saved={record => { setConfirmedCompletions(current => [...current.filter(item => item.key !== record.key), record]); setEventTask(null); void refresh(); void store.getState().loadMonth(undefined, { background: true }); }} openCalendar={() => { const original = eventTask.original; setEventTask(null); store.getState().host.editor.getState().begin(original); }}/>}<ScopeChoice host={store.getState().host} epoch={snapshot.epoch}/></CalendarStoreProvider></I18nextProvider>;
 }
 function ScopeChoice({ host, epoch }: { host: CalendarHost; epoch: string }) {
   const editor = useStore(host.editor);

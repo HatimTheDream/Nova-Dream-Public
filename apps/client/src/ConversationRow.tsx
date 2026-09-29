@@ -8,11 +8,13 @@ import { SidebarRow } from './SidebarRow';
 import { Archive, Folder, MessageSquare, Trash2 } from './icons';
 import { ArrowLeft } from './icons';
 import { formatSaved } from './ui';
+import { conversationWorkStatus } from './conversation-work-status';
 
 export function ConversationRow({ conversation, controller, snapshot, selected, hasDraft, updatedAt, open, refreshWorkspace }: { conversation: Conversation; controller: AssistantController; snapshot: Snapshot; selected: boolean; hasDraft: boolean; updatedAt: string; open: () => void; refreshWorkspace: () => Promise<void> }) {
   const [view, setView] = useState<'actions' | 'rename' | 'project' | 'remove'>('actions');
   const [title, setTitle] = useState(conversation.title), [projectId, setProjectId] = useState(conversation.projectId ?? ''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const active = controller.operations.some(op => op.conversationId === conversation.id && !['completed', 'failed', 'cancelled'].includes(op.state));
+  const workStatus = conversationWorkStatus(conversation.id, controller);
   const removal = controller.removals?.find(item => item.conversationId === conversation.id && ['prepared', 'unknown'].includes(item.state));
   const blocked = !!removal || !conversation.nativeId || busy || active || !!conversation.pendingSettings || controller.connection.state !== 'ready';
   const localDeleteBlocked = !!removal || busy || active || !!conversation.pendingSettings || conversation.state === 'creating';
@@ -29,7 +31,7 @@ export function ConversationRow({ conversation, controller, snapshot, selected, 
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Removal was not confirmed.'); }
     finally { setBusy(false); }
   };
-  return <SidebarRow title={conversation.title} icon={<MessageSquare size={16}/>} pinned={conversation.pinned} unread={conversation.unread} selected={selected} secondary={<>{hasDraft ? 'Draft · ' : ''}{conversation.state === 'ready' ? formatSaved(updatedAt) : 'Needs status check'}</>} open={open} kind={view === 'actions' ? 'menu' : 'dialog'} onClose={() => { setView('actions'); setError(''); }}>
+  return <SidebarRow title={conversation.title} icon={<MessageSquare size={16}/>} pinned={conversation.pinned} unread={conversation.unread} selected={selected} secondary={<>{workStatus ? <strong>{workStatus}</strong> : conversation.state === 'ready' ? formatSaved(updatedAt) : 'Needs status check'}{hasDraft ? ' · Draft' : ''}</>} open={open} kind={view === 'actions' ? 'menu' : 'dialog'} onClose={() => { setView('actions'); setError(''); }}>
       {close => view === 'actions' ? <>
         {conversation.nativeId && <><button role="menuitem" disabled={blocked} onClick={() => void save({ pinned: !conversation.pinned }, close)}>{conversation.pinned ? 'Unpin' : 'Pin'}</button>
         <button role="menuitem" disabled={blocked} onClick={() => { setTitle(conversation.title); setView('rename'); }}>Rename</button>

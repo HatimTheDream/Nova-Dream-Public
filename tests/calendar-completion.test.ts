@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from '../apps/service/store';
 import { CalendarService } from '../apps/service/calendar';
 import { calendarCompletionTarget, calendarCompletionKey, type CalendarCompletionCommand } from '../packages/domain/calendar-completion';
-import { createCalendarCompletionActions, type CompletionJournal } from '../apps/client/src/calendar-completion-actions';
+import { createCalendarCompletionActions, latestCalendarCompletion, type CompletionJournal } from '../apps/client/src/calendar-completion-actions';
 import type { CalendarDisplayEvent, CalendarPage } from '../packages/domain/calendar';
 const range = { from: '2026-09-12', to: '2026-10-12', timezone: 'UTC' };
 const accounts = { state: () => ({ accounts: [], clients: [], attempts: [], probes: [] }), calendarSources: async (): Promise<{ items: CalendarSource[]; limited: boolean }> => ({ items: [], limited: false }), calendarEvents: async (): Promise<CalendarPage> => ({ events: [], coverage: 'complete', pages: 1, skipped: 0 }) };
@@ -18,6 +18,22 @@ function fixture() {
   const command = (event: CalendarDisplayEvent, done = true, revision = 0): CalendarCompletionCommand => ({ requestId: randomUUID(), epoch: store.epoch, target: calendarCompletionTarget(event), range, expectedRevision: revision, done });
   return { get store() { return store; }, get calendar() { return calendar; }, create, command, async restart() { await calendar.close(); store.close(); store = new Store(directory); calendar = new CalendarService(store, accounts); }, async close() { await calendar.close(); store.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
+test('immediate checklist reopen uses the confirmed save until the workspace snapshot catches up without crossing event identities', async () => {
+  const f = fixture(); try {
+    f.create(); const event = f.calendar.state('a', range).events[0], target = calendarCompletionTarget(event), itemId = randomUUID();
+    const initial = f.calendar.completeTaskEvent('a', { ...f.command(event, false), checklist: [{ id: itemId, text: 'Earlier checklist', done: false }] });
+    const stale = f.store.snapshot('a').calendarCompletions!;
+    const confirmed = f.calendar.completeTaskEvent('a', { ...f.command(event, false, initial.revision), checklist: [{ id: itemId, text: 'Just saved checklist', done: false }] });
+    const before = structuredClone(stale);
+    assert.equal(latestCalendarCompletion(target, stale, [confirmed])?.checklist?.[0].text, 'Just saved checklist');
+    assert.equal(latestCalendarCompletion(target, [], [confirmed]), confirmed);
+    assert.equal(latestCalendarCompletion({ ...target, sourceId: 'another-account' }, stale, [confirmed]), undefined);
+    const newer = f.calendar.completeTaskEvent('a', { ...f.command(event, true, confirmed.revision), checklist: [{ id: itemId, text: 'Newer shared checklist', done: true }] });
+    assert.equal(latestCalendarCompletion(target, [newer], [confirmed]), newer);
+    assert.deepEqual(stale, before);
+  } finally { await f.close(); }
+});
+
 test('one-off completion keeps the original event and survives restart and dates outside the current view', async () => {
   const f = fixture(); try {
     f.create(); const before = f.calendar.state('a', range).events[0], command = f.command(before);

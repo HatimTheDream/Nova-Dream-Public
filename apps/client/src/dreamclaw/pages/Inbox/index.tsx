@@ -1,4 +1,5 @@
 import { LoadingRing } from '../../../ModuleLoading';
+import { InboxPaneResizer } from './InboxPaneResizer';
 import { emailImageUrl, mapEmailImageCss } from '../../../../../../packages/domain/email-images';
 import {inboxReplySource} from '../../inbox-reply-source';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -4023,21 +4024,14 @@ export function InboxPage() {
           </div>
 
           <div className="dc-inbox-divider flex items-stretch justify-center">
-            <button
-              type="button"
-              onMouseDown={beginSplitResize}
-              onDoubleClick={() => {
-                setIsListPaneCollapsed(false);
-                setListPaneWidth(DEFAULT_LIST_PANE_WIDTH);
-                listPaneWidthBeforeCollapseRef.current = DEFAULT_LIST_PANE_WIDTH;
-              }}
-              aria-label="Resize inbox panes"
-              className="group flex h-full w-4 cursor-col-resize items-center justify-center"
-            >
+            <InboxPaneResizer width={listPaneWidth} min={MIN_LIST_PANE_WIDTH} max={MAX_LIST_PANE_WIDTH} defaultWidth={DEFAULT_LIST_PANE_WIDTH}
+              startResize={beginSplitResize} resize={width => {
+                setIsListPaneCollapsed(false); setListPaneWidth(width); listPaneWidthBeforeCollapseRef.current = width;
+              }}>
               <div className="relative flex h-full w-px items-center justify-center bg-aegis-border/60 transition-colors group-hover:bg-aegis-primary/50">
                 <GripVertical size={12} className="rounded-full bg-[rgb(var(--aegis-bg))] text-aegis-text-dim" />
               </div>
-            </button>
+            </InboxPaneResizer>
           </div>
 
           <div
@@ -4168,19 +4162,19 @@ export function InboxPage() {
                           {categoryLabel((selectedThreadItem.category || 'other') as InboxCategoryFilter)}
                         </span>
                         {selectedThreadItem.isPinned && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-amber-300">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-aegis-text">
                             <Pin size={10} />
                             Pinned
                           </span>
                         )}
                         {selectedThreadItem.isFlagged && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-aegis-primary/20 bg-aegis-primary/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-aegis-primary">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-aegis-primary/20 bg-aegis-primary/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-aegis-text">
                             <Flag size={10} />
                             Flagged
                           </span>
                         )}
                         {senderActionState.blocked && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-red-200">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 normal-case tracking-normal text-[10px] text-aegis-text">
                             <Ban size={10} />
                             Sender blocked
                           </span>
@@ -4398,8 +4392,8 @@ export function InboxPage() {
                       <div className="space-y-3">
                         {selectedAccount.provider === 'gmail' ? (
                           <div className="space-y-1.5">
-                            <label className="text-[11px] uppercase tracking-[0.12em] text-aegis-text-dim">From</label>
-                            <select
+                            <label htmlFor="inbox-reply-from" className="text-[11px] uppercase tracking-[0.12em] text-aegis-text-dim">From</label>
+                            <select id="inbox-reply-from"
                               value={selectedFrom}
                               onChange={(event) => setSelectedFrom(event.target.value)}
                               className="w-full rounded-xl border border-aegis-border bg-[rgb(var(--aegis-overlay)/0.03)] px-3 py-2 text-[12px] text-aegis-text outline-none"
@@ -4419,11 +4413,11 @@ export function InboxPage() {
                               <div className="mt-2 break-words">{selectedAccount.email || 'No account selected'}</div>
                             </div>
                             <div className="rounded-xl border border-aegis-border bg-[rgb(var(--aegis-overlay)/0.03)] px-3 py-3 text-[11px] text-aegis-text-dim">
-                              <div className="font-medium text-aegis-text-muted">Outlook signature</div>
+                              <label htmlFor="inbox-outlook-signature" className="font-medium text-aegis-text-muted">Outlook signature</label>
                               <div className="mt-2">
                                 Edit the signature to include in this reply.
                               </div>
-                              <textarea
+                              <textarea id="inbox-outlook-signature"
                                 value={microsoftSignatureDraft}
                                 onChange={(event) => setMicrosoftSignatureDraft(event.target.value)}
                                 placeholder="Type the Outlook signature to append on drafts and sends for this account."

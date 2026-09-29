@@ -57,11 +57,11 @@
 .workspace-tabs { display: flex; flex: 1; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
 .workspace-tab { display: flex; align-items: center; flex: 0 1 180px; min-width: 100px; max-width: 200px; border-radius: 10px; background: transparent; }
 .workspace-tab.selected { background: var(--canvas); }
-.workspace-tab > button { min-height: 38px; border: 0; box-shadow: none; background: transparent; padding: 6px; }
+.workspace-tab > button { min-height: 44px; border: 0; box-shadow: none; background: transparent; padding: 6px; }
 .workspace-tab > button[role="tab"] { flex: 1; min-width: 0; justify-content: flex-start; gap: 5px; font-size: 12px; font-weight: 500; }
 .workspace-tab [role="tab"] > span:not(.e3-icon) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.workspace-tab .workspace-tab-close { flex: none; width: 28px; padding: 4px; }
-.workspace-tab-strip > .icon-button { flex: none; width: 34px; min-width: 34px; min-height: 38px; height: 38px; border: 0; background: transparent; box-shadow: none; padding: 6px; }
+.workspace-tab .workspace-tab-close { flex: none; width: 44px; min-width: 44px; padding: 4px; }
+.workspace-tab-strip > .icon-button { flex: none; width: 44px; min-width: 44px; min-height: 44px; height: 44px; border: 0; background: transparent; box-shadow: none; padding: 6px; }
 .workspace-tab-strip button:hover { background: var(--canvas); }
 .workspace-tab-content { flex: 1; min-height: 0; overflow: auto; padding: 18px; }
 .workspace-file-toolbar { display: flex; align-items: center; gap: 10px; margin: -8px 0 12px; color: var(--muted); font-size: 12px; }

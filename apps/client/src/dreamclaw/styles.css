@@ -90,4 +90,8 @@
 .dreamclaw-module .dc-calendar-optional { border-top: 1px solid var(--line); font-size: 13px; }
 .dreamclaw-module .dc-calendar-optional > summary { min-height: 44px; padding-block: 12px; cursor: pointer; font-weight: 600; }
 .dreamclaw-module .dc-calendar-optional > div { padding-bottom: 12px; }
-.dreamclaw-module .dc-calendar-actions { position: sticky; bottom: -24px; z-index: 2; margin-inline: -24px; margin-bottom: -24px; padding: 16px 24px 24px; background: var(--surface); border-top: 1px solid var(--line); }
+.dreamclaw-module .dc-calendar-dialog .dc-calendar-actions { position: sticky; bottom: -24px; z-index: 2; margin-inline: -24px; margin-bottom: -24px; padding: 16px 24px 24px; background: var(--surface); border-top: 1px solid var(--line); }
+.dreamclaw-module .dc-calendar-agenda-add { min-width: 44px; min-height: 44px; padding: 8px 10px; }
+.dreamclaw-module .dc-calendar-week-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.dreamclaw-module .dc-calendar-week-content { min-width: 760px; }
+.dreamclaw-module .dc-calendar-week-heading { position: sticky; top: 0; z-index: 20; }

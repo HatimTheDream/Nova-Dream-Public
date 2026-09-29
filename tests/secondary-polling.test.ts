@@ -129,14 +129,20 @@ test('starting a previously idle runtime rearms its status timer without repeati
 const operation = { id: 'operation', state: 'running', tools: [], nativeRunId: 'run' };
 const frame = { id: 'frame', operationId: 'operation', capturedAt: '2026-09-22T12:00:00Z', width: 800, height: 600 };
 test('tool view discovers delayed images, stops when closed or finished, and reads fresh on reopening', async () => {
-  let image: unknown = null, announcements = 0;
-  const app = host(AssistantActivityPanel, { operation, open: false, show() { announcements++; }, available() {}, close() {}, stop: async () => {} }, () => image);
+  let image: unknown = null, automaticOpens = 0, available = false;
+  const app = host(AssistantActivityPanel, { operation, open: false, show() { automaticOpens++; }, available(value: boolean) { available = value; }, close() {}, stop: async () => {} }, () => image);
   try {
     await app.flush(); await app.advance(6000); assert.equal(app.calls.length, 5);
+    assert.equal(available, false);
     await app.advance(60000); assert.equal(app.calls.length, 5, 'Closed discovery expires instead of polling indefinitely');
     await app.update({ operation: { ...operation, tools: [{ id: 'tool', state: 'completed' }] } });
-    image = frame; await app.advance(1500); assert.equal(announcements, 1);
+    image = frame; await app.advance(1500);
+    assert.equal(available, true, 'Discovery makes the explicit Live tool view action available');
+    assert.equal(automaticOpens, 0, 'Discovery does not open the panel or move focus away from writing');
+    assert.equal(app.tree, null); assert.equal(app.timers, 0);
+    const discovered = app.calls.length;
     await app.update({ open: true }); const live = app.calls.length;
+    assert.equal(live, discovered + 1, 'Explicit opening immediately reads the latest capture');
     await app.advance(3000); assert.equal(app.calls.length, live + 3);
     await app.visible(false); const hidden = app.calls.length; await app.advance(60000); assert.equal(app.calls.length, hidden);
     await app.visible(true); assert.equal(app.calls.length, hidden + 1);
@@ -144,31 +150,36 @@ test('tool view discovers delayed images, stops when closed or finished, and rea
     await app.advance(60000); assert.equal(app.calls.length, closed);
     await app.update({ open: true, operation: { ...operation, state: 'completed' } }); const finished = app.calls.length;
     await app.advance(60000); assert.equal(app.calls.length, finished);
-    assert.equal(announcements, 1, 'Reopening or refreshing does not force a second automatic panel opening');
+    assert.equal(automaticOpens, 0, 'Only the caller explicitly opens the panel; refreshes never force it open');
     assert.ok(app.calls.every(call => call.init.method === 'GET'));
   } finally { app.close(); }
 });
 
 test('a late image hint wakes closed running and completed views after discovery expires without leaving a timer', async () => {
   for (const state of ['running', 'completed']) {
-    let image: unknown = null, announcements = 0, available = false;
+    let image: unknown = null, automaticOpens = 0, available = false;
     const current = { ...operation, state };
-    const app = host(AssistantActivityPanel, { operation: current, open: false, show() { announcements++; }, available(value: boolean) { available = value; }, close() {}, stop: async () => {} }, () => image);
+    const app = host(AssistantActivityPanel, { operation: current, open: false, show() { automaticOpens++; }, available(value: boolean) { available = value; }, close() {}, stop: async () => {} }, () => image);
     try {
       await app.flush(); await app.advance(6000); assert.equal(app.calls.length, 5);
       image = frame; await app.advance(60000);
       assert.equal(app.calls.length, 5, 'An expired discovery window does not keep polling');
       await app.update({ operation: { ...current, observationId: frame.id } });
       assert.equal(app.calls.length, 6, 'Late image arrival is discovered through the existing state response');
-      assert.equal(available, true); assert.equal(announcements, 1); assert.equal(app.timers, 0);
+      assert.equal(available, true); assert.equal(automaticOpens, 0); assert.equal(app.tree, null); assert.equal(app.timers, 0);
       await app.advance(60000); assert.equal(app.calls.length, 6);
       await app.visible(false);
       image = { ...frame, id: 'newer-frame' };
       await app.update({ operation: { ...current, observationId: 'newer-frame' } });
       await app.advance(60000); assert.equal(app.calls.length, 6, 'Even an image hint respects hidden-tab suspension');
       await app.visible(true); assert.equal(app.calls.length, 7);
-      assert.equal(announcements, 1, 'A later image does not reopen a view the user already closed');
+      assert.equal(automaticOpens, 0, 'A later image only updates availability and never opens the closed view');
       assert.equal(app.timers, 0);
+      await app.update({ open: true });
+      assert.equal(app.calls.length, 8, 'Explicit opening refreshes both running and completed views immediately');
+      assert.equal(app.timers, state === 'running' ? 1 : 0, 'Only an explicitly open, active view keeps polling');
+      await app.update({ open: false });
+      assert.equal(app.timers, 0, 'Closing an explicitly opened view releases its timer');
     } finally { app.close(); }
   }
 });

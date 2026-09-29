@@ -68,13 +68,15 @@ export function MonthView({ onDateClick, onEventClick }: MonthViewProps) {
   };
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label={`${new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', calendar: 'gregory' }).format(selectedDate)} calendar`} dir="ltr">
+    <section role="grid" className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-label={`${new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', calendar: 'gregory' }).format(selectedDate)} calendar`} dir="ltr">
       <div className="grid shrink-0 grid-cols-7 border-b border-aegis-border bg-aegis-surface-solid" role="row">
         {weekdayHeaders.map((name) => <div key={name} role="columnheader" className="py-2 text-center text-[10px] font-bold uppercase tracking-[0.08em] text-aegis-text-dim sm:text-[11px]">{name}</div>)}
       </div>
-      <div ref={gridRef} role="grid" className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-px overflow-hidden bg-aegis-border"
+      <div ref={gridRef} role="rowgroup" className="grid min-h-0 flex-1 grid-rows-6 gap-px overflow-hidden bg-aegis-border"
         style={{ '--calendar-event-height': `${monthEventGeometry.event}px`, '--calendar-more-height': `${monthEventGeometry.more}px`, '--calendar-event-gap': `${monthEventGeometry.gap}px` } as CSSProperties}>
-        {cells.map((cell, index) => {
+        {Array.from({ length: 6 }, (_, week) => <div key={week} role="row" className="grid min-h-0 grid-cols-7 gap-px">
+        {cells.slice(week * 7, week * 7 + 7).map((cell, day) => {
+          const index = week * 7 + day;
           const dayEvents = eventsForDate(filteredEvents, cell.dateStr);
           const layout = monthEventLayout(dayEvents.length, eventHeight);
           const isSelected = cell.dateStr === selected;
@@ -114,7 +116,7 @@ export function MonthView({ onDateClick, onEventClick }: MonthViewProps) {
               </div>
             </div>
           );
-        })}
+        })}</div>)}
       </div>
       {filteredEvents.length === 0 && <p className="sr-only" role="status">No events are scheduled for this month.</p>}
     </section>
