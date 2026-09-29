@@ -1,6 +1,7 @@
 import { resolveSquareLynxAppearance } from './square-lynx.js';
 
-export const MASCOT_CATALOG = 'nova-mascot-1' as const;
+export const MASCOT_CATALOG = 'nova-mascot-2' as const;
+const legacyMascotCatalog = 'nova-mascot-1';
 
 export const mascotOptions = Object.freeze({
   face: Object.freeze(['classic', 'bright', 'calm', 'focused', 'curious', 'cheerful', 'gentle', 'confident'] as const),
@@ -19,12 +20,13 @@ export type MascotAppearance = {
   eyes: string;
   clothing: string;
   accent: string;
+  glassesColor: string;
 };
 
 export const defaultMascotAppearance: Readonly<MascotAppearance> = Object.freeze({
   face: 'classic', pattern: 'signature', outfit: 'suit', glasses: 'none',
   fur: '#f7ecd6', markings: '#cf2c40', eyes: '#edac23',
-  clothing: '#272930', accent: '#cf2c40',
+  clothing: '#272930', accent: '#cf2c40', glassesColor: '#25272b',
 });
 
 export type MascotAppearanceRecord = {
@@ -34,8 +36,8 @@ export type MascotAppearanceRecord = {
 };
 
 const choiceKeys = ['face', 'pattern', 'outfit', 'glasses'] as const;
-const colorKeys = ['fur', 'markings', 'eyes', 'clothing', 'accent'] as const;
-const appearanceKeys = [...choiceKeys, ...colorKeys];
+const legacyColorKeys = ['fur', 'markings', 'eyes', 'clothing', 'accent'] as const;
+const colorKeys = [...legacyColorKeys, 'glassesColor'] as const;
 const envelopeKeys = ['schemaVersion', 'catalogRevision', 'appearance'];
 const colorPattern = /^#[a-f\d]{6}$/i;
 
@@ -93,20 +95,24 @@ export function resolveMascotAppearance(source: unknown):
   if (source == null) return { status: 'unconfigured', source };
   const fields = dataFields(source);
   if (!fields) return { status: 'invalid', source };
-  if (fields.schemaVersion?.value !== 1 || fields.catalogRevision?.value !== MASCOT_CATALOG) {
+  const catalog = fields.catalogRevision?.value as unknown;
+  if (fields.schemaVersion?.value !== 1 || (catalog !== MASCOT_CATALOG && catalog !== legacyMascotCatalog)) {
     return { status: 'unsupported', source };
   }
   if (!hasExactly(fields, envelopeKeys)) return { status: 'invalid', source };
   const appearance = fields.appearance.value as unknown;
   const choices = dataFields(appearance);
-  if (!choices || !hasExactly(choices, appearanceKeys)) return { status: 'invalid', source };
+  // Version 1 keeps its exact saved shape. The editable/rendered copy alone
+  // receives the original frame ink; opening a record never migrates it.
+  const savedColorKeys = catalog === legacyMascotCatalog ? legacyColorKeys : colorKeys;
+  if (!choices || !hasExactly(choices, [...choiceKeys, ...savedColorKeys])) return { status: 'invalid', source };
   for (const key of choiceKeys) {
     const value: unknown = choices[key].value;
     if (typeof value !== 'string' || !(mascotOptions[key] as readonly string[]).includes(value)) {
       return { status: 'invalid', source };
     }
   }
-  for (const key of colorKeys) {
+  for (const key of savedColorKeys) {
     const value: unknown = choices[key].value;
     if (typeof value !== 'string' || value.length !== 7 || !colorPattern.test(value)) return { status: 'invalid', source };
   }
@@ -138,6 +144,7 @@ export function editableMascotAppearance(source: unknown): MascotAppearance {
     pattern: legacyPatterns[modules.pattern],
     outfit: modules.clothing === 'tie' ? 'suit' : 'shirt',
     glasses: 'none',
+    glassesColor: defaultMascotAppearance.glassesColor,
     fur: '#f6e9d2',
     markings: legacyMarkings[modules.colorway],
     eyes: '#e8a020',

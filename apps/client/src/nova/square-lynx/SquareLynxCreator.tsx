@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { createMascotAppearance, defaultMascotAppearance, editableMascotAppearance, mascotOptions, resolveMascotAppearance, type MascotAppearance } from '../../../../../packages/domain/mascot-appearance';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createMascotAppearance, defaultMascotAppearance, editableMascotAppearance, mascotOptions, MASCOT_CATALOG, resolveMascotAppearance, type MascotAppearance } from '../../../../../packages/domain/mascot-appearance';
 import { MascotSvg } from './MascotSvg';
 import './mascot-creator.css';
 
@@ -11,20 +11,23 @@ export interface SquareLynxCreatorProps {
 type SavedAppearance = SquareLynxCreatorProps['value'];
 type Choice = keyof typeof mascotOptions;
 type Expression = 'idle' | 'listening' | 'speaking';
-const TABS = ['look', 'face', 'outfit', 'colors'] as const;
-type Tab = typeof TABS[number];
-const COLOR_KEYS = ['fur', 'markings', 'eyes', 'clothing', 'accent'] as const;
+const CHOICES = ['face', 'pattern', 'outfit', 'glasses'] as const;
+const LOCK_GROUPS = [...CHOICES, 'colors'] as const;
+type LockGroup = typeof LOCK_GROUPS[number];
+const PALETTE_COLOR_KEYS = ['fur', 'markings', 'eyes', 'clothing', 'accent'] as const;
+const COLOR_KEYS = [...PALETTE_COLOR_KEYS, 'glassesColor'] as const;
 type ColorKey = typeof COLOR_KEYS[number];
-type Palette = { name: string; colors: Pick<MascotAppearance, ColorKey> };
+type Palette = { name: string; colors: Pick<MascotAppearance, typeof PALETTE_COLOR_KEYS[number]> };
+const ROW_COLORS: Record<Choice, readonly ColorKey[]> = { face: ['fur', 'eyes'], pattern: ['markings'], outfit: ['clothing', 'accent'], glasses: ['glassesColor'] };
 type History = { past: SavedAppearance[]; future: SavedAppearance[] };
 const HEX = /^#[0-9a-f]{6}$/i;
 const LABELS: Record<string, string> = {
-  look: 'Look', face: 'Face', outfit: 'Outfit', colors: 'Colors',
+  face: 'Face', pattern: 'Pattern', outfit: 'Outfit', glasses: 'Glasses', colors: 'Colors',
   signature: 'Signature', freckles: 'Freckles', blaze: 'Blaze', rosettes: 'Rosettes', mask: 'Mask', patches: 'Patches', bands: 'Bands', solid: 'Solid',
   classic: 'Classic', bright: 'Bright', calm: 'Calm', focused: 'Focused', curious: 'Curious', cheerful: 'Cheerful', gentle: 'Gentle', confident: 'Confident',
   suit: 'The Executive', knit: 'Soft Knit', shirt: 'Open Collar', hoodie: 'Off Duty', cardigan: 'Cardigan', vest: 'Vest', turtleneck: 'Turtleneck', utility: 'Utility',
   none: 'No Glasses', round: 'Round', square: 'Square', browline: 'Browline',
-  fur: 'Fur', markings: 'Markings', eyes: 'Eyes', clothing: 'Clothing', accent: 'Accent',
+  fur: 'Fur', markings: 'Markings', eyes: 'Eyes', clothing: 'Clothing', accent: 'Accent', glassesColor: 'Frame',
 };
 const PALETTES: readonly Palette[] = [
   { name: 'Nova', colors: { fur: '#f7ecd6', markings: '#cf2c40', eyes: '#edac23', clothing: '#272930', accent: '#cf2c40' } },
@@ -52,14 +55,27 @@ function different<T>(values: readonly T[], current: T): T {
   return candidates[Math.floor(Math.random() * candidates.length)] ?? current;
 }
 
-function CreatorIcon({ kind }: { kind: 'undo' | 'redo' | 'lock' | 'unlock' | 'shuffle' | 'download' }) {
+function CreatorIcon({ kind }: { kind: 'undo' | 'redo' | 'lock' | 'unlock' | 'shuffle' | 'download' | 'previous' | 'next' }) {
   return <svg className="mc-icon" viewBox="0 0 24 24" aria-hidden="true">
     {kind === 'undo' && <path d="M8 5 3 10l5 5M3 10h10a7 7 0 0 1 7 7" />}
     {kind === 'redo' && <path d="m16 5 5 5-5 5m5-5H11a7 7 0 0 0-7 7" />}
     {(kind === 'lock' || kind === 'unlock') && <><rect x="5" y="10" width="14" height="11" rx="3" /><path d={kind === 'lock' ? 'M8 10V7a4 4 0 0 1 8 0v3m-4 5v2' : 'M8 10V7a4 4 0 0 1 7.5-2m-3.5 10v2'} /></>}
     {kind === 'shuffle' && <path d="m17 3 4 4-4 4m4-4h-3c-6 0-6 10-12 10H3m14-4 4 4-4 4m4-4h-3c-6 0-6-10-12-10H3" />}
     {kind === 'download' && <path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" />}
+    {kind === 'previous' && <path d="m14 6-6 6 6 6" />}
+    {kind === 'next' && <path d="m10 6 6 6-6 6" />}
   </svg>;
+}
+
+function ChoiceSelector({ label, value, index, count, previous, next, lock, choice }: {
+  label: string; value: string; index: number; count: number; previous: () => void; next: () => void; lock?: ReactNode; choice: string;
+}) {
+  return <div className={`mc-selector-row${lock ? ' mc-selector-lockable' : ''}`} data-choice={choice} role="group" aria-label={label}>
+    <button type="button" className="mc-arrow" aria-label={`Previous ${label.toLowerCase()}`} onClick={previous}><CreatorIcon kind="previous" /></button>
+    <div className="mc-choice-current"><span className="mc-choice-label">{label}</span><strong className="mc-choice-value">{value}</strong><span className="mc-choice-count">{index < 0 ? '—' : index + 1} / {count}</span></div>
+    <button type="button" className="mc-arrow" aria-label={`Next ${label.toLowerCase()}`} onClick={next}><CreatorIcon kind="next" /></button>
+    {lock}
+  </div>;
 }
 
 function HexColor({ value, label, change, announce }: { value: string; label: string; change: (color: string) => void; announce: (message: string) => void }) {
@@ -82,9 +98,9 @@ function HexColor({ value, label, change, announce }: { value: string; label: st
 /** Edits the parent record draft. Opening, previewing, and downloading never save or migrate a record. */
 export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProps) {
   const id = useId();
-  const [tab, setTab] = useState<Tab>('look');
   const [expression, setExpression] = useState<Expression>('idle');
-  const [locks, setLocks] = useState<Record<Tab, boolean>>({ look: false, face: false, outfit: false, colors: false });
+  const [locks, setLocks] = useState<Record<LockGroup, boolean>>({ pattern: false, face: false, outfit: false, glasses: false, colors: false });
+  const [activeColor, setActiveColor] = useState<ColorKey | null>(null);
   const [history, setHistory] = useState<History>({ past: [], future: [] });
   const historyRef = useRef(history);
   const valueRef = useRef(value);
@@ -93,6 +109,7 @@ export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProp
   const previousKey = useRef(valueKey);
   const emittedKey = useRef<string | undefined>(undefined);
   const colorBefore = useRef<{ value: SavedAppearance } | null>(null);
+  const colorInputs = useRef<Partial<Record<ColorKey, HTMLInputElement>>>({});
   const [announcement, announce] = useState('');
   const appearance = editableMascotAppearance(value);
   const resolution = resolveMascotAppearance(value);
@@ -137,18 +154,19 @@ export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProp
   };
   const shuffle = () => {
     const next = { ...appearance };
-    if (!locks.look) next.pattern = different(mascotOptions.pattern, appearance.pattern);
-    if (!locks.face) { next.face = different(mascotOptions.face, appearance.face); next.glasses = different(mascotOptions.glasses, appearance.glasses); }
+    if (!locks.pattern) next.pattern = different(mascotOptions.pattern, appearance.pattern);
+    if (!locks.face) next.face = different(mascotOptions.face, appearance.face);
+    if (!locks.glasses) next.glasses = different(mascotOptions.glasses, appearance.glasses);
     if (!locks.outfit) next.outfit = different(mascotOptions.outfit, appearance.outfit);
     if (!locks.colors) {
-      const alternatives = PALETTES.filter(palette => COLOR_KEYS.some(key => palette.colors[key] !== appearance[key]));
+      const alternatives = PALETTES.filter(palette => PALETTE_COLOR_KEYS.some(key => palette.colors[key] !== appearance[key]));
       Object.assign(next, alternatives[Math.floor(Math.random() * alternatives.length)].colors);
     }
     commit(saved(next), 'A new look. Locked sections are unchanged.');
   };
   const download = () => {
     finishColor();
-    const recipe = { format: 'nova-mascot-look', version: 1, appearance };
+    const recipe = { format: 'nova-mascot-look', version: 2, catalogRevision: MASCOT_CATALOG, appearance };
     const url = URL.createObjectURL(new Blob([JSON.stringify(recipe, null, 2) + '\n'], { type: 'application/json' }));
     const anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'nova-mascot-look.json';
@@ -156,29 +174,46 @@ export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProp
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     announce('Your look has been downloaded. Save changes to apply it in Nova.');
   };
-  const navigateTabs = (event: KeyboardEvent<HTMLButtonElement>) => {
-    let next = TABS.indexOf(tab);
-    if (event.key === 'ArrowRight') next = (next + 1) % TABS.length;
-    else if (event.key === 'ArrowLeft') next = (next + TABS.length - 1) % TABS.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = TABS.length - 1;
-    else return;
-    event.preventDefault(); setTab(TABS[next]); document.getElementById(`${id}-tab-${TABS[next]}`)?.focus();
-  };
-  const lockButton = (group: Tab) => <button type="button" className="mc-lock" aria-pressed={locks[group]}
-    aria-label={`${locks[group] ? 'Unlock' : 'Lock'} ${group === 'face' ? 'face and glasses' : group} when shuffling`}
-    onClick={() => { setLocks(current => ({ ...current, [group]: !current[group] })); announce(`${group === 'face' ? 'Face and glasses' : LABELS[group]} ${locks[group] ? 'unlocked' : 'locked'} for shuffle.`); }}>
-    <CreatorIcon kind={locks[group] ? 'lock' : 'unlock'} /><span>{locks[group] ? 'Locked' : 'Lock'}</span>
+  const lockButton = (group: LockGroup) => <button type="button" className="mc-lock" aria-pressed={locks[group]}
+    aria-label={`${locks[group] ? 'Unlock' : 'Lock'} ${group === 'colors' ? 'all colors' : `${group} style`} when shuffling`} title={`${locks[group] ? 'Unlock' : 'Lock'} ${group === 'colors' ? 'all colors' : `${group} style`} when shuffling`}
+    onClick={() => { setLocks(current => ({ ...current, [group]: !current[group] })); announce(`${LABELS[group]} ${locks[group] ? 'unlocked' : 'locked'} for shuffle.`); }}>
+    <CreatorIcon kind={locks[group] ? 'lock' : 'unlock'} />
   </button>;
-  const options = (key: Choice, label: string) => <div className={`mc-options${key === 'glasses' ? ' mc-glasses' : ''}`} role="group" aria-label={label}>
-    {mascotOptions[key].map(option => <button type="button" key={option} className="mc-option" aria-pressed={appearance[key] === option}
-      aria-label={key === 'glasses' && option === 'none' ? 'No glasses' : `${LABELS[option]} ${key === 'pattern' ? 'markings' : key}`}
-      onClick={() => pick({ [key]: option } as Partial<MascotAppearance>, `${LABELS[option]} selected.`)}>
-      <span className="mc-avatar mc-option-art" aria-hidden="true"><MascotSvg appearance={{ ...appearance, [key]: option }} /></span><span>{LABELS[option]}</span>
-    </button>)}
-  </div>;
+  const cycleChoice = (key: Choice, direction: number) => {
+    const choices: readonly string[] = mascotOptions[key];
+    const index = (choices.indexOf(appearance[key]) + direction + choices.length) % choices.length;
+    pick({ [key]: choices[index] } as Partial<MascotAppearance>, `${LABELS[key]}: ${LABELS[choices[index]]}, ${index + 1} of ${choices.length}.`);
+  };
   const selectedStarter = STARTERS.find(starter => equal(starter.appearance, appearance));
-  const lockedGroups = TABS.filter(group => locks[group]);
+  const starterIndex = selectedStarter ? STARTERS.indexOf(selectedStarter) : -1;
+  const paletteIndex = PALETTES.findIndex(palette => PALETTE_COLOR_KEYS.every(key => palette.colors[key] === appearance[key]));
+  const cycleStarter = (direction: number) => {
+    const index = starterIndex < 0 ? (direction > 0 ? 0 : STARTERS.length - 1) : (starterIndex + direction + STARTERS.length) % STARTERS.length;
+    const starter = STARTERS[index];
+    commit(saved(starter.appearance), `${starter.name} applied to your draft.`);
+  };
+  const cyclePalette = (direction: number) => {
+    const index = paletteIndex < 0 ? (direction > 0 ? 0 : PALETTES.length - 1) : (paletteIndex + direction + PALETTES.length) % PALETTES.length;
+    pick(PALETTES[index].colors, `${PALETTES[index].name} colors applied.`);
+  };
+  const lockedGroups = LOCK_GROUPS.filter(group => locks[group]);
+  const updateColor = (key: ColorKey, color: string) => {
+    if (!HEX.test(color)) return;
+    if (!colorBefore.current) colorBefore.current = { value: copy(valueRef.current) };
+    emit(saved({ ...editableMascotAppearance(valueRef.current), [key]: color.toLowerCase() }));
+  };
+  const openColor = (key: ColorKey) => {
+    finishColor(); setActiveColor(key);
+    const input = colorInputs.current[key];
+    if (!input) return;
+    try { if (input.showPicker) input.showPicker(); else input.click(); }
+    catch { announce(`${LABELS[key]} color controls opened.`); }
+  };
+  const colorPicker = (key: ColorKey) => <div className="mc-color-field">
+    <input id={`${id}-color-${key}`} type="color" className="mc-color-picker" value={appearance[key]} aria-label={`${LABELS[key]} color`}
+      onChange={event => updateColor(key, event.target.value)} onBlur={finishColor} />
+    <label htmlFor={`${id}-color-${key}`}>{LABELS[key]}</label><HexColor key={key} value={appearance[key]} label={LABELS[key]} change={color => pick({ [key]: color }, `${LABELS[key]} color changed.`)} announce={announce} />
+  </div>;
 
   return <section className="mascot-creator" aria-label={`${name || 'Your'} mascot creator`}>
     <div className="mc-header"><div className="mc-title"><span className="mc-avatar mc-brand" aria-hidden="true"><MascotSvg appearance={defaultMascotAppearance} /></span><h4>Mascot Creator</h4></div>
@@ -197,25 +232,29 @@ export function SquareLynxCreator({ value, change, name }: SquareLynxCreatorProp
         <div className="mc-context"><span className="mc-avatar mc-context-icon" aria-hidden="true"><MascotSvg appearance={appearance} expression={expression} /></span><div><strong>Still you, at every size.</strong><span>Your icon in Nova</span></div><span className="mc-avatar mc-tiny-icon" aria-hidden="true"><MascotSvg appearance={appearance} expression={expression} /></span></div>
       </div>
       <div className="mc-customizer">
-        <h4 className="mc-starter-heading">Start With a Look</h4>
-        <div className="mc-starters" role="group" aria-label="Starter looks">{STARTERS.map(starter => <button type="button" key={starter.name} className="mc-starter" aria-pressed={equal(starter.appearance, appearance)} onClick={() => commit(saved(starter.appearance), `${starter.name} applied to your draft.`)}>
-          <span className="mc-avatar mc-starter-art" aria-hidden="true"><MascotSvg appearance={starter.appearance} /></span><span>{starter.name}</span>
-        </button>)}</div>
-        <div className="mc-tabs" role="tablist" aria-label="Appearance sections">{TABS.map(item => <button key={item} type="button" role="tab" id={`${id}-tab-${item}`} aria-selected={tab === item} aria-controls={`${id}-panel-${item}`} tabIndex={tab === item ? 0 : -1} onClick={() => setTab(item)} onKeyDown={navigateTabs}>{LABELS[item]}{locks[item] && <CreatorIcon kind="lock" />}</button>)}</div>
-        <div className="mc-panel" id={`${id}-panel-look`} role="tabpanel" aria-labelledby={`${id}-tab-look`} hidden={tab !== 'look'}><div className="mc-panel-heading"><h4>Markings</h4>{lockButton('look')}</div>{options('pattern', 'Marking pattern')}</div>
-        <div className="mc-panel" id={`${id}-panel-face`} role="tabpanel" aria-labelledby={`${id}-tab-face`} hidden={tab !== 'face'}><div className="mc-panel-heading"><h4>Face Style</h4>{lockButton('face')}</div>{options('face', 'Face style')}<h4 className="mc-subheading">Glasses</h4>{options('glasses', 'Glasses')}</div>
-        <div className="mc-panel" id={`${id}-panel-outfit`} role="tabpanel" aria-labelledby={`${id}-tab-outfit`} hidden={tab !== 'outfit'}><div className="mc-panel-heading"><h4>Outfit</h4>{lockButton('outfit')}</div>{options('outfit', 'Outfit')}</div>
-        <div className="mc-panel" id={`${id}-panel-colors`} role="tabpanel" aria-labelledby={`${id}-tab-colors`} hidden={tab !== 'colors'}>
-          <div className="mc-panel-heading"><h4>Colors</h4>{lockButton('colors')}</div>
-          <div className="mc-palettes" role="group" aria-label="Coordinated palettes">{PALETTES.map(palette => <button type="button" key={palette.name} className="mc-palette" aria-label={`${palette.name} palette`} aria-pressed={COLOR_KEYS.every(key => palette.colors[key] === appearance[key])} onClick={() => pick(palette.colors, `${palette.name} colors applied.`)}><span className="mc-palette-swatches" aria-hidden="true">{COLOR_KEYS.map(key => <span key={key} style={{ backgroundColor: palette.colors[key] }} />)}</span><span>{palette.name}</span></button>)}</div>
-          <div className="mc-colors">{COLOR_KEYS.map(key => <div className="mc-color-field" key={key}>
-            <input id={`${id}-color-${key}`} type="color" className="mc-color-picker" value={appearance[key]} aria-label={`${LABELS[key]} color`}
-              onChange={event => { if (!HEX.test(event.target.value)) return; if (!colorBefore.current) colorBefore.current = { value: copy(valueRef.current) }; emit(saved({ ...editableMascotAppearance(valueRef.current), [key]: event.target.value.toLowerCase() })); }} onBlur={finishColor} />
-            <div className="mc-color-label"><label htmlFor={`${id}-color-${key}`}>{LABELS[key]}</label><HexColor value={appearance[key]} label={LABELS[key]} change={color => pick({ [key]: color }, `${LABELS[key]} color changed.`)} announce={announce} /></div>
-          </div>)}</div>
-        </div>
-        <div className="mc-actions"><button type="button" className="mc-secondary" onClick={shuffle} disabled={lockedGroups.length === TABS.length}><CreatorIcon kind="shuffle" />Shuffle</button><div className="mc-reset-actions"><button type="button" className="mc-quiet" onClick={() => commit(saved(defaultMascotAppearance), 'Appearance reset. You can undo this change.')}>Reset</button><button type="button" className="mc-quiet" disabled={value === null} onClick={() => commit(null, 'Avatar cleared. Save changes to apply it.')}>Clear</button></div><button type="button" className="mc-primary" onClick={download}><CreatorIcon kind="download" />Download Look</button></div>
-        {lockedGroups.length > 0 && <p className="mc-lock-note">Kept when shuffling: {lockedGroups.map(group => group === 'face' ? 'Face and glasses' : LABELS[group]).join(', ')}.</p>}
+        <div className="mc-customizer-heading"><h4>Make it yours</h4><button type="button" className="mc-secondary" onClick={shuffle} disabled={lockedGroups.length === LOCK_GROUPS.length}><CreatorIcon kind="shuffle" />Shuffle</button></div>
+        <div className="mc-choices">{CHOICES.map(key => {
+          const colors = key === 'glasses' && appearance.glasses === 'none' ? [] : ROW_COLORS[key];
+          return <div key={key} className="mc-choice-block">
+            <ChoiceSelector choice={key} label={LABELS[key]} value={LABELS[appearance[key]]}
+              index={(mascotOptions[key] as readonly string[]).indexOf(appearance[key])} count={mascotOptions[key].length}
+              previous={() => cycleChoice(key, -1)} next={() => cycleChoice(key, 1)} lock={lockButton(key)} />
+            {colors.length > 0 && <div className="mc-row-colors" role="group" aria-label={`${LABELS[key]} colors`}>{colors.map(color => <span className="mc-swatch-control" key={color}>
+              <button type="button" className="mc-color-swatch" aria-label={`Edit ${color === 'glassesColor' ? 'glasses frame' : color} color`} aria-expanded={activeColor === color} aria-pressed={activeColor === color}
+                onClick={() => openColor(color)}><span style={{ backgroundColor: appearance[color] }} aria-hidden="true" /><span>{LABELS[color]}</span></button>
+              <input type="color" className="mc-color-launcher" value={appearance[color]} tabIndex={-1} aria-hidden="true"
+                ref={input => { if (input) colorInputs.current[color] = input; else delete colorInputs.current[color]; }}
+                onChange={event => updateColor(color, event.target.value)} onBlur={finishColor} />
+            </span>)}</div>}
+            {activeColor && colors.includes(activeColor) && colorPicker(activeColor)}
+          </div>;
+        })}</div>
+        <details className="mc-more"><summary>More options</summary><div className="mc-more-content">
+          <ChoiceSelector choice="starter" label="Starter look" value={selectedStarter?.name ?? 'Custom'} index={starterIndex} count={STARTERS.length} previous={() => cycleStarter(-1)} next={() => cycleStarter(1)} />
+          <ChoiceSelector choice="palette" label="Palette" value={paletteIndex < 0 ? 'Custom' : PALETTES[paletteIndex].name} index={paletteIndex} count={PALETTES.length} previous={() => cyclePalette(-1)} next={() => cyclePalette(1)} lock={lockButton('colors')} />
+          <div className="mc-actions"><button type="button" className="mc-secondary" onClick={download}><CreatorIcon kind="download" />Download look</button><button type="button" className="mc-quiet" onClick={() => commit(saved(defaultMascotAppearance), 'Appearance reset. You can undo this change.')}>Reset</button><button type="button" className="mc-quiet" disabled={value === null} onClick={() => commit(null, 'Avatar cleared. Save changes to apply it.')}>Clear</button></div>
+        </div></details>
+        {lockedGroups.length > 0 && <p className="mc-lock-note">Kept when shuffling: {lockedGroups.map(group => group === 'colors' ? 'All colors' : `${LABELS[group]} style`).join(', ')}.</p>}
         <p className="mc-save-note">{value && resolution.status !== 'ready' ? 'Your saved avatar stays unchanged until you edit and save.' : 'Changes apply when you save.'}</p>
       </div>
     </div>

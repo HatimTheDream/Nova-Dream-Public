@@ -23,7 +23,7 @@ test('saved mascot recipes survive Store restart and old portraits change only a
   try {
     const newAppearance = createMascotAppearance({
       ...defaultMascotAppearance, face: 'curious', pattern: 'rosettes', outfit: 'cardigan', glasses: 'browline',
-      fur: '#aabbcc', markings: '#123456', eyes: '#fedcba', clothing: '#445566', accent: '#aaccff',
+      fur: '#aabbcc', markings: '#123456', eyes: '#fedcba', clothing: '#445566', accent: '#aaccff', glassesColor: '#3377aa',
     });
     const newAgent = { ...blankRecord('agent', 'UTC'), name: 'New mascot', position: 'Designer', appearance: newAppearance } as AgentDesign;
     const oldAppearance = { schemaVersion: 1, catalogRevision: 'nova-square-lynx-1', avatarId: 'spots-teal-collar' };

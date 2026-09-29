@@ -154,10 +154,10 @@ function features(a: MascotAppearance, pose: MascotExpression, id: string, muzzl
 function eyewear(a: MascotAppearance) {
   if (a.glasses === 'none') return '';
   const sides = '<path d="M65 175L47 165 M335 175L353 165 M171 174Q200 155 229 174"/>';
-  if (a.glasses === 'round') return `<g fill="none" stroke="${ink}" stroke-width="7" stroke-linecap="round"><circle cx="120" cy="188" r="51"/><circle cx="280" cy="188" r="51"/>${sides}</g>`;
+  if (a.glasses === 'round') return `<g fill="none" stroke="${a.glassesColor}" stroke-width="7" stroke-linecap="round"><circle cx="120" cy="188" r="51"/><circle cx="280" cy="188" r="51"/>${sides}</g>`;
   const lenses = '<rect x="63" y="146" width="113" height="86" rx="18"/><rect x="224" y="146" width="113" height="86" rx="18"/>';
-  if (a.glasses === 'square') return `<g fill="none" stroke="${ink}" stroke-width="8" stroke-linecap="round">${lenses}${sides}</g>`;
-  return `<g fill="none" stroke="${ink}" stroke-width="4" stroke-linecap="round">${lenses}${sides}<path d="M65 170V161Q65 147 80 147H159Q174 147 174 161V170 M226 170V161Q226 147 241 147H320Q335 147 335 161V170" stroke-width="11"/></g>`;
+  if (a.glasses === 'square') return `<g fill="none" stroke="${a.glassesColor}" stroke-width="8" stroke-linecap="round">${lenses}${sides}</g>`;
+  return `<g fill="none" stroke="${a.glassesColor}" stroke-width="4" stroke-linecap="round">${lenses}${sides}<path d="M65 170V161Q65 147 80 147H159Q174 147 174 161V170 M226 170V161Q226 147 241 147H320Q335 147 335 161V170" stroke-width="11"/></g>`;
 }
 
 let sequence = 0;

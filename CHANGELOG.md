@@ -1,3 +1,9 @@
+## [1.15.1] — 2026-09-28
+
+- Simplifies the mascot creator into compact previous/next selectors with one visible choice per feature and a live character preview. Controls sit beside the preview when space permits and stack underneath in narrower windows.
+- Places applicable color controls with each feature, including independently colored glasses frames. Older saved mascot recipes keep their appearance and remain editable.
+- Keeps undo, shuffle, locks and custom colors available while moving secondary actions into a disclosure. All existing appearance options and saved-avatar behavior are preserved.
+
 ## [1.15.0] — 2026-09-28
 
 Create a Nova mascot with the approved illustrated artwork and more independent choices.

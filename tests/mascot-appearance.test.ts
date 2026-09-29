@@ -14,9 +14,9 @@ import {
 test('every new choice round trips independently through saved JSON', () => {
   const base: MascotAppearance = {
     face: 'curious', pattern: 'patches', outfit: 'utility', glasses: 'browline',
-    fur: '#123456', markings: '#abcdef', eyes: '#112233', clothing: '#445566', accent: '#778899',
+    fur: '#123456', markings: '#abcdef', eyes: '#112233', clothing: '#445566', accent: '#778899', glassesColor: '#0a1b2c',
   };
-  const options = { ...mascotOptions, fur: ['#ffeedd'], markings: ['#123abc'], eyes: ['#000000'], clothing: ['#ffffff'], accent: ['#ccbbaa'] };
+  const options = { ...mascotOptions, fur: ['#ffeedd'], markings: ['#123abc'], eyes: ['#000000'], clothing: ['#ffffff'], accent: ['#ccbbaa'], glassesColor: ['#876543'] };
   for (const key of Object.keys(options) as (keyof MascotAppearance)[]) {
     for (const value of options[key]) {
       const input = { ...base, [key]: value };
@@ -56,6 +56,50 @@ test('valid records preserve their exact source, normalize hex case and return d
   assert.equal(resolveMascotAppearance(nullPrototype).status, 'ready');
 });
 
+test('original mascot saves keep their exact shape and acquire the original frame ink only in editable copies', () => {
+  const source = Object.freeze({
+    schemaVersion: 1, catalogRevision: 'nova-mascot-1',
+    appearance: Object.freeze({
+      face: 'curious', pattern: 'patches', outfit: 'utility', glasses: 'round',
+      fur: '#123456', markings: '#ABCDEF', eyes: '#112233', clothing: '#445566', accent: '#778899',
+    }),
+  });
+  const before = JSON.stringify(source);
+  const resolved = resolveMascotAppearance(source);
+  assert.equal(resolved.status, 'ready');
+  assert.equal(resolved.source, source);
+  if (resolved.status !== 'ready') return;
+  assert.deepEqual(resolved.appearance, { ...source.appearance, markings: '#abcdef', glassesColor: '#25272b' });
+  const editable = editableMascotAppearance(source);
+  editable.glassesColor = '#998877';
+  const saved = createMascotAppearance(editable);
+  assert.equal(saved.catalogRevision, 'nova-mascot-2');
+  assert.equal(saved.appearance.glassesColor, '#998877');
+  assert.equal(resolved.appearance.glassesColor, '#25272b');
+  assert.equal(JSON.stringify(source), before);
+  assert.equal(Object.hasOwn(source.appearance, 'glassesColor'), false);
+  assert.equal(resolveMascotAppearance({ ...source, appearance: { ...source.appearance, glassesColor: '#25272b' } }).status, 'invalid');
+  assert.equal(resolveMascotAppearance({ ...source, catalogRevision: 'nova-mascot-2' }).status, 'invalid');
+  assert.equal(resolveMascotAppearance({ ...source, appearance: { ...source.appearance, glasses: 'unknown' } }).status, 'invalid');
+  assert.equal(resolveMascotAppearance({ ...source, appearance: { ...source.appearance, accent: 'url(#paint)' } }).status, 'invalid');
+});
+
+test('frame color validates independently and survives glasses style changes including None', () => {
+  const appearance = { ...defaultMascotAppearance, glassesColor: '#A1B2C3' };
+  for (const glasses of mascotOptions.glasses) {
+    const saved = createMascotAppearance({ ...appearance, glasses });
+    assert.deepEqual(saved.appearance, { ...appearance, glasses, glassesColor: '#a1b2c3' });
+    const resolved = resolveMascotAppearance(JSON.parse(JSON.stringify(saved)));
+    assert.equal(resolved.status, 'ready');
+    if (resolved.status === 'ready') assert.deepEqual(resolved.appearance, saved.appearance);
+  }
+  for (const invalid of [undefined, null, 1, '#123', '#1234567', '#123456\n', '#123456;', 'red', 'url(#paint)', '\"><script>']) {
+    const source = { ...createMascotAppearance(), appearance: { ...appearance, glassesColor: invalid } };
+    assert.equal(resolveMascotAppearance(source).status, 'invalid');
+    assert.equal(normalizeMascotAppearance(source.appearance).glassesColor, '#25272b');
+  }
+});
+
 test('malformed known records fail closed while future and other catalogs retain their source', () => {
   for (const source of [null, undefined]) assert.equal(resolveMascotAppearance(source).status, 'unconfigured');
   for (const source of [false, 0, 'mascot', [], new Date()]) assert.equal(resolveMascotAppearance(source).status, 'invalid');
@@ -89,13 +133,15 @@ test('getters, inherited data and unsafe keys are rejected without executing acc
   const accessor = { enumerable: true, get() { reads += 1; throw new Error('must not execute'); } };
   const envelope = Object.defineProperty(createMascotAppearance(), 'appearance', accessor);
   const nested = Object.defineProperty({ ...defaultMascotAppearance }, 'fur', accessor);
+  const frameAccessor = Object.defineProperty({ ...defaultMascotAppearance }, 'glassesColor', accessor);
   const legacy = Object.defineProperty(createSquareLynxAppearance(), 'avatarId', accessor);
   const inherited = Object.create(createMascotAppearance());
-  for (const source of [envelope, { ...createMascotAppearance(), appearance: nested }, inherited, legacy]) {
+  for (const source of [envelope, { ...createMascotAppearance(), appearance: nested }, { ...createMascotAppearance(), appearance: frameAccessor }, inherited, legacy]) {
     assert.equal(resolveMascotAppearance(source).status, 'invalid');
     assert.deepEqual(editableMascotAppearance(source), defaultMascotAppearance);
   }
   assert.deepEqual(normalizeMascotAppearance(nested), defaultMascotAppearance);
+  assert.deepEqual(normalizeMascotAppearance(frameAccessor), defaultMascotAppearance);
   for (const key of ['__proto__', 'constructor', 'prototype']) {
     const unsafe = Object.defineProperty(createMascotAppearance(), key, { value: { polluted: true }, enumerable: true });
     assert.equal(resolveMascotAppearance(unsafe).status, 'invalid');
@@ -124,7 +170,7 @@ test('all v2 legacy combinations map their independent choices only when editing
           const before = JSON.stringify(source);
           assert.deepEqual(editableMascotAppearance(source), {
             face: faces[face], pattern: patterns[pattern], outfit: clothing === 'tie' ? 'suit' : 'shirt',
-            glasses: 'none', fur: '#f6e9d2', markings: colors[colorway], eyes: '#e8a020',
+            glasses: 'none', glassesColor: '#25272b', fur: '#f6e9d2', markings: colors[colorway], eyes: '#e8a020',
             clothing: clothing === 'tie' ? '#232327' : '#2e3d5c', accent: colors[colorway],
           });
           assert.equal(resolveMascotAppearance(source).status, 'unsupported');
