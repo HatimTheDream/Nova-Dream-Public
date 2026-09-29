@@ -187,3 +187,23 @@ test('lookup remains bounded and does not claim missing receipts for the remaini
   assert.equal(reads.length, 1); assert.equal(reads[0].params.inputRunIds.length, 50);
   assert.ok(service.operations().every(op => op.nativeRunId === null && op.state === 'unknown'));
 });
+
+test('revoked read permission rejects a delayed terminal receipt until access is restored', async t => {
+  const f = fixture(t), operation = { ...f.operation, nativeRunId: f.operation.requestId }; f.seed(operation);
+  const service = f.start(), entered = deferred(), held = deferred();
+  const status = f.gateway.status.bind(f.gateway), request = f.gateway.request.bind(f.gateway);
+  let readable = true;
+  f.gateway.status = () => ({ ...status(), grantedScopes: readable ? ['operator.read', 'operator.write'] : ['operator.write'] });
+  f.gateway.request = async <T>(method: string, params: any): Promise<T> => {
+    if (method !== 'agent.wait') return request<T>(method, params);
+    f.gateway.calls.push({ method, params }); entered.resolve(); await held.promise;
+    return { runId: operation.nativeRunId, status: 'ok', terminalReceipt: { runId: operation.nativeRunId, sessionId: operation.nativeId }, terminalReply: { text: 'Original result after access is restored' } } as T;
+  };
+  const reading = service.reconcile(f.conversation.id); await entered.promise;
+  readable = false; held.resolve(); await reading;
+  assert.deepEqual(service.operations()[0], operation);
+  readable = true; await service.reconcile(f.conversation.id);
+  assert.equal(service.operations()[0].state, 'completed');
+  assert.equal(service.operations()[0].text, 'Original result after access is restored');
+  assert.equal(f.gateway.calls.some(call => ['chat.send', 'chat.abort'].includes(call.method)), false);
+});

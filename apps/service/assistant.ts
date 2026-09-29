@@ -394,7 +394,7 @@ export class AssistantService {
   private currentOperation(captured: AssistantOperation, conversation: Conversation): AssistantOperation | undefined {
     if (this.closed || captured.epoch !== this.store.epoch || this.removals.removed(conversation.id)) return;
     const status = this.gateway.status(), currentConversation = this.store.internalRead<Conversation>(conversationKey(conversation.id));
-    if (status.state !== 'ready' || status.generation !== conversation.connectionGeneration || !currentConversation || currentConversation.deleted
+    if (status.state !== 'ready' || !status.grantedScopes.includes('operator.read') || status.generation !== conversation.connectionGeneration || !currentConversation || currentConversation.deleted
       || currentConversation.nativeKey !== conversation.nativeKey || currentConversation.nativeId !== conversation.nativeId
       || currentConversation.connectionGeneration !== conversation.connectionGeneration) return;
     const current = this.store.internalRead<AssistantOperation>(operationKey(captured.id));
