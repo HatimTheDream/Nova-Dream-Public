@@ -882,6 +882,7 @@ class RunnerTests(unittest.TestCase):
 
     def instance(self):
         instance = driver.Driver(self.root / 'request.json')
+        instance.recovery_root = self.root
         instance.from_engine = instance.to_engine = instance.active_engine = '2026.9.2'
         instance.job_id = '34104484-7465-4b71-acf8-0e390a17aa42'
         instance.target_id, instance.prior_id = 'b' * 64, 'a' * 64

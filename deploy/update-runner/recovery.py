@@ -4,6 +4,7 @@ Derived from the previously reviewed hosted recovery approach. No function runs
 on import. Recovery files are never used as the future live tree through links.
 """
 import contextlib
+from contextvars import ContextVar
 from collections import Counter
 from datetime import datetime
 import hashlib
@@ -21,9 +22,35 @@ import subprocess
 import tempfile
 import time
 import uuid
+from codex_log_retention import attest_runtime, qualify_logs
 
 RESERVE = 1610612736
 ALLOWANCE = 128 * 1024 ** 2
+_VERIFICATION_SCRATCH = ContextVar('nova_verification_scratch', default=None)
+
+
+@contextlib.contextmanager
+def verification_scratch(parent):
+    """Keep private evidence copies on the caller's validated recovery filesystem."""
+    parent = pathlib.Path(parent)
+    require(parent.resolve(strict=True) == parent and parent.is_dir(), 'Verification scratch parent was redirected.')
+    info = parent.lstat()
+    require(not info.st_mode & 0o022 and (not hasattr(os, 'geteuid') or info.st_uid == os.geteuid()),
+            'Verification scratch parent is not protected.')
+    directory = pathlib.Path(tempfile.mkdtemp(prefix='nova-update-verification-', dir=parent))
+    identity = directory.lstat()
+    require(identity.st_dev == info.st_dev, 'Verification scratch left the recovery filesystem.')
+    token = _VERIFICATION_SCRATCH.set(directory)
+    try:
+        yield directory
+    finally:
+        _VERIFICATION_SCRATCH.reset(token)
+        # Each CopiedDatabase removes its own temporary copy. Preserve any
+        # unexpected residue instead of recursively deleting unknown contents.
+        current = directory.lstat()
+        require(not directory.is_symlink() and (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino),
+                'Verification scratch identity changed.')
+        directory.rmdir()
 
 
 # Exact OpenClaw 2026.9.2 shared schema15 and agent schema19 coverage.
@@ -425,7 +452,7 @@ class CopiedDatabase:
     def __init__(self, path):
         self.source_path = path
         self.source_identity = sqlite_source_identity(path)
-        self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-sqlite-read-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-sqlite-read-', dir=_VERIFICATION_SCRATCH.get())
         self.database_path = pathlib.Path(self.temporary.name) / path.name
         self.connection = None
         try:
@@ -477,13 +504,14 @@ def database(path, closed):
 
 
 def saved_state(snapshot, live, restored=False):
+    """Compare stable, stopped trees without opening either retained SQLite family."""
     paths = lambda root: {path.relative_to(root) for path in root.rglob('workspace.sqlite')}
     before_paths = paths(snapshot)
     require(before_paths and before_paths == paths(live), 'The saved database set changed.')
     reports = []
     for relative in sorted(before_paths):
         old, current = snapshot / relative, live / relative
-        with contextlib.closing(database(old, True)) as before, contextlib.closing(database(current, False)) as after:
+        with contextlib.closing(database(old, True)) as before, contextlib.closing(database(current, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Saved database integrity failed.')
             old_schema, new_schema = before.execute('pragma user_version').fetchone()[0], after.execute('pragma user_version').fetchone()[0]
             require(old_schema in {53, 55} and new_schema == old_schema, 'An app-only update changed a saved database schema.')
@@ -670,13 +698,15 @@ def migrated_embedded_database(before, after, name):
         require(rows(before, table) == current, 'Retained embedded work or attachment bytes changed during migration.')
 
 
-def retained_embedded_databases(snapshot, live, selected, active, from_version='2026.9.2', to_version=None):
+def retained_embedded_databases(snapshot, live, selected, active, from_version='2026.9.2', to_version=None,
+                                log_retention_window=None, log_retention_reports=None):
     to_version = to_version or from_version
     require(from_version == to_version or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Unreviewed embedded runtime migration.')
     paths = embedded_database_paths(snapshot, selected, active)
     require(paths == embedded_database_paths(live, selected, active), 'The active embedded database set changed.')
+    companion = None
     for relative in sorted(paths):
-        with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
+        with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:
             tables = embedded_schema(before, relative.name, from_version)
             newer = embedded_schema(after, relative.name, to_version)
             if from_version != to_version and tables != newer and relative.name in CODEX_SQL_MIGRATIONS:
@@ -687,9 +717,21 @@ def retained_embedded_databases(snapshot, live, selected, active, from_version='
             require(definitions(before) == definitions(after), 'An embedded database changed its schema definitions.')
             for table in tables:
                 require(list(before.execute('pragma table_xinfo("' + table + '")')) == list(after.execute('pragma table_xinfo("' + table + '")')), 'An embedded database changed its column definitions.')
-                old, new = rows(before, table), rows(after, table)
                 append_only = relative.name == 'logs_2.sqlite' and table == 'logs'
-                require(old <= new if append_only else old == new, 'Retained embedded work, receipts, history or configuration changed.')
+                if append_only and log_retention_window is not None and from_version == to_version == '2026.9.6':
+                    report = qualify_logs(before, after, *log_retention_window)
+                    if report['removedRows']:
+                        if companion is None:
+                            shared = selected / 'openclaw-runtime' / 'state' / 'state' / 'openclaw.sqlite'
+                            require(shared in active, 'Native log retention lacks the active runtime authority.')
+                            with contextlib.closing(database(live / shared, True)) as runtime:
+                                companion = attest_runtime(live, selected, runtime)
+                        if log_retention_reports is not None:
+                            log_retention_reports.append({**report, 'companion': companion,
+                                'databasePathSha256': hashlib.sha256(relative.as_posix().encode()).hexdigest()})
+                else:
+                    old, new = rows(before, table), rows(after, table)
+                    require(old <= new if append_only else old == new, 'Retained embedded work, receipts, history or configuration changed.')
     return paths
 
 
@@ -710,7 +752,7 @@ def retained_quarantine_cache(snapshot, live, selected, active, from_version, to
             require(closed and from_version == '2026.9.2', 'A native quarantine cache is missing outside the reviewed transition.')
             decisions.append(Counter()); continue
         require(path.is_file() and path.resolve(strict=True) == path, 'Native quarantine cache was redirected.')
-        with contextlib.closing(database(path, closed)) as connection:
+        with contextlib.closing(database(path, True)) as connection:
             require(connection.execute('pragma user_version').fetchone()[0] == 2
                     and connection.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native quarantine cache integrity or version changed.')
             schema = {name: re.sub(r'\s+', ' ', sql).strip() for kind, name, sql in connection.execute("select type,name,sql from sqlite_schema where name not like 'sqlite_%'") if kind == 'table'}
@@ -759,13 +801,13 @@ def native_schema(connection, relative, version='2026.9.2', prior_tables=None):
     return tables
 
 
-def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None):
-    selected, epoch, paths = native_scope(root, expected_epoch)
+def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None, *, closed=False):
+    selected, epoch, paths = native_scope(root, expected_epoch, closed=closed)
     for relative in sorted(embedded_database_paths(root, selected, paths)):
-        with contextlib.closing(database(root / relative, False)) as connection:
+        with contextlib.closing(database(root / relative, closed)) as connection:
             embedded_schema(connection, relative.name, version)
     for relative in sorted(paths):
-        with contextlib.closing(database(root / relative, False)) as connection:
+        with contextlib.closing(database(root / relative, closed)) as connection:
             tables = native_schema(connection, relative, version)
             if target_version is not None and target_version != version:
                 require((version, target_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
@@ -1403,7 +1445,7 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
             retained_plugin_index(before, after, node, after_path)
             continue
         if table == 'transcript_events':
-            require(transcript_hashes(before_path, node) <= transcript_hashes(after_path, node), 'Migrated native transcript bytes changed.')
+            require(transcript_hashes(before_path, node) <= transcript_hashes(after.database_path, node), 'Migrated native transcript bytes changed.')
             continue
         if table not in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES | NATIVE_RECONNECT_COLUMNS.keys():
             continue
@@ -1473,19 +1515,21 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
                 'Native migration did not retain saved work, history, configuration or permissions.')
 
 
-def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None):
+def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
+                       log_retention_window=None, log_retention_reports=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
-    selected, epoch, paths = native_scope(live, before_epoch)
+    selected, epoch, paths = native_scope(live, before_epoch, closed=True)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
     configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases)
-    embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version)
+    embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version,
+                                          log_retention_window, log_retention_reports)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version)
     require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine) == static_sqlite_files(live, selected, paths | embedded | quarantine), 'An inactive database, archived store or nonactive cache changed.')
     for relative in sorted(before_paths):
-        with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, False)) as after:
+        with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
             old_tables = native_schema(before, relative, from_version)
             new_tables = native_schema(after, relative, to_version, old_tables if migrating else None)

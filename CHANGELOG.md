@@ -1,3 +1,9 @@
+## [1.15.5] — 2026-09-29
+
+- Fixes recovery checks that could change SQLite shared-memory files while verifying saved work. Closed databases are checked through private copies on the recovery filesystem, preserving committed WAL content and the original files.
+- Recognizes the reviewed agent runtime's ten-day log expiry only when the installed executable, exact startup window and complete retained rows verify. Saved messages, receipts, settings and other records keep their existing strict protection.
+- Releases large capacity inventories before restarting the runtime and adds Linux regression coverage for these update and recovery boundaries.
+
 ## [1.15.4] — 2026-09-29
 
 - Allows an otherwise fully identified, unconfirmed Assistant request with no native run ID to remain safely preserved during an update. The original input and uncertain outcome stay unchanged; native suspension and startup checks still decide whether updating is safe.

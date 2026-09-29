@@ -1,6 +1,6 @@
 # Reviewed application and agent installer
 
-`install.py` and `recovery.py` implement the Linux delivery procedure used by the external updater. They support application updates with OpenClaw **2026.9.2** or **2026.9.6**, and the reviewed **2026.9.2 → 2026.9.6** upgrade. Nova's dependency lockfile and workspace schemas **53/55** stay unchanged. Other engine or schema transitions require a separate review and rehearsal. The installer never runs package installation, removes prior releases, or prunes backups.
+`install.py`, `recovery.py`, and `codex_log_retention.py` implement the Linux delivery procedure used by the external updater. They support application updates with OpenClaw **2026.9.2** or **2026.9.6**, and the reviewed **2026.9.2 → 2026.9.6** upgrade. Nova's dependency lockfile and workspace schemas **53/55** stay unchanged. Other engine or schema transitions require a separate review and rehearsal. The installer never runs package installation, removes prior releases, or prunes backups.
 
 Engine updates carry a separately signed, bounded `runtimeBundle` and a `runtime` record in `reviewed-pair.json`. The complete offline archive includes `node/bin/node`, production `node_modules`, `package.json`, and `package-lock.json`. The record pins archive bytes, SHA-256, expanded bytes, file count, Node version and Node binary hash. Root-owned `agentDirectory` and `agentNodePath` selectors choose the immutable package and engine-only Node runtime; Nova and the controller retain their existing Node runtime. The app's `E3_OPENCLAW_ENTRY` and `E3_OPENCLAW_NODE` must use those stable selectors.
 
@@ -42,11 +42,13 @@ The baseline must be a root-private closed snapshot with `workspace/`, `acceptan
 
 App releases, recovery and workspace must reside on the reviewed filesystem. Capacity must cover the expanded candidate, changed snapshot files, a full independent restoration, **1.5 GiB** operating reserve and two **128 MiB** allowances. The same capacity is rechecked with the service closed. No activation is used as a capacity probe.
 
+Private SQLite verification copies use an exclusive directory on the validated recovery filesystem, rather than the system temporary filesystem. The existing capacity reserves still apply. Each reader verifies the retained database and its sidecars before and after reading a disposable copy. Scratch cleanup removes only the expected empty directory; unexpected residue is retained for review.
+
 ## Frozen package
 
-Create an explicit flat directory with these four files:
+Create an explicit flat directory with these five files:
 
-- `install.py` and `recovery.py`, copied from these reviewed sources.
+- `install.py`, `recovery.py`, and `codex_log_retention.py`, copied from these reviewed sources.
 - `app.tgz`, the exact paired candidate archive containing only ordinary `dist/`, package metadata, `scripts/host.mjs`, and `scripts/candidate.mjs` files.
 - `reviewed-pair.json`, binding this archive to the exact source and target candidates.
 
@@ -78,6 +80,10 @@ The local owner-session-only `GET /api/software-update/acceptance` must return t
 
 The driver snapshots only after the owning service and its process group are closed. It verifies every saved database’s full entity, history, blob, reference, request-receipt and metadata rows; domain/account service records remain exact except updater lease and narrow transport token refresh records. Native SQLite shared schema 15 and agent schema 19 use explicit table coverage: saved work, history, projects, skills, memories, configuration, credentials and permissions retain full original rows. Only named derived caches, process leases, boot observations and narrow reconnect timestamps may change. Unknown tables fail preflight before stopping; unchanged table definitions are checked again after startup. Old transcript bytes and search settings are retained. Before the final receipt, the app and native service remain suspended; new external effects are not admitted.
 
+Stopped-state comparisons read private copies of both the snapshot and current SQLite families, including workspace selection and native stores. They never open retained SQLite files through a direct connection that could change SHM files or directory timestamps. Live preflight keeps its transactional reader; the copied-reader rule applies after closure. Transcript decompression during a closed migration also reads the private copy while retaining the original path for authority and inode checks.
+
+For application updates that keep OpenClaw **2026.9.6**, a narrow exception recognizes Codex **0.155.1** startup removal of logs older than **10 days**. It applies only to `logs_2.sqlite.logs`, after attesting the active selected workspace's managed npm installation, package versions and exact reviewed Codex executable hash. The driver durably records each actual start and its first verified readiness, bound to the job, candidate, engine and workspace epoch; rollback gets a separate window. Removed rows must form the complete timestamp prefix for a cutoff within that recorded window, and every retained row must remain exact. Missing or altered proof, another engine or the **9.2 → 9.6** migration keeps the existing append-only rule. Other tables, recent logs and per-partition log limits receive no additional exception. The verifier does not prune any records itself.
+
 On verified recovery, an independent copy is compared with the closed snapshot and must share no regular-file inode with either backup or failed workspace. The failed workspace is moved intact into that attempt’s recovery folder. The independent prior state returns to its original absolute path, the prior app is selected, and actual readiness plus saved-state/account checks run again. If those checks cannot be proved, the original job remains held for review.
 
 Private outputs belong beside the provided request, at `<candidate>/attempts/<jobId>/`, not beside the immutable `install.py`. A result is atomically published only after complete acceptance. A preflight failure may publish `unchanged` only if no service stop, pointer switch or workspace mutation was attempted, and fresh exact prior health and both maintenance holds can still be verified. It contains no false rollback or saved-state-verification claims. A failure after stopping but before any actual restoration remains a held failure, even if the prior service restarts.
@@ -88,6 +94,16 @@ Active native databases are selected through the same durable workspace-selectio
 
 ## Verification
 
-Run `python3 -B tests/update-runner.test.py -v`. Portable fixtures cover bounds, archive rejection, exact saved SQLite content, account/domain retention, original receipt identity, safe failure handling and native history preservation. On Linux with `rsync`, an additional real file/SQLite test verifies closed snapshots, sparse files, internal hardlinks, extended attributes and independent restored inodes, while using no real service.
+Run the focused suites, also required by the Linux release workflow:
+
+```sh
+python3 -B tests/update-runner.test.py -v
+python3 -B tests/update-closed-readers.test.py -v
+python3 -B tests/update-log-retention.test.py -v
+python3 -B tests/update-startup-window.test.py -v
+python3 -B tests/update-log-retention-integration.test.py -v
+```
+
+Fixtures cover bounds, archive rejection, exact saved SQLite content, account/domain retention, original receipt identity, safe failure handling and native history preservation. Focused checks cover copied readers and recovery-filesystem scratch, exact startup log retention, attested runtime integration, and real private startup receipts with mocked service calls and clocks. On Linux with `rsync`, real file/SQLite coverage also verifies closed snapshots, sparse files, internal hardlinks, extended attributes and independent restored inodes, while using no real service. Platform-specific cases skip where their actual filesystem guarantees cannot be exercised.
 
 Passing synthetic tests does not establish production readiness. Before signing an installable pair, perform the real reviewed host rehearsal, including service environment/protected-path qualification, held startup, readiness failure, paired restoration, retained account/history identity and no duplicate effects. The implementation has no authority to publish or install itself.

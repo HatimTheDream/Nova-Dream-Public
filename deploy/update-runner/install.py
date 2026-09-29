@@ -8,6 +8,7 @@ at the exact version and integrity captured by the verified companion lock.
 import ast
 import contextlib
 import fcntl
+import gc
 import hashlib
 import http.client
 import http.cookiejar
@@ -27,7 +28,8 @@ import uuid
 
 sys.dont_write_bytecode = True
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, inode_ids, prepare_independent,
-                      require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json)
+                      require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json,
+                      verification_scratch)
 
 SOCKET = '/run/nova-update/control.sock'
 ENGINE = '2026.9.2'
@@ -372,8 +374,10 @@ class Driver:
         manifest_file = self.baseline / ('snapshot-manifest.json' if (self.baseline / 'snapshot-manifest.json').exists() else 'linked-snapshot-source.json')
         verified = read_json(self.baseline / 'snapshot-verified.json')
         require(digest(manifest_file) == verified['manifestSha256'], 'The recovery baseline verification changed.')
-        self.baseline_entries = read_json(manifest_file, 64 * 1024 ** 2)
-        require(inventory(self.baseline / 'workspace')[0] == self.baseline_entries, 'The verified closed baseline changed.')
+        baseline_entries = read_json(manifest_file, 64 * 1024 ** 2)
+        require(inventory(self.baseline / 'workspace')[0] == baseline_entries, 'The verified closed baseline changed.')
+        del baseline_entries
+        gc.collect()
         self.pair = read_json(self.bundle / 'reviewed-pair.json', 65536)
         require({'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256'} <= set(self.pair)
                 and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime'}
@@ -562,7 +566,7 @@ class Driver:
         import pwd
         self.require_stopped()
         self.controller_hold()
-        selected, _, paths = native_scope(self.data, self.before['epoch'])
+        selected, _, paths = native_scope(self.data, self.before['epoch'], closed=True)
         root = self.data / selected / 'openclaw-runtime'
         agents = [{'agentId': path.parts[-3], 'path': str(self.data / path)} for path in sorted(paths)
                   if path.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}]
@@ -738,9 +742,43 @@ class Driver:
                 require(self.agent.resolve(strict=True) == (self.prior_agent if restoring else self.target_agent)
                         and self.agent_node.resolve(strict=True) == (self.prior_agent_node if restoring else self.target_agent_node),
                         'Refuse to start a mixed engine and Node pair.')
+            require(self.before is not None and isinstance(self.before.get('epoch'), str), 'Startup requires the accepted workspace epoch.')
+            self.startup_attempt = getattr(self, 'startup_attempt', 0) + 1
             self.launched = {'candidateId': self.target_id if selected == self.target else self.prior_id,
+                             'agentVersion': self.active_engine, 'epoch': self.before['epoch'], 'attempt': self.startup_attempt,
+                             'startedAtSeconds': time.time_ns() // 1_000_000_000,
                              'notBeforeTicks': int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))}
+            write_json(self.output / ('startup-' + str(self.startup_attempt) + '-started.json'),
+                       {'format': 1, 'jobId': self.job_id, **self.launched})
         subprocess.run(['/usr/bin/systemctl', action, self.settings['serviceName']], check=True, timeout=120)
+
+    def startup_ready(self, expected, epoch):
+        """Bind log maintenance to this actual start and first verified readiness."""
+        if self.launched is None or 'startedAtSeconds' not in self.launched:
+            return  # Pre-update acceptance has no installer-owned startup.
+        require(self.launched['candidateId'] == expected and self.launched['agentVersion'] == self.active_engine
+                and self.launched['epoch'] == epoch, 'Startup readiness belongs to a different application, engine or workspace.')
+        if 'readyAtSeconds' not in self.launched:
+            ready = (time.time_ns() + 999_999_999) // 1_000_000_000
+            require(0 <= ready - self.launched['startedAtSeconds'] <= 3600, 'Startup clock window is outside the reviewed bound.')
+            record = {**self.launched, 'readyAtSeconds': ready}
+            write_json(self.output / ('startup-' + str(record['attempt']) + '-ready.json'),
+                       {'format': 1, 'jobId': self.job_id, **record})
+            self.launched = record
+
+    def log_retention_window(self):
+        launch = self.launched
+        if launch is None or 'readyAtSeconds' not in launch or self.active_engine != '2026.9.6':
+            return None
+        selected = self.current.resolve(strict=True)
+        require(selected in {self.prior, self.target}, 'Log retention requires the reviewed selected application.')
+        expected = self.target_id if selected == self.target else self.prior_id
+        require(launch['candidateId'] == expected and launch['agentVersion'] == self.active_engine
+                and self.before is not None and launch['epoch'] == self.before['epoch'],
+                'Log retention startup belongs to a different application, engine or workspace.')
+        record = read_json(self.output / ('startup-' + str(launch['attempt']) + '-ready.json'))
+        require(record == {'format': 1, 'jobId': self.job_id, **launch}, 'Recorded startup window changed.')
+        return (launch['startedAtSeconds'], launch['readyAtSeconds'])
 
     def require_stopped(self):
         values = subprocess.check_output(['/usr/bin/systemctl', 'show', self.settings['serviceName'], '--property=ActiveState', '--property=SubState', '--property=MainPID', '--property=ControlPID', '--property=ControlGroup'], text=True, timeout=10)
@@ -846,6 +884,7 @@ class Driver:
                 accepted = self.acceptance(expected, version, restored_prior=True) if restored_prior else self.acceptance(expected, version)
                 require(self.before is None or accepted['accounts'] == self.before['accounts'], 'Retained account connections changed.')
                 require(self.before is None or accepted['epoch'] == self.before['epoch'], 'The selected workspace changed.')
+                self.startup_ready(expected, accepted['epoch'])
                 return accepted
             except Exception:
                 time.sleep(1)
@@ -858,9 +897,11 @@ class Driver:
         target = selected == self.target
         manifest = candidate(selected, self.target_id if target else self.prior_id,
                              self.release['novaVersion'] if target else self.release['compatibility']['fromNovaVersion'])
+        log_reports = []
         native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
                            self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None,
-                           app_releases=((self.prior, self.prior_manifest), (selected, manifest)))
+                           app_releases=((self.prior, self.prior_manifest), (selected, manifest)),
+                           log_retention_window=self.log_retention_window(), log_retention_reports=log_reports)
         for path in snapshot.rglob('*.jsonl'):
             if 'openclaw-runtime' not in path.parts:
                 continue
@@ -874,6 +915,10 @@ class Driver:
                 old, new = read_json(path), read_json(self.data / path.relative_to(snapshot))
                 search = lambda value: value.get('tools', {}).get('web', {}).get('search')
                 require(search(old) == search(new), 'Existing web-search configuration changed.')
+        if log_reports:
+            write_json(self.output / ('startup-' + str(self.launched['attempt']) + '-log-retention.json'),
+                       {'format': 1, 'jobId': self.job_id, 'candidateId': self.launched['candidateId'],
+                        'epoch': self.launched['epoch'], 'reports': log_reports})
 
     def settled_acceptance(self, expected, version, *, restored=False, independent=None):
         # Startup may open otherwise inactive SQLite stores and their transient
@@ -972,7 +1017,7 @@ class Driver:
             if type(failure) is RuntimeError:
                 messages = set()
                 with contextlib.suppress(Exception):
-                    for name in ('install.py', 'recovery.py'):
+                    for name in ('install.py', 'recovery.py', 'codex_log_retention.py'):
                         source = self.bundle / name
                         require(source.stat().st_size <= 512 * 1024, 'Failure diagnostic source exceeded its bound.')
                         for node in ast.walk(ast.parse(source.read_bytes())):
@@ -987,6 +1032,10 @@ class Driver:
 
     def run(self):
         self.validate()
+        with verification_scratch(self.recovery_root):
+            self.run_validated()
+
+    def run_validated(self):
         self.before = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
         self.stage('preparing')
         closed_capacity_rejected = False
@@ -1015,6 +1064,12 @@ class Driver:
             except InsufficientStorage:
                 closed_capacity_rejected = True
                 raise
+            finally:
+                # These full-workspace maps are only needed for closed capacity.
+                # Release them before restarting either native process tree,
+                # including the unchanged-prior capacity-refusal path.
+                del source, source_inodes, baseline, baseline_inodes
+                gc.collect()
             write_json(self.output / 'closed-capacity.json', {**plan, 'nativeMigrationBytes': migration_bytes})
             self.require_stopped()
             snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped)
