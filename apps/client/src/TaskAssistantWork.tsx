@@ -97,10 +97,16 @@ function StartAssistantDialog({ taskId, taskRevision, value, snapshot, agents, c
         requestId: crypto.randomUUID(), epoch: snapshot.epoch, expectedRevision: 0, payload: planValue,
       });
       try {
+        // Preserve non-assignment origins (e.g., contact, calendar) instead of
+        // overwriting them with the assignment link. The assignment is still
+        // created and accessible via Agents; the task keeps its source link.
+        const existingOrigin = value.origin;
+        const preserveOrigin = existingOrigin && existingOrigin.kind !== 'assignment';
+        const newOrigin = preserveOrigin ? existingOrigin : { kind: 'assignment' as const, id: plan.id, revision: plan.revision };
         await commit<Task>({
           kind: 'task' as const, entityId: taskId,
           requestId: crypto.randomUUID(), epoch: snapshot.epoch, expectedRevision: taskRevision,
-          payload: { ...value, origin: { kind: 'assignment', id: plan.id, revision: plan.revision } },
+          payload: { ...value, origin: newOrigin },
         });
       } catch (reason) {
         if (reason instanceof ApiError && reason.code === 'revision_conflict') {
@@ -108,12 +114,17 @@ function StartAssistantDialog({ taskId, taskRevision, value, snapshot, agents, c
         }
         throw reason;
       }
-      onOriginChange({ kind: 'assignment', id: plan.id, revision: plan.revision });
+      // Only update the local origin state if we actually set an assignment origin.
+      // If we preserved a non-assignment origin, the UI won't show the linked plan
+      // (which is correct - the task's source link takes precedence).
+      if (!value.origin || value.origin.kind === 'assignment') {
+        onOriginChange({ kind: 'assignment', id: plan.id, revision: plan.revision });
+      }
       close();
       try {
         await request('assignments/start', {
           requestId: crypto.randomUUID(), epoch: snapshot.epoch,
-          assignmentId: plan.id, revision: plan.revision, projectRevision: null,
+          assignmentId: plan.id, revision: plan.revision, projectRevision: project?.revision ?? null,
         });
       } catch (reason) {
         onStartNotice(`Plan created and linked. The assistant could not start it (${reason instanceof Error ? reason.message : 'no confirmation'}). Start it from Agents when ready.`);
