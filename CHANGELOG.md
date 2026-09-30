@@ -1,3 +1,21 @@
+## [2.0.3] — 2026-09-30
+
+- Keeps the Home header in place during keyboard navigation and lets Your Day reflow with enlarged text.
+- Gives Home priorities responsive cards with consistent action styling and readable spacing.
+- Lets widget rows and headings grow with their content, keeps scroll position visible, and preserves saved widget order.
+- Aligns task and routine actions/counts, makes full note text keyboard-scrollable, and improves weather units and labels.
+- Restores the briefing in the standalone public application and includes its regression checks in the standard test suite.
+- Updates email parsing dependencies to patched releases and aligns the public unknown-operation presentation checks.
+
+## [2.0.2] — 2026-09-30
+
+- Establishes shared semantic typography and spacing tokens (text sizes, line heights, spacing scale, card padding, button dimensions) consolidating the existing theme rather than creating a competing system.
+- Fixes home page UI: text no longer touches card edges, fixed heights that clipped content are now minimum heights, tiny 10-12px fonts raised to readable sizes, widget headers and task rows get proper padding.
+- Removes the blanket capitalize transform from buttons so labels preserve their authored capitalization.
+- Restores proper padding to content planning columns and cards.
+- Fixes composer textarea and controls for better touch targets and readable text.
+- Updates the briefing card to use theme tokens instead of hardcoded colors.
+
 ## [2.0.1] — 2026-09-30
 
 - Hides the Steps pill for interrupted (unknown-state) operations. Nothing is actively running in that state, so showing stale "Last reported" info was just clutter.

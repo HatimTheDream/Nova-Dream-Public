@@ -132,7 +132,7 @@ test('Home keeps specific task attention visible alongside unsaved draft recover
 test('Home bounds attention previews and discloses the remaining tasks', () => {
   const tasks = ['First', 'Second', 'Third', 'Fourth', 'Fifth'].map(title => task(title, { status: 'blocked' }));
   for (const count of [3, 4, 5]) {
-    const rendered = markup(tasks.slice(0, count), onlyWidget('attention'));
+    const rendered = section(markup(tasks.slice(0, count), onlyWidget('attention')), 'Task Attention');
     assert.equal((rendered.match(/aria-label="Review /g) ?? []).length, 2);
     for (const title of ['First', 'Second']) assert.ok(rendered.includes(`aria-label="Review ${title}: Blocked"`));
     assert.doesNotMatch(rendered, /Third|Fourth|Fifth/);

@@ -9,6 +9,7 @@ import { Dialog } from './ui';
 import { LoadingRing } from './ModuleLoading';
 const HomeWidgetDialog = lazy(() => import('./HomeWidgetDialog').then(module => ({ default: module.HomeWidgetDialog })));
 import { homeTaskState } from './home-task-state';
+import { BriefingCard } from './BriefingCard';
 import { retainedWindowId } from './useWorkspace';
 
 export const widgetNames = homeWidgetNames;
@@ -53,6 +54,12 @@ export function Home({ snapshot, layout, saveLayout, open, openSettings, newTask
   };
   return <div className="home-page page-scroll" data-reorder-scroll tabIndex={0} aria-label="Home board">
     <div className="page-intro"><div><h1>Today</h1></div><button className="primary" onClick={() => { setMenu(null); setEditor('new'); }}><Plus size={17}/>Add Widget</button></div>
+    <BriefingCard
+      snapshot={snapshot}
+      editTask={editTask}
+      complete={complete}
+      openAssistant={() => open('assistant')}
+    />
     {notice && <div className="home-board-notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss board notice" onClick={() => setNotice('')}><X size={16}/></button></div>}
     {reorder.order.length === 0 && <div className="home-empty-board"><h2>Make room for what matters</h2><p>Add tasks, a note, useful links, or a clock. Hidden widgets are kept in your widget library.</p><button className="primary" onClick={() => setEditor('new')}>Browse Widgets</button></div>}
     <div className="home-grid" ref={reorder.containerRef}>{reorder.order.map(id => {

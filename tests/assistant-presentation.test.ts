@@ -28,7 +28,8 @@ test('an uncertain operation keeps the observed tools and plan without claiming 
   const activity = renderToStaticMarkup(createElement(ToolActivity, { operation }));
   assert.match(activity, /Last reported activity/); assert.match(activity, /Outcome unconfirmed/); assert.match(activity, /Original retained output/);
   const plan = renderToStaticMarkup(createElement(StepsPill, { operation, plan: operation.plan }));
-  assert.match(plan, /Last reported/); assert.match(plan, /Step 2 of 2/); assert.doesNotMatch(plan, /class="run-pulse"/);
+  // Unknown state hides the StepsPill entirely (no stale "Last reported" when nothing is running)
+  assert.equal(plan, '');
   const running = renderToStaticMarkup(createElement(StepsPill, { operation: { ...operation, state: 'running' }, plan: operation.plan }));
   assert.match(running, /class="run-pulse"/); assert.doesNotMatch(running, /Last reported/);
   assert.equal(operation.state, 'unknown'); assert.equal(operation.id, 'original-operation');
@@ -48,9 +49,11 @@ test('the step dock clears only after confirmed completion, including an unfinis
   assert.equal(render('completed', plan.map(step => ({ ...step, status: 'complete' }))), '');
   assert.match(render('running'), /Step 2 of 2/);
   assert.match(render('running', plan.map(step => ({ ...step, status: 'complete' }))), /2 of 2 complete/);
-  for (const state of ['failed', 'cancelled', 'unknown'] as const) {
+  for (const state of ['failed', 'cancelled'] as const) {
     assert.match(render(state), /run-plan-pill/);
     assert.doesNotMatch(render(state), /class="run-pulse"/);
   }
+  // Unknown state hides the pill entirely (interrupted, nothing to show)
+  assert.equal(render('unknown'), '');
   assert.equal(plan[1].status, 'active', 'Hiding the dock must not rewrite saved progress');
 });
