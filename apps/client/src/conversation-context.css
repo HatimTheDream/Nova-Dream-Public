@@ -1,6 +1,6 @@
 .conversation-header-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 .assistant-workspace .conversation-project-control { display: inline-flex; max-width: 100%; vertical-align: middle; }
-.assistant-workspace .conversation-project-control .composer-control-button { width: auto; flex: 0 1 auto; max-width: 100%; min-height: 32px; height: 32px; padding: 3px 6px; border: 0; box-shadow: none; color: var(--muted); background: transparent; gap: 5px; }
+.assistant-workspace .conversation-project-control .composer-control-button { width: auto; flex: 0 1 auto; max-width: 100%; min-height: 44px; height: 44px; padding: 3px 6px; border: 0; box-shadow: none; color: var(--muted); background: transparent; gap: 5px; }
 .assistant-workspace .conversation-project-control .composer-control-label { display: block!important; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .conversation-header-actions .composer-control-button { width: 44px; height: 44px; padding: 10px; }
 .assistant-context-panel { display: flex; flex-direction: column; flex: 0 0 42%; min-width: 320px; max-width: 760px; min-height: 0; background: var(--surface); border-inline-start: 1px solid var(--line); }

@@ -3,7 +3,7 @@
 .home-page .widget-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:18px; font-weight:600; }
 .home-page .widget-header-controls { display:flex; align-items:center; gap:5px; flex:none; }
 .home-page .widget-header-controls .icon-button,
-.home-page .widget-options .widget-options-close { display:flex; align-items:center; justify-content:center; width:32px; min-width:32px; height:32px; min-height:32px; padding:6px; }
+.home-page .widget-options .widget-options-close { display:flex; align-items:center; justify-content:center; width:44px; min-width:44px; height:44px; min-height:44px; padding:6px; }
 .home-page .widget-move-handle { cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
 .home-page .widget-move-handle:active { cursor:grabbing; }
 .home-page .widget-options { top:44px; inset-inline-end:14px; width:min(238px,calc(100% - 28px)); max-height:none; overflow:visible; padding:12px; border-radius:15px; }
