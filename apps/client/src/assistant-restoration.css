@@ -18,6 +18,10 @@
 .assistant-workspace .assistant-welcome p { margin-top: 10px; font-size: 15px; }
 .assistant-workspace .suggestions { margin-top: 20px; }
 .assistant-workspace .composer-region { max-width: calc(var(--assistant-reading-width) + 48px); padding: 8px 24px 12px; overflow: visible; max-height: none; }
+/* Let pending questions use the remaining height without pushing writing controls below the window. */
+.assistant-workspace .composer-region:has(> .compact-question-tray) { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
+.assistant-workspace .composer-region:has(> .compact-question-tray) > * { flex-shrink: 0; }
+.assistant-workspace .composer-region > .compact-question-tray { flex: 0 1 auto; min-height: 0; }
 .assistant-workspace .composer { container-type: inline-size; position: relative; padding: 8px 10px; border-width: 1px; border-radius: 22px; box-shadow: 0 2px 12px #00000005; }
 .assistant-workspace .composer>textarea { min-height: 42px; max-height: 180px; padding: 9px 6px; resize: none; line-height: 1.5; overflow-y: auto; }
 .assistant-workspace .composer>textarea:focus { outline: none; box-shadow: none; }
