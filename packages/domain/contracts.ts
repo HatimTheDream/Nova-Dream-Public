@@ -39,6 +39,7 @@ export const taskSchema = /* @__PURE__ */ (() => z.object({ title: z.string().tr
   reminder: reminderSchema.nullable().optional(),
   plannedTime: clockTime.optional(), dueTime: clockTime.optional(), timezone: timezone.optional(),
   bucket: z.enum(['capture', 'anytime']).optional(), projectId: id.nullable().optional(), origin: recordOriginSchema.optional(),
+  workResult: z.object({ attemptId: z.string().uuid(), assignmentId: z.string().min(1).max(100), fileId: z.string().min(1).max(200).optional(), acceptedAt: z.number().int().positive() }).optional(),
   priority: z.enum(['low', 'normal', 'high']).optional(), estimateMinutes: z.number().int().min(0).max(1440).optional(),
   waitReason: z.string().max(1000).optional(),
   checklist: z.array(z.object({ id: z.string().uuid(), text: z.string().trim().min(1).max(300), done: z.boolean() }).strict()).max(500).refine(v => unique(v.map(i => i.id))).optional(),
