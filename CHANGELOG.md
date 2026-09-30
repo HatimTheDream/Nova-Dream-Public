@@ -1,3 +1,9 @@
+## [2.0.0] — 2026-09-30
+
+- Adds request-to-result continuity: start Assistant work directly from a task, with the task brief frozen into the operation context. The task shows linked assignment status, and a review surface displays the actual output, checks performed, and unresolved findings. Accepting a result links it back to the task.
+- Fixes Assistant control hit areas to 44px: message actions, conversation menu, widget controls, project control, and work detail buttons.
+- Applies the 44px decision targets and U37 short-window composer fix from the UI cleanup (compact questions, paged questions, plan review, approval requests).
+
 ## [1.15.5] — 2026-09-29
 
 - Fixes recovery checks that could change SQLite shared-memory files while verifying saved work. Closed databases are checked through private copies on the recovery filesystem, preserving committed WAL content and the original files.
