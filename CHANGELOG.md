@@ -1,3 +1,7 @@
+## [2.0.1] — 2026-09-30
+
+- Hides the Steps pill for interrupted (unknown-state) operations. Nothing is actively running in that state, so showing stale "Last reported" info was just clutter.
+
 ## [2.0.0] — 2026-09-30
 
 - Adds request-to-result continuity: start Assistant work directly from a task, with the task brief frozen into the operation context. The task shows linked assignment status, and a review surface displays the actual output, checks performed, and unresolved findings. Accepting a result links it back to the task.

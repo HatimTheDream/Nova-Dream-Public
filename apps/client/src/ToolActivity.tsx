@@ -33,7 +33,9 @@ export function StepsPill({ plan, operation }: { plan?: RunStep[]; operation?: A
   const root = useRef<HTMLElement>(null), trigger = useRef<HTMLButtonElement>(null), panelId = useId();
   // Keep the saved plan on the operation, but remove its live dock once the
   // runtime confirms completion even when its final step update was omitted.
-  const visible = !!plan?.length && operation?.state !== 'completed';
+  // Hide the pill entirely for unknown (interrupted) operations since nothing
+  // is actively running - showing stale "Last reported" info is just clutter.
+  const visible = !!plan?.length && operation?.state !== 'completed' && operation?.state !== 'unknown';
   const expanded = visible && (pinned || hovered);
   const settled = !!operation && ['completed', 'failed', 'cancelled'].includes(operation.state);
   const unconfirmed = operation?.state === 'unknown';
