@@ -39,6 +39,38 @@
     --type-control: 14px;
     --type-dense: 14px;
     --type-meta: 12px;
+
+    /* --- Shared typography scale (semantic) --- */
+    --text-body: 16px;
+    --leading-body: 24px;
+    --text-secondary: 14px;
+    --leading-secondary: 20px;
+    --text-heading-lg: 20px;
+    --leading-heading-lg: 28px;
+    --text-heading-md: 18px;
+    --leading-heading-md: 26px;
+    --text-heading-sm: 16px;
+    --leading-heading-sm: 24px;
+    --tracking-normal: normal;
+
+    /* --- Shared spacing scale --- */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* --- Component defaults --- */
+    --card-padding: var(--space-4);
+    --card-padding-spacious: var(--space-6);
+    --button-min-height: 44px;
+    --button-padding-x: var(--space-4);
+    --icon-button-size: 44px;
+    --icon-label-gap: var(--space-2);
+    --control-gap: var(--space-2);
+    --paragraph-gap: var(--space-3);
+    --group-gap: var(--space-4);
   }
 
   :root[data-theme=dark] {

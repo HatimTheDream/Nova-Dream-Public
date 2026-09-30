@@ -15,8 +15,8 @@
 
 /* The column names carry the stage; cards carry the writing. */
 .content-column { border: 0; border-radius: 0; background: transparent; }
-.content-column > header { padding: 0 4px 12px; }
-.content-column-cards { padding: 12px 0; }
+.content-column > header { padding: 0 var(--space-4) var(--space-3); }
+.content-column-cards { padding: var(--space-3) var(--space-4); }
 .content-planning .content-card { border: 1px solid var(--line); border-radius: 16px; box-shadow: none; }
 :root .content-planning .content-card > button.content-card-open {
  --button-fill: transparent; --button-border: transparent; --button-border-hover: transparent;

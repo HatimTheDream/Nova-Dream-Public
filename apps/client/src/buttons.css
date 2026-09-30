@@ -16,8 +16,12 @@
   box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
   font-weight:650;
   transition:var(--button-transition);
+  min-height:var(--button-min-height);
+  padding-inline:var(--button-padding-x);
+  letter-spacing:var(--tracking-normal);
 }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim) { text-transform:capitalize; }
+/* Blanket capitalize removed 2026-09-30: button labels preserve authored
+   capitalization. Components that intentionally want capitalization opt in. */
 /* A clickable record is still content. Keep saved/imported spelling and case,
    including model names, filenames and message excerpts, independent of its
    button geometry. Use preserve-case for content inside a mixed action label. */
