@@ -518,6 +518,15 @@
 .tasks-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,330px); align-items:start; gap:22px; }
 .task-section-title { padding:20px 0 12px; }
 .task-section-title h2 { font-size:20px; }
+.task-assistant-work { margin:16px 0; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--canvas); }
+.task-assistant-work .section-heading { margin-bottom:12px; }
+.task-assistant-work .section-heading h3 { font-size:15px; margin:0; }
+.task-assistant-work > p { margin:8px 0; }
+.task-assistant-work .button-row { margin-top:12px; }
+.attempt-history { margin-top:12px; }
+.attempt-history summary { cursor:pointer; font-size:13px; color:var(--muted); }
+.attempt-history ul { list-style:none; margin:8px 0 0; padding:0; display:grid; gap:8px; }
+.attempt-history li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
 .daily-task { padding:10px 0 18px; border-bottom:1px dashed var(--line); }
 .daily-task:last-child { border:0; }
 .daily-task .task-row { border:0; padding-bottom:9px; }

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { taskSchema, type Task, type Entity, type Attachment } from '../packages/domain/contracts.js';
+import { taskSchema, type Task, type Entity, type Attachment, type Project } from '../packages/domain/contracts.js';
 import type { AgentDesign } from '../packages/domain/workspace-records.js';
 import type { AssignmentAttempt } from '../packages/domain/assignments.js';
 import {
+  attemptsForPlan,
   briefFromTask,
   planValueFromTask,
   latestAttemptForPlan,
@@ -103,6 +104,54 @@ test('planValueFromTask sets agent/state/brief/title correctly', () => {
   assert.equal(value.due, '');
   assert.equal(value.state, 'planned');
   assert.equal(value.archived, false);
+});
+
+test('briefFromTask with project includes project name and files', () => {
+  const project = {
+    id: 'proj-1',
+    revision: 1,
+    updatedAt: '2026-09-30T00:00:00.000Z',
+    deviceId: 'device-1',
+    value: {
+      name: 'Website',
+      purpose: 'Build it',
+      attachments: [
+        { id: 'file-a', name: 'spec.md', size: 100, sha256: 'a'.repeat(64) },
+        { id: 'file-b', name: 'mock.png', size: 200, sha256: 'b'.repeat(64) },
+      ],
+    },
+  } as Entity<Project>;
+  const brief = briefFromTask({ ...baseTask, title: 'Launch', notes: 'Notes here.' } as Task, project);
+  assert.match(brief, /Project: Website/);
+  assert.match(brief, /spec\.md/);
+  assert.match(brief, /mock\.png/);
+  assert.match(brief, /Notes here\./);
+});
+
+test('briefFromTask with project but no files notes the absence', () => {
+  const project = {
+    id: 'proj-1', revision: 1, updatedAt: '', deviceId: '',
+    value: { name: 'Empty', purpose: '', attachments: [] },
+  } as Entity<Project>;
+  const brief = briefFromTask({ ...baseTask, title: 'T', notes: '' } as Task, project);
+  assert.match(brief, /no files attached/);
+});
+
+test('planValueFromTask copies projectId from the task', () => {
+  const withProject = planValueFromTask({ ...baseTask, projectId: 'proj-9' } as Task, agent);
+  assert.equal(withProject.projectId, 'proj-9');
+  const withoutProject = planValueFromTask({ ...baseTask, projectId: null } as Task, agent);
+  assert.equal(withoutProject.projectId, null);
+});
+
+test('attemptsForPlan returns all attempts newest first', () => {
+  const a = makeAttempt({ id: 'a', createdAt: 100, assignmentId: 'assign-1' });
+  const b = makeAttempt({ id: 'b', createdAt: 300, assignmentId: 'assign-1' });
+  const c = makeAttempt({ id: 'c', createdAt: 200, assignmentId: 'assign-1' });
+  const other = makeAttempt({ id: 'other', createdAt: 999, assignmentId: 'assign-2' });
+  const result = attemptsForPlan([a, other, b, c], 'assign-1');
+  assert.deepEqual(result.map(r => r.id), ['b', 'c', 'a']);
+  assert.deepEqual(attemptsForPlan([], 'assign-1'), []);
 });
 
 test('planValueFromTask truncates a long title to 240 characters', () => {

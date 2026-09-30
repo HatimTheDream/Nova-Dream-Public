@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { briefFromTask, latestAttemptForPlan, planValueFromTask } from '../../../packages/domain/task-work';
+import { attemptsForPlan, briefFromTask, latestAttemptForPlan, planValueFromTask } from '../../../packages/domain/task-work';
 import { ApiError, commit, request } from './api';
 import { Dialog } from './ui';
-import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
+import type { Entity, Project, Snapshot, Task } from '../../../packages/domain/contracts';
 import type { AgentDesign, Assignment } from '../../../packages/domain/workspace-records';
 import type { AssignmentAttempt, AssignmentState } from '../../../packages/domain/assignments';
 
@@ -34,7 +34,8 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
 
   if (origin) {
     const plan = snapshot.records?.assignment.find(record => record.id === origin.id);
-    const latest = latestAttemptForPlan(runState?.attempts ?? [], origin.id);
+    const attempts = attemptsForPlan(runState?.attempts ?? [], origin.id);
+    const latest = attempts[0];
     return <section className="task-assistant-work" aria-label="Assistant work">
       <div className="section-heading"><h3>Assistant work</h3></div>
       {startNotice && <p className="notice">{startNotice}</p>}
@@ -44,6 +45,13 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
         {latest ? <>
           <p>{attemptLabels[latest.state]} · {latest.message}</p>
           <p className="metadata">{new Date(latest.createdAt).toLocaleString()}</p>
+          {attempts.length > 1 && <details className="attempt-history">
+            <summary>Earlier runs ({attempts.length - 1})</summary>
+            <ul>{attempts.slice(1).map(attempt => <li key={attempt.id}>
+              <span>{attemptLabels[attempt.state]} · {new Date(attempt.createdAt).toLocaleString()}</span>
+              {attempt.result && <button type="button" className="quiet" onClick={() => onReview(attempt.id)}>Review</button>}
+            </li>)}</ul>
+          </details>}
         </> : <p className="metadata">No runs yet.</p>}
       </> : <p className="notice">The linked plan is unavailable.</p>}
       <div className="button-row">
@@ -71,7 +79,8 @@ function StartAssistantDialog({ taskId, taskRevision, value, snapshot, agents, c
   close: () => void; onOriginChange: (origin: NonNullable<Task['origin']>) => void; onStartNotice: (notice: string) => void;
 }) {
   const [agentId, setAgentId] = useState(agents[0]?.id ?? '');
-  const [brief, setBrief] = useState(() => briefFromTask(value));
+  const project = value.projectId ? snapshot.projects.find(p => p.id === value.projectId) : undefined;
+  const [brief, setBrief] = useState(() => briefFromTask(value, project));
   const [expectedOutput, setExpectedOutput] = useState('');
   const [maxMinutes, setMaxMinutes] = useState(5);
   const [busy, setBusy] = useState(false);
