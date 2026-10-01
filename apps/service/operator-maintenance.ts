@@ -9,16 +9,18 @@ import {guardedUpdatePath,readUpdateJson,writeUpdateJson} from './update-storage
 export const operatorMaintenanceSocket='/run/nova-update/operator.sock';
 const id=z.string().uuid(),hash=z.string().regex(/^[a-f0-9]{64}$/);
 const phase=z.enum(['entered','held','stopping','stopped','snapshot','restore','checking','releasing','released','cancelled','failed']);
-export const operatorLeaseSchema=z.object({format:z.literal(1),id,candidateId:hash,workspaceEpoch:id,phase,stopMarked:z.boolean(),createdAt:z.number().nonnegative(),updatedAt:z.number().nonnegative(),releaseKind:z.enum(['cancelled','unchanged','rehearsed']).optional(),proofSha256:hash.optional()}).strict().superRefine((value,context)=>{
+export const operatorLeaseSchema=z.object({format:z.literal(1),id,candidateId:hash,workspaceEpoch:id,phase,stopMarked:z.boolean(),createdAt:z.number().nonnegative(),updatedAt:z.number().nonnegative(),releaseKind:z.enum(['cancelled','unchanged','rehearsed','aborted']).optional(),proofSha256:hash.optional()}).strict().superRefine((value,context)=>{
   if(value.updatedAt<value.createdAt||(['entered','held','cancelled'].includes(value.phase)&&value.stopMarked)||(['stopping','stopped','snapshot','restore','checking'].includes(value.phase)&&!value.stopMarked)
     ||(['releasing','released','cancelled'].includes(value.phase)&&(!value.releaseKind||value.releaseKind!=='cancelled'&&!value.proofSha256))
     ||value.releaseKind==='cancelled'&&(value.stopMarked||value.proofSha256!==undefined)||value.releaseKind&&value.releaseKind!=='cancelled'&&!value.stopMarked||value.phase==='cancelled'&&value.releaseKind!=='cancelled'||value.phase==='released'&&value.releaseKind==='cancelled')context.addIssue({code:'custom',message:'Invalid operator maintenance state.'});
 });
 export type OperatorLease=z.infer<typeof operatorLeaseSchema>;
 const proofBase={format:z.literal(1),kind:z.literal('operator-maintenance-acceptance'),leaseId:id,candidateId:hash,workspaceEpoch:id,evidenceSha256:hash,priorAcceptanceSha256:hash,returnedAcceptanceSha256:hash,accountsVerified:z.literal(true),healthVerified:z.literal(true)};
+const abortProof=z.object({format:z.literal(1),kind:z.literal('operator-maintenance-abort-acceptance'),outcome:z.literal('aborted'),reason:z.literal('verification_failed_before_swap'),leaseId:id,candidateId:hash,workspaceEpoch:id,evidenceSha256:hash,returnedAcceptanceSha256:hash,snapshotManifestSha256:hash,snapshotVerifiedSha256:hash,originalRetained:z.literal(true),noWorkspaceSwap:z.literal(true),closedSnapshotVerified:z.literal(true),accountsVerified:z.literal(true),healthVerified:z.literal(true)}).strict();
 export const operatorAcceptanceSchema=z.discriminatedUnion('outcome',[
   z.object({...proofBase,outcome:z.literal('unchanged'),reason:z.literal('insufficient_storage'),unchangedVerified:z.literal(true)}).strict(),
   z.object({...proofBase,outcome:z.literal('rehearsed'),savedWorkVerified:z.literal(true),recoveryVerified:z.literal(true)}).strict(),
+  abortProof,
 ]);
 export interface OperatorLeaseStore {
   read():unknown;
@@ -122,7 +124,12 @@ export class FileOperatorLeaseStore implements OperatorLeaseStore {
     id.parse(leaseId);const folder=join(this.directory,leaseId);privatePath(this.directory,true);privatePath(folder,true);
     const path=join(folder,'acceptance.json');privatePath(path);const info=lstatSync(path);if(info.size>8192)throw Error('Operator acceptance exceeds its bound.');
     const bytes=readFileSync(path),value=operatorAcceptanceSchema.parse(JSON.parse(bytes.toString('utf8')));
-    for(const [name,expected,maximum] of [['rehearsal.json',value.evidenceSha256,8*1024*1024],['prior-acceptance.json',value.priorAcceptanceSha256,1024*1024],['returned-acceptance.json',value.returnedAcceptanceSha256,1024*1024]] as const){const evidence=join(folder,name);privatePath(evidence);if(lstatSync(evidence).size>maximum||createHash('sha256').update(readFileSync(evidence)).digest('hex')!==expected)throw Error('Operator rehearsal evidence changed.');}
+    // An aborted rehearsal has no fabricated pre-run acceptance or restoration
+    // claim. Its retained closed snapshot and returned source have separate proof.
+    const companions:readonly (readonly [string,string,number])[]=value.outcome==='aborted'
+      ?[['abort.json',value.evidenceSha256,8*1024*1024],['returned-acceptance.json',value.returnedAcceptanceSha256,1024*1024],['snapshot-manifest.json',value.snapshotManifestSha256,64*1024*1024],['snapshot-verified.json',value.snapshotVerifiedSha256,1024*1024]]
+      :[['rehearsal.json',value.evidenceSha256,8*1024*1024],['prior-acceptance.json',value.priorAcceptanceSha256,1024*1024],['returned-acceptance.json',value.returnedAcceptanceSha256,1024*1024]];
+    for(const [name,expected,maximum] of companions){const evidence=join(folder,name);privatePath(evidence);if(lstatSync(evidence).size>maximum||createHash('sha256').update(readFileSync(evidence)).digest('hex')!==expected)throw Error('Operator rehearsal evidence changed.');}
     return {value,sha256:createHash('sha256').update(bytes).digest('hex')};
   }
 }

@@ -1,3 +1,9 @@
+## [2.0.7] — 2026-09-30
+
+- Validates an independent pre-start restore against its original workspace paths while retaining strict checks on the copied data.
+- Adds an explicit verified abort outcome when a recovery rehearsal fails before any workspace swap, so the unchanged original can safely resume without claiming a successful restore.
+- Saves the actual pre-stop acceptance receipt before maintenance can interrupt a rehearsal.
+
 ## [2.0.6] — 2026-09-30
 
 - Adds a separate root-only maintenance lease so operators can verify recovery before publishing an installable update; interruptions retain the hold and uncertain requests cannot start competing work.

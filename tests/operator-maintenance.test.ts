@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
-import {chmodSync,mkdtempSync,readFileSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {chmodSync,mkdirSync,mkdtempSync,readFileSync,rmSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {test} from 'node:test';
@@ -15,6 +15,7 @@ const candidateId='a'.repeat(64),workspaceEpoch='22222222-2222-4222-8222-2222222
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function memory(){let value:unknown,fail:boolean|'after-write'=false,proofValue:unknown;const historical=new Map<string,unknown>();const store:OperatorLeaseStore={read:()=>structuredClone(value),find:id=>historical.get(id),save:lease=>{if(fail===true)throw Error('durability failed');if(value&&(value as OperatorLease).id!==lease.id)historical.set((value as OperatorLease).id,value);value=structuredClone(lease);if(fail==='after-write')throw Error('durability failed after rename');},proof:()=>({value:structuredClone(proofValue),sha256:hash(proofValue)})};return {store,set:(next:unknown)=>value=next,value:()=>structuredClone(value) as OperatorLease,fail:(next:boolean|'after-write')=>fail=next,proof:(next:unknown)=>proofValue=next};}
 function proof(outcome:'unchanged'|'rehearsed'='rehearsed'){return {format:1,kind:'operator-maintenance-acceptance',leaseId,candidateId,workspaceEpoch,evidenceSha256:'b'.repeat(64),priorAcceptanceSha256:'c'.repeat(64),returnedAcceptanceSha256:'d'.repeat(64),accountsVerified:true,healthVerified:true,...(outcome==='rehearsed'?{outcome,savedWorkVerified:true,recoveryVerified:true}:{outcome,reason:'insufficient_storage',unchangedVerified:true})};}
+function abortProof(){return {format:1,kind:'operator-maintenance-abort-acceptance',outcome:'aborted',reason:'verification_failed_before_swap',leaseId,candidateId,workspaceEpoch,evidenceSha256:'b'.repeat(64),returnedAcceptanceSha256:'c'.repeat(64),snapshotManifestSha256:'d'.repeat(64),snapshotVerifiedSha256:'e'.repeat(64),originalRetained:true,noWorkspaceSwap:true,closedSnapshotVerified:true,accountsVerified:true,healthVerified:true};}
 function fixture(saved=memory()){
   let now=1000,current=candidateId,conflict=false;
   const create=()=>new OperatorMaintenance(saved.store,()=>current,()=>{if(conflict)throw Error('installation conflict');},()=>now);
@@ -49,6 +50,19 @@ test('cancellation is desired release, not proof that an in-flight native prepar
 test('post-stop proof binds exact identity and narrow refusal does not claim full restoration',()=>{
   const f=fixture();f.checking();f.saved.proof({...proof(),workspaceEpoch:randomUUID()});assert.throws(()=>f.operator.release({leaseId}),/does not match/);f.saved.proof(proof('unchanged'));assert(operatorAcceptanceSchema.safeParse(proof('unchanged')).success);assert(!operatorAcceptanceSchema.safeParse({...proof('unchanged'),recoveryVerified:true}).success);
   f.operator.release({leaseId});assert.equal(f.saved.value().releaseKind,'unchanged');assert.equal(f.saved.value().phase,'releasing');assert.equal(f.operator.active,true);f.beat();assert.equal(f.saved.value().phase,'released');
+});
+
+test('a verification abort proves retained original and snapshot without inventing a prior acceptance or rehearsal pass',()=>{
+  assert(operatorAcceptanceSchema.safeParse(abortProof()).success);
+  for(const patch of [{reason:'preflight_failed'},{reason:'insufficient_storage'},{noWorkspaceSwap:false},{originalRetained:false},{closedSnapshotVerified:false},{snapshotManifestSha256:undefined},{snapshotVerifiedSha256:undefined},{priorAcceptanceSha256:'f'.repeat(64)},{savedWorkVerified:true},{recoveryVerified:true},{unchangedVerified:true},{kind:'operator-maintenance-acceptance'}])assert.equal(operatorAcceptanceSchema.safeParse({...abortProof(),...patch}).success,false,JSON.stringify(patch));
+});
+
+test('a stopped restore lease can abort only after checked original restart and the normal native release handshake',()=>{
+  const f=fixture();f.held();for(const phase of ['stopping','stopped','snapshot','restore'])f.operator.mark({leaseId,phase});f.restart();assert.equal(f.operator.holdFor,leaseId);assert.throws(()=>f.operator.cancel({leaseId}));f.saved.proof(abortProof());assert.throws(()=>f.operator.release({leaseId}));f.operator.mark({leaseId,phase:'checking'});assert.throws(()=>f.operator.release({leaseId}),'restart needs a fresh original heartbeat');f.beat(leaseId,false);assert.throws(()=>f.operator.release({leaseId}));f.beat(leaseId,true,{blockers:[{code:'busy',message:'Busy'}]});assert.throws(()=>f.operator.release({leaseId}));f.beat(leaseId,true);f.saved.proof({...abortProof(),candidateId:'e'.repeat(64)});assert.throws(()=>f.operator.release({leaseId}),/does not match/);f.saved.proof(abortProof());f.operator.release({leaseId});assert.equal(f.saved.value().releaseKind,'aborted');assert.equal(f.saved.value().phase,'releasing');f.restart();assert.equal(f.operator.active,true);f.beat(leaseId,true);assert.equal(f.saved.value().phase,'releasing');f.beat();assert.equal(f.saved.value().phase,'released');assert.equal(f.saved.value().releaseKind,'aborted');assert.equal(f.operator.active,false);
+});
+
+test('changing an abort proof during native release fails closed across restart',()=>{
+  const f=fixture();f.checking();f.saved.proof(abortProof());f.operator.release({leaseId});f.saved.proof({...abortProof(),snapshotManifestSha256:'f'.repeat(64)});assert.throws(f.restart,/does not match/);assert.throws(f.beat,/does not match/);assert.equal(f.saved.value().phase,'failed');assert.equal(f.operator.holdFor,leaseId);
 });
 test('proof or durable release-write failure never clears the held authority',()=>{
   const f=fixture();f.checking();f.saved.fail(true);assert.throws(()=>f.operator.release({leaseId}),/durability/);assert.equal(f.operator.holdFor,leaseId);f.saved.fail(false);assert.throws(()=>f.operator.release({leaseId}),/uncertain/);f.restart();f.beat(leaseId,true);f.operator.release({leaseId});f.saved.proof({...proof(),evidenceSha256:'e'.repeat(64)});assert.throws(f.restart,/does not match/);assert.throws(()=>f.beat(),/does not match/);assert.equal(f.saved.value().phase,'failed');assert.equal(f.operator.holdFor,leaseId);
@@ -86,6 +100,14 @@ test('real app bridge and durable native lease reconcile lost prepare and resume
 test('private store preserves terminal IDs and rejects malformed current state', {skip:process.platform==='linux'&&process.getuid?.()!==0},()=>{
   const root=mkdtempSync(join(process.env.QA_PROTECTED_PARENT??(process.platform==='linux'?'/root':tmpdir()),'nova-operator-'));chmodSync(root,0o700);
   try{const store=new FileOperatorLeaseStore(root),f=fixture({...memory(),store} as any);f.beat();f.enter();f.operator.cancel({leaseId});f.beat();f.operator.enter({leaseId:randomUUID(),candidateId,workspaceEpoch});assert.equal((store.find(leaseId) as OperatorLease).phase,'cancelled');writeFileSync(join(root,'current.json'),'{}');assert.throws(()=>new OperatorMaintenance(store,()=>candidateId,()=>{}));}finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('abort file proof requires every retained-snapshot companion and accepts no substituted bytes', {skip:process.platform==='linux'&&process.getuid?.()!==0},()=>{
+  const root=mkdtempSync(join(process.env.QA_PROTECTED_PARENT??(process.platform==='linux'?'/root':tmpdir()),'nova-operator-abort-'));chmodSync(root,0o700);
+  try{const store=new FileOperatorLeaseStore(root),folder=join(root,leaseId);mkdirSync(folder,{mode:0o700});const value=abortProof();const companions=[['abort.json','evidenceSha256'],['returned-acceptance.json','returnedAcceptanceSha256'],['snapshot-manifest.json','snapshotManifestSha256'],['snapshot-verified.json','snapshotVerifiedSha256']] as const;
+    for(const [name,field] of companions){const bytes=Buffer.from(JSON.stringify({fixture:name}));writeFileSync(join(folder,name),bytes,{mode:0o600});value[field]=createHash('sha256').update(bytes).digest('hex');}writeFileSync(join(folder,'acceptance.json'),JSON.stringify(value),{mode:0o600});assert.deepEqual(store.proof(leaseId).value,value,'no prior-acceptance.json exists or is needed');
+    for(const [name] of companions){const path=join(folder,name),bytes=readFileSync(path);unlinkSync(path);assert.throws(()=>store.proof(leaseId));writeFileSync(path,'{}',{mode:0o600});assert.throws(()=>store.proof(leaseId),/evidence changed/);writeFileSync(path,bytes,{mode:0o600});}assert.deepEqual(store.proof(leaseId).value,value);
+  }finally{rmSync(root,{recursive:true,force:true});}
 });
 test('a dangling authority symlink is corrupt state, not an absent lease', {skip:process.platform==='linux'&&process.getuid?.()!==0},t=>{
   const root=mkdtempSync(join(process.env.QA_PROTECTED_PARENT??(process.platform==='linux'?'/root':tmpdir()),'nova-operator-'));chmodSync(root,0o700);

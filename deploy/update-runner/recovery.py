@@ -750,7 +750,7 @@ def retained_embedded_databases(snapshot, live, selected, active, from_version='
     return paths
 
 
-def retained_quarantine_cache(snapshot, live, selected, active, from_version, to_version):
+def retained_quarantine_cache(snapshot, live, selected, active, from_version, to_version, *, logical_workspace_root=None):
     relative = selected / 'openclaw-runtime' / 'state' / 'state' / 'openclaw-quarantine.sqlite'
     old_path, new_path = snapshot / relative, live / relative
     if to_version != '2026.9.6' or not (old_path.exists() or new_path.exists()):
@@ -761,7 +761,8 @@ def retained_quarantine_cache(snapshot, live, selected, active, from_version, to
         'agent_integrity_verifications': 'CREATE TABLE agent_integrity_verifications ( path TEXT NOT NULL PRIMARY KEY, dev TEXT NOT NULL, ino TEXT NOT NULL, app_version TEXT NOT NULL, verified_at INTEGER NOT NULL, clean_close INTEGER NOT NULL CHECK (clean_close IN (0, 1)) ) STRICT',
     }
     decisions = []
-    allowed_paths = {str(live / path) for path in active if path.name != 'openclaw.sqlite'}
+    authority = live if logical_workspace_root is None else logical_workspace_root
+    allowed_paths = {str(authority / path) for path in active if path.name != 'openclaw.sqlite'}
     for path, closed in ((old_path, True), (new_path, False)):
         if not path.exists():
             require(closed and from_version == '2026.9.2', 'A native quarantine cache is missing outside the reviewed transition.')
@@ -907,7 +908,7 @@ def verified_session_bindings(snapshot, selected, configuration, node, key):
 
 
 def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None,
-                                 *, session_binding_key=None, session_binding_node=None):
+                                 *, session_binding_key=None, session_binding_node=None, logical_workspace_root=None):
     relative = selected / 'openclaw-runtime' / 'openclaw.json'
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
@@ -974,7 +975,8 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
     if app_releases is not None:
         retained_app_plugin_paths(normalized, app_releases)
     require(normalized[0] == normalized[1], 'Retained native configuration or account settings changed.')
-    return {'path': str(paths[1]), 'hashes': hashes, 'byteSizes': byte_sizes}
+    authority = live if logical_workspace_root is None else logical_workspace_root
+    return {'path': str(authority / relative), 'hashes': hashes, 'byteSizes': byte_sizes}
 
 
 SESSION_TITLES = r'''
@@ -1587,18 +1589,34 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
 
 
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
-                       log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None):
+                       log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
+                       logical_workspace_root=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch, closed=True)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
+    if logical_workspace_root is not None:
+        # An unstarted independent copy retains absolute names from the actual
+        # closed workspace. Bind that namespace to its selected epoch and exact
+        # canonical database set; never accept arbitrary cached absolute paths.
+        require(not migrating and log_retention_window is None and session_binding_key is None
+                and session_binding_node is None, 'Logical workspace authority is only for an unchanged pre-start copy.')
+        logical_workspace_root = pathlib.Path(logical_workspace_root)
+        require(logical_workspace_root.is_absolute() and logical_workspace_root.resolve(strict=True) == logical_workspace_root
+                and logical_workspace_root != live and not logical_workspace_root.is_relative_to(live)
+                and not live.is_relative_to(logical_workspace_root), 'The logical workspace authority must be the separate canonical original.')
+        logical_selected, logical_epoch, logical_paths = native_scope(logical_workspace_root, before_epoch, closed=True)
+        require((logical_selected, logical_epoch, logical_paths) == (selected, epoch, paths),
+                'The pre-start copy differs from the authoritative selected workspace.')
     configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases,
-                                                  session_binding_key=session_binding_key, session_binding_node=session_binding_node)
+                                                  session_binding_key=session_binding_key, session_binding_node=session_binding_node,
+                                                  logical_workspace_root=logical_workspace_root)
     embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version,
                                           log_retention_window, log_retention_reports)
-    quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version)
+    quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version,
+                                          logical_workspace_root=logical_workspace_root)
     require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine) == static_sqlite_files(live, selected, paths | embedded | quarantine), 'An inactive database, archived store or nonactive cache changed.')
     for relative in sorted(before_paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:

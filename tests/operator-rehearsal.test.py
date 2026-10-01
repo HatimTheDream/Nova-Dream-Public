@@ -142,6 +142,27 @@ class RehearsalTests(unittest.TestCase):
         phases = [json.loads(p.read_text())['phase'] for p in sorted(instance.output.glob('phase-*.json'))]
         self.assertEqual(phases[-2:], ['trial-cleanup-intent','complete'])
 
+    def test_prior_acceptance_is_saved_before_service_stop_and_retained_on_failure(self):
+        instance = self.fixture()
+        def stop(action):
+            self.assertEqual(action, 'stop')
+            path = instance.output/'prior-acceptance.json'
+            self.assertEqual(json.loads(path.read_text()), self.healthy)
+            held = [json.loads(p.read_text()) for p in instance.output.glob('phase-*.json')
+                    if json.loads(p.read_text())['phase'] == 'held']
+            self.assertEqual(len(held), 1)
+            self.assertEqual(held[0]['priorAcceptanceSha256'], hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertEqual(held[0]['acceptanceProvenance'], 'actual-held-before-first-stop')
+            self.assertEqual(held[0]['sourceProcess'], instance.source_process)
+            raise OSError('interrupted first stop')
+        instance.service = stop
+        with self.assertRaisesRegex(OSError, 'interrupted first stop'):
+            instance.run_rehearsal()
+        self.assertEqual(json.loads((instance.output/'prior-acceptance.json').read_text()), self.healthy)
+        self.assertTrue(instance.data.exists())
+        self.assertFalse(instance.original.exists() or instance.restore.exists() or instance.trial.exists())
+        self.assertFalse(any(event.startswith('proof:') for event in self.events))
+
     def test_crash_in_each_rename_preserves_every_workspace_and_never_releases(self):
         for failed_rename in range(1,5):
             with self.subTest(rename=failed_rename), contextlib.ExitStack() as local:

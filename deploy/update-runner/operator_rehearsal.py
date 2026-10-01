@@ -395,8 +395,11 @@ class Rehearsal(Driver):
             self.leased = True
             self.before = self.wait_acceptance(self.prior_id, self.review['novaVersion'])
             require(self.process_identity() == self.source_process, 'The admitted source restarted after read-only review.')
+            prior_acceptance = self.output / 'prior-acceptance.json'
+            write_json(prior_acceptance, self.before)
             self.held_allocated = allocated_metadata(self.data)
-            self.record('held')
+            self.record('held', priorAcceptanceSha256=digest(prior_acceptance),
+                        acceptanceProvenance='actual-held-before-first-stop', sourceProcess=self.source_process)
             self.mark('stopping'); self.record('stopping-intent')
             self.stop_attempted = True
             self.service('stop'); self.require_stopped(); self.mark('stopped')
@@ -439,7 +442,8 @@ class Rehearsal(Driver):
                 self.mark('restore')
                 prepare_independent(self.recovery / 'workspace', self.restore, self.data, self.require_stopped)
                 saved_state(self.recovery / 'workspace', self.restore, restored=True)
-                native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine)
+                native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine,
+                                   logical_workspace_root=self.data)
                 self.trial_root = root_identity(self.restore)
                 require(shutil.disk_usage(self.recovery_root).free >= RESERVE + 2 * ALLOWANCE + self.startup_growth,
                         'Reserve and explicit startup growth must fit before any workspace swap.')

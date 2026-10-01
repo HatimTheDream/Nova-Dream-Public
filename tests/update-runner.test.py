@@ -519,6 +519,65 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):recovery.retained_quarantine_cache(*args)
             with contextlib.closing(sqlite3.connect(path)) as db, db:db.execute(restore)
 
+    def prestart_copy_with_absolute_native_cache(self):
+        original, snapshot, restored = (self.root / name for name in ('original', 'snapshot', 'restored'))
+        fixture_native(original)
+        agent = pathlib.Path('openclaw-runtime/state/agents/main/agent/openclaw-agent.sqlite')
+        (original / agent).parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(original / agent)) as connection, connection:
+            connection.executescript("pragma user_version=23; create table session_nodes(id text primary key,entry_json text); insert into session_nodes values('saved','retained');")
+        relative = pathlib.Path('openclaw-runtime/state/state/openclaw-quarantine.sqlite')
+        cache = original / relative; cache.parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(cache)) as connection, connection:
+            connection.executescript('''pragma user_version=2;
+                CREATE TABLE quarantined_databases ( path TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, reason TEXT NOT NULL, quarantined_at INTEGER NOT NULL, writer_app_version TEXT, verified_generation TEXT ) STRICT;
+                CREATE TABLE agent_integrity_verifications ( path TEXT NOT NULL PRIMARY KEY, dev TEXT NOT NULL, ino TEXT NOT NULL, app_version TEXT NOT NULL, verified_at INTEGER NOT NULL, clean_close INTEGER NOT NULL CHECK (clean_close IN (0, 1)) ) STRICT;''')
+            connection.execute('insert into agent_integrity_verifications values(?,?,?,?,?,?)',
+                               (str(original / agent), '1', '2', '2026.9.6', 123, 1))
+        (original / 'openclaw-runtime/openclaw.json').write_text('{"retained":"configuration"}')
+        shutil.copytree(original, snapshot); shutil.copytree(snapshot, restored)
+        return original, snapshot, restored, relative, agent
+
+    def test_prestart_native_copy_uses_bound_original_absolute_authority(self):
+        original, snapshot, restored, cache, agent = self.prestart_copy_with_absolute_native_cache()
+        compare = lambda **kwargs: recovery.native_saved_state(snapshot, restored,
+            from_version='2026.9.6', to_version='2026.9.6', **kwargs)
+        with self.assertRaisesRegex(RuntimeError, 'integrity cache contains an unreviewed record'):
+            compare()
+        retained = {name: (root / cache).read_bytes() for name, root in [('snapshot', snapshot), ('original', original), ('restored', restored)]}
+        compare(logical_workspace_root=original)
+        self.assertEqual(retained, {name: (root / cache).read_bytes() for name, root in [('snapshot', snapshot), ('original', original), ('restored', restored)]})
+        configuration = recovery.native_runtime_configuration(snapshot, restored, pathlib.Path('.'),
+            from_version='2026.9.6', to_version='2026.9.6', logical_workspace_root=original)
+        self.assertEqual(configuration['path'], str(original / 'openclaw-runtime/openclaw.json'))
+        with contextlib.closing(sqlite3.connect(restored / agent)) as connection, connection:
+            connection.execute("update session_nodes set entry_json='lost saved work'")
+        with self.assertRaisesRegex(RuntimeError, 'Retained native work'):
+            compare(logical_workspace_root=original)
+
+    def test_prestart_logical_authority_rejects_wrong_epoch_paths_and_quarantine_changes(self):
+        original, snapshot, restored, cache, agent = self.prestart_copy_with_absolute_native_cache()
+        compare = lambda **kwargs: recovery.native_saved_state(snapshot, restored,
+            from_version='2026.9.6', to_version='2026.9.6', **kwargs)
+        for root in (restored, self.root):
+            with self.subTest(authority=str(root)), self.assertRaises(RuntimeError):
+                compare(logical_workspace_root=root)
+        wrong = self.root / 'wrong'; shutil.copytree(original, wrong)
+        with contextlib.closing(sqlite3.connect(wrong / 'workspace.sqlite')) as connection, connection:
+            connection.execute("update meta set value='00000000-0000-4000-8000-000000000000' where key='epoch'")
+        with self.assertRaises(RuntimeError): compare(logical_workspace_root=wrong)
+        for statement in (
+            "update agent_integrity_verifications set path='/unrelated/database.sqlite'",
+            "insert into quarantined_databases values('/saved','agent','corrupt',1,'2026.9.6',null)",
+        ):
+            with contextlib.closing(sqlite3.connect(restored / cache)) as connection, connection:
+                connection.execute(statement)
+            with self.subTest(statement=statement), self.assertRaises(RuntimeError):
+                compare(logical_workspace_root=original)
+            shutil.copyfile(snapshot / cache, restored / cache)
+        with self.assertRaisesRegex(RuntimeError, 'unchanged pre-start copy'):
+            compare(logical_workspace_root=original, log_retention_window=(1, 2))
+
     def test_embedded_closed_wal_is_read_from_a_copy_and_live_sidecars_are_qualified_logically(self):
         source, before, live = self.root / 'source', self.root / 'snapshot', self.root / 'live'
         paths = fixture_embedded_databases(source)
