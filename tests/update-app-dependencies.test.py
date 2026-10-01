@@ -289,6 +289,63 @@ class ProtectedExtractionTests(unittest.TestCase):
                     dependencies.stage_closure(archive, target, description)
                 self.assertTrue(target.exists(), 'Rejected staging must remain available for diagnosis')
 
+    def test_nested_closure_content_verification_never_seeks_gzip_backwards(self):
+        entries = self.fixture.entries()
+        for number in range(8):
+            parent = 'node_modules/fixture/tree-' + str(number)
+            entries.extend([entry(parent, kind='directory'),
+                            entry(parent + '/first.bin', b'a' * 65536),
+                            entry(parent + '/nested', kind='directory'),
+                            entry(parent + '/nested/content.bin', b'b' * 65536),
+                            entry(parent + '/last.bin', b'c' * 65536)])
+        entries.sort(key=lambda item: item[0].name)
+        archive, description = self.fixture.archive(entries)
+        target = self.root / 'nested-closure'
+        dependencies.stage_closure(archive, target, description)
+        observations = []
+        open_archive = dependencies._archive
+
+        def tracking_archive(path):
+            opened = open_archive(path)
+            stream = opened.fileobj
+            seeks, reads = [], []
+            observations.append((seeks, reads))
+            original_seek, original_read = stream.seek, stream.read
+
+            def track_seek(offset, whence=0):
+                # GzipFile.tell can delegate to seek on newer Python versions;
+                # query through the saved original method to avoid recursion.
+                before = original_seek(0, os.SEEK_CUR)
+                result = original_seek(offset, whence)
+                seeks.append((before, original_seek(0, os.SEEK_CUR)))
+                return result
+
+            def track_read(size=-1):
+                before = original_seek(0, os.SEEK_CUR)
+                result = original_read(size)
+                reads.append((before, original_seek(0, os.SEEK_CUR), len(result)))
+                return result
+
+            stream.seek, stream.read = track_seek, track_read
+            return opened
+
+        with patch.object(dependencies, '_archive', side_effect=tracking_archive):
+            dependencies.verify_closure(archive, target, description)
+        # archive_members separately validates metadata and package versions.
+        # The last archive instance is the actual complete file-content pass.
+        seeks, reads = observations[-1]
+        self.assertGreater(len(seeks), 24)
+        self.assertFalse([(before, after) for before, after in seeks if after < before],
+                         'Nested package verification must not replay gzip decompression')
+        self.assertEqual(sum(length for _, _, length in reads), description['expandedBytes'])
+        file_offsets = [member.offset_data for member in dependencies.archive_members(archive, description) if member.isfile()]
+        self.assertEqual(file_offsets, sorted(file_offsets))
+        # Forward-only reading must still detect a same-length content change.
+        damaged = target / 'node_modules/fixture/tree-3/nested/content.bin'
+        damaged.write_bytes(b'x' * 65536)
+        with self.assertRaisesRegex(RuntimeError, 'content changed'):
+            dependencies.verify_closure(archive, target, description)
+
     def test_redirected_destination_and_unprotected_parent_are_rejected(self):
         archive, description = self.fixture.archive()
         outside = self.root / 'outside'; outside.mkdir()

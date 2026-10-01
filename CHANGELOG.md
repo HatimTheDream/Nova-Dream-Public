@@ -1,3 +1,8 @@
+## [2.0.5] — 2026-09-30
+
+- Verifies offline dependency files in archive order, avoiding repeated decompression that could stall update preparation on a full installation.
+- Runs privileged Linux recovery fixtures in an explicitly protected directory while preserving production ownership checks.
+
 ## [2.0.4] — 2026-09-30
 
 - Checks update prerequisites before requesting maintenance and again before installation; uncertain started attempts still require verified recovery.

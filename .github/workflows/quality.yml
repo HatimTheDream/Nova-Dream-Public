@@ -27,11 +27,27 @@ jobs:
           python3 -B tests/update-log-retention-integration.test.py -v
           NODE_BINARY="$(command -v node)"
           python3 -B tests/update-app-archive.test.py -v
-          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/recovery-derived-state.test.py -v
-          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/workspace-key-reader.test.py -v
-          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-app-dependencies.test.py -v
-          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-admission-driver.test.py -v
-          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-dependency-selection.test.py -v
+          # Hosted runners may allow the runner user to write /opt. Keep the real
+          # production ownership checks and put privileged fixtures under /root.
+          QA_PROTECTED_PARENT="$(sudo mktemp -d /root/nova-recovery-ci.XXXXXX)"
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B - <<'PY'
+          import json, os, pathlib, stat
+          fixture = pathlib.Path(os.environ['QA_PROTECTED_PARENT'])
+          if fixture.parent != pathlib.Path('/root') or not fixture.name.startswith('nova-recovery-ci.'):
+              raise SystemExit('Unexpected recovery fixture parent.')
+          paths = [pathlib.Path('/opt'), *reversed((fixture, *fixture.parents))]
+          for path in paths:
+              info = path.lstat()
+              mode = stat.S_IMODE(info.st_mode)
+              print(json.dumps({'path': str(path), 'uid': info.st_uid, 'mode': oct(mode)}), flush=True)
+              if path != pathlib.Path('/opt') and (info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or mode & 0o022):
+                  raise SystemExit(f'Unprotected recovery fixture ancestor: {path}')
+          PY
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-derived-state.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/workspace-key-reader.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-app-dependencies.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

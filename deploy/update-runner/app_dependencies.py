@@ -308,9 +308,13 @@ def verify_closure(archive_path, target, description):
     actual = _walk(target)
     require(set(actual) == set(entries) | directories, 'Application dependencies contain missing or unreviewed files.')
     with _archive(archive_path) as archive:
-        for name, path in actual.items():
-            member = entries.get(name)
-            if member is not None and member.issym():
+        # A gzip seek backwards replays decompression from its beginning. Walk
+        # the reviewed archive order, rather than filesystem directory order,
+        # so full content verification stays one forward pass even for deeply
+        # nested packages. Every directory is an explicit validated member.
+        for member in members:
+            name, path = member.name, actual[member.name]
+            if member.issym():
                 info = path.lstat()
                 require(info.st_uid == 0 and path.is_symlink() and os.readlink(path) == member.linkname
                         and path.resolve(strict=True).is_relative_to(target / 'node_modules'),
