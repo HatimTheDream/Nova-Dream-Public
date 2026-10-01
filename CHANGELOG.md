@@ -1,3 +1,9 @@
+## [2.0.8] — 2026-10-01
+
+- Recognizes valid SQLite WAL resets during saved-work verification while retaining checksum, commit, truncation and generation checks.
+- Verifies regenerated plugin catalogs against the exact released files and copied workspace content, allowing legitimate release paths and file timestamps without accepting policy or capability changes.
+- Keeps separate, bounded diagnostics for an installation failure and a subsequent recovery failure, preserving both causes without exposing dynamic error content.
+
 ## [2.0.7] — 2026-09-30
 
 - Validates an independent pre-start restore against its original workspace paths while retaining strict checks on the copied data.

@@ -1213,12 +1213,12 @@ class Driver:
         os.replace(temporary, destination)
         sync_dir(self.recovery)
 
-    def record_failure(self, failure):
+    def record_failure(self, failure, *, recovery_failure=False):
         # Preserve the original cause before recovery. Only literal guard
         # messages in this verified driver pair may enter the private receipt;
         # subprocess output, dynamic exception text and commands never do.
         with contextlib.suppress(Exception):
-            reason = 'The update failed before acceptance.'
+            reason = 'Recovery failed before acceptance.' if recovery_failure else 'The update failed before acceptance.'
             if type(failure) is RuntimeError:
                 messages = set()
                 with contextlib.suppress(Exception):
@@ -1233,7 +1233,8 @@ class Driver:
                                 messages.add(node.args[index].value)
                 if str(failure) in messages:
                     reason = str(failure)
-            write_json(self.output / 'failure.json', {'errorType': type(failure).__name__, 'reason': reason})
+            name = 'recovery-failure.json' if recovery_failure else 'failure.json'
+            write_json(self.output / name, {'errorType': type(failure).__name__, 'reason': reason})
 
     def run(self):
         try:
@@ -1323,7 +1324,12 @@ class Driver:
             if self.result_publication_started:
                 raise
             if self.switch_attempted:
-                self.restore_prior()
+                try:
+                    self.restore_prior()
+                except BaseException as recovery_failure:
+                    # Keep both causes without changing result/hold semantics.
+                    self.record_failure(recovery_failure, recovery_failure=True)
+                    raise
             elif self.stop_attempted:
                 # Before a pointer switch, the original closed workspace remains
                 # selected. Restart only that exact verified prior pair.

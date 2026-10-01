@@ -414,8 +414,9 @@ def verify_sqlite_wal(path):
     """Reject truncated/corrupt committed WAL instead of silently ignoring it.
 
     SQLite file format sections 4.1-4.4 define these cumulative checksums.
-    A valid retained WAL-index binds the committed prefix when reset WALs also
-    contain obsolete frames. Without it, require complete current-salt frames.
+    A retained WAL-index binds the committed prefix. Without one, a reset WAL
+    may retain complete frames from older generations after its current commit.
+    Qualify that narrow tail rather than confusing allocated length with mxFrame.
     """
     wal = pathlib.Path(str(path) + '-wal')
     if not wal.exists() or not wal.stat().st_size:
@@ -452,6 +453,30 @@ def verify_sqlite_wal(path):
         for number in range(1, limit + 1):
             frame_header, page = source.read(24), source.read(page_size)
             page_number, database_size, frame_salt1, frame_salt2, first, second = struct.unpack('>6I', frame_header)
+            if (frame_salt1, frame_salt2) != (salt1, salt2) and committed is None:
+                require(final_commit == number - 1 and final_commit > 0,
+                        'Retained SQLite WAL reset tail does not follow a committed prefix.')
+                previous_generation, previous_salts, previous_checksum = 0, None, None
+                for tail_number in range(number, frames + 1):
+                    if tail_number != number:
+                        frame_header, page = source.read(24), source.read(page_size)
+                        page_number, _, frame_salt1, frame_salt2, first, second = struct.unpack('>6I', frame_header)
+                    generation = (salt1 - frame_salt1) & 0xffffffff
+                    salts = (frame_salt1, frame_salt2)
+                    require(page_number > 0 and 0 < generation < 0x80000000
+                            and generation >= previous_generation and frame_salt2 != salt2,
+                            'Retained SQLite WAL tail is not from older reset generations.')
+                    if generation == previous_generation:
+                        require(salts == previous_salts, 'Retained SQLite WAL reset generation identity failed.')
+                        tail_checksum = sqlite_wal_checksum(page, byteorder,
+                            sqlite_wal_checksum(frame_header[:8], byteorder, previous_checksum))
+                        require(tail_checksum == (first, second), 'Retained SQLite WAL reset tail checksum failed.')
+                    # Earlier frames in this obsolete generation were overwritten
+                    # by the reset. Its first remaining checksum is only a seed;
+                    # all following frames in that generation still must chain.
+                    previous_generation, previous_salts, previous_checksum = generation, salts, (first, second)
+                limit = final_commit
+                break
             require(page_number > 0 and (frame_salt1, frame_salt2) == (salt1, salt2), 'Retained SQLite WAL frame identity failed.')
             checksum = sqlite_wal_checksum(page, byteorder, sqlite_wal_checksum(frame_header[:8], byteorder, checksum))
             require(checksum == (first, second), 'Retained SQLite WAL frame checksum failed.')
@@ -1300,7 +1325,143 @@ def transcript_hashes(path, node):
     return Counter(hashes)
 
 
-def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6'):
+def catalog_file(path, expected_hash, signature=None, *, current=False):
+    """Attest catalog cache metadata against a bounded, direct ordinary file.
+
+    Snapshot ctime belongs to the independent copy, not the historic cache.
+    Current cache timestamps must describe its actual file; both sides retain
+    exact content hashes, sizes and mtimes.
+    """
+    path = pathlib.Path(path)
+    require(path.is_absolute() and path.resolve(strict=True) == path,
+            'Catalog file was redirected.')
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_size <= 16 * 1024 ** 2
+            and isinstance(expected_hash, str) and re.fullmatch('[a-f0-9]{64}', expected_hash),
+            'Catalog file identity is invalid.')
+    content = path.read_bytes()
+    require(len(content) == info.st_size and hashlib.sha256(content).hexdigest() == expected_hash,
+            'Catalog file differs from its retained content hash.')
+    if signature is not None:
+        require(isinstance(signature, dict) and set(signature) == {'size', 'mtimeMs', 'ctimeMs'}
+                and type(signature['size']) is int and signature['size'] == info.st_size
+                and all(type(signature[name]) in (int, float) and math.isfinite(signature[name])
+                        and 0 <= signature[name] <= 9007199254740991 for name in ('mtimeMs', 'ctimeMs')),
+                'Catalog file signature changed shape or size.')
+        require(abs(signature['mtimeMs'] - info.st_mtime_ns / 10 ** 6) <= 0.001
+                and (not current or abs(signature['ctimeMs'] - info.st_ctime_ns / 10 ** 6) <= 0.001),
+                'Catalog file signature does not describe its physical file.')
+    later = path.lstat()
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    require(identity(info) == identity(later) and path.resolve(strict=True) == path,
+            'Catalog file changed during attestation.')
+    return content
+
+
+def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
+    """Normalize only file-proved generated catalog differences, in memory.
+
+    Nova plugin paths/JSON formatting follow the two verified candidate
+    closures. A copied workspace Codex package may change ctime only. Every
+    other catalog field, policy, capability, installation and order stays exact.
+    """
+    before, after = indexes
+    require(len(before['plugins']) == len(after['plugins']), 'Native plugin catalog membership changed.')
+    app_plugins = {'edition3-worker': 'worker-plugin', 'edition3-sources': 'source-plugin',
+                   'edition3-accounts': 'account-plugin', 'edition3-workspace': 'module-plugin'}
+    seen = set()
+    for old, new in zip(before['plugins'], after['plugins']):
+        if old == new:
+            continue
+        plugin_id = old.get('pluginId')
+        require(isinstance(plugin_id, str) and plugin_id == new.get('pluginId') and plugin_id not in seen,
+                'Native plugin catalog identity or order changed.')
+        seen.add(plugin_id)
+        if plugin_id in app_plugins and app_releases is not None:
+            require(isinstance(app_releases, (tuple, list)) and len(app_releases) == 2,
+                    'Catalog relocation requires both verified application releases.')
+            relative = pathlib.Path('dist/service/apps/service') / app_plugins[plugin_id]
+            documents = []
+            for position, (record, (root, manifest)) in enumerate(zip((old, new), app_releases)):
+                root = pathlib.Path(root); plugin = root / relative
+                require(root.resolve(strict=True) == root and plugin.resolve(strict=True) == plugin
+                        and record.get('rootDir') == str(plugin) and record.get('source') == str(plugin / 'index.js')
+                        and record.get('manifestPath') == str(plugin / 'openclaw.plugin.json'),
+                        'Catalog plugin is outside its verified application release.')
+                prefix = relative.as_posix() + '/'
+                artifacts = {item['path']: item['sha256'] for item in manifest['artifacts'] if item['path'].startswith(prefix)}
+                actual = {}
+                require(0 < len(artifacts) <= 1000, 'Catalog plugin lacks its candidate artifact closure.')
+                for file in plugin.rglob('*'):
+                    require(not file.is_symlink() and (file.is_file() or file.is_dir()), 'Catalog plugin artifact was redirected.')
+                    if file.is_file():
+                        require(len(actual) < 1000, 'Catalog plugin closure exceeded its bound.')
+                        actual[file.relative_to(root).as_posix()] = digest(file)
+                require(actual == artifacts, 'Catalog plugin bytes differ from the verified candidate.')
+                package = record.get('packageJson')
+                require(isinstance(package, dict) and set(package) == {'path', 'hash', 'fileSignature'}
+                        and package['path'] == 'package.json' and isinstance(package['fileSignature'], dict)
+                        and isinstance(record.get('manifestFile'), dict), 'Catalog package identity changed shape.')
+                parsed_manifest = json.loads(catalog_file(plugin / 'openclaw.plugin.json', record.get('manifestHash'),
+                                                         record.get('manifestFile'), current=position == 1))
+                parsed_package = json.loads(catalog_file(plugin / 'package.json', package['hash'],
+                                                        package['fileSignature'], current=position == 1))
+                require(isinstance(parsed_manifest, dict) and parsed_manifest.get('id') == plugin_id
+                        and isinstance(parsed_package, dict) and parsed_package.get('name') == record.get('packageName')
+                        and parsed_package.get('version') == record.get('packageVersion'),
+                        'Catalog manifest or package identity differs from its file.')
+                documents.append((parsed_manifest, {key: value for key, value in parsed_package.items() if key != 'version'}))
+            require(documents[0] == documents[1], 'Catalog plugin JSON semantics changed.')
+            for field in ('rootDir', 'source', 'manifestPath', 'manifestHash', 'manifestFile', 'packageVersion'):
+                new[field] = old[field]
+            new['packageJson'] = old['packageJson']
+        elif plugin_id == 'codex' and workspace_roots is not None:
+            snapshot, live, logical, selected = map(pathlib.Path, workspace_roots)
+            package_root = pathlib.Path(old.get('rootDir', ''))
+            projects = logical / selected / 'openclaw-runtime/state/npm/projects'
+            require(package_root.is_absolute() and package_root.is_relative_to(projects)
+                    and len(package_root.relative_to(projects).parts) == 4
+                    and package_root.relative_to(projects).parts[1:] == ('node_modules', '@openclaw', 'codex')
+                    and new.get('rootDir') == str(package_root)
+                    and old.get('source') == new.get('source') == str(package_root / 'dist/index.js')
+                    and old.get('manifestPath') == new.get('manifestPath') == str(package_root / 'openclaw.plugin.json'),
+                    'Copied Codex catalog package is outside its retained workspace.')
+            physical = [root / package_root.relative_to(logical) for root in (snapshot, live)]
+            files = [('openclaw.plugin.json', 'manifestHash', 'manifestFile'),
+                     ('dist/doctor-contract-api.js', 'doctorContractHash', 'doctorContractFile')]
+            for relative_file, hash_name, signature_name in files:
+                require(old.get(hash_name) == new.get(hash_name), 'Copied Codex catalog content hash changed.')
+                signatures = [record.get(signature_name) for record in (old, new)]
+                require(all(isinstance(value, dict) for value in signatures), 'Copied Codex signature is absent.')
+                for position in range(2):
+                    catalog_file(physical[position] / relative_file, old.get(hash_name), signatures[position], current=position == 1)
+                require({key: value for key, value in signatures[0].items() if key != 'ctimeMs'}
+                        == {key: value for key, value in signatures[1].items() if key != 'ctimeMs'},
+                        'Copied Codex catalog metadata changed beyond ctime.')
+                new[signature_name] = old[signature_name]
+            packages = [record.get('packageJson') for record in (old, new)]
+            for position, package in enumerate(packages):
+                require(isinstance(package, dict) and set(package) == {'path', 'hash', 'fileSignature'}
+                        and package['path'] == 'package.json' and isinstance(package['fileSignature'], dict),
+                        'Copied Codex package identity changed shape.')
+                parsed = json.loads(catalog_file(physical[position] / 'package.json', package['hash'],
+                                                 package['fileSignature'], current=position == 1))
+                require(parsed.get('name') == '@openclaw/codex'
+                        and parsed.get('version') == (old, new)[position].get('packageVersion'),
+                        'Copied Codex package identity differs from its file.')
+            require(packages[0]['hash'] == packages[1]['hash']
+                    and {key: value for key, value in packages[0]['fileSignature'].items() if key != 'ctimeMs'}
+                    == {key: value for key, value in packages[1]['fileSignature'].items() if key != 'ctimeMs'},
+                    'Copied Codex package content or mtime changed.')
+            source_hash = digest(physical[0] / 'dist/index.js')
+            for root in physical:
+                catalog_file(root / 'dist/index.js', source_hash)
+            new['packageJson']['fileSignature'] = old['packageJson']['fileSignature']
+        # Unknown changed records are deliberately left for exact comparison.
+
+
+def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6',
+                          *, app_releases=None, workspace_roots=None):
     """Qualify pinned migration or same-engine catalog effective content."""
     require((from_version, to_version) in {('2026.9.2', '2026.9.6'), ('2026.9.6', '2026.9.6')},
             'Native machine-state regeneration is outside the reviewed engines.')
@@ -1358,6 +1519,7 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
     if from_version == to_version:
         require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
+        retained_catalog_files(indexes, app_releases, workspace_roots)
         effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
         require(effective(old_index) == effective(new_index), 'Retained native plugin policy or effective catalog changed.')
         return
@@ -1640,7 +1802,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
                 if table == 'config_machine_state':
                     if to_version == '2026.9.6':
-                        retained_plugin_index(before, after, node, live / relative, from_version, to_version)
+                        retained_plugin_index(before, after, node, live / relative, from_version, to_version,
+                                              app_releases=app_releases,
+                                              workspace_roots=(snapshot, live, logical_workspace_root or live, selected))
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:

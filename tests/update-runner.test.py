@@ -267,6 +267,88 @@ class RunnerTests(unittest.TestCase):
         with contextlib.closing(recovery.database(snapshot, True)) as connection:
             self.assertEqual(connection.execute('select value from retained').fetchall(), [('committed only in WAL',)])
 
+    def retained_reset_wal_database(self):
+        source, snapshot = self.root / 'reset.sqlite', self.root / 'reset-copy' / 'retained.sqlite'
+        snapshot.parent.mkdir()
+        with contextlib.closing(sqlite3.connect(source)) as writer:
+            writer.executescript('pragma locking_mode=exclusive;pragma journal_mode=WAL;pragma wal_autocheckpoint=0;'
+                                 'create table retained(id integer primary key,value text);')
+            writer.executemany('insert into retained(value) values(?)', [('first' * 400,)] * 120)
+            writer.commit()
+            self.assertEqual(writer.execute('pragma wal_checkpoint(restart)').fetchone()[0], 0)
+            writer.executemany('insert into retained(value) values(?)', [('second' * 300,)] * 60)
+            writer.commit()
+            self.assertEqual(writer.execute('pragma wal_checkpoint(restart)').fetchone()[0], 0)
+            writer.execute("insert into retained(value) values('current committed value')")
+            writer.commit()
+            self.assertFalse(pathlib.Path(str(source) + '-shm').exists())
+            for suffix in ('', '-wal'):
+                shutil.copyfile(pathlib.Path(str(source) + suffix), pathlib.Path(str(snapshot) + suffix))
+        content = pathlib.Path(str(snapshot) + '-wal').read_bytes()
+        page_size = int.from_bytes(content[8:12], 'big')
+        stride = page_size + 24
+        frames = (len(content) - 32) // stride
+        prefix = next(i for i in range(frames) if content[32+i*stride+8:32+i*stride+16] != content[16:24])
+        self.assertGreater(prefix, 0)
+        self.assertGreater(frames, prefix + 2)
+        self.assertGreater(len({content[32+i*stride+8:32+i*stride+16] for i in range(prefix, frames)}), 1)
+        self.assertGreater(int.from_bytes(content[32+(prefix-1)*stride+4:32+(prefix-1)*stride+8], 'big'), 0)
+        return snapshot, content, page_size, prefix
+
+    def test_closed_sqlite_reset_wal_without_shm_keeps_current_commit_and_evidence(self):
+        snapshot, _, _, _ = self.retained_reset_wal_database()
+        expected = recovery.sqlite_source_identity(snapshot)
+        with contextlib.closing(recovery.database(snapshot, True)) as connection:
+            self.assertEqual(connection.execute('select count(*) from retained').fetchone()[0], 181)
+            self.assertEqual(connection.execute('select value from retained order by id desc limit 1').fetchone()[0],
+                             'current committed value')
+            self.assertEqual(connection.execute('pragma quick_check').fetchone()[0], 'ok')
+        self.assertEqual(recovery.sqlite_source_identity(snapshot), expected)
+        self.assertFalse(pathlib.Path(str(snapshot) + '-shm').exists())
+
+    def test_closed_sqlite_reset_wal_rejects_current_corruption_and_truncation(self):
+        snapshot, original, page_size, prefix = self.retained_reset_wal_database()
+        wal = pathlib.Path(str(snapshot) + '-wal')
+        corrupted = bytearray(original)
+        corrupted[32 + 24 + page_size - 1] ^= 1
+        removed_commit = original[:32+(prefix-1)*(page_size+24)] + original[32+prefix*(page_size+24):]
+        uncommitted = bytearray(original)
+        last = 32 + (prefix - 1) * (page_size + 24)
+        uncommitted[last+4:last+8] = b'\0' * 4
+        seed = original[24:32] if prefix == 1 else original[last-(page_size+24)+16:last-(page_size+24)+24]
+        initial = tuple(int.from_bytes(seed[i:i+4], 'big') for i in (0, 4))
+        order = '>' if int.from_bytes(original[:4], 'big') == 0x377f0683 else '<'
+        checksum = recovery.sqlite_wal_checksum(uncommitted[last+24:last+24+page_size], order,
+                    recovery.sqlite_wal_checksum(uncommitted[last:last+8], order, initial))
+        uncommitted[last+16:last+24] = b''.join(value.to_bytes(4, 'big') for value in checksum)
+        for name, content in [('current-checksum', corrupted), ('truncated', original[:-1]),
+                              ('removed-current-commit', removed_commit), ('uncommitted-prefix', uncommitted)]:
+            with self.subTest(name=name):
+                wal.write_bytes(content)
+                with self.assertRaisesRegex(RuntimeError, 'WAL'):
+                    recovery.database(snapshot, True)
+
+    def test_closed_sqlite_reset_wal_rejects_future_or_returning_generations_and_corrupt_tail(self):
+        snapshot, original, page_size, prefix = self.retained_reset_wal_database()
+        wal = pathlib.Path(str(snapshot) + '-wal')
+        stride = page_size + 24
+        salt1 = int.from_bytes(original[16:20], 'big')
+        first_tail = 32 + prefix * stride
+        samples = {}
+        for name, offset, salts in [
+                ('return-current', len(original)-stride+8, original[16:24]),
+                ('future-generation', first_tail+8, ((salt1+1) & 0xffffffff).to_bytes(4, 'big')+original[first_tail+12:first_tail+16]),
+                ('current-salt-one', first_tail+8, original[16:20]+original[first_tail+12:first_tail+16])]:
+            content = bytearray(original); content[offset:offset+8] = salts; samples[name] = content
+        content = bytearray(original)
+        content[first_tail+stride+24+page_size-1] ^= 1
+        samples['obsolete-checksum'] = content
+        for name, content in samples.items():
+            with self.subTest(name=name):
+                wal.write_bytes(content)
+                with self.assertRaisesRegex(RuntimeError, 'WAL'):
+                    recovery.database(snapshot, True)
+
     def test_closed_uncheckpointed_journal_and_missing_saved_history_fail(self):
         before, live = self.root / 'snapshot', self.root / 'live'
         fixture_database(before / 'workspace.sqlite')
@@ -1842,6 +1924,49 @@ export const close=async()=>{};
         with patch.object(driver, 'write_json', side_effect=OSError('No receipt space')):
             instance.record_failure(RuntimeError('Expected live candidate is not ready.'))
         self.assertFalse(path.exists())
+
+    def test_distinct_rollback_failure_preserves_original_cause_and_rethrows_without_result(self):
+        instance = self.instance()
+        instance.recovery, instance.restore = self.root / 'recovery', self.root / 'restore'
+        instance.recovery_root = self.root
+        instance.data, instance.baseline, instance.target = self.root / 'data', self.root / 'baseline', self.root / 'target'
+        instance.config_files = []
+        instance.release.update(manifestExpiresAt=9999999999999, novaVersion='1.13.0')
+        instance.validate = instance.stage_app = instance.require_stopped = lambda: None
+        instance.stage = lambda value: None
+        actions = []
+        instance.service = lambda action: actions.append(action)
+        original = RuntimeError('Retained SQLite WAL frame identity failed.')
+        rollback = RuntimeError('Retained native plugin policy or effective catalog changed.')
+        instance.switch = lambda path: (_ for _ in ()).throw(original)
+        def fail_restore():
+            raise rollback
+        instance.restore_prior = fail_restore
+        instance.result = lambda outcome: actions.append(outcome)
+        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
+            with self.assertRaises(RuntimeError) as raised:
+                instance.run_validated()
+        self.assertIs(raised.exception, rollback)
+        self.assertIs(raised.exception.__context__, original)
+        self.assertEqual(actions, ['stop'])
+        self.assertTrue(instance.switch_attempted)
+        self.assertEqual(json.loads((self.root / 'failure.json').read_bytes()), {'errorType': 'RuntimeError', 'reason': str(original)})
+        self.assertEqual(json.loads((self.root / 'recovery-failure.json').read_bytes()), {'errorType': 'RuntimeError', 'reason': str(rollback)})
+        self.assertFalse((self.root / 'result.json').exists())
+
+    def test_recovery_failure_receipt_rejects_dynamic_sensitive_reason_and_cannot_mask_error(self):
+        instance = self.instance()
+        original = b'{"original":"preserved bytes"}\n'
+        (self.root / 'failure.json').write_bytes(original)
+        for error in (RuntimeError('Private credential: synthetic-secret'), ValueError('Private command: synthetic-secret')):
+            with patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
+                instance.record_failure(error, recovery_failure=True)
+            self.assertEqual(json.loads((self.root / 'recovery-failure.json').read_bytes()), {'errorType': type(error).__name__, 'reason': 'Recovery failed before acceptance.'})
+            self.assertEqual((self.root / 'failure.json').read_bytes(), original)
+            (self.root / 'recovery-failure.json').unlink()
+        with patch.object(driver, 'write_json', side_effect=OSError('No receipt space')):
+            instance.record_failure(RuntimeError('Expected live candidate is not ready.'), recovery_failure=True)
+        self.assertEqual((self.root / 'failure.json').read_bytes(), original)
 
     @unittest.skipUnless(sys.platform == 'linux' and pathlib.Path('/usr/bin/rsync').exists(), 'Requires Linux rsync/cp metadata support; no host service is used.')
     def test_linux_closed_snapshot_and_independent_restore_preserve_sparse_links_and_xattrs(self):

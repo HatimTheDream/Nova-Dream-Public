@@ -44,6 +44,7 @@ jobs:
                   raise SystemExit(f'Unprotected recovery fixture ancestor: {path}')
           PY
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-derived-state.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-catalog-files.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/workspace-key-reader.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-app-dependencies.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
