@@ -116,6 +116,8 @@ class Rehearsal(Driver):
         self.phase = 'unstarted'
         self.roles = {}
         self.startup_allocations = []
+        self.startup_budgets = []
+        self.startup_budget = None
         self.release_publication_started = False
         self.release_confirmed = False
         self.request_failure_recorded = False
@@ -365,31 +367,98 @@ class Rehearsal(Driver):
             require(digest(self.prior/name) == expected, 'Reviewed prior startup bytes changed.')
         return super().verify_configuration()
 
+    def prepare_startup_budget(self):
+        """Budget only unallocated growth at this exact stopped lifecycle boundary."""
+        self.require_stopped()
+        live = root_identity(self.data)
+        absent = lambda path: not path.exists() and not path.is_symlink()
+        if self.phase == 'capacity-refused':
+            require(live == self.source_root and not self.workspace_mutated
+                    and all(absent(path) for path in (self.original, self.restore, self.trial, self.recovery)),
+                    'Unchanged startup must precede every snapshot or workspace replacement.')
+            basis = 'unchanged-original-no-copy-planned'
+        elif self.phase == 'trial-start-intent':
+            require(live == self.trial_root and root_identity(self.original) == self.source_root
+                    and absent(self.restore) and absent(self.trial) and (self.recovery / 'snapshot-manifest.json').is_file(),
+                    'Trial startup requires the allocated verified snapshot, trial and preserved original.')
+            basis = 'verified-trial-and-preserved-original-already-allocated'
+        elif self.phase in {'return-original-complete', 'returned-original-retention-verified'}:
+            require(live == self.source_root and root_identity(self.trial) == self.trial_root
+                    and absent(self.original) and absent(self.restore) and (self.recovery / 'snapshot-manifest.json').is_file(),
+                    'Returned startup requires the allocated verified snapshot and retained trial.')
+            basis = 'returned-original-and-retained-trial-already-allocated'
+        else:
+            raise RuntimeError('No reviewed allocation phase permits this startup.')
+        # These three maintained paths allocate no further full workspace copy.
+        # Existing copies are already reflected in actual free bytes. The two
+        # established allowances remain reserved for verification/operation.
+        allocated = allocated_metadata(self.data)
+        free = shutil.disk_usage(self.recovery_root).free
+        floor = RESERVE + 2 * ALLOWANCE
+        self.require_stopped()
+        require(root_identity(self.data) == live, 'Stopped startup workspace changed during allocation review.')
+        attempt = getattr(self, 'startup_attempt', 0) + 1
+        record = {'format': 1, 'kind': 'operator-startup-capacity-budget', 'leaseId': self.job_id,
+                  'candidateId': self.prior_id, 'workspaceEpoch': self.expected_prior['workspaceEpoch'],
+                  'attempt': attempt, 'phase': self.phase, 'sourceRootIdentity': live,
+                  'observedAtSeconds': time.time_ns() // 1_000_000_000,
+                  'closedAllocatedBytes': allocated, 'freeBytesBeforeStart': free,
+                  'remainingCopyBytes': 0, 'copyAccounting': basis,
+                  'reserveBytes': RESERVE, 'allowanceBytes': 2 * ALLOWANCE,
+                  'minimumFreeBytes': floor, 'startupGrowthBudgetBytes': max(0, free - floor),
+                  'permitted': free > floor}
+        path = self.output / ('startup-' + str(attempt) + '-capacity.json')
+        write_json(path, record)  # Exclusive: refused or uncertain attempts cannot be rebudgeted.
+        self.startup_budgets.append({**record, 'receiptSha256': digest(path)})
+        require(record['permitted'], 'Actual stopped free space cannot preserve the startup operating reserve.')
+        self.startup_budget = self.startup_budgets[-1]
+
     def service(self, action):
         if action == 'start':
             self.controller_hold(); self.verify_configuration()
             loaded_workspace_guard(self.settings['serviceName'], self.data)
             require(root_identity(self.data) in (self.source_root, getattr(self, 'trial_root', None)),
                     'Refuse to start an unknown workspace role.')
-            require(shutil.disk_usage(self.recovery_root).free >= RESERVE + 2 * ALLOWANCE + self.startup_growth,
-                    'Startup growth must fit independently of the operating reserve.')
+            self.prepare_startup_budget()
         return super().service(action)
 
     def wait_acceptance(self, expected, version, *, restored_prior=False):
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             if self.launched is not None:
+                budget = self.startup_budget
+                require(budget is not None and budget['attempt'] == self.launched['attempt'],
+                        'Startup allocation requires this exact immutable stopped budget.')
                 allocated = allocated_metadata(self.data)
                 observation = {'attempt': self.launched['attempt'], 'allocatedBytes': allocated,
-                               'growthBytes': max(0, allocated - self.closed_allocated),
+                               'growthBytes': max(0, allocated - budget['closedAllocatedBytes']),
                                'freeBytes': shutil.disk_usage(self.recovery_root).free}
                 self.startup_allocations.append(observation)
                 require(len(self.startup_allocations) <= 1200, 'Startup observation exceeded its bounded history.')
-                if observation['growthBytes'] > self.startup_growth or observation['freeBytes'] < RESERVE + 2 * ALLOWANCE:
+                growth_exceeded = observation['growthBytes'] > budget['startupGrowthBudgetBytes']
+                reserve_exceeded = observation['freeBytes'] < budget['minimumFreeBytes']
+                if growth_exceeded or reserve_exceeded:
                     # Only this exact reviewed startup can be stopped without
                     # ordinary readiness; unknown running work remains held.
-                    self.qualify_started_barrier(self.prior, expected, version)
-                    self.service('stop'); self.require_stopped()
+                    # Retain the live observation before stop changes WAL and
+                    # temporary allocations. Diagnostic failure must not prevent
+                    # the existing independently qualified protective stop.
+                    try:
+                        write_json(self.output / ('startup-' + str(self.launched['attempt']) + '-capacity-refusal.json'),
+                                   {'format': 1, 'kind': 'operator-startup-capacity-refusal', 'leaseId': self.job_id,
+                                    'candidateId': expected, 'workspaceEpoch': self.expected_prior['workspaceEpoch'],
+                                    'observedAtSeconds': time.time_ns() // 1_000_000_000,
+                                    **observation, 'closedAllocatedBytes': budget['closedAllocatedBytes'],
+                                    'startupGrowthBudgetBytes': budget['startupGrowthBudgetBytes'],
+                                    'capacityReceiptSha256': budget['receiptSha256'],
+                                    'minimumFreeBytes': budget['minimumFreeBytes'],
+                                    'growthLimitExceeded': growth_exceeded, 'reserveLimitExceeded': reserve_exceeded,
+                                    'reason': 'growth_and_reserve_limits' if growth_exceeded and reserve_exceeded else
+                                              'growth_limit' if growth_exceeded else 'reserve_limit',
+                                    'observedBeforeStop': True, 'stopConfirmed': False})
+                    finally:
+                        self.qualify_started_barrier(self.prior, expected, version)
+                        self.service('stop'); self.require_stopped()
                     raise RuntimeError('Observed startup growth exceeded its reviewed allowance; the original and evidence remain held.')
             try:
                 accepted = self.acceptance(expected, version, restored_prior=restored_prior)
@@ -427,8 +496,8 @@ class Rehearsal(Driver):
                     'workspaceMutationAttempted': self.workspace_mutated, 'nodeSha256': self.runtime_node_hash,
                     'sourceCandidateId': self.prior_id, 'heldRunningAllocatedBytes': self.held_allocated,
                     'closedAllocatedBytes': self.closed_allocated, 'startupGrowthAllowanceBytes': self.startup_growth,
-                    'startupAllocationObservations': self.startup_allocations,
-                    'startupGrowthDisclosure': 'Allowance estimates observed held-to-closed allocation plus 128 MiB; observations sample actual restarts, not an absolute future bound.'}
+                    'startupAllocationObservations': self.startup_allocations, 'startupCapacityBudgets': self.startup_budgets,
+                    'startupGrowthDisclosure': 'Initial fit estimates held-to-closed growth plus 128 MiB. Each actual restart uses its own stopped allocation and free-space budget, preserving the reserve and two allowances; observed samples are not an absolute future bound.'}
         if outcome == 'rehearsed':
             evidence['snapshotManifestSha256'] = digest(self.recovery / 'snapshot-manifest.json')
         else:

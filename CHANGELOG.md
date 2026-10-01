@@ -1,3 +1,11 @@
+## [2.0.11] — 2026-10-01
+
+- Waits for the launched process to execute the reviewed application before recording startup identity, covering the Linux service fork/exec boundary.
+- Keeps the first process identity fixed and rejects replacement processes, unexpected restarts, wrong executable or workspace bindings, and observation timeouts.
+- Adds real Linux process-transition coverage while preserving the separate readiness, stopped-state and saved-work checks.
+- Budgets each recovery-rehearsal startup from its actual stopped allocation and available space, preserving recovery copies and the operating reserve instead of reusing an earlier runtime-size estimate.
+- Records the exact storage limit and measured values before a protective stop; a recording failure still allows the independently qualified stop.
+
 ## [2.0.10] — 2026-10-01
 
 - Waits for a newly observed idle heartbeat before the single recovery-maintenance request, avoiding the mismatch between idle heartbeat cadence and admission freshness.

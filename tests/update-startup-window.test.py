@@ -48,6 +48,8 @@ class StartupWindowTests(unittest.TestCase):
         self.instance.active_engine = '2026.9.6'
         self.process = {'pid': 1234, 'startTicks': 1000000}
         self.instance.startup_process_identity = lambda: dict(self.process)
+        self.invocation = 'a' * 32
+        self.instance.startup_process_binding = lambda **kwargs: {'process': dict(self.process), 'invocationId': self.invocation}
         self.instance.controller_hold = lambda: None
         self.instance.acceptance = lambda *args, **kwargs: dict(self.instance.before)
         self.running = False

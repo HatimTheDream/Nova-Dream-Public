@@ -41,6 +41,7 @@ MAXIMUM = 128 * 1024 ** 2
 RUNTIME_MAXIMUM = 512 * 1024 ** 2
 RUNTIME_EXPANDED_MAXIMUM = 2 * 1024 ** 3
 SERVICE_ACTION_TIMEOUT_SECONDS = 120
+STARTUP_EXEC_TIMEOUT_SECONDS = 30
 NATIVE_MIGRATION = r'''
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -929,19 +930,96 @@ class Driver:
                        {'format': 1, 'jobId': self.job_id, **self.launched})
         subprocess.run(['/usr/bin/systemctl', action, self.settings['serviceName']], check=True, timeout=SERVICE_ACTION_TIMEOUT_SECONDS)
         if action == 'start':
-            process = self.startup_process_identity()
-            require(process['startTicks'] >= self.launched['notBeforeTicks'], 'The process predates this guarded startup.')
-            record = {**self.launched, 'process': process}
+            process = self.wait_startup_exec(selected)
+            record = {**self.launched, 'process': process, 'processObservedAtSeconds': time.time_ns() // 1_000_000_000}
             path = self.output / ('startup-' + str(record['attempt']) + '-process.json')
             write_json(path, {'format': 1, 'jobId': self.job_id, **record})
             self.launched = {**record, 'processReceiptSha256': digest(path)}
+
+    def startup_observation_timeout(self):
+        deadline = getattr(self, '_startup_exec_deadline', None)
+        if deadline is None:
+            return 10
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, 'Startup exec observation exceeded its bound.')
+        return min(10, remaining)
+
+    def startup_process_binding(self, *, allow_missing=False):
+        """Bind the forked process before Type=simple has necessarily exec'd."""
+        command = ['/usr/bin/systemctl', 'show', self.settings['serviceName'],
+                   '--property=MainPID,NRestarts,InvocationID']
+        def state():
+            value = subprocess.check_output(command, text=True, timeout=self.startup_observation_timeout())
+            require(len(value) <= 4096, 'Startup service identity exceeded its bound.')
+            fields = dict(line.split('=', 1) for line in value.splitlines() if '=' in line)
+            require(fields.get('NRestarts') == '0', 'The guarded startup restarted before acceptance.')
+            return fields
+        before = state()
+        pid = before.get('MainPID', '')
+        require(pid.isdigit() and (int(pid) > 1 or (allow_missing and pid == '0')),
+                'The exact startup process is not running.')
+        if pid == '0':
+            return None
+        require(re.fullmatch(r'[0-9a-f]{32}', before.get('InvocationID', '')) is not None,
+                'The guarded startup invocation is missing.')
+        def ticks():
+            with (pathlib.Path('/proc') / pid / 'stat').open('rb') as stream:
+                value = stream.read(4097)
+            require(len(value) <= 4096, 'Startup process evidence exceeded its bound.')
+            fields = value[value.rfind(b')') + 2:].split()
+            require(len(fields) > 19, 'Invalid startup process identity.')
+            return int(fields[19])
+        started = ticks()
+        require(state() == before and ticks() == started, 'Startup process changed during its initial binding.')
+        return {'process': {'pid': int(pid), 'startTicks': started}, 'invocationId': before['InvocationID']}
+
+    def wait_startup_exec(self, selected):
+        # A simple service reports start after fork, before exec/cwd setup. Only
+        # the first actual process may cross that boundary; this never restarts
+        # the service or adopts a replacement process after an unsuccessful exec.
+        self._startup_exec_deadline = time.monotonic() + STARTUP_EXEC_TIMEOUT_SECONDS
+        try:
+            binding = None
+            while binding is None:
+                self.startup_observation_timeout()
+                require(self.current.resolve(strict=True) == selected, 'The selected startup application changed before exec.')
+                binding = self.startup_process_binding(allow_missing=True)
+                self.startup_observation_timeout()
+                if binding is None:
+                    time.sleep(min(0.1, self.startup_observation_timeout()))
+            require(binding['process']['startTicks'] >= self.launched['notBeforeTicks'], 'The process predates this guarded startup.')
+            started_path = self.output / ('startup-' + str(self.launched['attempt']) + '-started.json')
+            observed = {'format': 1, 'jobId': self.job_id, 'attempt': self.launched['attempt'], **binding,
+                        'observedAtSeconds': time.time_ns() // 1_000_000_000, 'startedReceiptSha256': digest(started_path)}
+            path = self.output / ('startup-' + str(self.launched['attempt']) + '-fork-observed.json')
+            write_json(path, observed)
+            self.launched = {**self.launched, 'processBinding': binding, 'bindingReceiptSha256': digest(path)}
+            while True:
+                self.startup_observation_timeout()
+                require(self.current.resolve(strict=True) == selected, 'The selected startup application changed before exec.')
+                require(self.startup_process_binding() == binding, 'The guarded startup process or invocation changed before exec.')
+                try:
+                    process = self.startup_process_identity()
+                except (RuntimeError, OSError, subprocess.SubprocessError):
+                    self.startup_observation_timeout()
+                    require(self.startup_process_binding() == binding, 'The guarded startup process or invocation changed before exec.')
+                    time.sleep(min(0.1, self.startup_observation_timeout()))
+                    continue
+                self.startup_observation_timeout()
+                require(process == binding['process'] and self.startup_process_binding() == binding,
+                        'The guarded startup process or invocation changed before exec.')
+                require(self.current.resolve(strict=True) == selected, 'The selected startup application changed before exec.')
+                self.startup_observation_timeout()
+                return process
+        finally:
+            del self._startup_exec_deadline
 
     def startup_process_identity(self):
         """Observe the exact service process without disclosing its environment."""
         selected = self.current.resolve(strict=True)
         require(selected in {self.prior, self.target}, 'Startup process selected an unexpected application.')
         command = ['/usr/bin/systemctl', 'show', self.settings['serviceName'], '--property=MainPID', '--value']
-        pid = subprocess.check_output(command, text=True, timeout=10).strip()
+        pid = subprocess.check_output(command, text=True, timeout=self.startup_observation_timeout()).strip()
         require(pid.isdigit() and int(pid) > 1, 'The exact startup process is not running.')
         process = pathlib.Path('/proc') / pid
         def bounded(name, maximum):
@@ -961,7 +1039,7 @@ class Driver:
         require([item for item in environment if item.startswith(b'E3_UPDATE_SOCKET=')] == [b'E3_UPDATE_SOCKET=' + SOCKET.encode()]
                 and [item for item in environment if item.startswith(b'E3_DATA_DIR=')] == [b'E3_DATA_DIR=' + str(self.data).encode()],
                 'The startup process is not bound to this controller and workspace.')
-        require(ticks() == started and subprocess.check_output(command, text=True, timeout=10).strip() == pid
+        require(ticks() == started and subprocess.check_output(command, text=True, timeout=self.startup_observation_timeout()).strip() == pid
                 and self.current.resolve(strict=True) == selected, 'Startup process identity changed during observation.')
         return {'pid': int(pid), 'startTicks': started}
 
@@ -976,6 +1054,7 @@ class Driver:
             require(0 <= ready - self.launched['startedAtSeconds'] <= MAX_STARTUP_WINDOW_SECONDS, 'Startup clock window is outside the reviewed bound.')
             require('process' in self.launched and self.startup_process_identity() == self.launched['process'],
                     'The ready process differs from this guarded startup.')
+            require(self.startup_process_binding() == self.launched['processBinding'], 'The ready startup invocation changed.')
             self.started_process_record()
             record = {**self.launched, 'readyAtSeconds': ready}
             write_json(self.output / ('startup-' + str(record['attempt']) + '-ready.json'),
@@ -991,6 +1070,13 @@ class Driver:
                   if key not in {'readyAtSeconds', 'processReceiptSha256'}}}
         require(read_json(path) == record and digest(path) == launch['processReceiptSha256'],
                 'Recorded startup process changed.')
+        binding_path = self.output / ('startup-' + str(launch['attempt']) + '-fork-observed.json')
+        binding = read_json(binding_path)
+        require(digest(binding_path) == launch['bindingReceiptSha256']
+                and binding['process'] == launch['process'] == launch['processBinding']['process']
+                and binding['invocationId'] == launch['processBinding']['invocationId']
+                and binding['startedReceiptSha256'] == digest(self.output / ('startup-' + str(launch['attempt']) + '-started.json')),
+                'Recorded initial startup binding changed.')
 
     def ready_startup_record(self):
         launch = self.launched
@@ -1024,6 +1110,7 @@ class Driver:
                     'The startup window cannot fit its bounded stop; retain this process for review.')
             require(self.ready_startup_record() == (ready, ready_hash)
                     and self.startup_process_identity() == ready['process'], 'The held startup process or receipt changed before stop.')
+            require(self.startup_process_binding() == ready['processBinding'], 'The held startup invocation changed before stop.')
             self.controller_hold()
         admitted()
         version = self.release['novaVersion'] if ready['candidateId'] == self.target_id else self.release['compatibility']['fromNovaVersion']

@@ -130,6 +130,7 @@ class StartupLifecycleTests(unittest.TestCase):
 
             instance.acceptance = acceptance
             instance.startup_process_identity = process_identity
+            instance.startup_process_binding = lambda **kwargs: {'process': process_identity(), 'invocationId': format(state.starts, '032x')}
             instance.require_stopped = stopped
             instance.controller_hold = hold
             instance.verify_configuration = lambda: state.events.append('configuration')

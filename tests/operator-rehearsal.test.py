@@ -217,6 +217,145 @@ class RehearsalTests(unittest.TestCase):
         self.assertFalse(instance.recovery.exists())
         self.assertFalse(instance.workspace_mutated)
 
+    def startup_guard_fixture(self, allocated, free):
+        instance = self.fixture(); instance.output.mkdir()
+        instance.launched = {'attempt': 2}
+        instance.closed_allocated = 4096; instance.startup_growth = 8192
+        instance.startup_budget = {'attempt': 2, 'closedAllocatedBytes': 4096, 'startupGrowthBudgetBytes': 8192,
+                                   'minimumFreeBytes': operator.RESERVE + 2 * operator.ALLOWANCE, 'receiptSha256': 'c'*64}
+        self.fake('allocated_metadata', lambda path: allocated)
+        self.stack.enter_context(patch.object(operator.shutil, 'disk_usage', lambda path: types.SimpleNamespace(free=free)))
+        instance.qualify_started_barrier = lambda *args: self.events.append('qualified-startup')
+        instance.acceptance = lambda *args, **kwargs: dict(self.healthy)
+        instance.startup_ready = lambda *args: self.events.append('startup-ready')
+        return instance
+
+    def test_startup_refusal_records_each_actual_predicate_before_stop_changes_allocation(self):
+        minimum = operator.RESERVE + 2 * operator.ALLOWANCE
+        for allocated, free, reason in ((12289, minimum, 'growth_limit'),
+                                       (12288, minimum - 1, 'reserve_limit'),
+                                       (12289, minimum - 1, 'growth_and_reserve_limits')):
+            with self.subTest(reason=reason), contextlib.ExitStack() as local:
+                case = RehearsalTests('runTest'); case.setUp(); local.callback(case.doCleanups)
+                instance = case.startup_guard_fixture(allocated, free)
+                path = instance.output/'startup-2-capacity-refusal.json'
+                def stop(action):
+                    self.assertEqual(action, 'stop')
+                    value = json.loads(path.read_text())
+                    self.assertEqual((value['allocatedBytes'], value['freeBytes'], value['reason']), (allocated, free, reason))
+                    self.assertTrue(value['observedBeforeStop']); self.assertFalse(value['stopConfirmed'])
+                    self.assertLess(len(path.read_bytes()), 2048)
+                    case.events.append('service:stop')
+                instance.service = stop
+                with self.assertRaisesRegex(RuntimeError, 'Observed startup growth'):
+                    operator.Rehearsal.wait_acceptance(instance, instance.prior_id, '2.0.2')
+                value = json.loads(path.read_text())
+                self.assertEqual(value['growthLimitExceeded'], allocated > 12288)
+                self.assertEqual(value['reserveLimitExceeded'], free < minimum)
+                self.assertLess(case.events.index('qualified-startup'), case.events.index('service:stop'))
+                self.assertEqual(case.events.count('service:stop'), 1)
+
+    def test_startup_refusal_diagnostic_failure_does_not_skip_protective_stop(self):
+        instance = self.startup_guard_fixture(12289, operator.RESERVE + 2 * operator.ALLOWANCE)
+        self.fake('write_json', lambda *args: (_ for _ in ()).throw(OSError('diagnostic unavailable')))
+        with self.assertRaisesRegex(OSError, 'diagnostic unavailable'):
+            operator.Rehearsal.wait_acceptance(instance, instance.prior_id, '2.0.2')
+        self.assertEqual(self.events.count('service:stop'), 1)
+        self.assertLess(self.events.index('qualified-startup'), self.events.index('service:stop'))
+        self.assertIn('closed', self.events)
+
+    def test_startup_refusal_preserves_existing_observation_and_keeps_exact_boundaries(self):
+        instance = self.startup_guard_fixture(12289, operator.RESERVE + 2 * operator.ALLOWANCE)
+        path = instance.output/'startup-2-capacity-refusal.json'; path.write_bytes(b'previous observation')
+        with self.assertRaises(FileExistsError):
+            operator.Rehearsal.wait_acceptance(instance, instance.prior_id, '2.0.2')
+        self.assertEqual(path.read_bytes(), b'previous observation')
+        self.assertEqual(self.events.count('service:stop'), 1)
+        with contextlib.ExitStack() as local:
+            case = RehearsalTests('runTest'); case.setUp(); local.callback(case.doCleanups)
+            exact = case.startup_guard_fixture(12288, operator.RESERVE + 2 * operator.ALLOWANCE)
+            self.assertEqual(operator.Rehearsal.wait_acceptance(exact, exact.prior_id, '2.0.2')['epoch'], exact.expected_prior['workspaceEpoch'])
+            self.assertFalse((exact.output/'startup-2-capacity-refusal.json').exists())
+            self.assertNotIn('service:stop', case.events)
+
+    def budget_fixture(self, phase, free, allocated=4096):
+        instance = self.fixture(); instance.output.mkdir()
+        instance.source_root = operator.root_identity(instance.data)
+        instance.closed_allocated = 1000; instance.startup_growth = 2000
+        instance.phase = phase
+        if phase != 'capacity-refused':
+            instance.recovery.mkdir()
+            exclusive_json(instance.recovery/'snapshot-manifest.json', portable_inventory(instance.data)[0])
+            if phase == 'trial-start-intent':
+                os.rename(instance.data, instance.original)
+                shutil.copytree(instance.original, instance.data)
+                instance.trial_root = operator.root_identity(instance.data)
+            else:
+                shutil.copytree(instance.data, instance.trial)
+                instance.trial_root = operator.root_identity(instance.trial)
+        self.fake('allocated_metadata', lambda path: allocated)
+        self.stack.enter_context(patch.object(operator.shutil, 'disk_usage', lambda path: types.SimpleNamespace(free=free)))
+        return instance
+
+    def test_each_stopped_lifecycle_budgets_only_actual_remaining_free_space(self):
+        floor = operator.RESERVE + 2 * operator.ALLOWANCE
+        for phase in ('capacity-refused','trial-start-intent','return-original-complete','returned-original-retention-verified'):
+            with self.subTest(phase=phase), contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.budget_fixture(phase, floor+10000)
+                instance.prepare_startup_budget()
+                budget=json.loads((instance.output/'startup-1-capacity.json').read_text())
+                self.assertEqual(budget['startupGrowthBudgetBytes'],10000)
+                self.assertEqual(budget['closedAllocatedBytes'],4096)
+                self.assertEqual(budget['remainingCopyBytes'],0)
+                self.assertEqual(budget['minimumFreeBytes'],floor)
+                self.assertTrue(budget['permitted'])
+                self.assertEqual(instance.closed_allocated,1000)
+                self.assertEqual(instance.startup_growth,2000)
+                self.assertNotIn('service:start',case.events)
+
+    def test_later_start_has_fresh_baseline_and_does_not_reuse_consumed_space(self):
+        floor=operator.RESERVE+2*operator.ALLOWANCE
+        instance=self.budget_fixture('return-original-complete',floor+10000)
+        instance.prepare_startup_budget();first=dict(instance.startup_budget)
+        instance.startup_attempt=1;instance.phase='returned-original-retention-verified'
+        self.fake('allocated_metadata',lambda path:9000)
+        self.stack.enter_context(patch.object(operator.shutil,'disk_usage',lambda path:types.SimpleNamespace(free=floor+4000)))
+        instance.prepare_startup_budget()
+        self.assertEqual(instance.startup_budget['closedAllocatedBytes'],9000)
+        self.assertEqual(instance.startup_budget['startupGrowthBudgetBytes'],4000)
+        self.assertEqual(first['startupGrowthBudgetBytes'],10000)
+        self.assertEqual(len(instance.startup_budgets),2)
+
+    def test_low_space_refusal_is_durable_and_cannot_rebudget_same_attempt(self):
+        floor=operator.RESERVE+2*operator.ALLOWANCE
+        instance=self.budget_fixture('capacity-refused',floor)
+        with self.assertRaisesRegex(RuntimeError,'Actual stopped free'):
+            instance.prepare_startup_budget()
+        path=instance.output/'startup-1-capacity.json';before=path.read_bytes()
+        self.assertFalse(json.loads(before)['permitted'])
+        self.stack.enter_context(patch.object(operator.shutil,'disk_usage',lambda path:types.SimpleNamespace(free=floor+10000)))
+        with self.assertRaises(FileExistsError):instance.prepare_startup_budget()
+        self.assertEqual(path.read_bytes(),before);self.assertIsNone(instance.startup_budget)
+        self.assertNotIn('service:start',self.events)
+
+    def test_unknown_phase_or_missing_allocated_fallback_refuses_before_budget(self):
+        floor=operator.RESERVE+2*operator.ALLOWANCE
+        instance=self.budget_fixture('return-original-complete',floor+10000)
+        shutil.rmtree(instance.trial)
+        with self.assertRaises((RuntimeError,FileNotFoundError)):instance.prepare_startup_budget()
+        self.assertFalse((instance.output/'startup-1-capacity.json').exists())
+        instance.phase='snapshot-verified'
+        with self.assertRaisesRegex(RuntimeError,'No reviewed allocation phase'):instance.prepare_startup_budget()
+
+    def test_initial_growth_estimate_is_not_reused_as_restart_cap(self):
+        instance=self.startup_guard_fixture(12288,operator.RESERVE+2*operator.ALLOWANCE)
+        instance.closed_allocated=1;instance.startup_growth=1
+        accepted=operator.Rehearsal.wait_acceptance(instance,instance.prior_id,'2.0.2')
+        self.assertEqual(accepted['epoch'],instance.expected_prior['workspaceEpoch'])
+        self.assertNotIn('service:stop',self.events)
+        self.assertEqual(instance.startup_allocations[-1]['growthBytes'],8192)
+
     def test_trial_retention_failure_keeps_original_trial_snapshot_and_lease(self):
         instance = self.fixture()
         instance.retained_native = lambda: (_ for _ in ()).throw(RuntimeError('native comparison failed'))
