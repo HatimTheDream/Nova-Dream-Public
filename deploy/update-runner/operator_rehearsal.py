@@ -453,7 +453,7 @@ class Rehearsal(Driver):
                 self.record('trial-start-intent'); self.service('start')
                 self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)
                 self.mark('checking'); self.record('trial-ready')
-                self.guarded_stop(restored_prior=True); self.require_stopped()
+                self.stop_for_retention(restored_prior=True); self.require_stopped()
                 saved_state(self.recovery / 'workspace', self.data, restored=True); self.retained_native(); self.verify_configuration()
                 require(inventory(self.original)[0] == read_json(self.recovery / 'snapshot-manifest.json', 64*1024**2),
                         'The preserved original changed while the trial ran.')
@@ -463,7 +463,7 @@ class Rehearsal(Driver):
                 require(inventory(self.data)[0] == read_json(self.recovery / 'snapshot-manifest.json', 64*1024**2),
                         'The returned original is not the preserved source.')
                 self.service('start'); self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)
-                self.guarded_stop(restored_prior=True); self.require_stopped()
+                self.stop_for_retention(restored_prior=True); self.require_stopped()
                 saved_state(self.recovery / 'workspace', self.data, restored=True); self.retained_native(); self.verify_configuration()
                 self.record('returned-original-retention-verified')
                 self.service('start')

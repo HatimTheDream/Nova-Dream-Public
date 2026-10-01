@@ -24,6 +24,7 @@ jobs:
           python3 -B tests/update-closed-readers.test.py -v
           python3 -B tests/update-log-retention.test.py -v
           python3 -B tests/update-startup-window.test.py -v
+          python3 -B tests/update-startup-lifecycle.test.py -v
           python3 -B tests/update-log-retention-integration.test.py -v
           NODE_BINARY="$(command -v node)"
           python3 -B tests/update-app-archive.test.py -v

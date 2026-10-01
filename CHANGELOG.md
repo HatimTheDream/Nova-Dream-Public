@@ -1,3 +1,9 @@
+## [2.0.9] — 2026-10-01
+
+- Verifies native startup changes through an authenticated fully stopped process boundary, preserving first-readiness evidence and strict saved-work checks.
+- Uses the same lifecycle verification for installation, rollback and recovery rehearsal; unexpected restarts, failed shutdowns and altered receipts cannot become successful acceptance.
+- Adds delayed native-cleanup regression coverage with real SQLite data and documents the separate storage requirements for normal installation and full recovery rehearsal.
+
 ## [2.0.8] — 2026-10-01
 
 - Recognizes valid SQLite WAL resets during saved-work verification while retaining checksum, commit, truncation and generation checks.

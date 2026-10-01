@@ -1139,7 +1139,7 @@ class RunnerTests(unittest.TestCase):
                     stopped();calls.append(name)
                 instance.wait_acceptance = ready
                 instance.controller_hold = lambda: calls.append('hold')
-                instance.guarded_stop, instance.require_stopped = stop, stopped
+                instance.stop_for_retention, instance.require_stopped = stop, stopped
                 instance.retained_native = lambda: check('native')
                 instance.verify_configuration = lambda: calls.append('configuration')
                 def start(action):
@@ -1187,7 +1187,7 @@ class RunnerTests(unittest.TestCase):
                 instance.wait_acceptance = ready
                 def stop(**kwargs):
                     ready();service('stop');stopped()
-                instance.guarded_stop = stop
+                instance.stop_for_retention = stop
                 def saved(*args, **kwargs):
                     stopped()
                     if instance.switched and failure == 'saved':raise RuntimeError('saved content changed')

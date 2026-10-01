@@ -96,6 +96,7 @@ class RehearsalTests(unittest.TestCase):
         instance.service = lambda action: events.append('service:'+action)
         instance.require_stopped = lambda: events.append('closed')
         instance.guarded_stop = lambda **kw: events.append('guarded-stop')
+        instance.stop_for_retention = lambda **kw: events.append('close-startup')
         instance.verify_configuration = lambda: events.append('config-verified')
         instance.retained_native = lambda: events.append('native-retention-verified')
         instance.wait_acceptance = lambda *args, **kw: (events.append('held-acceptance'),dict(self.healthy))[-1]
@@ -137,6 +138,8 @@ class RehearsalTests(unittest.TestCase):
         self.assertTrue((instance.baseline/'workspace/owner-record').exists())
         self.assertFalse(instance.trial.exists())
         self.assertEqual(self.events.count('service:start'),3)
+        self.assertEqual(self.events.count('close-startup'),2)
+        self.assertEqual(self.events.count('guarded-stop'),0)
         self.assertLess(self.events.index('proof:rehearsed'), self.events.index('operator:status'))
         self.assertEqual(self.key, bytearray(32))
         phases = [json.loads(p.read_text())['phase'] for p in sorted(instance.output.glob('phase-*.json'))]

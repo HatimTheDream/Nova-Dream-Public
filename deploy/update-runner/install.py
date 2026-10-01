@@ -32,6 +32,7 @@ from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest,
                       verification_scratch)
 import app_dependencies
 from workspace_key import read_workspace_key
+from codex_log_retention import MAX_STARTUP_WINDOW_SECONDS
 
 SOCKET = '/run/nova-update/control.sock'
 ENGINE = '2026.9.2'
@@ -39,6 +40,7 @@ ENGINES = {'2026.9.2', '2026.9.6'}
 MAXIMUM = 128 * 1024 ** 2
 RUNTIME_MAXIMUM = 512 * 1024 ** 2
 RUNTIME_EXPANDED_MAXIMUM = 2 * 1024 ** 3
+SERVICE_ACTION_TIMEOUT_SECONDS = 120
 NATIVE_MIGRATION = r'''
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -283,6 +285,7 @@ class Driver:
         self.stdout_open = True
         self.before = None
         self.launched = None
+        self.closed_startup = None
         self.runtime = None
         self.active_engine = None
         self.application_dependencies = None
@@ -916,41 +919,142 @@ class Driver:
                         'Refuse to start a mixed engine and Node pair.')
             require(self.before is not None and isinstance(self.before.get('epoch'), str), 'Startup requires the accepted workspace epoch.')
             self.startup_attempt = getattr(self, 'startup_attempt', 0) + 1
+            self.closed_startup = None
             self.launched = {'candidateId': self.target_id if selected == self.target else self.prior_id,
                              'agentVersion': self.active_engine, 'epoch': self.before['epoch'], 'attempt': self.startup_attempt,
+                             'service': self.settings['serviceName'],
                              'startedAtSeconds': time.time_ns() // 1_000_000_000,
                              'notBeforeTicks': int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))}
             write_json(self.output / ('startup-' + str(self.startup_attempt) + '-started.json'),
                        {'format': 1, 'jobId': self.job_id, **self.launched})
-        subprocess.run(['/usr/bin/systemctl', action, self.settings['serviceName']], check=True, timeout=120)
+        subprocess.run(['/usr/bin/systemctl', action, self.settings['serviceName']], check=True, timeout=SERVICE_ACTION_TIMEOUT_SECONDS)
+        if action == 'start':
+            process = self.startup_process_identity()
+            require(process['startTicks'] >= self.launched['notBeforeTicks'], 'The process predates this guarded startup.')
+            record = {**self.launched, 'process': process}
+            path = self.output / ('startup-' + str(record['attempt']) + '-process.json')
+            write_json(path, {'format': 1, 'jobId': self.job_id, **record})
+            self.launched = {**record, 'processReceiptSha256': digest(path)}
+
+    def startup_process_identity(self):
+        """Observe the exact service process without disclosing its environment."""
+        selected = self.current.resolve(strict=True)
+        require(selected in {self.prior, self.target}, 'Startup process selected an unexpected application.')
+        command = ['/usr/bin/systemctl', 'show', self.settings['serviceName'], '--property=MainPID', '--value']
+        pid = subprocess.check_output(command, text=True, timeout=10).strip()
+        require(pid.isdigit() and int(pid) > 1, 'The exact startup process is not running.')
+        process = pathlib.Path('/proc') / pid
+        def bounded(name, maximum):
+            with (process / name).open('rb') as stream:
+                value = stream.read(maximum + 1)
+            require(len(value) <= maximum, 'Startup process evidence exceeded its bound.')
+            return value
+        def ticks():
+            value = bounded('stat', 4096)
+            fields = value[value.rfind(b')') + 2:].split()
+            require(len(fields) > 19, 'Invalid startup process identity.')
+            return int(fields[19])
+        started = ticks()
+        require((process / 'exe').resolve(strict=True) == self.node and (process / 'cwd').resolve(strict=True) == selected,
+                'The startup process is not the reviewed application and Node pair.')
+        environment = bounded('environ', 256 * 1024).split(b'\0')
+        require([item for item in environment if item.startswith(b'E3_UPDATE_SOCKET=')] == [b'E3_UPDATE_SOCKET=' + SOCKET.encode()]
+                and [item for item in environment if item.startswith(b'E3_DATA_DIR=')] == [b'E3_DATA_DIR=' + str(self.data).encode()],
+                'The startup process is not bound to this controller and workspace.')
+        require(ticks() == started and subprocess.check_output(command, text=True, timeout=10).strip() == pid
+                and self.current.resolve(strict=True) == selected, 'Startup process identity changed during observation.')
+        return {'pid': int(pid), 'startTicks': started}
 
     def startup_ready(self, expected, epoch):
-        """Bind log maintenance to this actual start and first verified readiness."""
+        """Preserve first readiness; it is not native initialization completion."""
         if self.launched is None or 'startedAtSeconds' not in self.launched:
             return  # Pre-update acceptance has no installer-owned startup.
         require(self.launched['candidateId'] == expected and self.launched['agentVersion'] == self.active_engine
                 and self.launched['epoch'] == epoch, 'Startup readiness belongs to a different application, engine or workspace.')
         if 'readyAtSeconds' not in self.launched:
             ready = (time.time_ns() + 999_999_999) // 1_000_000_000
-            require(0 <= ready - self.launched['startedAtSeconds'] <= 3600, 'Startup clock window is outside the reviewed bound.')
+            require(0 <= ready - self.launched['startedAtSeconds'] <= MAX_STARTUP_WINDOW_SECONDS, 'Startup clock window is outside the reviewed bound.')
+            require('process' in self.launched and self.startup_process_identity() == self.launched['process'],
+                    'The ready process differs from this guarded startup.')
+            self.started_process_record()
             record = {**self.launched, 'readyAtSeconds': ready}
             write_json(self.output / ('startup-' + str(record['attempt']) + '-ready.json'),
                        {'format': 1, 'jobId': self.job_id, **record})
             self.launched = record
 
-    def log_retention_window(self):
+    def started_process_record(self):
         launch = self.launched
-        if launch is None or 'readyAtSeconds' not in launch or self.active_engine != '2026.9.6':
-            return None
+        require(launch is not None and 'process' in launch and 'processReceiptSha256' in launch,
+                'Startup requires the original observed process.')
+        path = self.output / ('startup-' + str(launch['attempt']) + '-process.json')
+        record = {'format': 1, 'jobId': self.job_id, **{key: value for key, value in launch.items()
+                  if key not in {'readyAtSeconds', 'processReceiptSha256'}}}
+        require(read_json(path) == record and digest(path) == launch['processReceiptSha256'],
+                'Recorded startup process changed.')
+
+    def ready_startup_record(self):
+        launch = self.launched
+        require(launch is not None and 'readyAtSeconds' in launch and 'process' in launch,
+                'Stopped retention requires this runner\'s actual ready process.')
         selected = self.current.resolve(strict=True)
         require(selected in {self.prior, self.target}, 'Log retention requires the reviewed selected application.')
         expected = self.target_id if selected == self.target else self.prior_id
         require(launch['candidateId'] == expected and launch['agentVersion'] == self.active_engine
+                and launch['service'] == self.settings['serviceName']
                 and self.before is not None and launch['epoch'] == self.before['epoch'],
                 'Log retention startup belongs to a different application, engine or workspace.')
-        record = read_json(self.output / ('startup-' + str(launch['attempt']) + '-ready.json'))
+        self.started_process_record()
+        path = self.output / ('startup-' + str(launch['attempt']) + '-ready.json')
+        record = read_json(path)
         require(record == {'format': 1, 'jobId': self.job_id, **launch}, 'Recorded startup window changed.')
-        return (launch['startedAtSeconds'], launch['readyAtSeconds'])
+        return record, digest(path)
+
+    def stop_for_retention(self, *, restored_prior=False):
+        """Close one held process lifetime before comparing retained data.
+
+        Ordinary emergency stopping remains independent of this evidence gate.
+        A refused/expired interval does not authorize a larger or joined one.
+        """
+        require(self.closed_startup is None, 'An existing closed startup must be retained, not replayed.')
+        ready, ready_hash = self.ready_startup_record()
+        def admitted():
+            now = (time.time_ns() + 999_999_999) // 1_000_000_000
+            require(ready['readyAtSeconds'] <= now and 0 <= now - ready['startedAtSeconds']
+                    <= MAX_STARTUP_WINDOW_SECONDS - SERVICE_ACTION_TIMEOUT_SECONDS,
+                    'The startup window cannot fit its bounded stop; retain this process for review.')
+            require(self.ready_startup_record() == (ready, ready_hash)
+                    and self.startup_process_identity() == ready['process'], 'The held startup process or receipt changed before stop.')
+            self.controller_hold()
+        admitted()
+        version = self.release['novaVersion'] if ready['candidateId'] == self.target_id else self.release['compatibility']['fromNovaVersion']
+        accepted = self.acceptance(ready['candidateId'], version, restored_prior=restored_prior)
+        require(accepted['epoch'] == ready['epoch'] and accepted['accounts'] == self.before['accounts'],
+                'The held account or workspace identity changed before stop.')
+        admitted()
+        self.service('stop')
+        self.require_stopped()
+        closed = (time.time_ns() + 999_999_999) // 1_000_000_000
+        require(ready['readyAtSeconds'] <= closed and 0 <= closed - ready['startedAtSeconds'] <= MAX_STARTUP_WINDOW_SECONDS,
+                'The actual stopped startup exceeded the reviewed bound.')
+        require(self.ready_startup_record() == (ready, ready_hash), 'Startup authority changed while stopping.')
+        self.controller_hold()
+        record = {**ready, 'readyReceiptSha256': ready_hash, 'closedAtSeconds': closed, 'owningServiceFullyStopped': True}
+        write_json(self.output / ('startup-' + str(ready['attempt']) + '-closed.json'), record)
+        self.closed_startup = record
+
+    def log_retention_window(self):
+        if self.closed_startup is None or self.active_engine != '2026.9.6':
+            return None
+        self.require_stopped()
+        ready, ready_hash = self.ready_startup_record()
+        record = read_json(self.output / ('startup-' + str(ready['attempt']) + '-closed.json'))
+        closed = record.get('closedAtSeconds')
+        require(type(closed) is int and ready['readyAtSeconds'] <= closed
+                and 0 <= closed - ready['startedAtSeconds'] <= MAX_STARTUP_WINDOW_SECONDS
+                and record == self.closed_startup == {**ready, 'readyReceiptSha256': ready_hash,
+                                                     'closedAtSeconds': closed, 'owningServiceFullyStopped': True},
+                'Recorded closed startup window changed.')
+        return (ready['startedAtSeconds'], closed)
 
     def require_stopped(self):
         values = subprocess.check_output(['/usr/bin/systemctl', 'show', self.settings['serviceName'], '--property=ActiveState', '--property=SubState', '--property=MainPID', '--property=ControlPID', '--property=ControlGroup'], text=True, timeout=10)
@@ -1113,7 +1217,7 @@ class Driver:
             require(type(independent) is int and independent > 0, 'Target acceptance requires the verified independent restoration size.')
         self.wait_acceptance(expected, version, restored_prior=restored)
         self.controller_hold()
-        self.guarded_stop(restored_prior=restored)
+        self.stop_for_retention(restored_prior=restored)
         self.require_stopped()
         saved_state(self.recovery / 'workspace', self.data, restored=restored)
         self.retained_native()
