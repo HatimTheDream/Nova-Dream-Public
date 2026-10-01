@@ -28,7 +28,7 @@ const jobSchema=z.object({
   state:z.enum(['waiting','downloading','verifying','preparing','installing','restarting','checking','completed','restored','failed','cancelled']),
   requestedAt:z.number().finite().nonnegative(),updatedAt:z.number().finite().nonnegative(),message:z.string().max(1000).optional(),
   download:z.object({received:z.number().int().nonnegative(),total:z.number().int().positive()}).strict().optional(),release,
-}).strict().refine(job=>job.candidateId===job.release.candidateId&&job.fromCandidateId===job.release.fromCandidateId&&(job.releaseId===undefined?!job.release.runtimeBundle:job.releaseId===job.release.bundle.sha256),'The saved release identity changed.');
+}).strict().refine(job=>job.candidateId===job.release.candidateId&&job.fromCandidateId===job.release.fromCandidateId&&(job.releaseId===undefined?!job.release.runtimeBundle&&!job.release.applicationDependenciesBundle:job.releaseId===job.release.bundle.sha256),'The saved release identity changed.');
 const journalSchema=z.object({format:z.literal(1),currentId:id.nullable(),jobs:z.array(jobSchema).max(updateJournalLimits.receipts)}).strict().superRefine((state,ctx)=>{
   if(new Set(state.jobs.map(job=>job.id)).size!==state.jobs.length||new Set(state.jobs.map(job=>job.idempotencyKey)).size!==state.jobs.length||state.currentId!==null&&!state.jobs.some(job=>job.id===state.currentId)||state.currentId===null&&state.jobs.length)ctx.addIssue({code:'custom',message:'Invalid update receipt references.'});
 });

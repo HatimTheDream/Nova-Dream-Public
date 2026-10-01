@@ -174,7 +174,7 @@ class RunnerTests(unittest.TestCase):
                 instance.settled_acceptance = lambda *args, **kwargs: {'health': {'ready': True}}
                 with patch.object(driver, 'inventory', side_effect=inventory), patch.object(driver.shutil, 'disk_usage', side_effect=lambda path: types.SimpleNamespace(free=free[0])), patch.object(driver, 'snapshot_closed', side_effect=snapshot), patch.object(driver, 'saved_state'), patch.object(driver, 'write_json', side_effect=lambda path, value: writes.__setitem__(path, value)), patch.object(driver, 'candidate'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
                     instance.run()
-                receipt = writes[scope / 'result.ready.json']
+                receipt = writes[scope / ('result.' + ('unchanged' if insufficient else 'completed') + '.ready.json')]
                 self.assertEqual(receipt['outcome'], 'unchanged' if insufficient else 'completed')
                 if insufficient:
                     self.assertEqual(actions, ['staged', 'stop', 'capacity-rejected', 'start'])
@@ -1624,7 +1624,7 @@ export const close=async()=>{};
         for perpetual in [False, True]:
             with self.subTest(perpetual=perpetual):
                 instance = self.instance()
-                calls, stages, clock = [], [], [0]
+                calls, stages, clock, outcomes = [], [], [0], []
                 instance.validate = lambda: None
                 def acceptance(*args):
                     calls.append(args)
@@ -1637,9 +1637,18 @@ export const close=async()=>{};
                 instance.acceptance, instance.stage = acceptance, stage
                 instance.stage_app = lambda: self.fail('Initial readiness must precede staging.')
                 instance.service = instance.switch = lambda *_: self.fail('No service or pointer change is allowed.')
+                def qualify_unchanged(outcome):
+                    outcomes.append(outcome)
+                    if perpetual:
+                        raise RuntimeError('Persistent activity cannot qualify unchanged acceptance.')
+                instance.result = qualify_unchanged
                 with patch.object(driver.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(driver.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
-                    with self.assertRaises(RuntimeError if perpetual else AfterInitialAcceptance):
+                    if perpetual:
+                        with self.assertRaises(RuntimeError):
+                            instance.run()
+                    else:
                         instance.run()
+                self.assertEqual(outcomes, ['unchanged'])
                 self.assertEqual(stages, [] if perpetual else ['preparing'])
                 self.assertEqual(len(calls), 3 if perpetual else 2)
                 self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)

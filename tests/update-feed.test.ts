@@ -80,6 +80,23 @@ test('a signed runtime asset outside configured artifact origins cannot be insta
   await f.feed.check();assert.equal(f.feed.status().availability,'error');assert.equal(f.feed.verifiedRelease(candidateId),undefined);
 });
 
+test('application dependency assets are signed, bounded and included in displayed download size',async()=>{
+  const f=fixture(),dependencies={url:'https://updates.example.test/dependencies.tgz',bytes:3456,sha256:'f'.repeat(64)};
+  const release={...target,applicationDependenciesBundle:dependencies,runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:1234,sha256:'e'.repeat(64)}};
+  f.setResponder(()=>f.response(f.manifest([release])));await f.feed.check();
+  assert.equal(f.feed.status().release?.downloadBytes,target.bundle.bytes+dependencies.bytes+1234);
+  assert.deepEqual(f.feed.verifiedRelease(candidateId)?.applicationDependenciesBundle,dependencies);
+  assert.equal(JSON.stringify(f.feed.status()).includes(dependencies.url),false);
+  for(const patch of [{bytes:0},{bytes:512*1024*1024+1},{sha256:'invalid'},{unreviewed:true}])assert.equal(updateManifestSchema.safeParse(f.manifest([{...target,applicationDependenciesBundle:{...dependencies,...patch}}])).success,false);
+});
+
+test('a signed dependency asset outside trusted HTTPS origins is rejected',async()=>{
+  for(const url of ['https://other.example.test/dependencies.tgz','http://updates.example.test/dependencies.tgz','https://user:secret@updates.example.test/dependencies.tgz']){
+    const f=fixture();f.setResponder(()=>f.response(f.manifest([{...target,applicationDependenciesBundle:{url,bytes:100,sha256:'e'.repeat(64)}}])));
+    await f.feed.check();assert.equal(f.feed.status().availability,'error');assert.equal(f.feed.verifiedRelease(candidateId),undefined);
+  }
+});
+
 test('automatic checks and manual checks remain bounded through service restart', async () => {
   const f = fixture(); await f.feed.check();
   await f.feed.check(true); await f.feed.check(); assert.equal(f.calls(), 1);

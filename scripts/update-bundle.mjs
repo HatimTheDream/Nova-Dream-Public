@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const maximum = 128 * 1024 * 1024;
 const sha = value => createHash('sha256').update(value).digest('hex');
-const excluded = new Set(['bundle.json', 'request.json', 'result.json', 'runner.log']);
+const excluded = new Set(['bundle.json', 'runtime.tgz', 'app-dependencies.tgz', 'request.json', 'result.json', 'runner.log', 'attempts']);
 function writeExclusive(path, bytes) {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
@@ -19,7 +19,7 @@ export function packageUpdateBundle(source, output) {
   if (!names.includes('install.py') || !names.length || names.length > 64) throw Error('The reviewed bundle needs install.py and at most 64 flat files.');
   let total = 0;
   const files = names.map(name => {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(name) || excluded.has(name)) throw Error('Unsupported or reserved update file name.');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(name) || excluded.has(name) || name.startsWith('preflight-')) throw Error('Unsupported or reserved update file name.');
     const path = join(input, name), metadata = lstatSync(path);
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1 || metadata.size > maximum) throw Error('Reviewed bundle entries must be independent regular files.');
     total += metadata.size; if (total > maximum) throw Error('The reviewed bundle is too large.');

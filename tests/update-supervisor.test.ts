@@ -18,13 +18,13 @@ function memory(initial?:HostUpdateJob):UpdateJournal{
 function deferred(){let resolve!:()=>void,reject!:(error:Error)=>void;const promise=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 function fixture(journal=memory(), overrides:Partial<Installer>={}){
   let verified=true,checking=false;
-  let installed=from,preparations=0,runs=0,reconciles=0,clock=1000;
-  const installer:Installer={prepare:async(_release,progress)=>{preparations++;progress(2048,2048);},run:async()=>{runs++;installed=target;return 'completed';},reconcile:async()=>{reconciles++;return undefined;},...overrides};
+  let installed=from,preparations=0,preflights=0,runs=0,reconciles=0,clock=1000;
+  const installer:Installer={prepare:async(_release,progress)=>{preparations++;progress(2048,2048);},preflight:async()=>{preflights++;},run:async()=>{runs++;installed=target;return 'completed';},reconcile:async()=>{reconciles++;return undefined;},...overrides};
   const feed={status:()=>({availability:checking?'checking' as const:verified?'available' as const:'unavailable' as const}),check:async()=>({availability:'available' as const}),verifiedRelease:(id:string)=>verified&&id===target?structuredClone(release):undefined};
   const supervisor=new UpdateSupervisor(feed,journal,installer,()=>installed,()=>clock);
   const beat=(heldFor:string|null=null,blockers:{code:string;message:string}[]=[])=>supervisor.beat({candidateId:installed,epoch,heldFor,nativeSuspended:!!heldFor,blockers});
   const input=(key=randomUUID())=>({epoch,candidateId:target,currentCandidateId:installed,idempotencyKey:key,when:'now' as const});
-  return {supervisor,journal,beat,input,verification:(valid:boolean,refreshing=false)=>{verified=valid;checking=refreshing;},setInstalled:(id:string)=>{installed=id;},advance:(delta=1000)=>{clock+=delta;},preparations:()=>preparations,runs:()=>runs,reconciles:()=>reconciles};
+  return {supervisor,journal,beat,input,verification:(valid:boolean,refreshing=false)=>{verified=valid;checking=refreshing;},setInstalled:(id:string)=>{installed=id;},advance:(delta=1000)=>{clock+=delta;},preparations:()=>preparations,preflights:()=>preflights,runs:()=>runs,reconciles:()=>reconciles};
 }
 
 test('clock rollback cannot turn an older heartbeat into fresh installation authority',async()=>{
@@ -33,9 +33,108 @@ test('clock rollback cannot turn an older heartbeat into fresh installation auth
  assert.equal(f.supervisor.view().blocker?.code,'workspace_unknown');assert.equal(f.runs(),0);
 });
 
+test('read-only preflight qualifies the exact prior workspace before maintenance is requested',async()=>{
+  const waiting=deferred(),calls:{candidateId:string;workspaceEpoch:string;jobId:string}[]=[];
+  const f=fixture(memory(),{preflight:async(candidate,jobId,prior)=>{
+    assert.deepEqual(candidate,release);calls.push({...prior,jobId});await waiting.promise;
+  }});
+  f.beat();await f.supervisor.request(f.input());
+  await new Promise(resolve=>setImmediate(resolve));
+  const job=f.journal.current()!;
+  assert.deepEqual(calls,[{candidateId:from,workspaceEpoch:epoch,jobId:job.id}]);
+  assert.equal(job.started,false);assert.equal(job.hold,false);assert.equal(f.runs(),0);
+  waiting.resolve();await f.supervisor.settle();
+  assert.equal(f.supervisor.view().holdFor,job.id);assert.equal(f.runs(),0);
+});
+
+test('missing qualified recovery refuses preparation without holding work or starting an attempt',async()=>{
+  let checks=0;
+  const f=fixture(memory(),{preflight:async()=>{checks++;throw Error('The recovery baseline is not paired with the installed candidate.');}});
+  f.beat();const input=f.input();await f.supervisor.request(input);await f.supervisor.settle();
+  const job=f.journal.current()!;
+  assert.equal(job.state,'failed');assert.equal(job.started,false);assert.equal(job.hold,false);
+  assert.equal(f.runs(),0);assert.equal(f.reconciles(),0);
+  assert.match(job.message!,/Nothing was installed/);assert.doesNotMatch(job.message!,/baseline|candidate/);
+  const replay=await f.supervisor.request(input);await f.supervisor.settle();
+  assert.equal(replay.job?.id,job.id);assert.equal(checks,1,'Same-key replay retains the original refusal.');
+});
+
+test('a lost read-only preflight response never authorizes a switch or requests maintenance',async()=>{
+  const f=fixture(memory(),{preflight:async()=>{throw Error('Preflight response was lost');}});
+  f.beat();await f.supervisor.request(f.input());await f.supervisor.settle();
+  assert.equal(f.supervisor.view().job?.state,'failed');assert.equal(f.supervisor.view().holdFor,null);
+  assert.equal(f.journal.current()?.started,false);assert.equal(f.runs(),0);
+});
+
+test('admission is rechecked for an unstarted held job after a controller restart',async()=>{
+  const job=saved({state:'waiting',hold:true,prepared:true});let checks=0;
+  const f=fixture(memory(job),{preflight:async()=>{checks++;throw Error('Host configuration changed');}});
+  f.beat(job.id);await f.supervisor.settle();
+  assert.equal(checks,1);assert.equal(f.runs(),0);assert.equal(f.reconciles(),0);
+  assert.equal(f.supervisor.view().holdFor,null);assert.equal(f.journal.current()?.started,false);
+});
+
+test('preflight is not reused after acquiring maintenance',async()=>{
+  const f=fixture();f.beat();await f.supervisor.request(f.input());await f.supervisor.settle();
+  assert.equal(f.preflights(),1);assert.equal(f.runs(),0);
+  f.beat(f.supervisor.view().job!.id);await f.supervisor.settle();
+  assert.equal(f.preflights(),2);assert.equal(f.runs(),1);assert.equal(f.supervisor.view().job?.state,'completed');
+});
+
+test('execution is bound to the original job workspace even after read-only admission succeeds',async()=>{
+  let captured:{candidateId:string;workspaceEpoch:string}|undefined;
+  const f=fixture(memory(),{run:async(_release,_job,_phase,prior)=>{captured=prior;throw Error('Workspace changed after preflight; actual runner refuses');}});
+  f.beat();await f.supervisor.request(f.input());await f.supervisor.settle();
+  const job=f.supervisor.view().job!;f.beat(job.id);await f.supervisor.settle();
+  assert.deepEqual(captured,{candidateId:from,workspaceEpoch:epoch});
+  assert.equal(f.supervisor.view().holdFor,job.id);assert.equal(f.supervisor.view().job?.state,'failed');
+});
+
+test('stale, switched or different-workspace heartbeats cannot inherit completed preflight authority',async()=>{
+  for(const change of ['stale','candidate','workspace'] as const){
+    const waiting=deferred(),f=fixture(memory(),{preflight:async()=>waiting.promise});
+    f.beat();await f.supervisor.request(f.input());await new Promise(resolve=>setImmediate(resolve));
+    if(change==='stale')f.advance(10000);
+    if(change==='candidate')f.setInstalled('e'.repeat(64));
+    if(change==='workspace')f.supervisor.beat({candidateId:from,epoch:randomUUID(),heldFor:null,nativeSuspended:false,blockers:[]});
+    waiting.resolve();await f.supervisor.settle();
+    assert.equal(f.supervisor.view().job?.state,'waiting',change);assert.equal(f.supervisor.view().holdFor,null,change);assert.equal(f.runs(),0,change);
+  }
+});
+
+test('a refreshed matching heartbeat can qualify completion of a slow preflight',async()=>{
+  const waiting=deferred(),f=fixture(memory(),{preflight:async()=>waiting.promise});
+  f.beat();await f.supervisor.request(f.input());await new Promise(resolve=>setImmediate(resolve));
+  f.advance(10000);f.beat();waiting.resolve();await f.supervisor.settle();
+  assert.equal(f.supervisor.view().holdFor,f.supervisor.view().job?.id);assert.equal(f.runs(),0);
+});
+
+test('cancellation and lost release verification during preflight cannot acquire maintenance',async()=>{
+  for(const change of ['cancel','verification','stop'] as const){
+    const waiting=deferred(),f=fixture(memory(),{preflight:async()=>waiting.promise});
+    f.beat();await f.supervisor.request(f.input());await new Promise(resolve=>setImmediate(resolve));
+    if(change==='cancel')f.supervisor.cancel({epoch,jobId:f.supervisor.view().job!.id});
+    if(change==='verification')f.verification(false);
+    if(change==='stop')f.supervisor.stop();
+    waiting.resolve();await f.supervisor.settle();
+    assert.equal(f.supervisor.view().holdFor,null,change);assert.equal(f.runs(),0,change);
+    if(change==='cancel')assert.equal(f.supervisor.view().job?.state,'cancelled');
+  }
+});
+
+test('a lost response from a started runner retains maintenance even when the prior candidate remains selected',async()=>{
+  let runs=0;
+  const f=fixture(memory(),{run:async()=>{runs++;throw Error('Runner response lost before acceptance');},preflight:async()=>{assert.equal(runs,0,'Started work must reconcile without fresh preflight.');}});
+  f.beat();const input=f.input();await f.supervisor.request(input);await f.supervisor.settle();
+  const id=f.supervisor.view().job!.id;f.beat(id);await f.supervisor.settle();
+  assert.equal(f.journal.current()?.started,true);assert.equal(f.supervisor.view().holdFor,id);assert.equal(runs,1);
+  await f.supervisor.request(input);f.supervisor.poll();await f.supervisor.settle();
+  assert.equal(runs,1);assert.equal(f.reconciles(),1);assert.equal(f.supervisor.view().holdFor,id);
+});
+
 test('runtime updates require the exact displayed release even when the app candidate stays unchanged',async()=>{
   const engine={...structuredClone(release),candidateId:from,agentVersion:'2026.9.6',runtimeBundle:{url:'https://example.test/runtime.tgz',bytes:100,sha256:'e'.repeat(64)}};
-  const journal=memory(),supervisor=new UpdateSupervisor({status:()=>({availability:'available'}),check:async()=>({availability:'available'}),verifiedRelease:()=>structuredClone(engine)},journal,{prepare:async()=>{},run:async()=>assert.fail('No native hold was acquired'),reconcile:async()=>undefined},()=>from,()=>1000);
+  const journal=memory(),supervisor=new UpdateSupervisor({status:()=>({availability:'available'}),check:async()=>({availability:'available'}),verifiedRelease:()=>structuredClone(engine)},journal,{prepare:async()=>{},preflight:async()=>{},run:async()=>assert.fail('No native hold was acquired'),reconcile:async()=>undefined},()=>from,()=>1000);
   supervisor.beat({candidateId:from,epoch,heldFor:null,nativeSuspended:false,blockers:[]});
   const input={epoch,candidateId:from,currentCandidateId:from,idempotencyKey:randomUUID(),when:'now'};
   await assert.rejects(supervisor.request(input),/available update changed/);
@@ -43,6 +142,17 @@ test('runtime updates require the exact displayed release even when the app cand
   const accepted=await supervisor.request({...input,releaseId:engine.bundle.sha256});await supervisor.settle();assert.equal(accepted.job?.releaseId,engine.bundle.sha256);
   await assert.rejects(supervisor.request({...input,releaseId:'f'.repeat(64)}),/different operation/);
   supervisor.stop();
+});
+
+test('dependency updates require an exact reviewed release and reject asset replacement during preflight',async()=>{
+  const candidate={...structuredClone(release),applicationDependenciesBundle:{url:'https://example.test/app-dependencies.tgz',bytes:100,sha256:'e'.repeat(64)}};
+  const journal=memory(),supervisor=new UpdateSupervisor({status:()=>({availability:'available'}),check:async()=>({availability:'available'}),verifiedRelease:()=>structuredClone(candidate)},journal,{prepare:async()=>{},preflight:async()=>{candidate.applicationDependenciesBundle.sha256='f'.repeat(64);},run:async()=>assert.fail('Changed dependencies cannot start installation'),reconcile:async()=>undefined},()=>from,()=>1000);
+  supervisor.beat({candidateId:from,epoch,heldFor:null,nativeSuspended:false,blockers:[]});
+  const input={epoch,candidateId:target,currentCandidateId:from,idempotencyKey:randomUUID(),when:'now'};
+  await assert.rejects(supervisor.request(input),/available update changed/);
+  await assert.rejects(supervisor.request({...input,releaseId:'f'.repeat(64)}),/available update changed/);
+  await supervisor.request({...input,releaseId:candidate.bundle.sha256});await supervisor.settle();
+  assert.equal(supervisor.view().holdFor,null);assert.equal(supervisor.view().job?.state,'failed');assert.equal(journal.current()?.started,false);
 });
 
 test('lost release verification releases an unstarted hold, while refresh remains pending',async()=>{
@@ -117,8 +227,9 @@ test('verified storage failures explain the blocker without claiming a restore o
 
 test('a local hold alone cannot authorize installation without native suspension proof',async()=>{
  const f=fixture();f.beat();await f.supervisor.request(f.input());await f.supervisor.settle();const id=f.supervisor.view().job!.id;
- f.supervisor.beat({candidateId:from,epoch,heldFor:id,nativeSuspended:false,blockers:[]});await f.supervisor.settle();assert.equal(f.runs(),0);
- f.beat(id);await f.supervisor.settle();assert.equal(f.runs(),1);
+ assert.equal(f.preflights(),1);
+ f.supervisor.beat({candidateId:from,epoch,heldFor:id,nativeSuspended:false,blockers:[]});await f.supervisor.settle();assert.equal(f.runs(),0);assert.equal(f.preflights(),1,'Waiting for native suspension must not repeat expensive read-only inventories.');
+ f.beat(id);await f.supervisor.settle();assert.equal(f.runs(),1);assert.equal(f.preflights(),2);
 });
 
 test('an uncertain durable save is adopted by same-key replay instead of launching a new request',async()=>{
@@ -143,5 +254,17 @@ test('file journal commits current selection and all old receipts atomically',()
     writeUpdateJson(join(directory,'journal.json'),{format:1,currentId:full.at(-1)!.id,jobs:full});
     assert.throws(()=>journal.save(saved()));assert.equal(journal.find(full[0].idempotencyKey)?.id,full[0].id);
     writeFileSync(join(directory,'journal.json'),' '.repeat(updateJournalLimits.bytes+1));assert.throws(()=>journal.current(),/Invalid update state/);
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
+test('durable dependency release receipts require their exact bundle identity',()=>{
+  const directory=mkdtempSync(join(tmpdir(),'nova-update-journal-dependencies-'));
+  try{
+    const journal=new FileUpdateJournal(directory),job=saved({release:{...structuredClone(release),applicationDependenciesBundle:{url:'https://example.test/app-dependencies.tgz',bytes:100,sha256:'e'.repeat(64)}}});
+    assert.throws(()=>journal.save(job),/saved release identity/);
+    assert.throws(()=>journal.save({...job,releaseId:'f'.repeat(64)}),/saved release identity/);
+    journal.save({...job,releaseId:job.release.bundle.sha256});
+    const reopened=new FileUpdateJournal(directory);assert.deepEqual(reopened.current()?.release.applicationDependenciesBundle,job.release.applicationDependenciesBundle);
+    assert.throws(()=>journal.save({...job,releaseId:job.release.bundle.sha256,release:{...job.release,applicationDependenciesBundle:{...job.release.applicationDependenciesBundle!,sha256:'f'.repeat(64)}}}),/original identity/);
   }finally{rmSync(directory,{recursive:true,force:true});}
 });

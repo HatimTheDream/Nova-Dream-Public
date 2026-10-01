@@ -21,6 +21,17 @@ test('reviewed flat bundle binds its fixed runner and helper bytes without overw
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('flat bundle packaging cannot absorb external assets or preflight request names', () => {
+  for (const name of ['runtime.tgz', 'app-dependencies.tgz', 'attempts', 'preflight-request.json']) {
+    const root = mkdtempSync(join(tmpdir(), 'nova-update-bundle-reserved-'));
+    try {
+      const source = join(root, 'reviewed'); mkdirSync(source);
+      writeFileSync(join(source, 'install.py'), '# inert fixture\n'); writeFileSync(join(source, name), 'reserved fixture');
+      assert.throws(() => packageUpdateBundle(source, join(root, 'bundle.json')), /reserved/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test('manifest signing uses an existing matching external key and advances the verified previous sequence', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nova-update-signing-fixture-'));
   try {

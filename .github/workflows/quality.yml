@@ -25,6 +25,13 @@ jobs:
           python3 -B tests/update-log-retention.test.py -v
           python3 -B tests/update-startup-window.test.py -v
           python3 -B tests/update-log-retention-integration.test.py -v
+          NODE_BINARY="$(command -v node)"
+          python3 -B tests/update-app-archive.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/recovery-derived-state.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/workspace-key-reader.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-app-dependencies.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-admission-driver.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" python3 -B tests/update-dependency-selection.test.py -v
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

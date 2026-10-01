@@ -16,7 +16,10 @@ const resultMessage=(result:InstallerResult)=>typeof result!=='string'&&result.r
   : resultState(result)==='completed'?'Update installed.':resultState(result)==='restored'?'Previous version restored.':'The update could not be prepared. Nothing was installed.';
 export interface Installer {
   prepare(release:VerifiedUpdateRelease,progress:(received:number,total:number)=>void):Promise<void>;
-  run(release:VerifiedUpdateRelease,jobId:string,phase:(state:'preparing'|'installing'|'restarting'|'checking')=>void):Promise<InstallerResult>;
+  /** Read-only admission: validate the exact prior workspace, recovery and staged
+   * pair without starting an attempt, stopping work or switching any selector. */
+  preflight(release:VerifiedUpdateRelease,jobId:string,prior:{candidateId:string;workspaceEpoch:string}):Promise<void>;
+  run(release:VerifiedUpdateRelease,jobId:string,phase:(state:'preparing'|'installing'|'restarting'|'checking')=>void,prior:{candidateId:string;workspaceEpoch:string}):Promise<InstallerResult>;
   reconcile(release:VerifiedUpdateRelease,jobId:string):Promise<InstallerResult|undefined>;
 }
 const install=z.object({epoch:z.string().uuid(),candidateId:z.string().regex(/^[0-9a-f]{64}$/),releaseId:z.string().regex(/^[0-9a-f]{64}$/).optional(),currentCandidateId:z.string().regex(/^[0-9a-f]{64}$/),idempotencyKey:z.string().uuid(),when:z.enum(['now','idle'])}).strict();
@@ -58,7 +61,7 @@ export class UpdateSupervisor {
     if(input.currentCandidateId!==this.current()||this.heartbeat?.candidateId!==input.currentCandidateId||this.heartbeat.epoch!==input.epoch||!this.freshHeartbeat())throw new UpdateAdmissionError('Refresh Software Update before installing.');
     const release=this.feed.verifiedRelease(input.candidateId);
     if(!release||release.fromCandidateId!==input.currentCandidateId)throw new UpdateAdmissionError('This compatible update is no longer verified. Check for updates again.');
-    if(input.releaseId!==undefined&&input.releaseId!==release.bundle.sha256||release.runtimeBundle&&!input.releaseId)throw new UpdateAdmissionError('The available update changed. Refresh and review its versions before updating.');
+    if(input.releaseId!==undefined&&input.releaseId!==release.bundle.sha256||(release.runtimeBundle||release.applicationDependenciesBundle)&&!input.releaseId)throw new UpdateAdmissionError('The available update changed. Refresh and review its versions before updating.');
     if(input.when==='now'&&this.heartbeat.blockers.length)throw new UpdateAdmissionError(this.heartbeat.blockers[0].message);
     const job:Job={id:randomUUID(),candidateId:input.candidateId,...(input.releaseId?{releaseId:input.releaseId}:{}),fromCandidateId:input.currentCandidateId,epoch:input.epoch,idempotencyKey:input.idempotencyKey,when:input.when,hold:false,started:false,prepared:false,state:'waiting',requestedAt:this.now(),updatedAt:this.now(),release};
     this.journal.save(job);this.job=job;this.kick();return this.view();
@@ -73,7 +76,7 @@ export class UpdateSupervisor {
   private change(patch:Partial<Job>) {if(!this.job)throw new Error('No update is active.');if(Object.entries(patch).every(([key,value])=>JSON.stringify(this.job![key as keyof Job])===JSON.stringify(value)))return; const next={...this.job,...patch,updatedAt:this.now()};this.journal.save(next);this.job=next;}
   private admitted(job:Job) {
     const beat=this.heartbeat;
-    return !!beat&&this.freshHeartbeat()&&beat.candidateId===job.fromCandidateId&&beat.epoch===job.epoch&&beat.blockers.length===0;
+    return !!beat&&this.freshHeartbeat()&&this.current()===job.fromCandidateId&&beat.candidateId===job.fromCandidateId&&beat.epoch===job.epoch&&beat.blockers.length===0;
   }
   private kick() {
     if(this.working||this.stopped||!this.job||terminal.has(this.job.state)&&!(this.job.started&&this.job.hold))return;
@@ -83,9 +86,10 @@ export class UpdateSupervisor {
   private async advance() {
     const job=this.job!;
     const same=()=>this.job?.id===job.id;
+    const cancelled=()=>this.job?.state==='cancelled';
     const release=job.started?job.release:this.feed.verifiedRelease(job.candidateId);
     if(!release) {this.unverified();return;}
-    if(release.bundle.sha256!==job.release.bundle.sha256||JSON.stringify(release.runtimeBundle)!==JSON.stringify(job.release.runtimeBundle)||release.agentVersion!==job.release.agentVersion)throw new Error('The reviewed update changed.');
+    if(release.bundle.sha256!==job.release.bundle.sha256||JSON.stringify(release.runtimeBundle)!==JSON.stringify(job.release.runtimeBundle)||JSON.stringify(release.applicationDependenciesBundle)!==JSON.stringify(job.release.applicationDependenciesBundle)||release.agentVersion!==job.release.agentVersion)throw new Error('The reviewed update changed.');
     if(job.started) {
       // Restart recovery is read-only. The original runner is never launched a second time.
       const observed=await this.installer.reconcile(release,job.id),result=observed&&resultState(observed);
@@ -100,20 +104,28 @@ export class UpdateSupervisor {
     if(!job.prepared) {
       this.change({state:'downloading',message:'Downloading update.'});
       await this.installer.prepare(release,(received,total)=>{if(this.job?.id===job.id&&this.job.state!=='cancelled')this.change({download:{received,total}});});
-      if(!same()||this.job?.state==='cancelled')return;
+      if(!same()||cancelled())return;
       this.change({state:'verifying',prepared:true,message:'Update verified.'});
     }
-    if(!same()||this.job?.state==='cancelled'||this.stopped)return;
+    if(!same()||cancelled()||this.stopped)return;
+    if(!this.admitted(job)) {this.change({state:'waiting',message:'Waiting for current work to finish.'});return;}
+    if(this.job!.hold&&(this.heartbeat?.heldFor!==job.id||this.heartbeat.nativeSuspended!==true))return;
+    // Validate before asking the app to pause. A refused or lost read-only
+    // preflight cannot strand maintenance or create an installation attempt.
+    // Repeat for a held but unstarted job: admission is never a durable receipt
+    // and cannot survive a controller restart or a changed host configuration.
+    await this.installer.preflight(release,job.id,{candidateId:job.fromCandidateId,workspaceEpoch:job.epoch});
+    if(!same()||cancelled()||this.stopped)return;
     if(!this.admitted(job)) {this.change({state:'waiting',message:'Waiting for current work to finish.'});return;}
     // Request maintenance first, then wait for a subsequent live heartbeat that
     // acknowledges it and observes all old work/effects drained.
     const refreshed=this.feed.verifiedRelease(job.candidateId);
     if(!refreshed){this.unverified();return;}
-    if(refreshed.bundle.sha256!==release.bundle.sha256||JSON.stringify(refreshed.runtimeBundle)!==JSON.stringify(release.runtimeBundle)||refreshed.agentVersion!==release.agentVersion)throw Error('The reviewed update changed during preparation.');
+    if(refreshed.bundle.sha256!==release.bundle.sha256||JSON.stringify(refreshed.runtimeBundle)!==JSON.stringify(release.runtimeBundle)||JSON.stringify(refreshed.applicationDependenciesBundle)!==JSON.stringify(release.applicationDependenciesBundle)||refreshed.agentVersion!==release.agentVersion)throw Error('The reviewed update changed during preparation.');
     if(!this.job!.hold){this.change({state:'waiting',hold:true,message:'Preparing to update.'});return;}
     if(this.heartbeat?.heldFor!==job.id||this.heartbeat.nativeSuspended!==true)return;
     this.change({state:'preparing',started:true,message:'Preparing recovery.'});
-    const observed=await this.installer.run(release,job.id,state=>{if(same())this.change({state,message:({preparing:'Preparing recovery.',installing:'Installing update.',restarting:'Restarting Nova Dream.',checking:'Checking the update.'})[state]});}),result=resultState(observed);
+    const observed=await this.installer.run(release,job.id,state=>{if(same())this.change({state,message:({preparing:'Preparing recovery.',installing:'Installing update.',restarting:'Restarting Nova Dream.',checking:'Checking the update.'})[state]});},{candidateId:job.fromCandidateId,workspaceEpoch:job.epoch}),result=resultState(observed);
     if(!same())return;
     if(result==='completed'&&this.current()!==job.candidateId)throw new Error('The installed candidate did not match.');
     if((result==='restored'||result==='unchanged')&&this.current()!==job.fromCandidateId)throw new Error('The original candidate did not match.');

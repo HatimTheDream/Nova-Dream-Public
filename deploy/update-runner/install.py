@@ -1,7 +1,7 @@
 """Reviewed Linux paired update driver; fixed entry invoked with --request.
 
-No operation runs on import. This driver deliberately supports unchanged
-app dependencies and schema55 only. Optional runtime closures are immutable,
+No operation runs on import. This driver supports schema55 and integrity-bound
+offline application dependencies. Optional runtime closures are immutable,
 offline engine packages. The official Codex plugin is installed through npm
 at the exact version and integrity captured by the verified companion lock.
 """
@@ -30,6 +30,8 @@ sys.dont_write_bytecode = True
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, inode_ids, prepare_independent,
                       require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json,
                       verification_scratch)
+import app_dependencies
+from workspace_key import read_workspace_key
 
 SOCKET = '/run/nova-update/control.sock'
 ENGINE = '2026.9.2'
@@ -283,6 +285,8 @@ class Driver:
         self.launched = None
         self.runtime = None
         self.active_engine = None
+        self.application_dependencies = None
+        self.session_binding_key = None
 
     def stage(self, stage):
         if not self.stdout_open:
@@ -294,17 +298,24 @@ class Driver:
             self.stdout_open = False
             sys.stdout = open(os.devnull, 'w')
 
-    def validate(self):
+    def validate(self, *, preflight=False):
         require(sys.platform == 'linux' and os.geteuid() == 0, 'Use the provisioned Linux update host.')
         protected(self.request_path, private=True)
         protected(self.output, True, True)
         self.request = read_json(self.request_path)
-        require(set(self.request) == {'format', 'jobId', 'release', 'hostConfiguration'} and self.request['format'] == 1, 'Unexpected installation request.')
+        fields = {'format', 'jobId', 'release', 'hostConfiguration'} | ({'preflightIdentity'} if preflight else {'expectedPrior'})
+        require(set(self.request) == fields and self.request['format'] == 1, 'Unexpected installation request.')
         self.job_id = str(uuid.UUID(self.request['jobId']))
         require(self.job_id == self.request['jobId'] and self.output.name == self.job_id, 'The attempt directory does not match its receipt.')
         self.release = self.request['release']
         self.target_id, self.prior_id = self.release['candidateId'], self.release['fromCandidateId']
         require(all(re.fullmatch('[a-f0-9]{64}', value) for value in (self.target_id, self.prior_id)), 'Invalid exact candidate pair.')
+        self.expected_prior = self.request['preflightIdentity' if preflight else 'expectedPrior']
+        require(isinstance(self.expected_prior, dict) and set(self.expected_prior) == {'candidateId', 'workspaceEpoch'}
+                and self.expected_prior['candidateId'] == self.prior_id
+                and isinstance(self.expected_prior['workspaceEpoch'], str)
+                and str(uuid.UUID(self.expected_prior['workspaceEpoch'])) == self.expected_prior['workspaceEpoch'],
+                'The original request must bind its candidate and workspace epoch.')
         compatibility = self.release['compatibility']
         self.from_engine, self.to_engine = compatibility['fromAgentVersion'], self.release['agentVersion']
         self.active_engine = self.from_engine
@@ -320,7 +331,8 @@ class Driver:
         runner_path = host_path.with_name('runner.json')
         protected(runner_path, private=True)
         self.settings = read_json(runner_path, 65536)
-        require(set(self.settings) == {'format', 'serviceName', 'serviceUser', 'nodePath', 'healthPort', 'dependencyDirectory', 'recoveryDirectory', 'baselineDirectory', 'protectedFiles'}
+        settings_fields = {'format', 'serviceName', 'serviceUser', 'nodePath', 'healthPort', 'dependencyDirectory', 'recoveryDirectory', 'baselineDirectory', 'protectedFiles'}
+        require(settings_fields <= set(self.settings) <= settings_fields | {'workspaceKeyCredential'}
                 and self.settings['format'] == 1, 'Unexpected reviewed host runner configuration.')
         require(re.fullmatch(r'[a-zA-Z0-9_-]+\.service', self.settings['serviceName'])
                 and re.fullmatch('[a-z_][a-z0-9_-]{0,31}', self.settings['serviceUser'])
@@ -331,6 +343,8 @@ class Driver:
         self.agent = pathlib.Path(self.host['agentDirectory'])
         self.runtime_root = pathlib.Path(self.host['runtimeDirectory'])
         self.dependencies = pathlib.Path(self.settings['dependencyDirectory'])
+        self.configured_dependencies = self.dependencies
+        self.dependency_root = self.configured_dependencies.parent
         self.recovery_root = pathlib.Path(self.settings['recoveryDirectory'])
         self.node = pathlib.Path(self.settings['nodePath'])
         for path in (self.releases, self.runtime_root, self.dependencies, self.recovery_root):
@@ -354,6 +368,30 @@ class Driver:
         self.prior = self.current.resolve(strict=True)
         require(self.prior.parent == self.releases, 'Selected release is outside its protected root.')
         self.prior_manifest = candidate(self.prior, self.prior_id, compatibility['fromNovaVersion'])
+        self.resolve_prior_dependencies()
+        self.pair = read_json(self.bundle / 'reviewed-pair.json', 65536)
+        require({'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256'} <= set(self.pair)
+                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime', 'applicationDependencies', 'helpers', 'adoptPrior'}
+                and self.pair['format'] == 1 and self.pair['candidateId'] == self.target_id and self.pair['priorCandidateId'] == self.prior_id,
+                'The reviewed archive does not identify this exact pair.')
+        adoption = self.pair.get('adoptPrior')
+        self.adopting_prior = adoption is not None
+        if self.adopting_prior:
+            require(isinstance(adoption, dict) and set(adoption) == {'format', 'baselineManifestSha256', 'dependencies', 'sourceDependencies', 'rollbackDirectoryName'}
+                    and adoption['format'] == 1 and isinstance(adoption['baselineManifestSha256'], str)
+                    and re.fullmatch('[a-f0-9]{64}', adoption['baselineManifestSha256'])
+                    and self.from_engine == self.to_engine and self.target_id != self.prior_id
+                    and self.pair.get('applicationDependencies') is not None
+                    and 'workspaceKeyCredential' in self.settings,
+                    'Prior adoption requires an exact reviewed same-engine pair and complete recovery verification.')
+            require(isinstance(adoption['rollbackDirectoryName'], str)
+                    and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}', adoption['rollbackDirectoryName']),
+                    'The preserved prior release name is invalid.')
+            self.adoption_source_prior = self.prior
+            self.rollback_prior = self.releases / adoption['rollbackDirectoryName']
+            self.verify_prior_adoption()
+        else:
+            require((self.prior / 'node_modules').is_symlink(), 'A legacy dependency layout requires explicit prior adoption.')
         self.target = self.prior if self.target_id == self.prior_id else self.releases / (self.release['novaVersion'] + '-' + self.target_id[:12])
         self.recovery = self.recovery_root / ('update-' + self.job_id)
         self.restore = self.data.parent / ('workspace.restore-' + self.job_id)
@@ -363,36 +401,51 @@ class Driver:
         if latest.exists():
             protected(latest, private=True)
             selected = read_json(latest, 4096)
-            require(selected['candidateId'] == self.prior_id and selected.get('agentVersion', ENGINE) == self.from_engine,
+            require(self.adopting_prior or (selected['candidateId'] == self.prior_id and selected.get('agentVersion', ENGINE) == self.from_engine),
                     'Latest recovery acceptance does not match the installed pair.')
             self.baseline = pathlib.Path(selected['directory'])
         protected(self.baseline, True, True)
         require(self.baseline.parent == self.recovery_root, 'Recovery baseline is outside the reviewed root.')
         acceptance = read_json(self.baseline / 'acceptance.json')
-        require(acceptance['health']['candidateId'] == self.prior_id and acceptance.get('agentVersion', ENGINE) == self.from_engine,
+        require(self.adopting_prior or (acceptance['health']['candidateId'] == self.prior_id and acceptance.get('agentVersion', ENGINE) == self.from_engine),
                 'The recovery baseline is not paired with the installed candidate and engine.')
         manifest_file = self.baseline / ('snapshot-manifest.json' if (self.baseline / 'snapshot-manifest.json').exists() else 'linked-snapshot-source.json')
         verified = read_json(self.baseline / 'snapshot-verified.json')
         require(digest(manifest_file) == verified['manifestSha256'], 'The recovery baseline verification changed.')
+        if self.adopting_prior:
+            # This older generation is only a pinned deduplication source.
+            # It never attests the current app, its data, or a usable rollback.
+            require(digest(manifest_file) == adoption['baselineManifestSha256'], 'The reviewed adoption deduplication source changed.')
         baseline_entries = read_json(manifest_file, 64 * 1024 ** 2)
         require(inventory(self.baseline / 'workspace')[0] == baseline_entries, 'The verified closed baseline changed.')
         del baseline_entries
         gc.collect()
-        self.pair = read_json(self.bundle / 'reviewed-pair.json', 65536)
-        require({'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256'} <= set(self.pair)
-                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime'}
-                and self.pair['format'] == 1 and self.pair['candidateId'] == self.target_id and self.pair['priorCandidateId'] == self.prior_id,
-                'The reviewed archive does not identify this exact pair.')
         self.archive = self.bundle / 'app.tgz'
         protected(self.archive, private=True)
         require(self.archive.stat().st_size == self.pair['archiveBytes'] <= MAXIMUM and digest(self.archive) == self.pair['archiveSha256'], 'Reviewed application archive changed.')
         self.validate_runtime()
+        self.validate_application_dependencies()
         self.config_files = [pathlib.Path(value) for value in self.settings['protectedFiles']]
         require(1 <= len(self.config_files) <= 16 and len(set(self.config_files)) == len(self.config_files), 'Invalid protected host configuration set.')
         for path in self.config_files:
             protected(path)
             require(not path.is_relative_to(self.data) and not path.is_relative_to(self.releases), 'Host protection files must remain outside replacements.')
         self.config_hashes = {str(path): digest(path) for path in self.config_files}
+        self.workspace_key_credential = None
+        if 'workspaceKeyCredential' in self.settings:
+            self.workspace_key_credential = pathlib.Path(self.settings['workspaceKeyCredential'])
+            protected(self.workspace_key_credential, private=True)
+            require(self.workspace_key_credential in self.config_files
+                    and self.workspace_key_credential.stat().st_size == 32
+                    and self.workspace_key_credential.stat().st_nlink == 1,
+                    'The workspace wrapping credential must have independent protected recovery coverage.')
+            helpers = self.pair.get('helpers')
+            require(isinstance(helpers, dict) and set(helpers) == {'recovery.py', 'codex_log_retention.py', 'workspace_key.py', 'app_dependencies.py', 'verify-session-bindings.mjs'},
+                    'The derived-state verifier helpers are not bound to the reviewed pair.')
+            for name, expected in helpers.items():
+                protected(self.bundle / name, private=True)
+                require(isinstance(expected, str) and re.fullmatch('[a-f0-9]{64}', expected)
+                        and digest(self.bundle / name) == expected, 'Reviewed recovery helper bytes changed.')
         self.agent_identity = inventory(self.prior_agent)[0]
         require(read_json(self.prior_agent / 'package.json')['version'] == self.from_engine, 'The installed agent version changed.')
         self.agent_node_hash = digest(self.prior_agent_node)
@@ -402,7 +455,115 @@ class Driver:
         self.client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.client_candidate = None
         require(not (self.output / 'result.json').exists() and not (self.output / 'driver-attempt.json').exists(), 'The original runner attempt must be reconciled, never repeated.')
-        write_json(self.output / 'driver-attempt.json', {'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id})
+        if not preflight:
+            write_json(self.output / 'driver-attempt.json', {'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id})
+
+    def preflight(self):
+        """Read-only admission. No session, hold, attempt receipt, or staging writes."""
+        self.validate(preflight=True)
+        expected = self.request['preflightIdentity']
+        require(isinstance(expected, dict) and set(expected) == {'candidateId', 'workspaceEpoch'}
+                and expected['candidateId'] == self.prior_id
+                and isinstance(expected['workspaceEpoch'], str)
+                and str(uuid.UUID(expected['workspaceEpoch'])) == expected['workspaceEpoch'],
+                'Preflight must bind the current candidate and workspace epoch.')
+        require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before admission.')
+        self.archive_members()
+        self.verify_configuration()
+        first = self.api('health')
+        context = self.api('access/context')
+        require(first.get('status') == 'ready' and first.get('candidateId') == self.prior_id
+                and first.get('version') == self.release['compatibility']['fromNovaVersion']
+                and first.get('schemaVersion') == 55 and first.get('apiVersion') == 1
+                and context.get('workspaceEpoch') == expected['workspaceEpoch']
+                and self.api('health') == first, 'The installed candidate or selected workspace changed during admission.')
+        print(json.dumps({'format': 1, 'preflight': 'passed', **expected}), flush=True)
+
+    def verify_prior_adoption(self):
+        """Observe both immutable rollback and legacy source; never change either."""
+        review = self.pair['adoptPrior']
+        original = self.adoption_source_prior
+        require(self.rollback_prior != original and self.rollback_prior.parent == self.releases,
+                'Prior adoption must preserve a separate exact rollback release.')
+        app_dependencies.verify_retained_dependencies(self.dependencies, review['dependencies'])
+        require(app_dependencies.inspect_retained_dependencies(original / 'node_modules') == review['sourceDependencies'],
+                'The original prior dependency bytes or metadata changed.')
+        candidate(original, self.prior_id, self.release['compatibility']['fromNovaVersion'])
+        candidate(self.rollback_prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
+        for name in ('package.json', 'dist/candidate.json', 'scripts/host.mjs', 'scripts/candidate.mjs'):
+            protected(original / name)
+            protected(self.rollback_prior / name)
+            require(digest(original / name) == digest(self.rollback_prior / name), 'Adopted prior startup code differs from the installed candidate.')
+        pointer = self.rollback_prior / 'node_modules'
+        require(pointer.is_symlink() and pointer.lstat().st_uid == 0 and pointer.resolve(strict=True) == self.dependencies,
+                'Adopted prior dependencies do not select their independently retained closure.')
+
+    def resolve_prior_dependencies(self):
+        """Each release owns its selector; the configured dependency root is stable."""
+        protected(self.configured_dependencies, True)
+        protected(self.dependency_root, True)
+        pointer = self.prior / 'node_modules'
+        if not pointer.is_symlink():
+            # Only explicit signed adoption may accept the legacy real tree.
+            self.dependencies = self.configured_dependencies
+            return
+        require(pointer.lstat().st_uid == 0, 'The installed dependency selector is not root-owned.')
+        selected = pointer.resolve(strict=True)
+        managed = (selected.name == 'node_modules'
+                   and selected.parent.parent == self.dependency_root / 'managed-updates'
+                   and re.fullmatch('[a-f0-9]{64}', selected.parent.name))
+        require(selected == self.configured_dependencies or managed, 'Installed dependencies escaped the reviewed dependency root.')
+        protected(selected, True)
+        self.dependencies = selected
+
+    def validate_application_dependencies(self):
+        description = self.pair.get('applicationDependencies')
+        signed = self.release.get('applicationDependenciesBundle')
+        require((description is None) == (signed is None), 'Application dependencies are not bound to the signed release.')
+        if description is None:
+            return
+        app_dependencies.validate_description(description, signed)
+        require(int(description['nodeVersion'].split('.')[0]) == self.release['nodeMajor']
+                and description['platform'] == self.release['platform']
+                and description['arch'] == self.release['arch'], 'Application dependencies target a different host runtime.')
+        identity = subprocess.run([str(self.node), '-e', "console.log(JSON.stringify({platform:process.platform,arch:process.arch,nodeVersion:process.versions.node,nodeAbi:Number(process.versions.modules)}))"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True,
+                                  env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'NODE_DISABLE_COMPILE_CACHE': '1'})
+        require(len(identity.stdout) <= 4096 and json.loads(identity.stdout) == {key: description[key] for key in ('platform', 'arch', 'nodeVersion', 'nodeAbi')},
+                'Application dependencies require the exact installed Node version and ABI.')
+        self.application_dependencies = description
+        self.application_dependency_archive = self.bundle / 'app-dependencies.tgz'
+        protected(self.application_dependency_archive, private=True)
+        require(self.application_dependency_archive.stat().st_size == description['archiveBytes']
+                and digest(self.application_dependency_archive) == description['archiveSha256'], 'Downloaded application dependency bytes changed.')
+        app_dependencies.archive_members(self.application_dependency_archive, description)
+        self.application_dependency_target = self.dependency_root / 'managed-updates' / description['archiveSha256']
+        require(self.dependency_root.stat().st_dev == self.recovery_root.stat().st_dev,
+                'Application dependencies and recovery need the same reviewed capacity filesystem.')
+
+    def application_dependency_storage_required(self):
+        if self.application_dependencies is None:
+            return 0
+        if self.application_dependency_target.exists() or self.application_dependency_target.is_symlink():
+            app_dependencies.verify_closure(self.application_dependency_archive, self.application_dependency_target, self.application_dependencies)
+            return 0
+        return app_dependencies.storage_required(self.application_dependencies)
+
+    def stage_application_dependencies(self):
+        if self.application_dependencies is None:
+            return self.dependencies
+        target = self.application_dependency_target
+        if not target.exists() and not target.is_symlink():
+            if not target.parent.exists() and not target.parent.is_symlink():
+                protected(target.parent.parent, True)
+                target.parent.mkdir(mode=0o755)
+                target.parent.chmod(0o755)
+            protected(target.parent, True)
+            app_dependencies.stage_closure(self.application_dependency_archive, target, self.application_dependencies)
+        app_dependencies.verify_closure(self.application_dependency_archive, target, self.application_dependencies)
+        app_dependencies.verify_execution(target, self.node, self.application_dependencies, self.settings['serviceUser'])
+        self.target_dependency_identity = inventory(target)[0]
+        return target / 'node_modules'
 
     def validate_runtime(self):
         runtime = self.pair.get('runtime')
@@ -632,6 +793,8 @@ class Driver:
         guard = self.api('software-update/acceptance')
         require(guard.get('candidateId') == expected and guard.get('heldFor') == self.job_id
                 and guard.get('maintenanceHeld') is True and guard.get('nativeSuspended') is True, 'The live app and native agent must retain this exact update barrier.')
+        if hasattr(self, 'expected_prior'):
+            require(guard.get('epoch') == self.expected_prior['workspaceEpoch'], 'The workspace differs from the original admitted request.')
         require(not require_idle or guard.get('blockers') == [], 'Live work is not verified idle.')
         self.controller_hold()
         agent = self.api('assistant/service')
@@ -731,6 +894,11 @@ class Driver:
             if hasattr(self, 'target_runtime_identity'):
                 require(inventory(self.runtime_target)[0] == self.target_runtime_identity, 'The immutable staged runtime changed.')
         require(inventory(self.dependencies)[0] == self.dependency_identity, 'The retained dependency tree changed.')
+        if getattr(self, 'adopting_prior', False):
+            self.verify_prior_adoption()
+        if hasattr(self, 'target_dependency_identity'):
+            require(inventory(self.application_dependency_target)[0] == self.target_dependency_identity,
+                    'The immutable staged application dependencies changed.')
 
     def service(self, action):
         require(action in {'start', 'stop'}, 'Unsupported service action.')
@@ -811,6 +979,7 @@ class Driver:
         source, source_inodes = inventory(self.data)
         baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
+        required += self.application_dependency_storage_required()
         self.migration_storage_required = 0
         if self.runtime is not None:
             required += self.runtime_storage_required()
@@ -825,6 +994,7 @@ class Driver:
         require(self.releases.stat().st_dev == self.recovery_root.stat().st_dev, 'Candidate and recovery capacity need a separately reviewed filesystem plan.')
         write_json(self.output / 'capacity.json', plan)
         self.stage_runtime()
+        target_dependencies = self.stage_application_dependencies()
         if self.target.exists() or self.target.is_symlink():
             candidate(self.target, self.target_id, self.release['novaVersion'])
             with tarfile.open(self.archive, 'r:gz') as archive:
@@ -855,13 +1025,21 @@ class Driver:
                 require(not destination.is_symlink(), 'Extracted application path was redirected.')
                 destination.chmod(0o755 if destination.is_dir() else 0o644)
         dependencies = lambda path: {key: value for key, value in read_json(path / 'package-lock.json')['packages'].items() if key}
-        require(dependencies(self.prior) == dependencies(self.target), 'Dependencies changed; this runner cannot install them.')
-        require((self.prior / 'node_modules').is_symlink() and (self.prior / 'node_modules').resolve(strict=True) == self.dependencies,
-                'Prior app dependencies differ from the provisioned retained directory.')
+        if self.application_dependencies is None:
+            require(dependencies(self.prior) == dependencies(self.target), 'Changed dependencies require a signed offline application closure.')
+        else:
+            require(digest(self.target / 'package-lock.json') == self.application_dependencies['packageLockSha256']
+                    and app_dependencies.dependency_graph_sha256(read_json(self.target / 'package-lock.json', 16 * 1024 ** 2)) == self.application_dependencies['dependencyGraphSha256'],
+                    'The candidate lockfile differs from the signed application dependency closure.')
+        if getattr(self, 'adopting_prior', False):
+            self.verify_prior_adoption()
+        else:
+            require((self.prior / 'node_modules').is_symlink() and (self.prior / 'node_modules').resolve(strict=True) == self.dependencies,
+                    'Prior app dependencies differ from the provisioned retained directory.')
         link = self.target / 'node_modules'
         if not link.exists() and not link.is_symlink():
-            link.symlink_to(self.dependencies, target_is_directory=True)
-        require(link.is_symlink() and link.lstat().st_uid == 0 and link.resolve(strict=True) == self.dependencies, 'Staged dependency pointer changed.')
+            link.symlink_to(target_dependencies, target_is_directory=True)
+        require(link.is_symlink() and link.lstat().st_uid == 0 and link.resolve(strict=True) == target_dependencies, 'Staged dependency pointer changed.')
         candidate(self.target, self.target_id, self.release['novaVersion'])
         subprocess.run(['/usr/sbin/runuser', '-u', self.settings['serviceUser'], '--', str(self.node), '--input-type=module', '-e',
                         "import {accessSync,constants} from 'node:fs';accessSync('node_modules',constants.R_OK|constants.X_OK);accessSync('dist/service/apps/service/main.js',constants.R_OK);"],
@@ -900,8 +1078,10 @@ class Driver:
         log_reports = []
         native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
                            self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None,
-                           app_releases=((self.prior, self.prior_manifest), (selected, manifest)),
-                           log_retention_window=self.log_retention_window(), log_retention_reports=log_reports)
+                           app_releases=((getattr(self, 'adoption_source_prior', self.prior), self.prior_manifest), (selected, manifest)),
+                           log_retention_window=self.log_retention_window(), log_retention_reports=log_reports,
+                           session_binding_key=self.session_binding_key,
+                           session_binding_node=self.node if self.session_binding_key is not None else None)
         for path in snapshot.rglob('*.jsonl'):
             if 'openclaw-runtime' not in path.parts:
                 continue
@@ -962,7 +1142,9 @@ class Driver:
                            reason='The update could not be prepared. The installed version is unchanged.')
         else:
             payload.update(savedWorkVerified=True, accountsVerified=True, recoveryVerified=True, healthVerified=True)
-        temporary = self.output / 'result.ready.json'
+        # A failed completed-result write may leave its exclusive temporary
+        # file behind. Preserve it; a verified restoration gets its own file.
+        temporary = self.output / ('result.' + outcome + '.ready.json')
         write_json(temporary, payload)
         # Once the atomic result may be visible, a controller can release the
         # barrier. Never roll back after an uncertain acceptance publication.
@@ -994,6 +1176,9 @@ class Driver:
                 os.rename(self.failed, self.data)
             raise
         sync_dir(self.data.parent)
+        if getattr(self, 'adopting_prior', False):
+            self.verify_prior_adoption()
+            self.prior = self.rollback_prior
         candidate(self.prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
         self.switch_runtime(restoring=True)
         self.switch(self.prior)
@@ -1002,11 +1187,27 @@ class Driver:
         self.stage('checking')
         accepted = self.settled_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'], restored=True)
         write_json(self.recovery / 'restoration-accepted.json', {'health': accepted['health'], 'agentVersion': self.from_engine, 'failedWorkspaceRetained': True})
+        self.publish_restored_acceptance(accepted)
         latest = self.recovery_root / ('latest-restored-' + self.job_id + '.json')
-        write_json(latest, {'candidateId': self.prior_id, 'agentVersion': self.from_engine, 'directory': str(self.baseline)})
+        write_json(latest, {'candidateId': self.prior_id, 'agentVersion': self.from_engine, 'directory': str(self.recovery)})
         os.replace(latest, self.recovery_root / 'latest-update.json')
         sync_dir(self.recovery_root)
         self.result('restored')
+
+    def publish_restored_acceptance(self, accepted):
+        """Preserve a target acceptance written before a later publication failed."""
+        destination = self.recovery / 'acceptance.json'
+        if destination.exists() or destination.is_symlink():
+            protected(destination, private=True)
+            previous = read_json(destination)
+            require(previous.get('health', {}).get('candidateId') == self.target_id
+                    and previous.get('agentVersion') == self.to_engine,
+                    'An unexpected recovery acceptance must be preserved for review.')
+            write_json(self.recovery / 'target-acceptance-before-restoration.json', previous)
+        temporary = self.recovery / 'restored-acceptance.ready.json'
+        write_json(temporary, {'health': accepted['health'], 'agentVersion': self.from_engine})
+        os.replace(temporary, destination)
+        sync_dir(self.recovery)
 
     def record_failure(self, failure):
         # Preserve the original cause before recovery. Only literal guard
@@ -1017,7 +1218,7 @@ class Driver:
             if type(failure) is RuntimeError:
                 messages = set()
                 with contextlib.suppress(Exception):
-                    for name in ('install.py', 'recovery.py', 'codex_log_retention.py'):
+                    for name in ('install.py', 'recovery.py', 'codex_log_retention.py', 'app_dependencies.py', 'workspace_key.py'):
                         source = self.bundle / name
                         require(source.stat().st_size <= 512 * 1024, 'Failure diagnostic source exceeded its bound.')
                         for node in ast.walk(ast.parse(source.read_bytes())):
@@ -1031,15 +1232,20 @@ class Driver:
             write_json(self.output / 'failure.json', {'errorType': type(failure).__name__, 'reason': reason})
 
     def run(self):
-        self.validate()
-        with verification_scratch(self.recovery_root):
-            self.run_validated()
+        try:
+            self.validate()
+            with verification_scratch(self.recovery_root):
+                self.run_validated()
+        finally:
+            if self.session_binding_key is not None:
+                self.session_binding_key[:] = b'\0' * len(self.session_binding_key)
+                self.session_binding_key = None
 
     def run_validated(self):
-        self.before = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
-        self.stage('preparing')
         closed_capacity_rejected = False
         try:
+            self.before = self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
+            self.stage('preparing')
             self.stage_app()
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             require(not self.recovery.exists() and not self.restore.exists() and not self.restore.is_symlink(), 'A previous recovery attempt must be retained.')
@@ -1074,6 +1280,8 @@ class Driver:
             self.require_stopped()
             snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped)
             saved_state(self.recovery / 'workspace', self.data, restored=True)
+            if getattr(self, 'workspace_key_credential', None) is not None:
+                self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
             for number, path in enumerate(self.config_files):
                 shutil.copy2(path, self.recovery / ('protected-' + str(number)))
                 require(digest(path) == digest(self.recovery / ('protected-' + str(number))), 'Protected configuration copy did not verify.')
@@ -1081,6 +1289,12 @@ class Driver:
             independent = sum(item['allocated'] for item in inventory(self.recovery / 'workspace')[1].values())
             require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
                     'Verified snapshot no longer leaves full independent restore capacity and reserve.')
+            if getattr(self, 'adopting_prior', False):
+                # Adoption earns its rollback proof from this stopped selected
+                # tree. Never publish the older generation as current recovery.
+                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine, self.from_engine)
+                write_json(self.recovery / 'prior-acceptance.json', {'health': self.before['health'], 'agentVersion': self.from_engine,
+                           'snapshotManifestSha256': digest(self.recovery / 'snapshot-manifest.json'), 'independentRestoreBytes': independent})
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             self.stage('installing')
             self.switch_attempted = True
@@ -1129,10 +1343,13 @@ class Driver:
 
 
 def main():
-    require(len(sys.argv) == 3 and sys.argv[1] == '--request', 'Use the original controller request file.')
+    require(len(sys.argv) == 3 and sys.argv[1] in {'--request', '--preflight'}, 'Use the original controller request file.')
     os.umask(0o077)
     request = pathlib.Path(sys.argv[2])
     protected(request, private=True)
+    if sys.argv[1] == '--preflight':
+        Driver(request).preflight()
+        return
     descriptor = os.open(request.parent / 'driver.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)

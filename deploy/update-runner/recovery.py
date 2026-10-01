@@ -26,6 +26,7 @@ from codex_log_retention import attest_runtime, qualify_logs
 
 RESERVE = 1610612736
 ALLOWANCE = 128 * 1024 ** 2
+SESSION_BINDINGS_VERIFIER_SHA256 = '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0'
 _VERIFICATION_SCRATCH = ContextVar('nova_verification_scratch', default=None)
 
 
@@ -257,6 +258,22 @@ def inode_ids(records):
     return {(item['device'], item['inode']) for item in records.values()}
 
 
+def retained_sparse_allocation(entries, source, copied):
+    """Qualify allocation, after exact bytes/metadata and independent inodes.
+
+    A copied extent may round up by one 4 KiB block. Losing substantial holes
+    is refused even when the result still happens to be classified sparse.
+    The total rounding cost must fit inside the existing copy allowance.
+    """
+    growth = 0
+    for relative, info in source.items():
+        if info['sparse'] and entries[relative]['size'] >= 1024 ** 2:
+            delta = max(0, copied[relative]['allocated'] - info['allocated'])
+            require(delta <= 4096, 'A large sparse file lost more than one allocation block.')
+            growth += delta
+    require(growth <= ALLOWANCE, 'Sparse allocation rounding exceeded its existing copy allowance.')
+
+
 def capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes=0):
     require(inode_ids(source_inodes).isdisjoint(inode_ids(baseline_inodes)), 'Live files already share recovery inodes.')
     changed = []
@@ -289,6 +306,8 @@ def run_copy(arguments, log_path, volume, minimum_free):
                         'Recovery copy approached its operating reserve; evidence was retained.')
                 time.sleep(0.05)
             require(process.returncode == 0, 'Recovery copy failed; private evidence was retained.')
+            require(shutil.disk_usage(volume).free >= minimum_free,
+                    'Recovery copy consumed its operating reserve; evidence was retained.')
         except BaseException:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGTERM)
@@ -331,9 +350,7 @@ def snapshot_closed(data, destination, baseline, require_stopped):
     require(actual == source, 'Closed recovery bytes or metadata differ.')
     require(inode_ids(actual_inodes).isdisjoint(inode_ids(source_inodes)), 'Recovery must not share live file inodes.')
     require(inventory(baseline)[0] == old, 'The prior closed recovery changed.')
-    for relative, info in source_inodes.items():
-        if info['sparse'] and source[relative]['size'] >= 1024 ** 2:
-            require(actual_inodes[relative]['sparse'], 'A large sparse recovery file became fully allocated.')
+    retained_sparse_allocation(source, source_inodes, actual_inodes)
     flush_tree(destination, actual, actual_inodes)
     write_json(destination.parent / 'snapshot-manifest.json', actual)
     write_json(destination.parent / 'snapshot-verified.json', {'manifestSha256': digest(destination.parent / 'snapshot-manifest.json'), **plan})
@@ -354,9 +371,7 @@ def prepare_independent(snapshot, destination, failed, require_stopped):
     require(inode_ids(actual_inodes).isdisjoint(inode_ids(source_inodes) | inode_ids(failed_inodes)),
             'The future live tree must have independent file inodes.')
     require(inventory(snapshot)[0] == expected and inventory(failed)[0] == failed_entries, 'Retained recovery or failed state changed.')
-    for relative, info in source_inodes.items():
-        if info['sparse'] and expected[relative]['size'] >= 1024 ** 2:
-            require(actual_inodes[relative]['sparse'], 'A large sparse restored file became fully allocated.')
+    retained_sparse_allocation(expected, source_inodes, actual_inodes)
     require_stopped()
     flush_tree(destination, actual, actual_inodes)
     return expected
@@ -851,11 +866,56 @@ def retained_app_plugin_paths(configurations, app_releases):
             entry['config']['bundlePath'] = marker
 
 
-def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None):
+def verified_session_bindings(snapshot, selected, configuration, node, key):
+    """Use the single pinned producer-compatible verifier, without logging keys
+    or its private record diagnostics. The source is the selected closed store.
+    The driver's reviewed helper manifest authenticates this sibling too.
+    """
+    require(isinstance(key, (bytes, bytearray)) and len(key) == 32 and node is not None,
+            'Session binding derivation requires its protected key and verified Node executable.')
+    scratch = _VERIFICATION_SCRATCH.get()
+    require(scratch is not None, 'Session binding verification requires private recovery scratch.')
+    store, epoch = selected_workspace(snapshot, closed=True)
+    require(store == snapshot / selected, 'Session binding verification selected the wrong workspace.')
+    source_identity = sqlite_source_identity(store / 'workspace.sqlite')
+    bounded_json(configuration, 4 * 1024 * 1024)
+    configuration_hash = digest(configuration)
+    require(shutil.disk_usage(scratch).free >= sum(value[0][6] for value in source_identity.values()) + RESERVE + ALLOWANCE,
+            'Session binding verification copy and recovery reserve no longer fit.')
+    verifier = pathlib.Path(__file__).resolve().with_name('verify-session-bindings.mjs')
+    require(not verifier.is_symlink() and digest(verifier) == SESSION_BINDINGS_VERIFIER_SHA256,
+            'Session binding verifier differs from the reviewed implementation.')
+    # Node's disposable database copies must consume the accounted recovery
+    # volume, not an unrelated /tmp mount. Do not inherit NODE_OPTIONS/loaders.
+    environment = {name: os.environ[name] for name in ('SystemRoot', 'SYSTEMROOT') if name in os.environ}
+    environment.update(TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch), NODE_DISABLE_COMPILE_CACHE='1')
+    result = subprocess.run([str(node), str(verifier), '--store', str(store), '--config', str(configuration), '--key', '-'],
+                            input=key, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=environment, timeout=120, check=False)
+    require(sqlite_source_identity(store / 'workspace.sqlite') == source_identity and digest(configuration) == configuration_hash,
+            'Session binding source or generated configuration changed during verification.')
+    require(shutil.disk_usage(scratch).free >= RESERVE + ALLOWANCE, 'Session binding verification consumed its recovery reserve.')
+    require(result.returncode == 0 and len(result.stdout) <= 65536,
+            'Generated session bindings failed selected-store derivation verification.')
+    try:
+        report = json.loads(result.stdout)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('Session binding verifier returned an invalid proof.') from None
+    require(report.get('check') == 'sessionBindings-derivation' and report.get('pass') is True
+            and report.get('diagnostics', {}).get('epoch') == epoch,
+            'Session binding proof does not match the selected workspace epoch.')
+
+
+def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None,
+                                 *, session_binding_key=None, session_binding_node=None):
     relative = selected / 'openclaw-runtime' / 'openclaw.json'
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
         return None
+    derive_bindings = session_binding_key is not None or session_binding_node is not None
+    if derive_bindings:
+        require(all(path.resolve(strict=True) == path for path in paths), 'The selected native configuration was redirected.')
+        verified_session_bindings(snapshot, selected, paths[1], session_binding_node, session_binding_key)
     normalized, hashes, byte_sizes = [], [], []
     for path in paths:
         require(path.resolve(strict=True) == path, 'The selected native configuration was redirected.')
@@ -874,6 +934,10 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
         bridge = value.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
         if isinstance(bridge, dict) and isinstance(bridge.get('token'), str) and re.fullmatch(r'[a-f0-9]{64}', bridge['token']):
             bridge['token'] = '<owned-module-token>'
+        if derive_bindings and isinstance(bridge, dict):
+            # Only this generated field is qualified above. Every other config
+            # value (including module permissions and credentials) stays exact.
+            bridge.pop('sessionBindings', None)
         if (from_version, to_version) == ('2026.9.2', '2026.9.6'):
             # The official configuration writer records these two completed
             # migrations and removes the implicit empty main-agent entry.
@@ -1234,8 +1298,10 @@ def transcript_hashes(path, node):
     return Counter(hashes)
 
 
-def retained_plugin_index(before, after, node, after_path):
-    """Permit the pinned official npm Codex install and rebuilt catalog only."""
+def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6'):
+    """Qualify pinned migration or same-engine catalog effective content."""
+    require((from_version, to_version) in {('2026.9.2', '2026.9.6'), ('2026.9.6', '2026.9.6')},
+            'Native machine-state regeneration is outside the reviewed engines.')
     names = ['state_key', 'value_json', 'updated_at_ms']
     for connection in (before, after):
         require([item[1] for item in connection.execute('pragma table_info(config_machine_state)')] == names,
@@ -1261,7 +1327,7 @@ def retained_plugin_index(before, after, node, after_path):
     indexes, revisions = [], []
     required = {'version', 'warning', 'hostContractVersion', 'compatRegistryVersion', 'migrationVersion',
                 'policyHash', 'generatedAtMs', 'installRecords', 'plugins', 'diagnostics'}
-    for row, version in ((old[key], '2026.9.2'), (new[key], '2026.9.6')):
+    for row, version in ((old[key], from_version), (new[key], to_version)):
         require(isinstance(row[1], str) and len(row[1]) <= 16 * 1024 * 1024, 'Native plugin index exceeded its bound.')
         value = json.loads(row[1])
         require(isinstance(value, dict) and set(value) == {'revision', 'index'}
@@ -1288,6 +1354,11 @@ def retained_plugin_index(before, after, node, after_path):
     old_index, new_index = indexes
     require(revisions[1] >= revisions[0] and old_index.get('workspaceDir') == new_index.get('workspaceDir')
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
+    if from_version == to_version:
+        require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
+        effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
+        require(effective(old_index) == effective(new_index), 'Retained native plugin policy or effective catalog changed.')
+        return
     records, updated = old_index['installRecords'], new_index['installRecords']
     require(set(records) == set(updated) and 'codex' in records
             and all(records[name] == updated[name] for name in records if name != 'codex')
@@ -1516,14 +1587,15 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
 
 
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
-                       log_retention_window=None, log_retention_reports=None):
+                       log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch, closed=True)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
-    configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases)
+    configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases,
+                                                  session_binding_key=session_binding_key, session_binding_node=session_binding_node)
     embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version,
                                           log_retention_window, log_retention_reports)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version)
@@ -1549,7 +1621,10 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
                 if table == 'config_machine_state':
-                    require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
+                    if to_version == '2026.9.6':
+                        retained_plugin_index(before, after, node, live / relative, from_version, to_version)
+                    else:
+                        require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
                     require(rows(before, table) <= (native_restart_rows(before, after, table, relative, live / relative, boot_replacements)
                             if to_version == '2026.9.6' else native_boot_rows(after, table, boot_replacements)),

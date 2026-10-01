@@ -4,10 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ManagedUpdateInstaller, reviewedAssetResponse } from '../apps/service/update-installer.js';
+import { ManagedUpdateInstaller, reviewedAssetResponse, updatePreflightLimits } from '../apps/service/update-installer.js';
 import type { VerifiedUpdateRelease } from '../apps/service/update-feed.js';
 
 const hash=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
+const prior=(release:VerifiedUpdateRelease)=>({candidateId:release.fromCandidateId,workspaceEpoch:randomUUID()});
 const file=(name:string,content:string)=>({name,data:Buffer.from(content).toString('base64'),sha256:hash(content)});
 const runner=file('install.py','# Inert integrity fixture. This file must never execute.\n');
 const companion=file('acceptance.py','# Another inert fixture.\n');
@@ -54,7 +55,7 @@ test('paired runtime download is separately authenticated, reused, and checked a
     assert.deepEqual(readFileSync(join(folder,'runtime.tgz')),runtime);assert.deepEqual(progress.at(-1),[f.bytes.length+runtime.length,f.bytes.length+runtime.length]);
     await installer.prepare(release,()=>{});assert.equal(requests,2);
     writeFileSync(join(folder,'runtime.tgz'),Buffer.alloc(runtime.length));
-    await assert.rejects(installer.run(release,randomUUID(),()=>{}),/Runtime package changed/);
+    await assert.rejects(installer.run(release,randomUUID(),()=>{},prior(release)),/Runtime package changed/);
     assert.equal(existsSync(join(folder,'attempts')),false,'Tampered runtime cannot start or record installation.');
   }finally{f.close();}
 });
@@ -64,6 +65,100 @@ test('invalid runtime bytes cannot be accepted alongside a valid application pac
   const release={...f.release,runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:runtime.length,sha256:hash(runtime)}};
   const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),'must-not-execute',(async(url)=>new Response(url===release.runtimeBundle.url?Buffer.from('invalid'):f.bytes)) as typeof fetch);
   try{await assert.rejects(installer.prepare(release,()=>{}),/Runtime package verification failed|runtime package exceeded/i);assert.equal(existsSync(join(f.directory,release.bundle.sha256,'attempts')),false);}finally{f.close();}
+});
+
+test('separate dependency and runtime closures verify, share reviewed bundle identity and retain total progress',async()=>{
+  const f=fixture(),dependencies=Buffer.from('inert application dependencies'),runtime=Buffer.from('inert runtime');let requests=0;
+  const release={...f.release,applicationDependenciesBundle:{url:'https://updates.example.test/dependencies.tgz',bytes:dependencies.length,sha256:hash(dependencies)},runtimeBundle:{url:'https://updates.example.test/runtime.tgz',bytes:runtime.length,sha256:hash(runtime)}};
+  const folder=join(f.directory,release.bundle.sha256),progress:number[][]=[];
+  const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),'must-not-execute',(async url=>{requests++;return new Response(url===release.applicationDependenciesBundle.url?dependencies:url===release.runtimeBundle.url?runtime:f.bytes);}) as typeof fetch);
+  try{
+    await installer.prepare(release,(a,b)=>progress.push([a,b]));
+    assert.deepEqual(readFileSync(join(folder,'app-dependencies.tgz')),dependencies);assert.deepEqual(readFileSync(join(folder,'runtime.tgz')),runtime);
+    const total=f.bytes.length+dependencies.length+runtime.length;assert.deepEqual(progress.at(-1),[total,total]);assert.ok(progress.every(item=>item[1]===total));
+    await installer.prepare(release,()=>{});assert.equal(requests,3);
+    writeFileSync(join(folder,'app-dependencies.tgz'),Buffer.alloc(dependencies.length));
+    await assert.rejects(installer.preflight(release,randomUUID(),{candidateId:release.fromCandidateId,workspaceEpoch:randomUUID()}),/dependencies package changed/);
+    await assert.rejects(installer.run(release,randomUUID(),()=>{},prior(release)),/dependencies package changed/);
+    assert.equal(existsSync(join(folder,'attempts')),false);
+  }finally{f.close();}
+});
+
+test('a dependency-only closure selects the reviewed bundle folder and rejects invalid bytes or oversized declarations',async()=>{
+  for(const invalid of [false,true]){
+    const f=fixture(),dependencies=Buffer.from('dependency fixture');let requests=0;
+    const release={...f.release,applicationDependenciesBundle:{url:'https://updates.example.test/dependencies.tgz',bytes:dependencies.length,sha256:hash(dependencies)}};
+    const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),'must-not-execute',(async url=>{requests++;return new Response(url===release.applicationDependenciesBundle.url?(invalid?Buffer.alloc(dependencies.length):dependencies):f.bytes);}) as typeof fetch);
+    try{
+      if(invalid)await assert.rejects(installer.prepare(release,()=>{}),/dependencies package verification failed/);
+      else {await installer.prepare(release,()=>{});assert.ok(existsSync(join(f.directory,release.bundle.sha256,'app-dependencies.tgz')));assert.equal(existsSync(f.folder),false);}
+      assert.equal(requests,2);
+      await assert.rejects(installer.prepare({...release,applicationDependenciesBundle:{...release.applicationDependenciesBundle,bytes:512*1024*1024+1}},()=>{}),/supported size/);assert.equal(requests,2);
+    }finally{f.close();}
+  }
+});
+
+function preflightFixture(body:string,operation='--preflight'){
+  const contents="const fs=require('node:fs'); const assert=require('node:assert/strict'); assert.equal(process.argv[2],"+JSON.stringify(operation)+"); const request=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); const identity=request.preflightIdentity; "+body;
+  const runnerFile=file('install.py',contents),f=fixture([runnerFile,companion]);
+  const release={...f.release,bundle:{...f.release.bundle,runnerSha256:runnerFile.sha256}};
+  const installer=new ManagedUpdateInstaller(f.directory,join(f.directory,'host.json'),process.execPath,(async()=>new Response(f.bytes)) as typeof fetch);
+  return {...f,release,installer};
+}
+
+test('read-only preflight binds a fresh exact workspace response without creating an installation request or result',async()=>{
+  const f=preflightFixture("assert.deepEqual(Object.keys(request).sort(),['format','hostConfiguration','jobId','preflightIdentity','release']); console.log(JSON.stringify({format:1,preflight:'passed',...identity}));"),jobId=randomUUID(),prior={candidateId:f.release.fromCandidateId,workspaceEpoch:randomUUID()};
+  try{
+    await f.installer.prepare(f.release,()=>{});
+    await f.installer.preflight(f.release,jobId,prior);await f.installer.preflight(f.release,jobId,prior);
+    const entries=readdirSync(f.attempt(jobId));assert.equal(entries.length,2);assert.ok(entries.every(name=>/^preflight-[a-f0-9-]+\.json$/.test(name)));
+    for(const name of entries){const request=JSON.parse(readFileSync(join(f.attempt(jobId),name),'utf8'));assert.deepEqual(request.preflightIdentity,prior);assert.equal(request.jobId,jobId);assert.deepEqual(request.release,f.release);}
+    await assert.rejects(f.installer.preflight(f.release,jobId,{...prior,candidateId:'c'.repeat(64)}),/reviewed prior candidate/);
+    writeFileSync(join(f.attempt(jobId),'request.json'),'retained original execution');
+    await assert.rejects(f.installer.preflight(f.release,jobId,prior),/reconciled/);assert.equal(readFileSync(join(f.attempt(jobId),'request.json'),'utf8'),'retained original execution');
+  }finally{f.close();}
+});
+
+test('preflight rejects wrong-workspace, malformed, excessive and unsuccessful runner responses without exposing stderr',async()=>{
+  const bodies=[
+    "console.log(JSON.stringify({format:1,preflight:'passed',...identity,candidateId:'c'.repeat(64)}));",
+    "console.log(JSON.stringify({format:1,preflight:'passed',...identity,workspaceEpoch:require('node:crypto').randomUUID()}));",
+    "console.log(JSON.stringify({format:1,preflight:'passed',...identity,unreviewed:true}));",
+    "console.log('not json');",
+    "console.log('{}\\n{}');",
+    "process.stdout.write('x'.repeat(17000));",
+    "process.stderr.write('secret-private-error '.repeat(1000));",
+    "console.error('secret-private-error');process.exit(2);",
+  ];
+  for(const body of bodies){
+    const f=preflightFixture(body),jobId=randomUUID();
+    try{await f.installer.prepare(f.release,()=>{});await assert.rejects(f.installer.preflight(f.release,jobId,{candidateId:f.release.fromCandidateId,workspaceEpoch:randomUUID()}),error=>{assert.doesNotMatch(String(error),/secret-private-error/);return true;});assert.ok(readdirSync(f.attempt(jobId)).every(name=>name.startsWith('preflight-')));}finally{f.close();}
+  }
+});
+
+test('read-only preflight terminates a stalled runner at the bounded deadline',async context=>{
+  const f=preflightFixture('setInterval(()=>{},1000);'),jobId=randomUUID();
+  try{
+    await f.installer.prepare(f.release,()=>{});context.mock.timers.enable({apis:['setTimeout']});
+    const pending=f.installer.preflight(f.release,jobId,{candidateId:f.release.fromCandidateId,workspaceEpoch:randomUUID()});
+    const rejected=assert.rejects(pending,/preflight did not verify/);
+    const deadline=performance.now()+5000;
+    while(!existsSync(f.attempt(jobId))||!readdirSync(f.attempt(jobId)).some(name=>name.startsWith('preflight-'))){assert.ok(performance.now()<deadline,'Preflight request must be staged before its deadline is advanced.');await new Promise(resolve=>setImmediate(resolve));}
+    context.mock.timers.tick(updatePreflightLimits.timeoutMs);await rejected;
+    assert.ok(readdirSync(f.attempt(jobId)).every(name=>name.startsWith('preflight-')));
+  }finally{context.mock.timers.reset();f.close();}
+});
+
+test('the actual execution request retains the original workspace identity after preflight',async()=>{
+  const f=preflightFixture("assert.deepEqual(Object.keys(request).sort(),['expectedPrior','format','hostConfiguration','jobId','release']); assert.equal(request.expectedPrior.candidateId,request.release.fromCandidateId); fs.writeFileSync(require('node:path').join(require('node:path').dirname(process.argv[3]),'result.json'),JSON.stringify({format:1,jobId:request.jobId,candidateId:request.release.candidateId,priorCandidateId:request.expectedPrior.candidateId,outcome:'unchanged',unchangedVerified:true,healthVerified:true,reason:'Synthetic unchanged fixture.'}));",'--request');
+  const jobId=randomUUID(),expectedPrior=prior(f.release);
+  try{
+    await f.installer.prepare(f.release,()=>{});
+    assert.equal(await f.installer.run(f.release,jobId,()=>{},expectedPrior),'unchanged');
+    const recorded=JSON.parse(readFileSync(join(f.attempt(jobId),'request.json'),'utf8'));
+    assert.deepEqual(recorded.expectedPrior,expectedPrior);
+    await assert.rejects(f.installer.run(f.release,randomUUID(),()=>{},{...expectedPrior,candidateId:'f'.repeat(64)}),/reviewed prior candidate/);
+  }finally{f.close();}
 });
 
 test('interrupted download evidence is retained while a later attempt downloads and verifies anew',async()=>{
@@ -96,7 +191,7 @@ test('declared and streamed size, hash and response identity failures cannot ext
 
 test('signed but malformed file tables reject reserved paths, traversal, duplicates and invalid contents',async()=>{
   for(const files of [
-    ...['bundle.json','request.json','result.json','runner.log','attempts','../outside.py','sub/file.py','sub\\file.py','C:outside.py'].map(name=>[runner,file(name,'fixture')]),
+    ...['bundle.json','runtime.tgz','app-dependencies.tgz','preflight-request.json','request.json','result.json','runner.log','attempts','../outside.py','sub/file.py','sub\\file.py','C:outside.py'].map(name=>[runner,file(name,'fixture')]),
     [runner,runner], [companion], [runner,{...companion,data:'eA'}], [runner,{...companion,sha256:'f'.repeat(64)}],
   ]){
     const f=fixture(files);try{await assert.rejects(f.installer.prepare(f.release,()=>{}));assert.equal(existsSync(join(f.directory,'outside.py')),false);assert.equal(existsSync(join(f.folder,'request.json')),false);}finally{f.close();}
@@ -108,13 +203,13 @@ test('run admission revalidates both the bundle and companion files before any r
   for(const changed of ['bundle.json','install.py','acceptance.py']){
     const f=fixture();try{
       await f.installer.prepare(f.release,()=>{});writeFileSync(join(f.folder,changed),'tampered fixture');
-      await assert.rejects(f.installer.run(f.release,randomUUID(),()=>assert.fail('Unverified content cannot report a running stage')),/changed/);
+      await assert.rejects(f.installer.run(f.release,randomUUID(),()=>assert.fail('Unverified content cannot report a running stage'),prior(f.release)),/changed/);
       assert.equal(existsSync(join(f.folder,'request.json')),false);assert.equal(existsSync(join(f.folder,'runner.log')),false);
     }finally{f.close();}
   }
   const f=fixture();try{
     await f.installer.prepare(f.release,()=>{});const jobId=randomUUID(),attempt=f.attempt(jobId),original='{ "retained": true }';mkdirSync(attempt,{recursive:true});writeFileSync(join(attempt,'request.json'),original);
-    await assert.rejects(f.installer.run(f.release,jobId,()=>assert.fail('An earlier attempt cannot run again')),/reconciled/);
+    await assert.rejects(f.installer.run(f.release,jobId,()=>assert.fail('An earlier attempt cannot run again'),prior(f.release)),/reconciled/);
     assert.equal(readFileSync(join(attempt,'request.json'),'utf8'),original);assert.equal(existsSync(join(attempt,'runner.log')),false);
   }finally{f.close();}
 });

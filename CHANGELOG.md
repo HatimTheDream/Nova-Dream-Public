@@ -1,3 +1,10 @@
+## [2.0.4] — 2026-09-30
+
+- Checks update prerequisites before requesting maintenance and again before installation; uncertain started attempts still require verified recovery.
+- Supports signed offline application dependency packages with lock, platform, native-module and integrity checks while retaining separate rollback dependencies.
+- Verifies regenerated session bindings against the selected saved workspace and allows narrowly verified plugin-index refreshes and filesystem allocation rounding.
+- Adds exact application archive packaging, isolated Linux recovery checks, and explicit legacy-installation adoption without modifying shared dependency files or relabelling an old backup.
+
 ## [2.0.3] — 2026-09-30
 
 - Keeps the Home header in place during keyboard navigation and lets Your Day reflow with enlarged text.

@@ -9,6 +9,9 @@ import type {VerifiedUpdateRelease} from './update-feed.js';
 import {readUpdateJson,writeUpdateJson} from './update-storage.js';
 
 const maxBundle=128*1024*1024;
+export const updatePreflightLimits=Object.freeze({timeoutMs:120_000,outputBytes:16*1024});
+const preflightIdentitySchema=z.object({candidateId:z.string().regex(/^[a-f0-9]{64}$/),workspaceEpoch:z.string().uuid()}).strict();
+const preflightResultSchema=preflightIdentitySchema.extend({format:z.literal(1),preflight:z.literal('passed')}).strict();
 const bundleSchema=z.object({format:z.literal(1),files:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/),data:z.string().max(maxBundle),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict()).min(1).max(64)}).strict();
 const resultIdentity={format:z.literal(1),jobId:z.string().uuid(),candidateId:z.string().regex(/^[a-f0-9]{64}$/),priorCandidateId:z.string().regex(/^[a-f0-9]{64}$/)};
 const resultSchema=z.discriminatedUnion('outcome',[
@@ -40,7 +43,7 @@ export class ManagedUpdateInstaller implements Installer {
   constructor(private readonly directory:string,private readonly hostConfiguration:string,private readonly python='/usr/bin/python3',private readonly fetch=globalThis.fetch){}
   private folder(release:VerifiedUpdateRelease){
     if(!/^[a-f0-9]{64}$/.test(release.candidateId))throw Error('Invalid update candidate identity.');
-    const identity=release.runtimeBundle?release.bundle.sha256:release.candidateId;
+    const identity=release.runtimeBundle||release.applicationDependenciesBundle?release.bundle.sha256:release.candidateId;
     if(!/^[a-f0-9]{64}$/.test(identity))throw Error('Invalid update release identity.');
     const folder=join(this.directory,identity);
     if(existsSync(folder)){const info=lstatSync(folder);if(!info.isDirectory()||info.isSymbolicLink())throw Error('An update path needs review.');}
@@ -61,24 +64,28 @@ export class ManagedUpdateInstaller implements Installer {
     return folder;
   }
   async prepare(release:VerifiedUpdateRelease,progress:(received:number,total:number)=>void){
-    const runtime = release.runtimeBundle, total = release.bundle.bytes + (runtime?.bytes ?? 0);
-    await this.prepareApp(release, received => progress(received, total));
-    if (!runtime) return;
-    if (!Number.isSafeInteger(runtime.bytes) || runtime.bytes <= 0 || runtime.bytes > 512 * 1024 * 1024) throw Error('The runtime package exceeds its supported size.');
-    const dir = this.folder(release), download = join(dir, 'runtime.tgz');
-    if (await this.verifiedAsset(runtime, download)) { progress(total,total); return; }
-    const space = statfsSync(this.directory); if (Number(space.bavail) * Number(space.bsize) < runtime.bytes + 128 * 1024 * 1024) throw Error('Not enough space to stage the runtime update.');
-    if (existsSync(download)) { const info=lstatSync(download); if(!info.isFile()||info.isSymbolicLink()) throw Error('A runtime update path needs review.'); renameSync(download,join(dir,'incomplete-runtime-'+randomUUID()+'.tgz')); }
+    const assets=[{asset:release.runtimeBundle,name:'runtime',label:'Runtime'},{asset:release.applicationDependenciesBundle,name:'app-dependencies',label:'Application dependencies'}];
+    for(const {asset,label} of assets)if(asset&&(!Number.isSafeInteger(asset.bytes)||asset.bytes<=0||asset.bytes>512*1024*1024))throw Error(label+' package exceeds its supported size.');
+    const total=release.bundle.bytes+assets.reduce((sum,item)=>sum+(item.asset?.bytes??0),0);
+    await this.prepareApp(release,received=>progress(received,total));
+    let received=release.bundle.bytes;
+    for(const {asset,name,label} of assets){if(!asset)continue;await this.prepareAsset(release,asset,name,label,count=>progress(received+count,total));received+=asset.bytes;}
+  }
+  private async prepareAsset(release:VerifiedUpdateRelease,asset:{url:string;bytes:number;sha256:string},name:string,label:string,progress:(received:number)=>void){
+    const dir=this.folder(release),download=join(dir,name+'.tgz');
+    if(await this.verifiedAsset(asset,download)){progress(asset.bytes);return;}
+    const space=statfsSync(this.directory);if(Number(space.bavail)*Number(space.bsize)<asset.bytes+128*1024*1024)throw Error('Not enough space to stage '+label.toLowerCase()+'.');
+    if(existsSync(download)){const info=lstatSync(download);if(!info.isFile()||info.isSymbolicLink())throw Error('An external update path needs review.');renameSync(download,join(dir,'incomplete-'+name+'-'+randomUUID()+'.tgz'));}
     const abort = new AbortController(), timer = setTimeout(()=>abort.abort(),10*60*1000); timer.unref();
     let file: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const response=await reviewedAssetResponse(runtime.url,abort.signal,this.fetch);
-      const declared=response.headers.get('content-length');if(declared&&Number(declared)!==runtime.bytes)throw Error('Runtime package size changed.');
+      const response=await reviewedAssetResponse(asset.url,abort.signal,this.fetch);
+      const declared=response.headers.get('content-length');if(declared&&Number(declared)!==asset.bytes)throw Error(label+' package size changed.');
       file=await open(download,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
       const hash=createHash('sha256');let received=0,lastReport=0;
-      for await(const part of response.body as unknown as AsyncIterable<Uint8Array>){received+=part.length;if(received>runtime.bytes)throw Error('Runtime package exceeded its verified size.');hash.update(part);await file.writeFile(part);if(Date.now()-lastReport>=250||received===runtime.bytes){progress(release.bundle.bytes+received,total);lastReport=Date.now();}}
+      for await(const part of response.body as unknown as AsyncIterable<Uint8Array>){received+=part.length;if(received>asset.bytes)throw Error(label+' package exceeded its verified size.');hash.update(part);await file.writeFile(part);if(Date.now()-lastReport>=250||received===asset.bytes){progress(received);lastReport=Date.now();}}
       await file.sync();await file.close();file=undefined;
-      if(received!==runtime.bytes||hash.digest('hex')!==runtime.sha256)throw Error('Runtime package verification failed.');
+      if(received!==asset.bytes||hash.digest('hex')!==asset.sha256)throw Error(label+' package verification failed.');
     } finally { clearTimeout(timer); await file?.close(); }
   }
   private async verifiedAsset(asset:{bytes:number;sha256:string},path:string){
@@ -109,7 +116,7 @@ export class ManagedUpdateInstaller implements Installer {
   private extract(release:VerifiedUpdateRelease,path:string){
     const bundle=bundleSchema.parse(readUpdateJson(path,maxBundle));
     if(new Set(bundle.files.map(f=>f.name)).size!==bundle.files.length)throw Error('Duplicate update files.');
-    if(bundle.files.some(f=>['bundle.json','runtime.tgz','request.json','result.json','runner.log','attempts'].includes(f.name)))throw Error('Reserved update file.');
+    if(bundle.files.some(f=>['bundle.json','runtime.tgz','app-dependencies.tgz','request.json','result.json','runner.log','attempts'].includes(f.name)||f.name.startsWith('preflight-')))throw Error('Reserved update file.');
     const runner=bundle.files.find(f=>f.name==='install.py');if(!runner||runner.sha256!==release.bundle.runnerSha256)throw Error('The installer does not match its reviewed identity.');
     for(const file of bundle.files){const bytes=Buffer.from(file.data,'base64');if(bytes.toString('base64')!==file.data||createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('An update file did not verify.');const dest=join(this.folder(release),file.name);if(existsSync(dest)){const info=lstatSync(dest);if(!info.isFile()||info.isSymbolicLink()||!readFileSync(dest).equals(bytes))throw Error('A staged update file changed.');}else{const fd=openSync(dest,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{writeFileSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}}}
   }
@@ -119,16 +126,44 @@ export class ManagedUpdateInstaller implements Installer {
     if(result.jobId!==jobId||result.candidateId!==release.candidateId||result.priorCandidateId!==release.fromCandidateId)throw Error('Update acceptance does not match its original request.');
     return result.outcome==='unchanged'&&result.reasonCode?{outcome:'unchanged',reasonCode:result.reasonCode}:result.outcome;
   }
-  async run(release:VerifiedUpdateRelease,jobId:string,phase:Parameters<Installer['run']>[2]){
+  private async verifiedRunner(release:VerifiedUpdateRelease){
     const directory=this.folder(release),runner=join(directory,'install.py');
     const bundle=join(directory,'bundle.json');
     if(!await this.verifiedBundle(release,bundle))throw Error('Update package changed after verification.');
     if(release.runtimeBundle&&!await this.verifiedAsset(release.runtimeBundle,join(directory,'runtime.tgz')))throw Error('Runtime package changed after verification.');
+    if(release.applicationDependenciesBundle&&!await this.verifiedAsset(release.applicationDependenciesBundle,join(directory,'app-dependencies.tgz')))throw Error('Application dependencies package changed after verification.');
     this.extract(release,bundle);
     const runnerInfo=lstatSync(runner);
     if(!runnerInfo.isFile()||runnerInfo.isSymbolicLink()||await hashFile(runner)!==release.bundle.runnerSha256)throw Error('Installer changed after verification.');
+    return {directory,runner};
+  }
+  async preflight(release:VerifiedUpdateRelease,jobId:string,prior:Parameters<Installer['preflight']>[2]):Promise<void>{
+    const identity=preflightIdentitySchema.parse(prior);
+    if(identity.candidateId!==release.fromCandidateId)throw Error('Preflight must identify the reviewed prior candidate.');
+    const {directory,runner}=await this.verifiedRunner(release),attempt=this.attempt(release,jobId,true);
+    if(['request.json','driver-attempt.json','result.json'].some(name=>existsSync(join(attempt,name))))throw Error('The original installation attempt must be reconciled, not repeated.');
+    const request=join(attempt,'preflight-'+randomUUID()+'.json');
+    writeUpdateJson(request,{format:1,jobId,release,hostConfiguration:this.hostConfiguration,preflightIdentity:identity});
+    const output=await new Promise<string>((resolve,reject)=>{
+      const child=spawn(this.python,[runner,'--preflight',request],{cwd:directory,stdio:['ignore','pipe','pipe'],shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'}});
+      const chunks:Buffer[]=[];let stdout=0,stderr=0,failed=false;
+      const fail=()=>{if(failed)return;failed=true;child.kill('SIGKILL');};
+      const timer=setTimeout(fail,updatePreflightLimits.timeoutMs);timer.unref();
+      child.stdout!.on('data',(bytes:Buffer)=>{stdout+=bytes.length;if(stdout>updatePreflightLimits.outputBytes){fail();return;}chunks.push(bytes);});
+      child.stderr!.on('data',(bytes:Buffer)=>{stderr+=bytes.length;if(stderr>updatePreflightLimits.outputBytes)fail();});
+      child.on('error',()=>{failed=true;});
+      child.on('close',code=>{clearTimeout(timer);if(code!==0||failed){reject(Error('Read-only update preflight did not verify. Nothing was installed.'));return;}resolve(Buffer.concat(chunks).toString('utf8'));});
+    });
+    let result:z.infer<typeof preflightResultSchema>;
+    try{result=preflightResultSchema.parse(JSON.parse(output));}catch{throw Error('Read-only update preflight returned invalid verification.');}
+    if(result.candidateId!==identity.candidateId||result.workspaceEpoch!==identity.workspaceEpoch)throw Error('The prior workspace changed during update preflight.');
+  }
+  async run(release:VerifiedUpdateRelease,jobId:string,phase:Parameters<Installer['run']>[2],prior:Parameters<Installer['run']>[3]){
+    const expectedPrior=preflightIdentitySchema.parse(prior);
+    if(expectedPrior.candidateId!==release.fromCandidateId)throw Error('Installation must identify the reviewed prior candidate.');
+    const {directory,runner}=await this.verifiedRunner(release);
     const attempt=this.attempt(release,jobId,true),request=join(attempt,'request.json');if(existsSync(request))throw Error('The original installation attempt must be reconciled, not repeated.');
-    writeUpdateJson(request,{format:1,jobId,release,hostConfiguration:this.hostConfiguration});
+    writeUpdateJson(request,{format:1,jobId,release,hostConfiguration:this.hostConfiguration,expectedPrior});
     const log=openSync(join(attempt,'runner.log'),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
     try {await new Promise<void>((resolve,reject)=>{
       const child=spawn(this.python,[runner,'--request',request],{cwd:directory,stdio:['ignore','pipe',log],shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'}});

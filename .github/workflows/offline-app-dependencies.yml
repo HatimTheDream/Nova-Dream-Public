@@ -1,0 +1,51 @@
+name: Prepare offline Linux application dependencies
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build a separate locked production dependency tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/nova-offline-dependency-source"
+          mkdir -p "$source_dir/scripts"
+          cp package.json package-lock.json "$source_dir/"
+          cp scripts/prepare-pty.mjs "$source_dir/scripts/"
+          npm ci --prefix "$source_dir" --omit=dev --no-audit --no-fund
+          npm audit --prefix "$source_dir" --omit=dev --audit-level=moderate
+      - name: Qualify native imports and package only the offline closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/nova-offline-dependency-artifact"
+          mkdir -p "$artifact_dir"
+          python3 -B deploy/update-runner/app_dependencies.py pack \
+            "$RUNNER_TEMP/nova-offline-dependency-source" \
+            "$artifact_dir/app-dependencies.tgz" --node "$(command -v node)"
+      - name: Retain private review artifacts for one day
+        if: github.event.repository.private == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-dependencies-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/nova-offline-dependency-artifact/app-dependencies.tgz
+            ${{ runner.temp }}/nova-offline-dependency-artifact/app-dependencies.tgz.metadata.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

@@ -1,6 +1,6 @@
 # Reviewed application and agent installer
 
-`install.py`, `recovery.py`, and `codex_log_retention.py` implement the Linux delivery procedure used by the external updater. They support application updates with OpenClaw **2026.9.2** or **2026.9.6**, and the reviewed **2026.9.2 → 2026.9.6** upgrade. Nova's dependency lockfile and workspace schemas **53/55** stay unchanged. Other engine or schema transitions require a separate review and rehearsal. The installer never runs package installation, removes prior releases, or prunes backups.
+The reviewed Python driver and recovery helpers implement the Linux delivery procedure used by the external updater. They support application updates with OpenClaw **2026.9.2** or **2026.9.6**, and the reviewed **2026.9.2 → 2026.9.6** upgrade. The current application schema remains **55**. Changed application dependencies require a separately signed offline closure. Other engine or schema transitions require a separate review and rehearsal. The installer never runs package installation, removes prior releases, or prunes backups.
 
 Engine updates carry a separately signed, bounded `runtimeBundle` and a `runtime` record in `reviewed-pair.json`. The complete offline archive includes `node/bin/node`, production `node_modules`, `package.json`, and `package-lock.json`. The record pins archive bytes, SHA-256, expanded bytes, file count, Node version and Node binary hash. Root-owned `agentDirectory` and `agentNodePath` selectors choose the immutable package and engine-only Node runtime; Nova and the controller retain their existing Node runtime. The app's `E3_OPENCLAW_ENTRY` and `E3_OPENCLAW_NODE` must use those stable selectors.
 
@@ -24,6 +24,7 @@ Next to the protected controller configuration, provision `runner.json` owned by
   "dependencyDirectory": "/opt/nova/dependencies/node_modules",
   "recoveryDirectory": "/var/lib/nova-update-recovery",
   "baselineDirectory": "/var/lib/nova-update-recovery/before-reviewed-bootstrap",
+  "workspaceKeyCredential": "/etc/nova/server.key",
   "protectedFiles": [
     "/etc/nova/server.key",
     "/etc/nova/host.env",
@@ -36,6 +37,8 @@ Next to the protected controller configuration, provision `runner.json` owned by
 
 Use the actual independently reviewed paths. The driver hashes and preserves protected files without displaying their bytes. App dependencies must be the same retained root-owned directory selected by the prior app. The real service process must inherit `E3_UPDATE_SOCKET=/run/nova-update/control.sock`. No caller can supply another command, service, server URL, or recovery path.
 
+All code and dependency authority paths must be root-owned and must not be group/other-writable. Do not apply the historical `775`/`664` deployment modes. A private wrapping credential must also be in `protectedFiles`; retain every loaded service drop-in and external runtime target. Never normalize shared legacy dependency inodes in place.
+
 The recovery root and its ancestors must be owned by root and not writable by the app account. Keep them outside an app-owned home directory; do not change that home directory's ownership to satisfy updater checks. When retaining an earlier closed snapshot in a new protected recovery root, preserve its full manifest, acceptance, content and metadata and verify that no regular file shares an inode with the live workspace. Preserve the original snapshot.
 
 The baseline must be a root-private closed snapshot with `workspace/`, `acceptance.json` identifying the installed candidate, and `snapshot-verified.json` authenticating `snapshot-manifest.json` (or the older `linked-snapshot-source.json`). It must remain separate from live workspace files. The driver compares every snapshot byte and relevant metadata before reusing unchanged files. After an accepted update, a protected `latest-update.json` selects the next verified baseline; no recovery folder is deleted or replaced.
@@ -46,9 +49,9 @@ Private SQLite verification copies use an exclusive directory on the validated r
 
 ## Frozen package
 
-Create an explicit flat directory with these five files:
+Create an explicit flat directory with these reviewed files:
 
-- `install.py`, `recovery.py`, and `codex_log_retention.py`, copied from these reviewed sources.
+- `install.py`, `recovery.py`, `codex_log_retention.py`, `app_dependencies.py`, `workspace_key.py`, and `verify-session-bindings.mjs`, copied from these reviewed sources.
 - `app.tgz`, the exact paired candidate archive containing only ordinary `dist/`, package metadata, `scripts/host.mjs`, and `scripts/candidate.mjs` files.
 - `reviewed-pair.json`, binding this archive to the exact source and target candidates.
 
@@ -63,6 +66,20 @@ Create an explicit flat directory with these five files:
 ```
 
 The values above are examples, not an installable release. Use the exact already-verified candidate and archive bytes, then run the standard `scripts/update-bundle.mjs` packaging command. Its signed manifest binds every helper and the archive. The expanded archive and whole encoded bundle each have a 128 MiB bound. Do not include private operational records or signing material.
+
+Generate `app.tgz` with `python3 -B scripts/update-app-archive.py APP_DIRECTORY OUTPUT_TGZ --node NODE`. It admits only the built candidate, `package.json`, `package-lock.json`, and the two host entry scripts. The manual full-`scripts/` tarball is not the maintained update format.
+
+For changed dependencies, build a fresh Linux production dependency tree outside the deployment host, then run `python3 -B deploy/update-runner/app_dependencies.py pack SOURCE OUTPUT --node NODE`. The descriptor becomes `applicationDependencies` in the reviewed pair; its archive gets a separate signed feed `applicationDependenciesBundle` entry. The complete lock hash, non-root package graph, archive length/hash, expansion/file count and exact Linux architecture, Node version and ABI are checked. The candidate must contain that exact lock. Extraction preserves executable bits, rejects unsafe links, and runs fixed native-import probes as the service account. Each release selects its own immutable closure; prior dependencies remain available for restoration. Budget both downloaded and expanded closures. The manual dependency workflow produces an Actions artifact, not a published or signed update.
+
+When `workspaceKeyCredential` is configured, add a `helpers` mapping in the pair with exact SHA-256 values for `recovery.py`, `codex_log_retention.py`, `app_dependencies.py`, `workspace_key.py`, and `verify-session-bindings.mjs`. The raw workspace key is unwrapped only from the existing selected closed workspace through the verified prior key implementation. It travels to the single pinned binding verifier through stdin, stays out of arguments/logs/files, and is wiped from the driver's mutable buffer. The wrapping credential is not itself the raw workspace key. After startup, bindings must equal those derived from the actual selected snapshot store, with exact provenance. Other configuration stays checked. A prestart snapshot may retain stale generated bindings; they are compared exactly until startup has legitimately regenerated them.
+
+## Read-only admission and explicit prior adoption
+
+The controller calls `--preflight` before requesting maintenance and again immediately before starting an unstarted attempt. This mode validates protected code, retained recovery, signed archives and current candidate/workspace epoch using read-only health/access endpoints. It creates no session, hold, driver lock, attempt receipt or result. Its response must arrive within 120 seconds and match the exact expected identity. Admission is rechecked after controller restart. A started or uncertain attempt still requires authenticated result reconciliation; a preflight pass is never a license to clear it.
+
+Legacy layouts require a separately reviewed `adoptPrior` object in the exact signed pair: `{format:1,baselineManifestSha256,dependencies,sourceDependencies,rollbackDirectoryName}`. Dependency receipts come from the maintained helper. Prepare a separate, immutable copy of the exact prior candidate and an independent dependency copy with preserved bytes/executable modes; never invent a missing prior lockfile. The rollback copy must have the same candidate and startup-script hashes and select the protected retained dependency tree. The original prior tree and its paths stay intact. Running-source capture is preparation only; both the original source and prepared copy must verify again after writers stop. Normal prior dependency/baseline requirements remain strict without this explicit review.
+
+For adoption, an older verified snapshot is only a manifest-pinned deduplication source. Its old acceptance cannot attest current data. Before any new version switch, the driver must create and verify a complete closed snapshot of the selected current workspace, protected files and retained native state, with full independent-restoration capacity. A rollback chooses the independently adopted prior candidate only after restoring the exact current snapshot; its new verified acceptance points to that new recovery generation, never the older deduplication source. Host-specific adoption records belong in private operator delivery, not public source or QA artifacts. This contract is not proof that any particular host adoption has passed its rehearsal.
 
 Optional `startupBarrier` in `reviewed-pair.json` supports recovery when the newly started app is alive but unresponsive. It is an explicit publisher attestation of the reviewed startup contract:
 

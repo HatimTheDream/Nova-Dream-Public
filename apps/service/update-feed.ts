@@ -25,6 +25,7 @@ const releaseSchema = z.object({
   recovery: z.object({ pairedSnapshot: z.literal(true), independentRestore: z.literal(true), readinessTimeoutSeconds: z.number().int().min(30).max(600) }).strict(),
   bundle: z.object({ url: z.string().max(2048).url(), bytes: z.number().int().positive().max(8 * 1024 ** 3), sha256: hex, runnerSha256: hex }).strict(),
   runtimeBundle: z.object({ url: z.string().max(2048).url(), bytes: z.number().int().positive().max(512 * 1024 ** 2), sha256: hex }).strict().optional(),
+  applicationDependenciesBundle: z.object({ url: z.string().max(2048).url(), bytes: z.number().int().positive().max(512 * 1024 ** 2), sha256: hex }).strict().optional(),
 }).strict().refine(release => release.compatibility.pluginVersion === release.novaVersion, 'The reviewed plugin must match Nova.');
 export const updateManifestSchema = z.object({
   format: z.literal(1), channel: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
@@ -125,7 +126,7 @@ export class UpdateFeed {
     if (manifest.channel !== this.trust.channel || created > now + 5 * 60_000 || expires <= now || expires <= created || expires - created > 31 * DAY) throw Error('Invalid validity period');
     const payloadHash = createHash('sha256').update(bytes).digest('hex');
     if (manifest.sequence < this.cache.highestSequence || (manifest.sequence === this.cache.highestSequence && payloadHash !== this.cache.highestPayloadHash)) throw Error('Release sequence rollback');
-    for (const release of manifest.releases) for (const artifact of [release.bundle, release.runtimeBundle].filter(Boolean)) if (!this.trust.artifactOrigins.includes(trustedHttps(artifact!.url).origin)) throw Error('Untrusted artifact origin');
+    for (const release of manifest.releases) for (const artifact of [release.bundle, release.runtimeBundle, release.applicationDependenciesBundle].filter(Boolean)) if (!this.trust.artifactOrigins.includes(trustedHttps(artifact!.url).origin)) throw Error('Untrusted artifact origin');
     return { manifest, payloadHash };
   }
 
@@ -143,7 +144,7 @@ export class UpdateFeed {
   }
 
   private summary(release: UpdateRelease): SoftwareUpdateReleaseSummary {
-    return { candidateId: release.candidateId, releaseId: release.bundle.sha256, novaVersion: release.novaVersion, agentVersion: release.agentVersion, notes: [...release.notes], downloadBytes: release.bundle.bytes + (release.runtimeBundle?.bytes ?? 0) };
+    return { candidateId: release.candidateId, releaseId: release.bundle.sha256, novaVersion: release.novaVersion, agentVersion: release.agentVersion, notes: [...release.notes], downloadBytes: release.bundle.bytes + (release.runtimeBundle?.bytes ?? 0) + (release.applicationDependenciesBundle?.bytes ?? 0) };
   }
 
   status(): UpdateFeedStatus {
