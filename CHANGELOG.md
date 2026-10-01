@@ -1,3 +1,9 @@
+## [2.0.10] — 2026-10-01
+
+- Waits for a newly observed idle heartbeat before the single recovery-maintenance request, avoiding the mismatch between idle heartbeat cadence and admission freshness.
+- Preserves bounded, sanitized refusal diagnostics and reconciles uncertain responses against the exact lease without repeating maintenance entry.
+- Retains the existing freshness, saved-work, process identity and recovery checks; uncertain or competing maintenance still refuses safely.
+
 ## [2.0.9] — 2026-10-01
 
 - Verifies native startup changes through an authenticated fully stopped process boundary, preserving first-readiness evidence and strict saved-work checks.

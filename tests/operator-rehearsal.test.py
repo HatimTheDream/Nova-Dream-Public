@@ -86,6 +86,7 @@ class RehearsalTests(unittest.TestCase):
         self.key = bytearray(b'k'*32)
         self.healthy = {'health':{'candidateId':instance.prior_id,'version':'2.0.2'},'epoch':instance.expected_prior['workspaceEpoch'],'accounts':[['account','provider','connected',['read']]]}
         instance.validate_operator = lambda: events.append('validate')
+        instance.wait_for_fresh_admission = lambda: events.append('new-real-heartbeat')
         instance.controller_hold = lambda: {'held':True,'lease':{'id':instance.job_id,'phase':self.lease_phase}}
         instance.mark = lambda phase: (events.append('mark:'+phase), setattr(self,'lease_phase',phase))[-1]
         def call(action, value=None):
@@ -140,6 +141,8 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(self.events.count('service:start'),3)
         self.assertEqual(self.events.count('close-startup'),2)
         self.assertEqual(self.events.count('guarded-stop'),0)
+        self.assertLess(self.events.index('validate'),self.events.index('new-real-heartbeat'))
+        self.assertLess(self.events.index('new-real-heartbeat'),self.events.index('operator:enter'))
         self.assertLess(self.events.index('proof:rehearsed'), self.events.index('operator:status'))
         self.assertEqual(self.key, bytearray(32))
         phases = [json.loads(p.read_text())['phase'] for p in sorted(instance.output.glob('phase-*.json'))]
@@ -301,6 +304,164 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(value['roles']['live'],instance.source_root)
         self.assertIsNone(value['roles']['original'])
         self.assertEqual((instance.data/'owner-record').read_bytes(),b'original saved data')
+
+    def socket_reply(self, instance, status, payload=None, failure=None):
+        """Real protocol/receipt code; fake only protected socket and transport."""
+        calls=[]
+        class Reply:
+            def read(self, maximum):return payload[:maximum]
+        response=Reply();response.status=status
+        class Socket:
+            def request(self, method, path, **kwargs):calls.append(path)
+            def getresponse(self):
+                if failure:raise failure
+                return response
+            def close(self):pass
+        lstat=pathlib.Path.lstat;is_socket=pathlib.Path.is_socket
+        self.stack.enter_context(patch.object(pathlib.Path,'lstat',lambda path,*a,**kw:
+            types.SimpleNamespace(st_uid=0,st_gid=0,st_mode=0o600) if path==pathlib.Path(operator.OPERATOR_SOCKET) else lstat(path,*a,**kw)))
+        self.stack.enter_context(patch.object(pathlib.Path,'is_socket',lambda path:
+            True if path==pathlib.Path(operator.OPERATOR_SOCKET) else is_socket(path)))
+        self.fake('OperatorSocket',lambda *args,**kwargs:Socket())
+        instance.operator=types.MethodType(operator.Rehearsal.operator,instance)
+        return calls
+
+    def test_controller_rejection_retains_safe_http_reason_before_reconciliation(self):
+        instance=self.fixture();instance.output.mkdir()
+        calls=self.socket_reply(instance,409,b'{"message":"A fresh idle workspace identity is required."}')
+        with self.assertRaisesRegex(RuntimeError,'fresh_idle_identity_required'):
+            instance.operator('enter',{'leaseId':instance.job_id,**instance.expected_prior})
+        path=instance.output/'operator-request-failure.json';original=path.read_bytes()
+        value=json.loads(original)
+        self.assertEqual((value['action'],value['httpStatus'],value['outcome'],value['reason']),
+                         ('enter',409,'rejected','fresh_idle_identity_required'))
+        with self.assertRaises(RuntimeError):instance.operator('status')
+        self.assertEqual(path.read_bytes(),original)
+        self.assertEqual(calls,['/v1/enter','/v1/status'])
+
+    def test_dynamic_rejection_and_server_failure_cannot_claim_known_refusal(self):
+        for status in (409,500):
+            with self.subTest(status=status),contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.fixture();instance.output.mkdir()
+                case.socket_reply(instance,status,b'{"message":"private-token and /private/owner/path"}')
+                with self.assertRaises(RuntimeError) as failure:instance.operator('enter')
+                record=(instance.output/'operator-request-failure.json').read_text()
+                self.assertNotIn('private-token',record+str(failure.exception))
+                self.assertNotIn('/private/owner/path',record+str(failure.exception))
+                self.assertEqual(json.loads(record)['outcome'],'uncertain')
+
+    def test_lost_operator_response_records_uncertain_without_repeating_request(self):
+        instance=self.fixture();instance.output.mkdir()
+        calls=self.socket_reply(instance,None,failure=TimeoutError('response lost'))
+        with self.assertRaises(TimeoutError):instance.operator('enter')
+        value=json.loads((instance.output/'operator-request-failure.json').read_text())
+        self.assertIsNone(value['httpStatus']);self.assertEqual(value['outcome'],'uncertain')
+        self.assertEqual(value['reason'],'transport_failure');self.assertEqual(calls,['/v1/enter'])
+
+    def test_lost_enter_only_reconciles_exact_unstopped_lease_without_replay(self):
+        for changed in (None,'candidateId','workspaceEpoch','stopMarked'):
+            with self.subTest(changed=changed),contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.fixture();calls=[]
+                lease={'id':instance.job_id,**instance.expected_prior,'phase':'entered','stopMarked':False}
+                if changed:lease[changed]=True if changed=='stopMarked' else 'wrong'
+                def call(action,value=None):
+                    calls.append(action)
+                    if action=='enter':raise TimeoutError('lease persisted, reply lost')
+                    return {'format':1,'lease':dict(lease)}
+                instance.operator=call
+                with self.assertRaises(TimeoutError):instance.run_rehearsal()
+                self.assertEqual(calls,['enter','status']+(['cancel'] if changed is None else []))
+                self.assertFalse(instance.stop_attempted)
+                self.assertFalse(any(event.startswith('service:') for event in case.events))
+                self.assertTrue(instance.data.exists());self.assertFalse(instance.recovery.exists())
+
+    def freshness_boundary(self, instance, replies):
+        clock=[0.0];seen=[]
+        self.stack.enter_context(patch.object(operator.time,'monotonic',lambda:clock[0]))
+        self.stack.enter_context(patch.object(operator.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds)))
+        def call(action,value=None):
+            self.assertEqual(action,'status')
+            fresh,latency=replies[min(len(seen),len(replies)-1)]
+            seen.append(fresh);clock[0]+=latency
+            return {'format':1,'held':False,'freshHeartbeat':fresh,'lease':None}
+        instance.operator=call
+        instance.wait_for_fresh_admission=types.MethodType(operator.Rehearsal.wait_for_fresh_admission,instance)
+        return seen,clock
+
+    def test_freshness_requires_new_observed_transition_not_initial_true(self):
+        instance=self.fixture();instance.output.mkdir()
+        seen,clock=self.freshness_boundary(instance,[(True,0),(True,0),(False,0),(True,0)])
+        instance.wait_for_fresh_admission()
+        self.assertEqual(seen,[True,True,False,True])
+        self.assertEqual(clock[0],1.5)
+        self.assertFalse((instance.output/'operator-request-failure.json').exists())
+        self.assertFalse(instance.stop_attempted)
+
+    def test_slow_status_reply_cannot_supply_freshness_transition(self):
+        instance=self.fixture();instance.output.mkdir()
+        seen,clock=self.freshness_boundary(instance,[(False,0),(True,3),(False,0),(True,0)])
+        instance.wait_for_fresh_admission()
+        self.assertEqual(seen,[False,True,False,True])
+        self.assertLess(clock[0],45)
+
+    def test_pause_between_fast_replies_does_not_supply_freshness_margin(self):
+        instance=self.fixture();instance.output.mkdir()
+        seen,clock=self.freshness_boundary(instance,[(False,0),(True,0),(False,0),(True,0)])
+        sleeps=[]
+        def paused(seconds):
+            clock[0]+=4 if not sleeps else seconds
+            sleeps.append(seconds)
+        self.stack.enter_context(patch.object(operator.time,'sleep',paused))
+        instance.wait_for_fresh_admission()
+        self.assertEqual(seen,[False,True,False,True])
+        self.assertLess(clock[0],45)
+
+    def test_no_observed_transition_refuses_before_enter_or_service_action(self):
+        for fresh in (False,True):
+            with self.subTest(fresh=fresh),contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.fixture()
+                seen,clock=case.freshness_boundary(instance,[(fresh,0)])
+                with self.assertRaisesRegex(RuntimeError,'newly observed idle heartbeat'):instance.run_rehearsal()
+                self.assertEqual(clock[0],45)
+                self.assertGreater(len(seen),1)
+                self.assertFalse(any(event.startswith('service:') for event in case.events))
+                proof=json.loads((instance.output/'operator-request-failure.json').read_text())
+                self.assertEqual((proof['action'],proof['outcome'],proof['reason']),
+                                 ('admission','not_attempted','new_heartbeat_not_observed'))
+                self.assertFalse(instance.stop_attempted or instance.leased)
+
+    def test_source_process_change_refuses_before_freshness_observation(self):
+        instance=self.fixture();instance.output.mkdir()
+        seen,_=self.freshness_boundary(instance,[(False,0),(True,0)])
+        instance.process_identity=lambda:{'pid':999,'startTicks':999}
+        with self.assertRaisesRegex(RuntimeError,'restarted before operator entry'):instance.wait_for_fresh_admission()
+        self.assertEqual(seen,[])
+
+    def test_active_lease_or_malformed_status_cannot_admit(self):
+        for state in ({'held':False,'freshHeartbeat':True,'lease':{'phase':'entered'}},
+                      {'held':False,'freshHeartbeat':1,'lease':None}):
+            with self.subTest(state=state),contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.fixture();instance.output.mkdir()
+                instance.operator=lambda *args,**kwargs:state
+                with self.assertRaisesRegex(RuntimeError,'unchanged idle controller'):
+                    operator.Rehearsal.wait_for_fresh_admission(instance)
+                proof=json.loads((instance.output/'operator-request-failure.json').read_text())
+                self.assertEqual(proof['reason'],'admission_status_not_idle')
+
+    def test_invalid_or_oversized_response_never_claims_refusal(self):
+        for payload in (b'not-json',b'[]',b'x'*8193):
+            with self.subTest(size=len(payload)),contextlib.ExitStack() as local:
+                case=RehearsalTests('runTest');case.setUp();local.callback(case.doCleanups)
+                instance=case.fixture();instance.output.mkdir()
+                calls=case.socket_reply(instance,200,payload)
+                with self.assertRaises((RuntimeError,ValueError)):instance.operator('enter')
+                proof=json.loads((instance.output/'operator-request-failure.json').read_text())
+                self.assertEqual((proof['outcome'],proof['reason']),('uncertain','invalid_response'))
+                self.assertEqual(calls,['/v1/enter'])
 
 
 if __name__=='__main__':unittest.main()

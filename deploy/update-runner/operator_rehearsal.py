@@ -32,6 +32,22 @@ from workspace_key import read_workspace_key
 OPERATOR_SOCKET = '/run/nova-update/operator.sock'
 HELPERS = {'operator_rehearsal.py', 'install.py', 'recovery.py', 'codex_log_retention.py',
            'app_dependencies.py', 'workspace_key.py', 'verify-session-bindings.mjs'}
+OPERATOR_REJECTIONS = {
+    'A fresh idle workspace identity is required.': 'fresh_idle_identity_required',
+    'An existing installation must settle before operator maintenance.': 'installation_unsettled',
+    'An operator maintenance lease is already active.': 'operator_lease_active',
+    'A completed operator identity cannot be reused.': 'identity_already_used',
+    'The original operator identity changed.': 'original_identity_changed',
+    'The selected candidate or workspace changed.': 'selected_identity_changed',
+    'This operator lease is not current.': 'lease_not_current',
+    'Only an unchanged pre-stop lease can be cancelled.': 'cancellation_not_admitted',
+    'The exact workspace and native process must acknowledge this hold.': 'native_hold_unconfirmed',
+    'Operator maintenance phase cannot be skipped or reversed.': 'invalid_phase_transition',
+    'A verified returned source and matching native hold are required.': 'returned_source_unconfirmed',
+    'Operator acceptance does not match the original lease.': 'acceptance_identity_changed',
+    'Operator authority is uncertain. Restart the controller to reconcile its durable record.': 'authority_uncertain',
+    'Operator maintenance clock moved backwards.': 'clock_moved_backwards',
+}
 
 
 class OperatorSocket(http.client.HTTPConnection):
@@ -102,6 +118,19 @@ class Rehearsal(Driver):
         self.startup_allocations = []
         self.release_publication_started = False
         self.release_confirmed = False
+        self.request_failure_recorded = False
+
+    def request_failure(self, action, status, outcome, reason):
+        # Keep the first failure, before status/cancel reconciliation can itself
+        # fail. Never retain a response body, transport exception, or owner data.
+        if self.request_failure_recorded:
+            return
+        path = self.output / 'operator-request-failure.json'
+        require(not path.exists(), 'The original operator request failure must be retained.')
+        write_json(path, {'format': 1, 'kind': 'operator-request-failure', 'leaseId': self.job_id,
+                         'candidateId': self.prior_id, 'workspaceEpoch': self.expected_prior['workspaceEpoch'],
+                         'action': action, 'httpStatus': status, 'outcome': outcome, 'reason': reason})
+        self.request_failure_recorded = True
 
     def operator(self, action, value=None):
         require(action in {'status', 'enter', 'phase', 'release', 'cancel'}, 'Unsupported operator action.')
@@ -110,14 +139,28 @@ class Rehearsal(Driver):
         require(info.st_uid == info.st_gid == 0 and info.st_mode & 0o777 == 0o600 and pathlib.Path(OPERATOR_SOCKET).is_socket(),
                 'Operator maintenance requires its root-only socket.')
         client = OperatorSocket('localhost', timeout=5)
+        status = None
+        outcome, reason = 'uncertain', 'transport_failure'
         try:
             client.request('POST', '/v1/' + action, body=json.dumps(value or {}).encode(), headers={'Content-Type': 'application/json'})
             response = client.getresponse()
+            status = response.status
             raw = response.read(8193)
-            require(response.status == 200 and len(raw) <= 8192, 'The operator controller did not accept this exact request.')
+            outcome, reason = 'uncertain', 'invalid_response'
+            require(len(raw) <= 8192, 'The operator controller response exceeded its bound.')
             result = json.loads(raw)
-            require(result.get('format') == 1, 'Invalid operator status.')
+            if status != 200:
+                message = result.get('message') if isinstance(result, dict) else None
+                reason = OPERATOR_REJECTIONS.get(message, 'unrecognized_controller_response') if isinstance(message, str) else 'unrecognized_controller_response'
+                # A 5xx or unrecognized body may follow a committed lease. A
+                # known 409 is a refusal, but never authorizes request replay.
+                outcome = 'rejected' if status == 409 and reason in OPERATOR_REJECTIONS.values() else 'uncertain'
+                raise RuntimeError('Operator request failed (HTTP ' + str(status) + '; ' + reason + ').')
+            require(isinstance(result, dict) and result.get('format') == 1, 'Invalid operator status.')
             return result
+        except Exception:
+            self.request_failure(action, status, outcome, reason)
+            raise
         finally:
             client.close()
 
@@ -129,6 +172,40 @@ class Rehearsal(Driver):
                 and lease.get('phase') not in {'releasing', 'released', 'cancelled'},
                 'The exact operator maintenance authority is not retained.')
         return result
+
+    def wait_for_fresh_admission(self):
+        """Observe a new real heartbeat, not the unknown age of an initial true.
+
+        The idle app beats every 30s; the controller correctly admits only beats
+        under 10s. Observe false -> true within two seconds using fast replies,
+        then let the single enter request recheck the authoritative identity and
+        freshness. No synthetic beat, session, feed check, or lease is written.
+        """
+        require(self.process_identity() == self.source_process,
+                'The admitted source restarted before operator entry.')
+        deadline = time.monotonic() + 45
+        previous = None
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            state = self.operator('status')
+            observed = time.monotonic()
+            lease = state.get('lease')
+            valid = (type(state.get('freshHeartbeat')) is bool and state.get('held') is False
+                     and (lease is None or isinstance(lease, dict) and lease.get('phase') in {'released', 'cancelled'}))
+            if not valid:
+                self.request_failure('admission', None, 'not_attempted', 'admission_status_not_idle')
+                raise RuntimeError('Operator admission requires an unchanged idle controller.')
+            elapsed = observed - started
+            require(elapsed >= 0, 'The operator admission clock moved backwards.')
+            if (observed < deadline and elapsed <= 1 and state['freshHeartbeat'] and previous is not None
+                    and previous[0] is False and 0 <= observed - previous[1] <= 2):
+                return
+            previous = (state['freshHeartbeat'], observed) if elapsed <= 1 else None
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.5, remaining))
+        self.request_failure('admission', None, 'not_attempted', 'new_heartbeat_not_observed')
+        raise RuntimeError('No newly observed idle heartbeat within the operator admission deadline.')
 
     def mark(self, phase):
         self.controller_hold()
@@ -391,6 +468,7 @@ class Rehearsal(Driver):
         self.source_root = root_identity(self.data)
         self.record('preflight-passed')
         try:
+            self.wait_for_fresh_admission()
             self.operator('enter', {'leaseId': self.job_id, **self.expected_prior})
             self.leased = True
             self.before = self.wait_acceptance(self.prior_id, self.review['novaVersion'])
@@ -481,7 +559,9 @@ class Rehearsal(Driver):
                 with contextlib.suppress(Exception):
                     state = self.operator('status')
                     lease = state.get('lease') or {}
-                    if lease.get('id') == self.job_id and lease.get('phase') in {'entered', 'held'} and not lease.get('stopMarked'):
+                    if (lease.get('id') == self.job_id and lease.get('candidateId') == self.prior_id
+                            and lease.get('workspaceEpoch') == self.expected_prior['workspaceEpoch']
+                            and lease.get('phase') in {'entered', 'held'} and lease.get('stopMarked') is False):
                         self.operator('cancel', {'leaseId': self.job_id})
             with contextlib.suppress(Exception):
                 failure_phase = ('cleanup-failed-after-release' if self.release_confirmed else
