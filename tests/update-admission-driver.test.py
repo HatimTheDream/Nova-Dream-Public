@@ -358,6 +358,9 @@ class AdmissionDriverTests(unittest.TestCase):
         running=[True]
         instance.service=lambda action:running.__setitem__(0,action=='start')
         instance.guarded_stop=lambda **kwargs:running.__setitem__(0,False)
+        # These publication/rollback fixtures fake process lifecycle as a unit.
+        # Real durable lifecycle boundaries run in update-startup-lifecycle.
+        instance.stop_for_retention=lambda **kwargs:running.__setitem__(0,False)
         instance.require_stopped=lambda:self.assertFalse(running[0])
         def acceptance(expected,version,**kwargs):
             self.assertTrue(running[0])
