@@ -1,3 +1,9 @@
+## [2.0.6] — 2026-09-30
+
+- Adds a separate root-only maintenance lease so operators can verify recovery before publishing an installable update; interruptions retain the hold and uncertain requests cannot start competing work.
+- Rehearses a complete independent workspace restore under the unchanged application, verifies saved work and accounts, and returns the original workspace before releasing maintenance.
+- Requires explicit stopped-state capacity, startup growth allowance, and a loaded missing-workspace startup guard; insufficient storage preserves an honest unchanged outcome.
+
 ## [2.0.5] — 2026-09-30
 
 - Verifies offline dependency files in archive order, avoiding repeated decompression that could stall update preparation on a full installation.

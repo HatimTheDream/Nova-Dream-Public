@@ -44,6 +44,58 @@ class AdmissionDriverTests(unittest.TestCase):
         os.umask(self.umask)
         self.temporary.cleanup()
 
+    def recovery_baseline_fixture(self):
+        instance = driver.Driver(self.root / 'unused-request.json')
+        instance.recovery_root = self.root / 'recovery'
+        instance.recovery_root.mkdir()
+        instance.prior_id = 'a' * 64
+        instance.from_engine = driver.ENGINE
+        generations = []
+        for name in ('historical', 'rehearsed'):
+            generation = instance.recovery_root / name
+            workspace = generation / 'workspace'
+            workspace.mkdir(parents=True)
+            (workspace / 'saved.txt').write_text(name)
+            recovery.write_json(generation / 'snapshot-manifest.json', recovery.inventory(workspace)[0])
+            recovery.write_json(generation / 'snapshot-verified.json', {
+                'manifestSha256': recovery.digest(generation / 'snapshot-manifest.json')})
+            recovery.write_json(generation / 'acceptance.json', {
+                'health': {'candidateId': instance.prior_id}, 'agentVersion': instance.from_engine})
+            generations.append(generation)
+        historical, rehearsed = generations
+        instance.settings = {'baselineDirectory': str(rehearsed)}
+        instance.pair = {'adoptPrior': {
+            'baselineManifestSha256': recovery.digest(rehearsed / 'snapshot-manifest.json')}}
+        latest = instance.recovery_root / 'latest-update.json'
+        recovery.write_json(latest, {'directory': str(historical), 'candidateId': 'b' * 64,
+                                    'agentVersion': instance.from_engine})
+        return instance, historical, rehearsed, latest
+
+    def test_signed_adoption_uses_exact_configured_baseline_without_rewriting_latest(self):
+        instance, historical, rehearsed, latest = self.recovery_baseline_fixture()
+        instance.adopting_prior = True
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        instance.validate_recovery_baseline()
+        self.assertEqual(instance.baseline, rehearsed)
+        instance.pair['adoptPrior']['baselineManifestSha256'] = recovery.digest(historical / 'snapshot-manifest.json')
+        with self.assertRaisesRegex(RuntimeError, 'reviewed adoption deduplication source changed'):
+            instance.validate_recovery_baseline()
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_normal_update_keeps_latest_pair_guard_and_selected_generation(self):
+        instance, historical, rehearsed, latest = self.recovery_baseline_fixture()
+        instance.adopting_prior = False
+        with self.assertRaisesRegex(RuntimeError, 'Latest recovery acceptance does not match'):
+            instance.validate_recovery_baseline()
+        selected = json.loads(latest.read_text())
+        selected['candidateId'] = instance.prior_id
+        latest.write_text(json.dumps(selected))
+        before = latest.read_bytes()
+        instance.validate_recovery_baseline()
+        self.assertEqual(instance.baseline, historical)
+        self.assertEqual(latest.read_bytes(), before)
+        self.assertNotEqual(instance.baseline, rehearsed)
+
     def preflight_fixture(self):
         request = self.root / 'request.json'
         request.write_text('{}'); request.chmod(0o600)

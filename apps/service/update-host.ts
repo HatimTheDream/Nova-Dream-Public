@@ -9,6 +9,7 @@ import { UpdateAdmissionError, UpdateSupervisor } from './update-supervisor.js';
 import { ManagedUpdateInstaller } from './update-installer.js';
 import { FileUpdateJournal, guardedUpdatePath, readUpdateJson, writeUpdateJson } from './update-storage.js';
 import { updateHeartbeatSchema } from './update-host-client.js';
+import {FileOperatorLeaseStore,OperatorMaintenance,operatorMaintenanceRequestHandler,operatorMaintenanceSocket} from './operator-maintenance.js';
 
 export const updateHostSocket = '/run/nova-update/control.sock';
 const absolute = z.string().min(1).max(4096).refine(value => isAbsolute(value) && resolve(value) === value, 'Use a canonical absolute path.');
@@ -89,15 +90,15 @@ export function updateHostRequestHandler(supervisor: HostController) {
   };
 }
 
-async function clearAbandonedSocket(gid: number) {
-  if (!existsSync(updateHostSocket)) return;
-  const info = lstatSync(updateHostSocket);
+async function clearAbandonedSocket(path: string,gid: number) {
+  try { lstatSync(path); } catch(error) {if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+  const info = lstatSync(path);
   if (!info.isSocket() || info.uid !== 0 || info.gid !== gid) throw Error('The update socket needs operator review.');
   await new Promise<void>((accept, reject) => {
-    const socket = connect(updateHostSocket);
+    const socket = connect(path);
     socket.once('connect', () => { socket.destroy(); reject(Error('An update host is already running.')); });
     socket.setTimeout(1000, () => { socket.destroy(); reject(Error('The update socket state is uncertain.')); });
-    socket.once('error', (error: NodeJS.ErrnoException) => { if (error.code !== 'ECONNREFUSED') { reject(error); return; } const current = lstatSync(updateHostSocket); if (current.ino !== info.ino || current.dev !== info.dev) { reject(Error('The update socket changed.')); return; } unlinkSync(updateHostSocket); accept(); });
+    socket.once('error', (error: NodeJS.ErrnoException) => { if (error.code !== 'ECONNREFUSED') { reject(error); return; } const current = lstatSync(path); if (current.ino !== info.ino || current.dev !== info.dev) { reject(Error('The update socket changed.')); return; } unlinkSync(path); accept(); });
   });
 }
 
@@ -136,13 +137,23 @@ export async function startUpdateHost(configurationPath: string, verifyCandidate
     agentFeed,
     trust: { url: config.feed.url, channel: config.feed.channel, artifactOrigins: config.feed.artifactOrigins, publicKey: readFileSync(config.feed.publicKeyFile, 'utf8') } });
   for (const path of [join(config.stateDirectory, 'jobs'), join(config.stateDirectory, 'staging')]) { mkdirSync(path, { recursive: true, mode: 0o700 }); guardedUpdatePath(path, true); }
-  const supervisor = new UpdateSupervisor(feed, new FileUpdateJournal(join(config.stateDirectory, 'jobs')), new ManagedUpdateInstaller(join(config.stateDirectory, 'staging'), configurationPath), () => current().candidateId);
-  await clearAbandonedSocket(gid);
+  let supervisor:UpdateSupervisor;
+  const operator = new OperatorMaintenance(new FileOperatorLeaseStore(join(config.stateDirectory,'operator-maintenance')),()=>current().candidateId,()=>supervisor.assertOperatorAdmission());
+  supervisor = new UpdateSupervisor(feed, new FileUpdateJournal(join(config.stateDirectory, 'jobs')), new ManagedUpdateInstaller(join(config.stateDirectory, 'staging'), configurationPath), () => current().candidateId,Date.now,operator);
+  await clearAbandonedSocket(updateHostSocket,gid);
+  await clearAbandonedSocket(operatorMaintenanceSocket,0);
   const server = createServer(updateHostRequestHandler(supervisor)); server.requestTimeout = 15_000; server.headersTimeout = 5_000; server.maxConnections = 32;
   await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(updateHostSocket, () => { server.removeListener('error', reject); accept(); }); });
   chownSync(updateHostSocket, 0, gid); chmodSync(updateHostSocket, 0o660);
+  const operatorServer=createServer(operatorMaintenanceRequestHandler(operator));operatorServer.requestTimeout=10_000;operatorServer.headersTimeout=5_000;operatorServer.maxConnections=4;
+  const previousMask=process.umask(0o077);
+  try {
+    await new Promise<void>((accept,reject)=>{operatorServer.once('error',reject);operatorServer.listen(operatorMaintenanceSocket,()=>{operatorServer.removeListener('error',reject);accept();});});
+    chownSync(operatorMaintenanceSocket,0,0);chmodSync(operatorMaintenanceSocket,0o600);
+  } catch(error) {operatorServer.close();await new Promise<void>(accept=>server.close(()=>accept()));throw error;}
+  finally {process.umask(previousMask);}
   feed.start();
   const poll = setInterval(() => { try { supervisor.poll(); } catch { /* Keep the durable hold; a failed observation cannot authorize work. */ } }, 2000); poll.unref();
   supervisor.poll();
-  return { config, supervisor, async close() { clearInterval(poll); feed.stop(); supervisor.stop(); await new Promise<void>(accept => server.close(() => accept())); } };
+  return { config, supervisor, async close() { clearInterval(poll); feed.stop(); supervisor.stop(); await Promise.all([new Promise<void>(accept => server.close(() => accept())),new Promise<void>(accept=>operatorServer.close(()=>accept()))]); } };
 }

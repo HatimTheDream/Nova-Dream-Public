@@ -109,6 +109,26 @@ An `unchanged` receipt includes a safe `reasonCode`: `insufficient_storage` for 
 
 Active native databases are selected through the same durable workspace-selection and recovery-proof contract as the app, then bound to the epoch from authenticated acceptance. Only that workspace’s canonical shared and agent stores receive the reviewed schema rules. Dormant workspace databases, nested archives, plugin fixtures and nonactive caches retain exact file bytes and sidecars; they are neither opened as active stores nor ignored. A selection change, rewritten inactive database or unknown active table fails verification.
 
+## Operator recovery rehearsal
+
+`operator_rehearsal.py` provides a separately reviewed, root-only rehearsal without creating an installation job, changing the selected release/runtime, publishing an installer result, or rewriting `latest-update.json`. It requires the provisioned operator-maintenance controller socket and an exact private review; it is not a bypass for signed application delivery. The controller stores the independent lease durably and retains post-stop holds across restarts. Release requires hash-bound local acceptance evidence and the application's subsequent native-resume acknowledgement.
+
+The private review pins `leaseId`, current `candidateId`/`workspaceEpoch`/versions, `hostConfiguration`, the exact old `baselineDirectory` and `baselineManifestSha256`, an independently provisioned `labParent`, the existing `startupGuardFile`/hash, reviewed prior `startupBarrier` artifacts, all `helperHashes`, `nodeSha256`, actual `sourceDependencies`, and both `sourceHostHashes`. Its `format` is 1 and `kind` is `operator-rehearsal-review`. Use actual reviewed identities, never example values. The prior engine must remain 2026.9.6. The complete selected workspace is captured; an older verified generation is only a pinned deduplication source.
+
+The permanent service guard must contain `[Unit] ConditionPathIsDirectory=` for the exact configured workspace and be included in the retained protected files. The CLI verifies the effective condition through typed systemd D-Bus data. This prevents a missing workspace during a crash between renames from becoming a new empty store. The lab parent must be root-private, share the workspace filesystem, and remain outside the workspace, protected recovery, updater state, release, runtime and configuration trees. Mutable copied data must never enter the controller's recursively root-owned state directory.
+
+```sh
+python3 -B deploy/update-runner/operator_rehearsal.py --plan /protected/operator-review.json
+python3 -B deploy/update-runner/operator_rehearsal.py --execute /protected/operator-review.json
+python3 -B deploy/update-runner/operator_rehearsal.py --status /protected/operator-review.json
+```
+
+`--plan` performs read-only admission; it creates no session or lease and never stops a service. Review its exact inputs and full operation plan before using `--execute`. Execution acquires the real app/native hold, closes all owning processes, budgets the complete snapshot delta and independent restoration, and adds an explicit startup-growth estimate to the existing operating reserve and copy allowances. That estimate is the observed held-running allocation minus closed allocation, plus 128 MiB; sampled actual startup growth is recorded and excess refuses acceptance. It is an observed estimate, not a proof of every possible future startup peak.
+
+The complete current snapshot, protected configuration and existing raw-key verification path use the maintained recovery helpers. An independent restore is first checked while closed, then reopened at the original absolute workspace path under the hold. The original remains intact in the private lab. After trial comparison, the original returns, undergoes its own held-start/closed comparison, and starts once more for final readiness. Every rename has durable intent with exact root inode identities and both parent directories are synced. Successful full rehearsal produces a current baseline acceptance with explicit operator provenance, without changing the latest selector. Capacity refusal before workspace mutation can produce only narrow unchanged/health/accounts evidence; it claims neither saved-work equivalence nor a verified recovery.
+
+Interrupted execution is never automatically replayed. `--status` reports bounded phase and physical-root evidence for manual review. Preserve the lease, original, snapshots and trial tree when any identity, startup or publication is uncertain. A release response timeout is distinct from a held failure; a cleanup failure after release must not claim the app remains held. Only the newly created trial tree may be removed after original verification and settled native release, with its exact inode and private-lab containment checked. Existing recovery generations, originals and prior releases are never deleted by this CLI.
+
 ## Verification
 
 Run the focused suites, also required by the Linux release workflow:
@@ -119,6 +139,7 @@ python3 -B tests/update-closed-readers.test.py -v
 python3 -B tests/update-log-retention.test.py -v
 python3 -B tests/update-startup-window.test.py -v
 python3 -B tests/update-log-retention-integration.test.py -v
+python3 -B tests/operator-rehearsal.test.py -v
 ```
 
 Fixtures cover bounds, archive rejection, exact saved SQLite content, account/domain retention, original receipt identity, safe failure handling and native history preservation. Focused checks cover copied readers and recovery-filesystem scratch, exact startup log retention, attested runtime integration, and real private startup receipts with mocked service calls and clocks. On Linux with `rsync`, real file/SQLite coverage also verifies closed snapshots, sparse files, internal hardlinks, extended attributes and independent restored inodes, while using no real service. Platform-specific cases skip where their actual filesystem guarantees cannot be exercised.

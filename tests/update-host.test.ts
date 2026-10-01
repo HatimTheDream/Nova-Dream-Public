@@ -24,6 +24,8 @@ test('local controller accepts bounded validated actions and preserves uncertain
     assert.equal((await call('check', {})).status, 200); assert.equal(checkCalls, 1);
     assert.equal((await call('check', { url: 'https://arbitrary.example.test' })).status, 409); assert.equal(checkCalls, 1);
     assert.equal((await call('status', {}, { origin: 'https://example.test' })).status, 400);
+    assert.equal((await call('enter', { leaseId: 'e2864df8-f7d3-40f9-b377-c4a3620de271' })).status, 400, 'The app-owned socket cannot acquire an operator lease.');
+    assert.equal((await call('release', { leaseId: 'e2864df8-f7d3-40f9-b377-c4a3620de271' })).status, 400, 'The app-owned socket cannot release operator authority.');
     assert.equal((await call('status', {}, { declared: 65537 })).status, 413);
     assert.equal((await call('heartbeat', { candidateId: 'a'.repeat(64), epoch: 'e2864df8-f7d3-40f9-b377-c4a3620de271', heldFor: null, nativeSuspended:false, blockers: [] })).status, 200); assert.equal(beats, 1);
     assert.equal((await call('heartbeat', { candidateId: 'latest' })).status, 409); assert.equal(beats, 1);

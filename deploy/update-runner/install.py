@@ -396,30 +396,7 @@ class Driver:
         self.recovery = self.recovery_root / ('update-' + self.job_id)
         self.restore = self.data.parent / ('workspace.restore-' + self.job_id)
         self.failed = self.recovery / 'failed-workspace'
-        self.baseline = pathlib.Path(self.settings['baselineDirectory'])
-        latest = self.recovery_root / 'latest-update.json'
-        if latest.exists():
-            protected(latest, private=True)
-            selected = read_json(latest, 4096)
-            require(self.adopting_prior or (selected['candidateId'] == self.prior_id and selected.get('agentVersion', ENGINE) == self.from_engine),
-                    'Latest recovery acceptance does not match the installed pair.')
-            self.baseline = pathlib.Path(selected['directory'])
-        protected(self.baseline, True, True)
-        require(self.baseline.parent == self.recovery_root, 'Recovery baseline is outside the reviewed root.')
-        acceptance = read_json(self.baseline / 'acceptance.json')
-        require(self.adopting_prior or (acceptance['health']['candidateId'] == self.prior_id and acceptance.get('agentVersion', ENGINE) == self.from_engine),
-                'The recovery baseline is not paired with the installed candidate and engine.')
-        manifest_file = self.baseline / ('snapshot-manifest.json' if (self.baseline / 'snapshot-manifest.json').exists() else 'linked-snapshot-source.json')
-        verified = read_json(self.baseline / 'snapshot-verified.json')
-        require(digest(manifest_file) == verified['manifestSha256'], 'The recovery baseline verification changed.')
-        if self.adopting_prior:
-            # This older generation is only a pinned deduplication source.
-            # It never attests the current app, its data, or a usable rollback.
-            require(digest(manifest_file) == adoption['baselineManifestSha256'], 'The reviewed adoption deduplication source changed.')
-        baseline_entries = read_json(manifest_file, 64 * 1024 ** 2)
-        require(inventory(self.baseline / 'workspace')[0] == baseline_entries, 'The verified closed baseline changed.')
-        del baseline_entries
-        gc.collect()
+        self.validate_recovery_baseline()
         self.archive = self.bundle / 'app.tgz'
         protected(self.archive, private=True)
         require(self.archive.stat().st_size == self.pair['archiveBytes'] <= MAXIMUM and digest(self.archive) == self.pair['archiveSha256'], 'Reviewed application archive changed.')
@@ -458,6 +435,33 @@ class Driver:
         if not preflight:
             write_json(self.output / 'driver-attempt.json', {'jobId': self.job_id, 'candidateId': self.target_id, 'priorCandidateId': self.prior_id})
 
+    def validate_recovery_baseline(self):
+        self.baseline = pathlib.Path(self.settings['baselineDirectory'])
+        latest = self.recovery_root / 'latest-update.json'
+        # Signed adoption pins the configured deduplication source explicitly.
+        # A historical update receipt cannot override that reviewed generation.
+        if not self.adopting_prior and latest.exists():
+            protected(latest, private=True)
+            selected = read_json(latest, 4096)
+            require(selected['candidateId'] == self.prior_id and selected.get('agentVersion', ENGINE) == self.from_engine,
+                    'Latest recovery acceptance does not match the installed pair.')
+            self.baseline = pathlib.Path(selected['directory'])
+        protected(self.baseline, True, True)
+        require(self.baseline.parent == self.recovery_root, 'Recovery baseline is outside the reviewed root.')
+        acceptance = read_json(self.baseline / 'acceptance.json')
+        require(self.adopting_prior or (acceptance['health']['candidateId'] == self.prior_id and acceptance.get('agentVersion', ENGINE) == self.from_engine),
+                'The recovery baseline is not paired with the installed candidate and engine.')
+        manifest_file = self.baseline / ('snapshot-manifest.json' if (self.baseline / 'snapshot-manifest.json').exists() else 'linked-snapshot-source.json')
+        verified = read_json(self.baseline / 'snapshot-verified.json')
+        require(digest(manifest_file) == verified['manifestSha256'], 'The recovery baseline verification changed.')
+        if self.adopting_prior:
+            # This older generation is only a pinned deduplication source.
+            # It never attests the current app, its data, or a usable rollback.
+            require(digest(manifest_file) == self.pair['adoptPrior']['baselineManifestSha256'], 'The reviewed adoption deduplication source changed.')
+        baseline_entries = read_json(manifest_file, 64 * 1024 ** 2)
+        require(inventory(self.baseline / 'workspace')[0] == baseline_entries, 'The verified closed baseline changed.')
+        del baseline_entries
+        gc.collect()
     def preflight(self):
         """Read-only admission. No session, hold, attempt receipt, or staging writes."""
         self.validate(preflight=True)
