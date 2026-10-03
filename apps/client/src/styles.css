@@ -755,7 +755,7 @@
 .task-search { display:flex; align-items:center; flex:1; gap:10px; margin:0; padding:0 12px; min-width:0; background:var(--surface); border:1px solid var(--line); border-radius:14px; color:var(--muted); }
 .task-search input { flex:1; width:100%; min-width:0; border:0; background:transparent; padding-inline:0; box-shadow:none; }
 .task-search-tools>button { white-space:nowrap; }
-.tasks-workspace .task-list { padding:0 20px; display:block; max-height:none; overflow:visible; }
+.tasks-workspace .task-list { padding:0 20px; display:block; max-height:none; overflow:visible; container:task-list / inline-size; }
 .tasks-workspace .task-section-title { padding:18px 0 14px; margin:0; }
 .tasks-workspace .task-section-title h2 { font-size:17px; margin:0 0 5px; }
 .task-section-title .metadata { font-size:12px; font-weight:400; }
@@ -813,7 +813,17 @@
 
 .tasks-workspace .daily-task .task-row { min-height:48px; flex-wrap:nowrap; }
 .tasks-workspace .daily-task .task-open { box-shadow:none; background:transparent; min-width:0; min-height:44px; display:flex; align-items:flex-start; flex-direction:column; justify-content:center; gap:2px; }
-.tasks-workspace .daily-task .task-open strong { display:block; width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500; }
+.tasks-workspace .daily-task .task-open strong { display:block; width:100%; white-space:normal; overflow-wrap:anywhere; font-weight:500; }
+/* Keep row actions reachable at the actual list width, including a narrow
+   desktop pane. Scheduling context moves below the title before it crowds it. */
+@container task-list (max-width:420px) {
+  .tasks-workspace .daily-task .task-row { display:grid; grid-template-columns:44px minmax(0,1fr) 44px; align-items:start; gap:var(--space-2); }
+  .tasks-workspace .daily-task .task-row > :first-child { grid-column:1; grid-row:1; }
+  .tasks-workspace .daily-task .task-open { grid-column:2 / -1; grid-row:1; }
+  .tasks-workspace .daily-task .task-subtask-progress { grid-column:2; grid-row:2; justify-self:end; padding-inline:0; }
+  .tasks-workspace .daily-task .task-row-menu { grid-column:3; grid-row:2; }
+  .tasks-workspace .daily-task .task-inline-note { grid-column:2 / -1; grid-row:3; max-width:none; padding:0 0 var(--space-2); white-space:normal; overflow-wrap:anywhere; }
+}
 @media(max-width:650px) { .tasks-workspace .task-list { padding-inline:12px; }.task-editor .dialog-footer { bottom:-18px; } }
 /* Task feedback must not shift the row the owner just checked. */
 .task-feedback { position:absolute; right:18px; bottom:18px; z-index:40; width:max-content; max-width:calc(100% - 36px); padding:9px 12px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:var(--shadow); }
@@ -951,3 +961,7 @@
 @media (prefers-reduced-motion: reduce) { .nova-loading-ring, .dreamclaw-module .nova-loading-ring { animation-duration: 2.4s; } }
 .nav-icon:has(.settings-update-dot) { position: relative; }
 .settings-update-dot { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: #b43c3c; box-shadow: 0 0 0 2px var(--surface); }
+
+/* Keep view names whole; wrap the control group before breaking a word. */
+:root .tasks-workspace .task-primary-views { flex-wrap:wrap; gap:var(--space-2); padding:0; border:0; background:transparent; }
+:root .tasks-workspace .task-primary-views button { flex:1 0 auto; padding-inline:var(--space-2); white-space:normal; overflow-wrap:normal; word-break:normal; box-shadow:none; }

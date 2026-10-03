@@ -1,0 +1,86 @@
+/* Shared Quiet List surfaces. These are explicit container/slot contracts,
+   not descendant resets: calendar grids, editors, portraits, and dense data
+   views keep their own layout. Settings already uses borderless sections. */
+:root .card:not(.settings-card,.record-list-item,.record-editor,.record-earned,.hub-inspector) {
+  min-width:0;
+  border:var(--surface-border);
+  border-radius:var(--card-radius);
+  box-shadow:none;
+}
+:root .card.card-spacious { padding:var(--card-padding-spacious); }
+:root .card > :is(h2,h3,p) { overflow-wrap:anywhere; }
+:root .card > :is(h2,h3) { letter-spacing:normal; }
+:root .card > p:not([class]) { line-height:var(--leading-body); }
+:root .card > .card-actions {
+  display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--control-gap); margin-top:var(--space-4);
+}
+
+/* Shared headers and action groups yield to long titles and enlarged text. */
+:root :is(.page-intro,.section-heading) { min-width:0; flex-wrap:wrap; gap:var(--space-3); }
+:root :is(.page-intro,.section-heading) > :is(h1,h2,h3,strong,div) { min-width:0; overflow-wrap:anywhere; }
+:root .section-heading > :is(h2,h3,strong) { line-height:1.4; }
+:root :is(.button-row,.setup-actions,.dialog-footer,.record-editor-footer) {
+  flex-wrap:wrap; gap:var(--control-gap);
+}
+
+/* Dialog title, writing area, and actions share one measured inset. */
+:root dialog.dialog {
+  border:var(--surface-border); border-radius:var(--card-radius);
+  box-shadow:0 16px 56px rgb(0 0 0 / .18);
+  max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px);
+  scroll-padding-block:var(--dialog-padding);
+}
+:root .dialog > .dialog-inner { padding:var(--dialog-padding); min-width:0; }
+:root .dialog-inner > .dialog-header {
+  display:flex; flex-wrap:nowrap; align-items:flex-start;
+  gap:var(--space-3); margin:0 0 var(--space-6);
+  padding:0 0 var(--space-4); border-bottom:var(--surface-border);
+}
+:root .dialog-header > h2 {
+  flex:1; min-width:0; margin:0; padding-top:var(--space-2);
+  font-size:var(--text-heading-md); line-height:var(--leading-heading-md);
+  letter-spacing:normal; overflow-wrap:anywhere;
+}
+:root .dialog-header > button { flex:none; }
+:root .dialog form { gap:var(--space-4); }
+:root .dialog :is(input:not([type=checkbox],[type=radio],[type=range],[type=color]),select,textarea) {
+  border-radius:var(--control-radius);
+  line-height:1.5; padding:10px var(--space-3);
+}
+:root .dialog label { line-height:1.45; }
+:root .dialog label > small { line-height:1.5; }
+:root .dialog .dialog-footer {
+  padding-top:var(--space-4); margin-top:var(--space-2);
+  border-top:var(--surface-border);
+}
+:root .dialog .dialog-footer > .metadata {
+  min-width:0; font-size:var(--type-meta); line-height:1.5; overflow-wrap:anywhere;
+}
+:root .dialog :is(.task-editor > .dialog-footer,.record-editor-footer) {
+  bottom:calc(-1 * var(--dialog-padding)); padding-bottom:var(--dialog-padding);
+}
+:root .dialog .task-editor > .dialog-footer { margin-bottom:calc(-1 * var(--dialog-padding)); }
+
+/* Messages keep their own severity, with readable content and reliable inset. */
+:root .notice {
+  min-width:0; gap:var(--space-3); padding:var(--space-3) var(--space-4);
+  border-radius:var(--control-radius); box-shadow:none;
+  font-size:var(--type-control); line-height:1.5;
+}
+:root .notice > :is(div,span) { min-width:0; overflow-wrap:anywhere; }
+:root .notice > div { flex:1; }
+:root .notice > div > p { font-size:inherit; line-height:inherit; margin:var(--space-2) 0; }
+:root .notice > div > p:first-child { margin-top:0; }
+:root .notice > div > p:last-child { margin-bottom:0; }
+:root .notice .button-row { margin-top:var(--space-3); }
+:root .empty { min-width:0; gap:var(--space-3); }
+:root .empty > :is(h3,p) { max-width:60ch; overflow-wrap:anywhere; }
+
+@media(max-width:650px) {
+  :root { --dialog-padding:var(--space-4); }
+  :root .dialog-inner > .dialog-header { margin-bottom:var(--space-4); }
+  :root .dialog .dialog-footer > button { flex:1 1 120px; }
+  :root .notice { flex-wrap:wrap; }
+  :root .notice > div { flex-basis:calc(100% - 36px); }
+}

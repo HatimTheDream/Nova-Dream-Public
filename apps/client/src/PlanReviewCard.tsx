@@ -34,8 +34,10 @@ export function PlanReviewCard({ review, onOpenPanel }: { review: PlanReviewCont
   return <section className="nova-plan-review" aria-label="Plan proposal">
     <div className="nova-plan-heading"><List size={16}/><span>Plan</span><span>Version {item.version}</span>{onOpenPanel && <button type="button" className="nova-plan-panel-button" aria-label="Open plan in side panel" title="Open in side panel" onClick={onOpenPanel}><PanelRight size={17}/></button>}</div>
     {review.proposal && <><div id={bodyId} className={open ? 'nova-plan-inline-document' : 'nova-plan-preview-content'}>{open ? <PlanReviewDocument item={item}/> : <div className="nova-plan-body"><ProposalBody proposal={review.proposal} preview/></div>}</div><button type="button" className="nova-plan-expand" aria-expanded={open} aria-controls={bodyId} onClick={() => setExpanded(open ? null : identity)}>{open ? 'Collapse plan' : 'Expand plan'}<ChevronDown size={15} className={open ? 'expanded' : ''}/></button></>}
-    {(item.state !== 'ready' || review.accepted) && <p className="nova-plan-state" role="status">{review.status}</p>}
-    {item.error && <p className="nova-plan-state" role="status">{item.error}</p>}
+    {(item.state !== 'ready' || review.accepted || item.error) && <div className="nova-plan-status">
+      {(item.state !== 'ready' || review.accepted) && <p className="nova-plan-state" role="status">{review.status}</p>}
+      {item.error && <p className="nova-plan-state" role="status">{item.error}</p>}
+    </div>}
     {!review.decisionVisible && review.canReview && <button type="button" className="nova-plan-return" onClick={review.openDecision}>Review plan</button>}
   </section>;
 }

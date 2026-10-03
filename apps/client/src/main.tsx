@@ -18,6 +18,9 @@ import './home-widget-controls.css';
 import './app-icon.css';
 import './voice-panel.css';
 import './typography.css';
+import './quiet-ui.css';
+import './home-quiet.css';
+import './app-navigation.css';
 
 applyDocumentAppIcon(readCachedAppIcon());
 initializeTypography();

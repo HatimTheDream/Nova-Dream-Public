@@ -6,7 +6,7 @@ export function Dialog({ title, children, close }: { title: string; children: Re
   const titleId = useId();
   const closeRef = useRef(close); closeRef.current = close;
   useEffect(() => { const previous = document.activeElement as HTMLElement | null; ref.current?.showModal(); ref.current?.querySelector<HTMLElement>('input:not([type=hidden]),textarea')?.focus(); return () => previous?.focus(); }, []);
-  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); closeRef.current(); }} onClick={event => { if (event.target === event.currentTarget) closeRef.current(); }}><div className="dialog-inner"><div className="section-heading"><h2 id={titleId}>{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={close}><X size={20}/></button></div>{children}</div></dialog>;
+  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); closeRef.current(); }} onClick={event => { if (event.target === event.currentTarget) closeRef.current(); }}><div className="dialog-inner"><div className="section-heading dialog-header"><h2 id={titleId}>{title}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><X size={20}/></button></div>{children}</div></dialog>;
 }
 export function Empty({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
   return <div className="empty"><h3>{title}</h3>{children && <p>{children}</p>}{action}</div>;

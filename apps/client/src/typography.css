@@ -7,6 +7,19 @@
   --message-font: var(--system-font);
   --interface-text-scale: 1;
   --assistant-text-size: 15px;
+  /* Semantic text tokens resolve the interface preference here. The build's
+     typography transform handles literal sizes and --type-* consumers; it
+     deliberately leaves this file and reading preferences alone. */
+  --text-body: calc(16px * var(--interface-text-scale));
+  --leading-body: calc(24px * var(--interface-text-scale));
+  --text-secondary: calc(14px * var(--interface-text-scale));
+  --leading-secondary: calc(20px * var(--interface-text-scale));
+  --text-heading-lg: calc(20px * var(--interface-text-scale));
+  --leading-heading-lg: calc(28px * var(--interface-text-scale));
+  --text-heading-md: calc(18px * var(--interface-text-scale));
+  --leading-heading-md: calc(26px * var(--interface-text-scale));
+  --text-heading-sm: calc(16px * var(--interface-text-scale));
+  --leading-heading-sm: calc(24px * var(--interface-text-scale));
   font-family: var(--app-font);
 }
 :root[data-interface-font="sora"] { --app-font: var(--sora-font); }
@@ -19,7 +32,7 @@
 :root[data-message-text-size="small"] { --assistant-text-size: 14px; }
 :root[data-message-text-size="large"] { --assistant-text-size: 17px; }
 :root[data-message-text-size="extra-large"] { --assistant-text-size: 20px; }
-body { font-size: calc(16px * var(--interface-text-scale)); }
+body { font-size:var(--text-body); line-height:1.5; }
 
 /* Only reading content uses message preferences; surrounding controls do not. */
 :root :is(.assistant-workspace, .conversation-reader, .research-report-body, .nova-plan-body) .message-text,

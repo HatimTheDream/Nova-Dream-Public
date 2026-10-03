@@ -33,9 +33,9 @@
     --selection: var(--soft-gold);
     --selection-ink: var(--text);
     --selection-edge: color-mix(in srgb, var(--gold) 40%, var(--line));
-    --control-radius: 14px;
-    --card-radius: 22px;
-    --shadow: 0 3px 0 var(--line);
+    --control-radius: 10px;
+    --card-radius: 16px;
+    --shadow: 0 2px 8px rgb(var(--text-rgb) / .06);
     --type-control: 14px;
     --type-dense: 14px;
     --type-meta: 12px;
@@ -65,12 +65,14 @@
     --card-padding: var(--space-4);
     --card-padding-spacious: var(--space-6);
     --button-min-height: 44px;
-    --button-padding-x: var(--space-4);
+    --button-padding-x: var(--space-3);
     --icon-button-size: 44px;
     --icon-label-gap: var(--space-2);
     --control-gap: var(--space-2);
     --paragraph-gap: var(--space-3);
     --group-gap: var(--space-4);
+    --dialog-padding: var(--space-6);
+    --surface-border: 1px solid var(--line);
   }
 
   :root[data-theme=dark] {

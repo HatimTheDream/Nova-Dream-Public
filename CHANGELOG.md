@@ -1,3 +1,12 @@
+## [2.1.0] — 2026-10-03
+
+- Rebuilds Home around Quiet List: a daily briefing, upcoming appointment, Assistant activity, and a separate My space for saved notes, links and widgets. Existing content and ordering are kept; sections use a consistent width and grow with their content.
+- Applies calmer shared buttons, readable spacing and typography, aligned dialog insets, and natural-height collection rows across the app. Long task titles wrap while their actions remain reachable.
+- Moves navigation to a bottom row on narrow windows and phones, with More for the remaining sections. The row reserves space below the content and keeps the saved navigation order; wider windows retain the side rail.
+- Fixes plan-card status/error padding and small-screen approval labels without changing approval or saved-writing behavior.
+- Opens the exact saved draft or conversation from Home; keeps status and freshness claims tied to the available data. Snoozes survive midnight, tomorrow respects timezone date changes, and due/blocked reasons no longer duplicate a task.
+- Documents a shared UI contract and preserves specialized Calendar, Inbox, Content Board and spatial agent layouts.
+
 ## [2.0.11] — 2026-10-01
 
 - Waits for the launched process to execute the reviewed application before recording startup identity, covering the Linux service fork/exec boundary.

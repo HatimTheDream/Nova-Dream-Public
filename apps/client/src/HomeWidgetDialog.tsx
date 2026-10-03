@@ -100,7 +100,6 @@ export function HomeWidgetDialog({ widget, widgets, projects, storageKey, defaul
   const [draft, setDraft] = useState(() => restoreDraft(key, widget));
   const [search, setSearch] = useState('');
   const [galleryType, setGalleryType] = useState<HomeWidgetType>('clock');
-  const [gallerySize, setGallerySize] = useState<HomeWidget['size']>(() => draft.selected ? draft.forms[draft.selected]?.size ?? 'compact' : 'compact');
   const [category, setCategory] = useState<typeof categories[number]>('All Widgets');
   const [error, setError] = useState('');
   const [storageError, setStorageError] = useState(false);
@@ -183,7 +182,7 @@ export function HomeWidgetDialog({ widget, widgets, projects, storageKey, defaul
   const visibleTypes = libraryOrder.filter(candidate => (category === 'All Widgets' || (category === 'Personal' ? personalTypes.includes(candidate) : !personalTypes.includes(candidate)))
     && `${homeWidgetNames[candidate]} ${descriptions[candidate]}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const selectedType = visibleTypes.includes(galleryType) ? galleryType : visibleTypes[0];
-  const selectedSize = gallerySize;
+  const selectedSize = 'square';
   const selectedCount = selectedType ? widgets.filter(item => !item.hidden && resolveWidgetType(item) === selectedType).length : 0;
   const hidden = widgets.filter(item => item.hidden);
   return <Dialog title={widget ? 'Customize Widget' : current ? 'Create A Widget' : 'Add Widgets'} close={leave}>
@@ -207,18 +206,17 @@ export function HomeWidgetDialog({ widget, widgets, projects, storageKey, defaul
             <div className="home-gallery-detail-heading"><h3>{homeWidgetNames[selectedType]}</h3></div>
             <div className={`home-gallery-stage gallery-stage-${selectedSize}`}><WidgetPreview widget={{ ...(draft.forms[selectedType] ?? { id: selectedType, type: selectedType, hidden: false }), size: selectedSize }} sample/></div>
             <p className="home-gallery-example">Example Preview</p>
-            <div className="home-gallery-size-picker" role="group" aria-label="Preview Size">{sizeOptions.map(size => <button type="button" key={size.value} aria-pressed={selectedSize === size.value} onClick={() => setGallerySize(size.value)}><span className={`home-size-diagram diagram-${size.value}`} aria-hidden="true"/><span>{size.name}</span></button>)}</div>
             <div className="home-gallery-add"><span>{selectedCount ? `${selectedCount} on your board · add another` : 'Make it yours with a name and settings'}</span><button type="button" className="primary" disabled={atLimit} onClick={() => choose(selectedType, selectedSize)}>Customize &amp; Add</button></div>
           </section> : <div className="home-gallery-no-results"><h3>No Widgets Found</h3><p>Try another name or choose All.</p></div>}
         </div>
         {hidden.length > 0 && <details className="home-hidden-widgets"><summary>Hidden Widgets ({hidden.length})</summary><p>Your content and settings are kept. Restore a widget to use it again.</p>{hidden.map(item => <div className="home-hidden-widget" key={item.id}><span><strong>{widgetTitle(item)}</strong><small>{homeWidgetNames[resolveWidgetType(item)]}</small></span><button type="button" onClick={() => restore(item.id)}>Restore<span className="sr-only"> {widgetTitle(item)}</span></button></div>)}</details>}
       </> : <form className="home-widget-config" noValidate onSubmit={event => { event.preventDefault(); apply(); }}><div className="home-widget-config-layout"><div className="home-widget-config-fields">
-        {!widget && <button type="button" className="home-library-back" onClick={() => { if (persist(draft)) { setGallerySize(current.size); setGalleryType(type!); keep({ ...draft, selected: undefined }); } }}>Back To Widget Library</button>}
+        {!widget && <button type="button" className="home-library-back" onClick={() => { if (persist(draft)) { setGalleryType(type!); keep({ ...draft, selected: undefined }); } }}>Back To Widget Library</button>}
         <div className="home-widget-config-heading"><h3 ref={configHeading} tabIndex={-1}>{homeWidgetNames[type!]}</h3></div>
         {changedElsewhere && <div className="home-widget-message"><strong>This widget has changed since you started editing.</strong><p>Review your draft before applying it. Your changes will replace its current settings.</p><details><summary>Current widget on your board</summary><WidgetPreview widget={currentSaved!}/></details></div>}
         <label>Widget Name<input value={current.title ?? ''} maxLength={80} placeholder={homeWidgetNames[type!]} onChange={event => patch({ title: event.target.value })}/><small>Leave blank to use the default name.</small></label>
         <fieldset className="home-widget-colors"><legend>Color</legend><div>{homeWidgetColors.map(color => <button type="button" key={color} aria-pressed={(current.color ?? 'default') === color} onClick={() => patch({ color })}><span className={`home-color-swatch swatch-${color}`} data-widget-color={color} aria-hidden="true"/><span>{colorNames[color]}</span></button>)}</div><p className="metadata">Default keeps this widget’s original color.</p></fieldset>
-        <fieldset className="home-widget-sizes"><legend>Size</legend><div>{sizeOptions.map(size => <button type="button" key={size.value} aria-pressed={current.size === size.value} onClick={() => patch({ size: size.value })}><span className={`home-size-diagram diagram-${size.value}`} aria-hidden="true"/><strong>{size.name}</strong><small>{size.description}</small></button>)}</div><p className="metadata">Widgets with the same size use the same space. On small screens, widgets fit one column.</p></fieldset>
+        <p className="metadata">My space keeps a consistent width. Each section grows to fit its content.</p>
         {(type === 'welcome' || type === 'clock') && <label>Timezone<select value={current.settings?.timezone ?? ''} onChange={event => settings({ timezone: event.target.value || undefined })}><option value="">Follow Workspace</option>{[...new Set([current.settings?.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')].filter((zone): zone is string => !!zone))].map(zone => <option key={zone} value={zone}>{zone.replaceAll('_', ' ').replaceAll('/', ' / ')}</option>)}</select></label>}
         {type === 'weather' && <fieldset className="home-weather-settings"><legend>Weather Location</legend>
           {current.settings?.location && <p className="home-widget-message"><strong>{current.settings.location.name}</strong><br/><span>Selected City</span></p>}
@@ -243,7 +241,7 @@ export function HomeWidgetDialog({ widget, widgets, projects, storageKey, defaul
           <label htmlFor={`${fieldId}-url-${link.id}`}>Web Address<input id={`${fieldId}-url-${link.id}`} type="url" value={link.url} maxLength={2000} placeholder="https://example.com" onChange={event => settings({ links: current.settings!.links!.map(item => item.id === link.id ? { ...item, url: event.target.value } : item) })}/></label>
           <button type="button" onClick={() => settings({ links: current.settings!.links!.filter(item => item.id !== link.id) })}>Remove<span className="sr-only"> link {index + 1}</span></button>
         </div>)}<button type="button" disabled={(current.settings?.links?.length ?? 0) >= 12} onClick={() => settings({ links: [...current.settings?.links ?? [], { id: crypto.randomUUID(), label: '', url: '' }] })}>Add A Link</button></fieldset>}
-        </div><section className="home-widget-live-preview" aria-label="Widget content preview"><div><strong>Preview</strong><small>Sample content · actual size follows your board</small></div><WidgetPreview widget={current}/></section></div>
+        </div><section className="home-widget-live-preview" aria-label="Widget content preview"><div><strong>Preview</strong><small>Sample content · actual size follows your board</small></div><WidgetPreview widget={{ ...current, size: 'square' }}/></section></div>
         {issues.length > 0 && <div className="home-widget-error" role="alert"><strong>Review these settings</strong><ul>{issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul></div>}
         <div className="dialog-footer"><p className="metadata">{storageError ? 'Edits are only in this window.' : 'Unfinished edits are kept in this browser.'}</p><button type="button" onClick={leave}>Keep For Later</button><button className="primary" type="submit" disabled={atLimit}>{widget ? 'Apply Changes' : 'Add Widget'}</button></div>
       </form>}

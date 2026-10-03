@@ -16,7 +16,7 @@ export type HomeActions = {
   complete: (task: Entity<Task>) => void;
 };
 type Props = HomeActions & {
-  id: HomeWidgetType; snapshot?: Snapshot; widget?: HomeWidget; now?: number; projectMissing?: boolean; customize?: () => void;
+  flow?: boolean; id: HomeWidgetType; snapshot?: Snapshot; widget?: HomeWidget; now?: number; projectMissing?: boolean; customize?: () => void;
   state: ReturnType<typeof homeTaskState>;
   draft: Draft;
   dirty: boolean;
@@ -36,11 +36,11 @@ const emptyCopy = {
 };
 
 /** Widget content stays separate from layout, menus and reorder persistence. */
-export function HomeWidgetContent({ id, snapshot, state, draft, dirty, draftStatus, time, date, timezone, widget, now = Date.now(), projectMissing, customize, open, openSettings, newTask, editTask, complete }: Props) {
+export function HomeWidgetContent({ flow = false, id, snapshot, state, draft, dirty, draftStatus, time, date, timezone, widget, now = Date.now(), projectMissing, customize, open, openSettings, newTask, editTask, complete }: Props) {
   const { active, completed, attention, emptyState } = state;
-  const size = widget?.size ?? 'square', compact = size === 'compact';
-  const taskCapacity = { compact: 1, square: 2, wide: 3, large: 8 }[size];
-  const attentionCapacity = compact ? 0 : size === 'large' ? 6 : size === 'square' && dirty ? 1 : 2;
+  const size = flow ? 'square' : widget?.size ?? 'square', compact = size === 'compact';
+  const taskCapacity = flow ? 12 : { compact: 1, square: 2, wide: 3, large: 8 }[size];
+  const attentionCapacity = flow ? 12 : compact ? 0 : size === 'large' ? 6 : size === 'square' && dirty ? 1 : 2;
   const view = widget?.settings?.view;
   const allTasks = view === 'all' ? state.ordered : view === 'ready' ? state.ready : view === 'attention' ? state.ordered.filter(task => attention.some(item => item.task.id === task.id)) : view === 'upcoming' ? state.ordered.filter(task => !['done', 'skipped'].includes(task.value.status) && task.value.planned > dayInZone(timezone, now)) : state.tasks;
   const limit = Math.min(widget?.settings?.limit ?? (id === 'attention' ? 3 : 5), id === 'attention' ? attentionCapacity : taskCapacity);
@@ -50,7 +50,7 @@ export function HomeWidgetContent({ id, snapshot, state, draft, dirty, draftStat
   if (projectMissing) return <div className="home-content"><h3>Project unavailable</h3>{!compact && <p>This widget keeps its original project filter. Choose another project in its settings.</p>}<div className="home-actions"><button className="home-action" onClick={customize}>Customize Widget</button></div></div>;
   if (id === 'clock') return <div className="home-clock-content"><time className="home-clock-time" dateTime={new Date(now).toISOString()}>{time}</time><p>{date}</p><p className="metadata">{timezone.replaceAll('_', ' ')}</p></div>;
   if (id === 'weather' && widget) return <HomeWeatherWidget widget={widget} customize={customize ?? (() => {})}/>;
-  if (id === 'daily-routines' && snapshot && widget) return <DailyRoutinesWidget snapshot={snapshot} widget={widget} now={now} openTasks={() => open('tasks')} editTask={editTask}/>;
+  if (id === 'daily-routines' && snapshot && widget) return <DailyRoutinesWidget flow={flow} snapshot={snapshot} widget={widget} now={now} openTasks={() => open('tasks')} editTask={editTask}/>;
   if (id === 'next-appointment' && snapshot) return <HomeAppointmentWidget epoch={snapshot.epoch} deviceId={snapshot.deviceId} timezone={timezone} now={now} size={size} openCalendar={() => open('calendar')}/>;
   if (id === 'next-action') {
     const routineTaskIds = new Set(snapshot?.taskState?.occurrences.map(occurrence => occurrence.taskId) ?? []);

@@ -340,3 +340,8 @@
 .home-widget-config .home-widget-sizes button { padding:8px 4px; }
 .home-widget-config .home-widget-sizes .metadata { display:none; }
 @media(max-width:650px) { .home-widget-config-layout { grid-template-columns:minmax(0,1fr); }.home-widget-config .home-widget-live-preview { position:static; }.home-widget-config .dialog-footer { bottom:-17px; }.home-widget-config .home-widget-preview { max-width:320px; margin:auto; } }
+/* Color labels keep whole words at narrow dialog widths. */
+:root .home-widget-dialog .home-widget-colors > div { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,112px),1fr)); gap:var(--space-2); }
+:root .home-widget-dialog .home-widget-colors button { flex-direction:row; justify-content:flex-start; min-height:44px; padding:var(--space-2); gap:var(--space-2); font-size:var(--text-secondary); line-height:var(--leading-secondary); }
+:root .home-widget-dialog .home-widget-colors button > span:last-child { overflow-wrap:normal; word-break:normal; }
+:root .home-widget-dialog .home-widget-colors .home-color-swatch { width:24px; height:24px; flex:none; }

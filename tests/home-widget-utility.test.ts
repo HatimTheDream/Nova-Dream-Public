@@ -4,10 +4,12 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { weatherGraphicKind } from '../apps/client/src/WeatherGraphic';
 import { defaultLayout, type Entity, type Snapshot, type Task } from '../packages/domain/contracts';
-import { createHomeWidget } from '../packages/domain/home-widgets';
+import { createHomeWidget, type HomeWidget, type HomeWidgetType } from '../packages/domain/home-widgets';
 import type { HomeWeatherResult } from '../packages/domain/home-weather';
 import type { Routine } from '../packages/domain/tasks';
 import { dailyRoutineTasks } from '../apps/client/src/DailyRoutinesWidget';
+import { HomeWidgetContent } from '../apps/client/src/HomeWidgets';
+import { homeTaskState } from '../apps/client/src/home-task-state';
 import { homeWeatherCondition, weatherResponseMatches, WeatherReading } from '../apps/client/src/HomeWeatherWidget';
 
 const now = Date.parse('2026-09-20T01:00:00Z');
@@ -17,6 +19,74 @@ const task = (id: string, patch: Partial<Task> = {}) => entity<Task>(id, { title
 const snapshot = (): Pick<Snapshot, 'tasks' | 'routines' | 'taskState' | 'layout'> => ({
   tasks: [], routines: [routine('routine:daily')], layout: entity('layout', { ...defaultLayout, timezone: 'UTC' }),
   taskState: { occurrences: [], events: [], routineEvents: [], focus: [], earnedXp: 0, orders: [] },
+});
+
+function renderHomeContent(id: HomeWidgetType, widget: HomeWidget, data = snapshot(), flow = true): string {
+  const noop = () => {};
+  return renderToStaticMarkup(createElement(HomeWidgetContent, {
+    id, widget, flow, snapshot: data as Snapshot, now,
+    state: homeTaskState(data, data.layout.value, now),
+    draft: { title: '', text: '', projectId: null, attachments: [] },
+    dirty: false, draftStatus: '', time: '01:00', date: 'September 20', timezone: 'UTC',
+    open: noop, openSettings: noop, newTask: noop, editTask: noop, complete: noop,
+  }));
+}
+
+test('My space task flow honors its saved limit without rewriting legacy widget size', () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 9 }, (_, index) => task(`Task ${index + 1}`));
+  const widget = createHomeWidget('next');
+  widget.size = 'compact';
+  widget.settings = { ...widget.settings, limit: 7, view: 'ready' };
+  const savedWidget = structuredClone(widget), savedData = structuredClone(data);
+
+  const html = renderHomeContent('next', widget, data);
+  assert.equal(html.match(/class="task-open"/g)?.length, 7);
+  for (let index = 1; index <= 7; index++) assert.ok(html.includes(`title="Task ${index}"`));
+  assert.doesNotMatch(html, /title="Task [89]"/);
+  assert.match(html, /aria-label="Showing 7 of 9 matching tasks"/);
+  assert.equal(renderHomeContent('next', widget, data, false).match(/class="task-open"/g)?.length, 1, 'legacy compact rendering keeps its original capacity');
+  assert.deepEqual(widget, savedWidget);
+  assert.deepEqual(data, savedData);
+});
+
+test('My space forwards flow to daily routines and preserves their saved display limit', () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 7 }, (_, index) => task(`Routine ${index + 1}`));
+  data.taskState!.occurrences = data.tasks.map(item => ({ taskId: item.id, routineId: 'routine:daily', templateRevision: 1, date: '2026-09-20', timezone: 'UTC', kind: 'task' }));
+  const widget = createHomeWidget('daily-routines');
+  widget.size = 'compact';
+  widget.settings = { ...widget.settings, limit: 4 };
+  const savedWidget = structuredClone(widget), savedData = structuredClone(data);
+
+  const html = renderHomeContent('daily-routines', widget, data);
+  assert.equal(html.match(/class="home-routine-open"/g)?.length, 4);
+  for (let index = 1; index <= 4; index++) assert.ok(html.includes(`title="Routine ${index}"`));
+  assert.doesNotMatch(html, /title="Routine [567]"/);
+  assert.match(html, /aria-label="Showing 4 of 7 daily routines"/);
+  assert.equal(renderHomeContent('daily-routines', widget, data, false).match(/class="home-routine-open"/g)?.length, 1, 'legacy compact rendering keeps its original capacity');
+  assert.deepEqual(widget, savedWidget);
+  assert.deepEqual(data, savedData);
+});
+
+test('My space exposes all twelve saved quick links as directly accessible anchors', () => {
+  const widget = createHomeWidget('links');
+  widget.size = 'compact';
+  const links = Array.from({ length: 12 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    label: `Bookmark ${index + 1}`, url: `https://example.test/bookmark/${index + 1}`,
+  }));
+  widget.settings = { ...widget.settings, links };
+  const savedWidget = structuredClone(widget);
+
+  const html = renderHomeContent('links', widget);
+  assert.equal(html.match(/<a href=/g)?.length, 12);
+  for (const link of links) {
+    assert.ok(html.includes(`<a href="${link.url}" target="_blank" rel="noopener noreferrer" title="${link.label}"><strong>${link.label}</strong>`));
+  }
+  assert.doesNotMatch(html, /All 12 links/);
+  assert.equal(renderHomeContent('links', widget, snapshot(), false).match(/<a href=/g)?.length, 1);
+  assert.deepEqual(widget, savedWidget);
 });
 
 test('daily widgets use retained occurrences in their own timezone and saved task order', () => {

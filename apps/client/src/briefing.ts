@@ -1,4 +1,5 @@
-import type { Draft, Entity, Snapshot, Task } from '../../../packages/domain/contracts';
+import type { Snapshot } from '../../../packages/domain/contracts';
+import { addDays } from '../../../packages/domain/calendar';
 
 /**
  * Proactive home briefing: "Here's what deserves your attention, and why."
@@ -42,14 +43,14 @@ export interface Briefing {
   /** Count of urgent items beyond the visible cap. Never silently hidden. */
   overflowCount: number;
   generatedAt: number;
-  /** Per-source freshness, e.g. "Tasks current as of 8:42 AM". */
+  /** Describes the available source, without inventing a synchronization time. */
   freshnessLine: string;
 }
 
 export interface DismissalState {
   /** occurrenceKey -> 'snoozed' | 'hidden' | 'done' */
   dismissed: Record<string, 'snoozed' | 'hidden' | 'done'>;
-  /** occurrenceKey -> timestamp when a snooze expires */
+  /** Stable obligation key -> expiry; legacy occurrence keys remain readable. */
   snoozeUntil: Record<string, number>;
 }
 
@@ -57,18 +58,8 @@ const MAX_VISIBLE = 5;
 
 const importanceRank = { high: 0, normal: 1, low: 2 } as const;
 
-function startOfDay(timestamp: number, timezone?: string): number {
-  const date = new Date(timestamp);
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
-  return new Date(`${parts}T00:00:00`).getTime();
-}
-
 function dayKey(timestamp: number, timezone?: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(timestamp));
-}
-
-function formatTime(timestamp: number, timezone?: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(timestamp);
 }
 
 /**
@@ -81,18 +72,18 @@ function formatTime(timestamp: number, timezone?: string): string {
  */
 export function buildBriefing(snapshot: Snapshot, now: number, dismissals: DismissalState, timezone?: string): Briefing {
   const candidates: BriefingItem[] = [];
-  const todayStart = startOfDay(now, timezone);
   const todayKey = dayKey(now, timezone);
-  const freshnessLine = `Tasks current as of ${formatTime(now, timezone)}`;
+  const tomorrowKey = addDays(todayKey, 1);
+  const freshnessLine = 'From saved tasks and drafts';
 
   const isDismissed = (occurrenceKey: string): boolean => {
+    const stableKey = occurrenceKey.replace(/:\d{4}-\d{2}-\d{2}$/, '');
+    const until = Math.max(dismissals.snoozeUntil[stableKey] ?? 0, dismissals.snoozeUntil[occurrenceKey] ?? 0);
+    // Timed snoozes survive the calendar-day boundary and do not require a
+    // per-day dismissal entry. Continue honoring the former keyed format.
+    if (now < until) return true;
     const state = dismissals.dismissed[occurrenceKey];
-    if (!state) return false;
-    if (state === 'snoozed') {
-      const until = dismissals.snoozeUntil[occurrenceKey] ?? 0;
-      return now < until;
-    }
-    return true;
+    return state === 'hidden' || state === 'done';
   };
 
   // --- Tasks: overdue with real due dates ---
@@ -109,11 +100,10 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
     // The due field is a YYYY-MM-DD date; "overdue" means the date is before today.
     const isOverdue = dueDateStr !== undefined && dueDateStr < todayKey;
     const isDueToday = dueDateStr !== undefined && dueDateStr === todayKey;
-    const isDueTomorrow = dueDateStr !== undefined && dueDateStr === dayKey(now + 86400000, timezone);
+    const isDueTomorrow = dueDateStr !== undefined && dueDateStr === tomorrowKey;
 
-    // Gate 1: requires me? Waiting/blocked tasks need a decision.
-    // Gate 2: actionable now? Yes for overdue/due-soon.
-    // Gate 3: info current? Due dates are snapshot facts.
+    // Due dates are saved facts. Showing an actionable task does not establish
+    // who caused a delay or whether the owner can resolve a blockage alone.
 
     if (isOverdue) {
       // Days overdue from calendar dates: parse both as UTC midnight for a stable diff.
@@ -191,22 +181,32 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
       }
     }
 
-    // Blocked/waiting: your decision is needed.
+    // Status is evidence of a blockage, not evidence that only the owner can
+    // resolve it. A due date and a blockage describe one obligation.
     if (['blocked', 'waiting'].includes(value.status)) {
       const blockKey = `task-block:${task.id}:${todayKey}`;
       if (!isDismissed(blockKey)) {
-        candidates.push({
-          id: `${task.id}:block`,
-          occurrenceKey: blockKey,
+        const statusDetail = value.waitReason
+          ? `Marked ${value.status}: ${value.waitReason}`
+          : `Marked ${value.status}. Review its status or next step.`;
+        const statusReason = `Task is marked ${value.status}; review what can move it forward.`;
+        const dueCandidate = candidates.at(-1);
+        if (dueCandidate?.id === task.id) {
+          dueCandidate.tier = Math.min(dueCandidate.tier, 2) as BriefingTier;
+          dueCandidate.detail += ` ${statusDetail}`;
+          dueCandidate.whyThis.source += ' and task status';
+          dueCandidate.whyThis.reason += ` ${statusReason}`;
+          dueCandidate.actions.push({ kind: 'hide', label: 'Not now', taskId: task.id });
+        } else candidates.push({
+          id: task.id,
+          occurrenceKey,
           tier: 2,
           title: value.title,
-          detail: value.waitReason
-            ? `Waiting: ${value.waitReason}`
-            : `Marked ${value.status}. Your decision may unblock it.`,
+          detail: statusDetail,
           whyThis: {
             source: 'Task status',
             freshness: freshnessLine,
-            reason: `Task is ${value.status}; only you can resolve it.`,
+            reason: statusReason,
           },
           actions: [
             { kind: 'open-task', label: 'Open task', taskId: task.id },
@@ -221,6 +221,8 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
   // --- Drafts with content: actionable now ---
   for (const draft of snapshot.drafts) {
     if (!draft.value.text?.trim() && !draft.value.attachments.length) continue;
+    const organization = snapshot.draftOrganization?.find(row => row.draftId === draft.id && row.draftRevision === draft.revision);
+    if (organization && organization.folder !== 'active') continue;
     const occurrenceKey = `draft:${draft.id}:${todayKey}`;
     if (isDismissed(occurrenceKey)) continue;
     candidates.push({
@@ -228,7 +230,7 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
       occurrenceKey,
       tier: 3,
       title: draft.value.title || 'Untitled draft',
-      detail: 'A draft is waiting for your attention.',
+      detail: 'Unsent content is saved here when you want to return to it.',
       whyThis: {
         source: 'Saved draft',
         freshness: freshnessLine,

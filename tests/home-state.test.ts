@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Children, createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Home } from '../apps/client/src/Home';
+import { HomeSpace } from '../apps/client/src/HomeSpace';
 import { HomeWidgetContent } from '../apps/client/src/HomeWidgets';
 import { homeTaskState } from '../apps/client/src/home-task-state';
 import { defaultLayout, emptyDraft, type Draft, type Entity, type Layout, type Snapshot, type Task, type WidgetId } from '../packages/domain/contracts';
@@ -12,11 +13,12 @@ const now = Date.parse('2026-09-18T07:30:00Z');
 const layout: Layout = { ...defaultLayout, timezone: 'America/Los_Angeles' };
 const task = (id: string, value: Partial<Task> = {}): Entity<Task> => ({ id, revision: 1, deviceId: 'fixture', updatedAt: new Date(now).toISOString(), value: { title: id, notes: '', status: 'open', planned: '', due: '', ...value } });
 const state = (tasks: Entity<Task>[], options: Partial<Layout> = {}, at = now) => homeTaskState({ tasks }, { ...layout, ...options }, at);
-const markup = (tasks: Entity<Task>[], options: Partial<Layout> = {}, dirty = false, draft: Partial<Draft> = {}, extra: Partial<Pick<Snapshot, 'projects' | 'taskState'>> = {}) => {
+const homeProps = (tasks: Entity<Task>[], options: Partial<Layout> = {}, dirty = false, draft: Partial<Draft> = {}, extra: Partial<Pick<Snapshot, 'projects' | 'taskState'>> = {}): Parameters<typeof Home>[0] => {
   const currentLayout = { ...layout, ...options };
   const snapshot: Snapshot = { epoch: 'fixture', cursor: 0, deviceId: 'fixture', layout: { id: 'layout', revision: 1, deviceId: 'fixture', updatedAt: '', value: currentLayout }, tasks, drafts: [], projects: [], capabilities: { assistant: false, voice: false, reason: '' }, ...extra };
-  return renderToStaticMarkup(createElement(Home, { snapshot, layout: currentLayout, saveLayout() {}, open() {}, openSettings() {}, newTask() {}, editTask() {}, complete() {}, draft: { ...emptyDraft, text: dirty ? 'Keep this unsaved thought' : '', ...draft }, dirty, draftStatus: 'Waiting to save' }));
+  return { snapshot, layout: currentLayout, saveLayout() {}, open() {}, openSettings() {}, newTask() {}, editTask() {}, complete() {}, draft: { ...emptyDraft, text: dirty ? 'Keep this unsaved thought' : '', ...draft }, dirty, draftStatus: 'Waiting to save' };
 };
+const markup = (...args: Parameters<typeof homeProps>) => renderToStaticMarkup(createElement(HomeSpace, homeProps(...args)));
 const onlyWidget = (id: WidgetId): Partial<Layout> => ({ widgets: layout.widgets.map(widget => ({ ...widget, hidden: widget.id !== id })) });
 const widgetProps = (tasks: Entity<Task>[], widget: HomeWidget, overrides: Partial<Parameters<typeof HomeWidgetContent>[0]> = {}): Parameters<typeof HomeWidgetContent>[0] => ({
   id: resolveWidgetType(widget), widget, state: state(tasks), draft: emptyDraft, dirty: false, draftStatus: '',
@@ -29,6 +31,26 @@ const section = (rendered: string, title: string) => {
   assert.ok(match, `Expected the ${title} widget`);
   return match[0];
 };
+
+test('Home opens Today with briefing and activity while saved widgets stay in My space', context => {
+  context.mock.method(Date, 'now', () => now);
+  const note = { ...createHomeWidget('note'), title: 'My private note', settings: { text: 'Saved note content' } };
+  const props = homeProps([], { widgets: [note] });
+  const saved = structuredClone(props.snapshot);
+  const today = renderToStaticMarkup(createElement(Home, props));
+  assert.match(today, /id="home-tab-today" role="tab" aria-selected="true" aria-controls="home-panel-today"/);
+  assert.match(today, /id="home-tab-space" role="tab" aria-selected="false" aria-controls="home-panel-space"/);
+  assert.match(today, /id="home-panel-space" role="tabpanel" aria-labelledby="home-tab-space" hidden=""><\/div>/);
+  assert.match(today, /aria-label="Daily briefing"/);
+  assert.match(today, /aria-label="Coming up"/);
+  assert.match(today, /Nova activity/);
+  assert.match(today, /Add task/);
+  assert.doesNotMatch(today, /My private note|Saved note content|data-reorder-item=/);
+  const space = renderToStaticMarkup(createElement(HomeSpace, props));
+  assert.match(section(space, 'My private note'), /Saved note content/);
+  assert.doesNotMatch(space, /aria-label="Daily briefing"|home-activity-title/);
+  assert.deepEqual(props.snapshot, saved, 'changing the Home presentation does not rewrite saved widgets');
+});
 
 test('Home attention includes overdue deadlines without a plan and keeps every applicable reason once', () => {
   const tasks = [
@@ -99,7 +121,7 @@ test('Home keeps the selected day and timezone task order', () => {
   assert.deepEqual(homeTaskState({ tasks: [first, second], taskState }, layout, now).tasks.map(item => item.id), ['second', 'first']);
 });
 
-test('Home renders first-task guidance only for empty work and retains history filter guidance', () => {
+test('My space renders first-task guidance only for empty work and retains history filter guidance', () => {
   assert.match(markup([]), /Add Your First Task/);
   const future = markup([task('Future task', { planned: '9999-01-01' })]);
   assert.doesNotMatch(future, /Add Your First Task/);
@@ -110,7 +132,7 @@ test('Home renders first-task guidance only for empty work and retains history f
   assert.doesNotMatch(markup([finished], { showCompleted: true }), /Show completed tasks to review them/);
 });
 
-test('Home keeps specific task attention visible alongside unsaved draft recovery', () => {
+test('My space keeps specific task attention visible alongside unsaved draft recovery', () => {
   const overdue = task('Overdue task', { due: '2000-01-01' });
   const single = markup([overdue], onlyWidget('attention'));
   assert.match(single, /1 task needs review/);
@@ -119,8 +141,8 @@ test('Home keeps specific task attention visible alongside unsaved draft recover
   const combined = markup([overdue, waiting], onlyWidget('attention'), true);
   assert.match(combined, /2 tasks need review/);
   assert.match(combined, /aria-label="Review Overdue task: Overdue deadline"/);
-  assert.doesNotMatch(combined, /aria-label="Review Waiting task:/);
-  assert.match(combined, /1 more task to review/);
+  assert.match(combined, /aria-label="Review Waiting task: Waiting, Plan needs review"/);
+  assert.doesNotMatch(combined, /1 more task to review/);
   assert.match(combined, /Waiting to save/);
   assert.match(combined, /Review Draft/);
   assert.match(combined, /Open Tasks/);
@@ -129,10 +151,11 @@ test('Home keeps specific task attention visible alongside unsaved draft recover
   assert.match(draft, /Waiting to save/);
 });
 
-test('Home bounds attention previews and discloses the remaining tasks', () => {
+test('My space honors the saved attention limit and discloses the remaining tasks', () => {
   const tasks = ['First', 'Second', 'Third', 'Fourth', 'Fifth'].map(title => task(title, { status: 'blocked' }));
+  const attention = { ...createHomeWidget('attention'), settings: { limit: 2 } };
   for (const count of [3, 4, 5]) {
-    const rendered = section(markup(tasks.slice(0, count), onlyWidget('attention')), 'Task Attention');
+    const rendered = section(markup(tasks.slice(0, count), { widgets: [attention] }), 'Task Attention');
     assert.equal((rendered.match(/aria-label="Review /g) ?? []).length, 2);
     for (const title of ['First', 'Second']) assert.ok(rendered.includes(`aria-label="Review ${title}: Blocked"`));
     assert.doesNotMatch(rendered, /Third|Fourth|Fifth/);
@@ -141,7 +164,7 @@ test('Home bounds attention previews and discloses the remaining tasks', () => {
   }
 });
 
-test('Home recognizes attachment-only drafts without claiming pending attachments are saved', () => {
+test('My space recognizes attachment-only drafts without claiming pending attachments are saved', () => {
   const attached: Partial<Draft> = { title: 'Brief to continue', text: '   ', attachments: [{ id: 'file:brief', name: 'brief.txt', size: 12, sha256: 'a'.repeat(64) }] };
   const rendered = markup([], onlyWidget('draft'), true, attached);
   assert.match(rendered, /Brief to continue/);
@@ -224,7 +247,7 @@ test('each Tasks widget applies its own view and preview limit independently of 
   assert.doesNotMatch(upcoming, /Ready first|Ready second|Waiting item|Completed item|Trashed item/);
 });
 
-test('the Home board keeps two project filters independent and resolves prerequisites across the whole workspace', () => {
+test('My space keeps two project filters independent and resolves prerequisites across the whole workspace', () => {
   const alpha = { ...createHomeWidget('next'), title: 'Alpha work', settings: { projectId: 'project:alpha', view: 'ready' as const, limit: 1 } };
   const beta = { ...createHomeWidget('next'), title: 'Beta work', settings: { projectId: 'project:beta', view: 'all' as const, limit: 12 } };
   const projects: Snapshot['projects'] = ['alpha', 'beta'].map(name => ({ id: `project:${name}`, revision: 1, deviceId: 'fixture', updatedAt: '', value: { name, purpose: '' } }));

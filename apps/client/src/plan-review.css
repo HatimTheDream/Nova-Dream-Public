@@ -1,42 +1,48 @@
-.nova-plan-review { width:100%; min-width:0; margin:14px 0; overflow:hidden; border:1px solid var(--line); border-radius:15px; background:var(--surface); font-size:13px; line-height:1.65; }
-.nova-plan-heading { display:flex; align-items:center; gap:8px; min-height:46px; padding:3px 12px; color:var(--muted); font-size:11px; }
-.nova-plan-heading > span:nth-of-type(2) { margin-left:2px; font-size:10px; }
-:root .assistant-workspace .nova-plan-panel-button { width:44px; min-width:44px; min-height:44px; height:44px; margin-left:auto; padding:8px; background:transparent; border:0; box-shadow:none; }
-.nova-plan-preview-content { max-height:220px; overflow:hidden; padding:0 15px 12px; mask-image:linear-gradient(#000 calc(100% - 24px),transparent); }
-.nova-plan-review h3 { margin:5px 0 9px; font-size:15px; line-height:1.55; overflow-wrap:anywhere; }
-.nova-plan-review p { margin:8px 0; }
+.nova-plan-review { width:100%; min-width:0; margin:var(--group-gap) 0; overflow:hidden; border:1px solid var(--line); border-radius:var(--card-radius); background:var(--surface); font-size:var(--text-secondary); line-height:var(--leading-secondary); }
+.nova-plan-heading { display:flex; flex-wrap:wrap; align-items:center; gap:var(--icon-label-gap); min-height:var(--button-min-height); padding:var(--space-2) var(--card-padding); color:var(--muted); font-size:var(--text-secondary); }
+.nova-plan-heading > svg { flex:none; }
+.nova-plan-heading > span:nth-of-type(2) { font-size:var(--type-meta); }
+:root .assistant-workspace .nova-plan-panel-button { flex:none; width:var(--icon-button-size); min-width:var(--icon-button-size); min-height:var(--icon-button-size); height:var(--icon-button-size); margin-left:auto; padding:var(--space-2); background:transparent; border:0; box-shadow:none; }
+.nova-plan-preview-content { max-height:220px; overflow:hidden; padding:0 var(--card-padding) var(--card-padding); mask-image:linear-gradient(#000 calc(100% - 24px),transparent); }
+.nova-plan-review h3 { margin:0 0 var(--paragraph-gap); font-size:var(--text-heading-sm); line-height:var(--leading-heading-sm); overflow-wrap:anywhere; }
+.nova-plan-body p { margin:var(--paragraph-gap) 0; }
 .nova-plan-review .message-text.dc-reply-markdown,.nova-plan-document .message-text.dc-reply-markdown { font-size:inherit; line-height:inherit; }
-.nova-plan-review ol,.nova-plan-review ul,.nova-plan-document ol,.nova-plan-document ul { padding-left:22px; margin:10px 0; }
-.nova-plan-review li,.nova-plan-document li { margin:4px 0; overflow-wrap:anywhere; }
-.nova-plan-review h4,.nova-plan-document h4 { margin:22px 0 8px; font-size:13px; }
-:root .assistant-workspace .nova-plan-expand,:root .assistant-workspace .nova-plan-return { display:flex; align-items:center; justify-content:flex-start; gap:8px; min-height:44px; width:100%; padding:9px 14px; border:0; border-top:1px solid var(--line); border-radius:0; color:var(--muted); background:transparent; box-shadow:none; text-transform:none; font-size:11px; font-weight:500; }
+.nova-plan-review ol,.nova-plan-review ul,.nova-plan-document ol,.nova-plan-document ul { padding-inline-start:var(--space-6); margin:var(--paragraph-gap) 0; }
+.nova-plan-review li,.nova-plan-document li { margin:var(--space-2) 0; overflow-wrap:anywhere; }
+.nova-plan-review h4,.nova-plan-document h4 { margin:var(--space-6) 0 var(--space-2); font-size:var(--text-heading-sm); }
+:root .assistant-workspace .nova-plan-expand,:root .assistant-workspace .nova-plan-return { display:flex; align-items:center; justify-content:flex-start; gap:var(--icon-label-gap); min-height:var(--button-min-height); width:100%; padding:var(--space-3) var(--card-padding); border:0; border-top:1px solid var(--line); border-radius:0; color:var(--text); background:transparent; box-shadow:none; text-transform:none; font-size:var(--type-control); line-height:var(--leading-secondary); font-weight:500; white-space:normal; }
 .nova-plan-expand .expanded { transform:rotate(180deg); }
-.nova-plan-state { margin:9px 14px; color:var(--muted); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
-.nova-plan-inline-document { padding:0 15px 12px; }
-.nova-plan-document { max-width:780px; min-width:0; margin:0 auto; padding:22px 26px; font-size:13px; line-height:1.8; overflow-wrap:anywhere; }
-.nova-plan-document h3 { margin:16px 0 18px; font-size:22px; font-weight:600; line-height:1.45; }
-.nova-plan-document .nova-plan-state { margin-inline:0; }
+.nova-plan-state { margin:var(--paragraph-gap) 0; color:var(--muted); font-size:var(--text-secondary); line-height:var(--leading-secondary); overflow-wrap:anywhere; }
+/* The container owns the inset so paragraph styles cannot erase it. */
+.nova-plan-status { display:grid; gap:var(--paragraph-gap); padding:var(--card-padding); }
+.nova-plan-status .nova-plan-state { margin:0; }
+.nova-plan-inline-document { padding:0 var(--card-padding) var(--card-padding); }
+.nova-plan-document { max-width:780px; min-width:0; margin:0 auto; padding:var(--card-padding-spacious); font-size:var(--text-body); line-height:var(--leading-body); overflow-wrap:anywhere; }
+.nova-plan-document h3 { margin:var(--space-4) 0; font-size:var(--text-heading-lg); font-weight:600; line-height:var(--leading-heading-lg); }
 .nova-plan-inline-document .nova-plan-document { padding:0; }
-.nova-plan-inline-document .nova-plan-document h3 { font-size:17px; }
-.nova-plan-document-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; color:var(--muted); font-size:11px; }
-.nova-plan-document-toolbar select { min-width:44px; width:auto; min-height:44px; max-width:70%; padding:5px 8px; font-size:11px; border-color:transparent; background:transparent; box-shadow:none; }
-.nova-plan-decision { min-width:0; width:100%; padding:8px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
-.nova-plan-decision-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:44px; padding-left:6px; }
-.nova-plan-decision-heading strong { font-size:13px; font-weight:550; }
-:root .assistant-workspace .nova-plan-decision button { --button-depth:0px; --button-shadow-depth:0px; text-transform:none; box-shadow:none; transform:none; font-size:12px; }
-:root .assistant-workspace .nova-plan-defer { width:44px; height:44px; min-width:44px; min-height:44px; padding:8px; border:0; background:transparent; color:var(--muted); }
-:root .assistant-workspace .nova-plan-yes { display:flex; width:100%; min-height:44px; padding:8px; gap:10px; border:0; border-radius:10px; background:color-mix(in srgb,var(--text) 5%,var(--surface)); text-align:left; justify-content:flex-start; }
+.nova-plan-inline-document .nova-plan-document h3 { font-size:var(--text-heading-md); line-height:var(--leading-heading-md); }
+.nova-plan-document-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--space-2) var(--space-3); min-height:var(--button-min-height); color:var(--muted); font-size:var(--text-secondary); line-height:var(--leading-secondary); }
+.nova-plan-document-toolbar select { min-width:var(--icon-button-size); width:auto; min-height:var(--button-min-height); max-width:100%; padding:var(--space-2); font-size:var(--type-control); border-color:var(--line); background:var(--surface); box-shadow:none; }
+.nova-plan-decision { min-width:0; width:100%; padding:var(--card-padding); border:1px solid var(--line); border-radius:var(--card-radius); background:var(--surface); }
+.nova-plan-decision-heading { display:flex; align-items:center; justify-content:space-between; gap:var(--icon-label-gap); min-height:var(--button-min-height); margin-bottom:var(--space-2); }
+.nova-plan-decision-heading strong { min-width:0; font-size:var(--text-heading-sm); line-height:var(--leading-heading-sm); font-weight:600; overflow-wrap:anywhere; }
+:root .assistant-workspace .nova-plan-decision button { --button-depth:0px; --button-shadow-depth:0px; text-transform:none; box-shadow:none; transform:none; font-size:var(--type-control); line-height:var(--leading-secondary); white-space:normal; }
+:root .assistant-workspace .nova-plan-defer { flex:none; width:var(--icon-button-size); height:var(--icon-button-size); min-width:var(--icon-button-size); min-height:var(--icon-button-size); padding:var(--space-2); border:0; background:transparent; color:var(--muted); }
+:root .assistant-workspace .nova-plan-yes { display:flex; width:100%; min-height:var(--button-min-height); padding:var(--space-3); gap:var(--icon-label-gap); border:1px solid var(--selection-edge); border-radius:var(--control-radius); background:var(--soft-gold); color:var(--text); text-align:left; justify-content:flex-start; }
+.nova-plan-yes > span:not(.nova-plan-answer-number) { min-width:0; overflow-wrap:anywhere; }
 .nova-plan-yes > svg { margin-left:auto; flex:none; color:var(--muted); }
-.nova-plan-answer-number { display:inline-flex; align-items:center; justify-content:center; flex:0 0 25px; height:25px; border-radius:50%; background:color-mix(in srgb,var(--text) 8%,var(--surface)); font-size:11px; color:var(--muted); }
-.nova-plan-amendment { display:flex; align-items:center; gap:8px; padding:5px 4px 0; min-width:0; }
-.nova-plan-amendment > svg { flex:none; width:25px; height:25px; padding:5px; border-radius:50%; color:var(--muted); background:color-mix(in srgb,var(--text) 3%,var(--surface)); }
-:root .assistant-workspace .nova-plan-amendment textarea { flex:1; min-width:0; width:0; min-height:44px; max-height:160px; margin:0; padding:12px 0 8px; border:0; border-radius:0; background:transparent; box-shadow:none; font-size:12px; line-height:20px; resize:none; }
-:root .assistant-workspace .nova-plan-amendment .nova-plan-skip,:root .assistant-workspace .nova-plan-amendment .nova-plan-send { flex:none; min-height:44px; height:44px; min-width:44px; border:0; border-radius:22px; background:color-mix(in srgb,var(--text) 3%,var(--surface)); padding:8px; font-size:11px; }
+.nova-plan-answer-number { display:inline-flex; align-items:center; justify-content:center; flex:0 0 var(--space-6); height:var(--space-6); border-radius:50%; background:color-mix(in srgb,var(--text) 8%,var(--surface)); font-size:var(--type-meta); color:var(--muted); }
+.nova-plan-amendment { display:flex; align-items:flex-start; gap:var(--control-gap); padding-top:var(--space-3); min-width:0; }
+.nova-plan-amendment > svg { flex:none; width:var(--space-6); height:var(--space-6); margin-top:var(--space-2); padding:var(--space-1); color:var(--muted); }
+:root .assistant-workspace .nova-plan-amendment textarea { flex:1; min-width:0; width:0; min-height:var(--button-min-height); max-height:160px; margin:0; padding:var(--space-3) 0 var(--space-2); border:0; border-radius:0; background:transparent; box-shadow:none; font-size:var(--type-control); line-height:var(--leading-secondary); resize:none; }
+:root .assistant-workspace .nova-plan-amendment .nova-plan-skip,:root .assistant-workspace .nova-plan-amendment .nova-plan-send { flex:none; min-height:var(--icon-button-size); min-width:var(--icon-button-size); border:0; border-radius:var(--control-radius); background:var(--raised); padding:var(--space-2); font-size:var(--type-control); }
 :root .assistant-workspace .nova-plan-amendment .nova-plan-send { background:var(--text); color:var(--surface); }
-.nova-plan-recovery { display:flex; flex-wrap:wrap; gap:8px; padding:0 6px 6px; }
-:root .assistant-workspace .nova-plan-recovery button { min-height:44px; min-width:44px; padding:8px 10px; background:transparent; border-color:var(--line); font-size:11px; }
-.nova-plan-decision .nova-plan-state { margin:8px 6px; }
+.nova-plan-recovery { display:flex; flex-wrap:wrap; gap:var(--control-gap); }
+:root .assistant-workspace .nova-plan-recovery button { min-height:var(--button-min-height); min-width:var(--icon-button-size); max-width:100%; padding:var(--space-2) var(--space-3); background:transparent; border-color:var(--line); font-size:var(--type-control); overflow-wrap:anywhere; }
 :root .assistant-workspace .composer.plan-decision-composer { border:0; border-radius:0; background:transparent; box-shadow:none; padding-top:0; }
 :root .assistant-workspace .composer.plan-decision-composer > :not(.composer-actions) { display:none; }
 :root .assistant-workspace .composer.plan-decision-composer .composer-actions [aria-label="Add to message"],:root .assistant-workspace .composer.plan-decision-composer .composer-actions [aria-label="Attach files"],:root .assistant-workspace .composer.plan-decision-composer .composer-actions [aria-label="Dictate a message"],:root .assistant-workspace .composer.plan-decision-composer .composer-actions .send-button { display:none; }
-@media(max-width:480px) { .nova-plan-review { font-size:12px; }.nova-plan-preview-content { max-height:220px;padding-inline:12px; }.nova-plan-review h3 { font-size:14px; }.nova-plan-decision-heading strong { font-size:12px; }:root .assistant-workspace .nova-plan-yes { font-size:11px;gap:8px; }:root .assistant-workspace .nova-plan-amendment textarea { min-height:54px;padding-block:8px;font-size:11px;line-height:18px; }.nova-plan-amendment { gap:5px; }.nova-plan-document { padding:18px; }.nova-plan-inline-document { padding-inline:12px; } }
+@media(max-width:480px) {
+  .nova-plan-document { padding:var(--card-padding); }
+  :root .assistant-workspace .nova-plan-amendment textarea { font-size:max(16px,var(--type-control)); }
+}
