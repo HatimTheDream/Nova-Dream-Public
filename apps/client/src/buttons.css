@@ -1,27 +1,27 @@
-/* Shared Quiet List controls: calm faces, clear state, and stable geometry.
+/* Shared action-button language: a clean face with depth only underneath.
    Content rows, calendar surfaces, checkboxes and drag handles keep their
    specialized geometry. Their nested action controls use this same system. */
-:root { --button-radius:var(--control-radius); --button-depth:0px; --button-transition:background .12s,border-color .12s,color .12s; }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim),
+:root { --button-radius:var(--control-radius); --button-depth:2px; --button-transition:background .12s,border-color .12s,box-shadow .12s,translate .12s; }
+:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button),
 .home-page .home-link-list a {
-  --button-depth:0px;
+  --button-depth:var(--button-compact-depth,2px);
   --button-edge:var(--line);
   --button-fill:var(--surface);
   --button-border:var(--line);
   --button-border-hover:color-mix(in srgb,var(--line) 75%,var(--control));
-  border:1px solid var(--button-border);
+  border:2px solid var(--button-border);
   border-radius:var(--button-radius);
   background:var(--button-fill);
   color:var(--text);
-  box-shadow:none;
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
   font-size:var(--type-control);
-  font-weight:550;
+  font-weight:650;
   line-height:1.45;
+  white-space:normal;
+  overflow-wrap:anywhere;
   transition:var(--button-transition);
   min-height:var(--button-min-height);
   padding-inline:var(--button-padding-x);
-  white-space:normal;
-  overflow-wrap:anywhere;
   letter-spacing:var(--tracking-normal);
 }
 /* Blanket capitalize removed 2026-09-30: button labels preserve authored
@@ -49,50 +49,35 @@
 :root button:is(.primary,.bg-aegis-primary,.nav-item.active) { --button-fill:var(--action); --button-edge:var(--action-edge); color:var(--action-ink); }
 :root button:is([aria-pressed=true],[aria-selected=true]):not(.check-button,.nav-item.active) { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); color:var(--text); }
 :root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
-/* Filled states keep the same one-pixel border space and do not shift on press. */
-:root button:is(.primary,.bg-aegis-primary,.nav-item.active,[aria-pressed=true],[aria-selected=true],.danger,.danger-text,.dc-mail-delivery-confirm):not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim) {
-  --button-depth:0px;
+/* Reserve the same border space without drawing an accent around filled faces.
+   Compact controls set their own depth token, independent of selection. */
+:root button:is(.primary,.bg-aegis-primary,.nav-item.active,[aria-pressed=true],[aria-selected=true],.danger,.danger-text,.dc-mail-delivery-confirm):not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button) {
+  --button-depth:var(--button-compact-depth,4px);
   --button-border:transparent;
   --button-border-hover:transparent;
-  border:1px solid var(--button-border);
+  border:2px solid var(--button-border);
   border-radius:var(--button-radius);
   background:var(--button-fill);
-  box-shadow:none;
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
 }
-/* Imported action utilities keep their position when pressed. */
+/* Imported action utilities share the press motion without changing placement. */
 :root .dreamclaw-module button.bg-aegis-primary { --tw-translate-y:0px; }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim):hover:not(:disabled),
+:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):hover:not(:disabled),
 .home-page .home-link-list a:hover {
   background:color-mix(in srgb,var(--button-fill) 85%,var(--soft-gold));
   border-color:var(--button-border-hover);
-  box-shadow:none;
+  box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
 }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim):active:not(:disabled),
+:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):active:not(:disabled),
 .home-page .home-link-list a:active {
   --button-shadow-depth:0px;
-  translate:none;
-  background:color-mix(in srgb,var(--button-fill) 75%,var(--soft-gold));
+  translate:0 var(--button-depth);
   box-shadow:none;
 }
-:root button:disabled:not(:where(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim)) { --button-shadow-depth:0px; translate:none; box-shadow:none; }
-/* Quiet actions have a hit area, not another card face. Keep explicit primary,
-   destructive, and selected states authoritative inside menus and toolbars. */
-:root button:is(.quiet,.text-button,.icon-button):not(.primary,.danger,.danger-text,[aria-pressed=true],[aria-selected=true]),
-:root .primary-rail button.nav-item:not(.active),
-:root :is(.popover,.composer-popover) > button:not(.primary,.danger,.danger-text,[aria-pressed=true],[aria-selected=true]) {
-  --button-fill:transparent; --button-border:transparent; --button-border-hover:transparent;
-  border-color:transparent; background:transparent; color:var(--muted); box-shadow:none;
-}
-:root button:is(.quiet,.text-button,.icon-button):hover:not(:disabled,.primary,.danger,.danger-text,[aria-pressed=true],[aria-selected=true]),
-:root .primary-rail button.nav-item:not(.active):hover,
-:root :is(.popover,.composer-popover) > button:hover:not(:disabled,.primary,.danger,.danger-text,[aria-pressed=true],[aria-selected=true]) {
-  background:var(--canvas); color:var(--text); box-shadow:none;
-}
-:root button.icon-button { padding:0; min-width:var(--icon-button-size); gap:0; }
-:root button.text-button { padding-inline:var(--space-2); }
-:root button:is(.primary,.bg-aegis-primary) { font-weight:600; }
+:root button:disabled:not(:where(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button)) { --button-shadow-depth:min(2px,var(--button-depth)); translate:none; box-shadow:0 var(--button-shadow-depth) 0 var(--button-edge,var(--line)); }
 :root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 .home-page .home-link-list a:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
+:root button.icon-button { padding:0; min-width:var(--icon-button-size); gap:0; }
 /* The logo and module tiles share one square geometry at every viewport. */
 :root { --app-tile-size:44px; --app-rail-width:calc(var(--app-tile-size) + 16px); --app-module-glyph-size:24px; --app-tile-radius:24%; --app-tile-corner:round; }
 @supports(corner-shape:squircle) {
@@ -118,7 +103,7 @@
 @media(prefers-reduced-motion:reduce) { :root { --button-transition:none; } }
 
 .home-widget-preview .home-preview-action {
-  --button-depth:0px;
-  border:1px solid var(--line); border-radius:var(--button-radius); background:var(--surface);
-  box-shadow:none; color:var(--text); font-weight:550;
+  --button-depth:2px;
+  border:2px solid var(--line); border-radius:var(--button-radius); background:var(--surface);
+  box-shadow:0 var(--button-depth) 0 var(--line); color:var(--text); font-weight:650;
 }

@@ -1,31 +1,35 @@
-.settings-page { --button-compact-depth: 0px; --button-radius: 9px; container: nova-settings / inline-size; scroll-padding-block: 16px; }
-.settings-layout, .settings-return { max-width: 948px; margin-inline: auto; }
+.settings-page { container: nova-settings / inline-size; scroll-padding-block: 16px; }
+.settings-layout, .settings-return { max-width: 1040px; margin-inline: auto; }
 .settings-return { margin-bottom: 16px; }
-.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); align-items: start; }
 .settings-navigation { min-width: 0; }
-:root .settings-page button, :root .settings-page .button-link { min-height: 44px; max-width: 100%; border-width: 1px; border-radius: 9px; box-shadow: none; transform: none; text-transform: none; }
-:root .settings-page button:is(:hover, :active, :disabled), :root .settings-page .button-link:is(:hover, :active) { box-shadow: none; transform: none; }
-.settings-tabs { display: flex; flex-direction: row; flex-wrap: nowrap; gap: 4px; padding: 3px 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
-:root .settings-page .settings-tabs [role="tab"] { --button-fill: transparent; --button-border: transparent; --button-border-hover: transparent; flex: 0 0 auto; justify-content: center; text-align: center; gap: 0; min-width: 0; padding: 10px 12px; border: 1px solid transparent; background: transparent; color: var(--muted); font-weight: 500; white-space: nowrap; }
-:root .settings-page .settings-tabs [role="tab"]:hover { --button-fill: var(--surface); background: var(--surface); color: var(--text); }
-:root .settings-page .settings-tabs [role="tab"][aria-selected="true"] { --button-fill: color-mix(in srgb, var(--text) 6%, var(--surface)); color: var(--text); background: var(--button-fill); }
-:root .settings-page .settings-tabs [role="tab"]:focus-visible { outline-offset: -3px; }
+.settings-heading { margin: 0 0 var(--space-4); font-size: clamp(24px,3cqw,32px); line-height: 1.25; overflow-wrap: anywhere; }
+:root .settings-page button, :root .settings-page .button-link { min-height: var(--button-min-height); max-width: 100%; text-transform: none; }
+/* Category controls use the shared raised button family; names appear on
+   hover or keyboard focus, and remain available to assistive technology. */
+.settings-tabs { display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--control-gap); padding-block: var(--space-1); }
+:root .settings-page .settings-tabs [role="tab"] { position: relative; flex: 0 0 var(--icon-button-size); width: var(--icon-button-size); height: var(--icon-button-size); min-width: var(--icon-button-size); padding: 0; gap: 0; justify-content: center; }
+:root .settings-page .settings-tabs [role="tab"][aria-selected="true"] { --button-fill: var(--action); --button-edge: var(--action-edge); --button-border: var(--action-edge); --button-border-hover: var(--action-edge); color: var(--action-ink); background: var(--button-fill); }
+.settings-category-button::after { content: attr(aria-label); position: absolute; z-index: 5; top: calc(100% + 8px); left: 50%; translate: -50% 0; max-width: min(220px,80vw); padding: 6px 10px; border: var(--surface-border); border-radius: 8px; background: var(--text); color: var(--surface); font-size: var(--type-meta); line-height: 1.5; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; }
+.settings-category-button:is(:hover,:focus-visible)::after { opacity: 1; visibility: visible; }
+.settings-category-button:first-child::after { left: 0; translate: none; }
+.settings-category-button:last-child::after { left: auto; right: 0; translate: none; }
 .settings-content, .settings-panel { min-width: 0; }
-.settings-content { width: 100%; max-width: 760px; }
+.settings-content { width: 100%; }
 .settings-panel[hidden] { display: none; }
 .settings-page .settings-card { padding: 0; margin-bottom: 28px; border: 0; border-radius: 0; box-shadow: none; background: none; }
-.settings-page .settings-card > h2, .settings-page .section-heading h2 { margin: 0 0 8px; padding: 0; border: 0; font-size: 17px; line-height: 1.4; }
+.settings-page .settings-card > h2, .settings-page .section-heading h2 { margin: 0 0 var(--space-3); padding: 0; border: 0; font-size: var(--text-heading-md); line-height: var(--leading-heading-md); }
 .settings-page .section-heading { gap: 16px; align-items: center; margin-bottom: 12px; }
 .settings-page .section-heading h3, .settings-page .section-heading h4 { margin: 0; font-size: 15px; }
 .settings-page .assistant-setup > h3 { margin: 0 0 8px; font-size: 15px; }
-.settings-page .settings-card p:not(.typography-preview) { font-size: 13px; line-height: 1.55; }
+.settings-page .settings-card p:not(.typography-preview) { font-size: var(--text-secondary); line-height: var(--leading-secondary); }
 .settings-page .settings-card > p { color: var(--muted); margin: 6px 0 14px; }
 .settings-page .setting-row { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; min-height: 66px; padding: 11px 0; }
 .settings-page .setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .settings-page .setting-row > div { min-width: 0; overflow-wrap: anywhere; }
-.settings-page .setting-row strong { font-size: 14px; }
+.settings-page .setting-row strong { font-size: var(--text-body); line-height: var(--leading-body); }
 .settings-page .setting-row p { margin: 4px 0 0; color: var(--muted); }
-.settings-page .setting-row select { flex: 0 1 auto; width: auto; min-width: 0; max-width: min(55%, 260px); min-height: 44px; border-width: 1px; border-radius: 9px; }
+.settings-page .setting-row select { flex: 0 1 auto; width: auto; min-width: 0; max-width: min(55%, 260px); min-height: var(--button-min-height); border-width: 1px; border-radius: var(--control-radius); }
 .settings-page .setting-row > button, .settings-page .section-heading > button { flex-shrink: 0; }
 .settings-page .typography-setting { font-size: 14px; }
 .typography-controls { display: flex; gap: 8px; flex: 0 0 274px; }
@@ -35,7 +39,7 @@
 .settings-page .settings-timezone { margin-top: 20px; }
 .settings-page .app-icon-setting > div:first-child { flex: 1 1 auto; }
 .settings-page .app-icon-setting > .app-icon-options { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 0; }
-:root .settings-page .app-icon-setting .app-icon-options > button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 0; padding: 5px; border-width: 1px; }
+:root .settings-page .app-icon-setting .app-icon-options > button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 0; padding: 5px; }
 .settings-page .app-icon-options button > span { display: none; }
 .settings-page .app-icon-options img { width: 32px; height: 32px; }
 .settings-page details > summary { min-height: 44px; align-content: center; cursor: pointer; font-size: 13px; font-weight: 600; padding-block: 10px; }
@@ -101,12 +105,7 @@
 .usage-days { margin: 0; }
 .usage-days > div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-top: 1px solid var(--line); }
 .usage-days dd { margin: 0; }
-@container nova-settings (min-width: 780px) {
-  .settings-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 28px; }
-  .settings-navigation { position: sticky; top: 0; }
-  .settings-tabs { flex-direction: column; overflow-x: visible; }
-  :root .settings-page .settings-tabs [role="tab"] { justify-content: flex-start; text-align: left; }
-}
+@container nova-settings (max-width: 320px) { .settings-tabs { gap: var(--space-1); } }
 @media (max-width: 650px) {
   .settings-page .setting-row { gap: 10px; }
   .settings-page .setting-row > button { flex-shrink: 1; }
@@ -127,7 +126,6 @@
 
 .usage-metrics strong.usage-missing { font-size: 12px; overflow-wrap: anywhere; }
 
-.settings-tabs [role=tab] > span { display: block; width: 100%; text-align: inherit; }
 .settings-versions { margin: 8px 0 0; }
 .settings-versions > div { display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:7px 0; }
 .settings-versions dt, .settings-versions dd { margin:0; min-width:0; overflow-wrap:anywhere; }

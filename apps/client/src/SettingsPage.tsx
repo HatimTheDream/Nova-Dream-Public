@@ -6,7 +6,7 @@ import type { AccessContext } from '../../../packages/domain/phone';
 import { Connections } from './Connections';
 import { ProviderAccounts } from './ProviderAccounts';
 import { AboutSettings } from './AboutSettings';
-import { ArrowLeft } from './icons';
+import { Archive, ArrowLeft, Device, Link2, MessageSquare, Settings2, Zap } from './icons';
 import './settings.css';
 
 const GitHubConnection = lazy(() => import('./GitHubConnection').then(module => ({ default: module.GitHubConnection })));
@@ -16,12 +16,12 @@ const InstallSettings = lazy(() => import('./InstallSettings').then(module => ({
 const UsageSettings = lazy(() => import('./UsageSettings').then(module => ({ default: module.UsageSettings })));
 const SoftwareUpdateSettings = lazy(() => import('./SoftwareUpdateSettings').then(module => ({ default: module.SoftwareUpdateSettings })));
 const categories = [
-  { id: 'general', label: 'General' },
-  { id: 'accounts', label: 'Accounts' },
-  { id: 'assistant', label: 'Assistant' },
-  { id: 'usage', label: 'Usage' },
-  { id: 'phone', label: 'Devices' },
-  { id: 'data', label: 'Data' },
+  { id: 'general', label: 'General', icon: Settings2 },
+  { id: 'accounts', label: 'Accounts', icon: Link2 },
+  { id: 'assistant', label: 'Assistant', icon: MessageSquare },
+  { id: 'usage', label: 'Usage', icon: Zap },
+  { id: 'phone', label: 'Devices', icon: Device },
+  { id: 'data', label: 'Data', icon: Archive },
 ] as const;
 export type SettingsTab = typeof categories[number]['id'];
 
@@ -63,14 +63,15 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
     {returnTo && <div className="settings-return"><button onClick={returnTo.open}><ArrowLeft size={16}/>Back to {returnTo.label}</button></div>}
     <div className="settings-layout">
     <div className="settings-navigation">
+      <h1 className="settings-heading">Settings <span aria-hidden="true">·</span> {current.label}</h1>
       <div ref={tablist} className="settings-tabs" role="tablist" aria-label="Settings categories" aria-orientation={orientation}>
-        {tabs.map((tab, index) => <button type="button" key={tab.id} id={`settings-tab-${tab.id}`} role="tab" aria-selected={current.id === tab.id} aria-controls={`settings-panel-${tab.id}`} tabIndex={current.id === tab.id ? 0 : -1} ref={node => { if (node) buttons.current.set(tab.id, node); else buttons.current.delete(tab.id); }} onClick={() => select(tab.id)} onKeyDown={event => {
+        {tabs.map((tab, index) => <button type="button" key={tab.id} id={`settings-tab-${tab.id}`} className="settings-category-button" role="tab" aria-label={tab.label} aria-selected={current.id === tab.id} aria-controls={`settings-panel-${tab.id}`} tabIndex={current.id === tab.id ? 0 : -1} ref={node => { if (node) buttons.current.set(tab.id, node); else buttons.current.delete(tab.id); }} onClick={() => select(tab.id)} onKeyDown={event => {
           const forward = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
           const backward = orientation === 'vertical' ? 'ArrowUp' : 'ArrowLeft';
           const next = event.key === forward ? (index + 1) % tabs.length : event.key === backward ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
           if (next === undefined) return;
           event.preventDefault(); select(tabs[next].id); buttons.current.get(tabs[next].id)?.focus();
-        }}><span>{tab.label}</span></button>)}
+        }}><tab.icon size={22} decorative/></button>)}
       </div>
     </div>
     <div className="settings-content">

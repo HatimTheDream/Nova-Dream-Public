@@ -19,9 +19,8 @@ const hooks = registerHooks({
 const { BottomNavigation } = await import('../apps/client/src/BottomNavigation');
 hooks.deregister();
 
-const text = (node: any): string => node == null || typeof node === 'boolean' ? '' : typeof node === 'string' || typeof node === 'number' ? String(node) : Array.isArray(node) ? node.map(text).join('') : text(node.props?.children);
 const nodes = (node: any): any[] => node == null || typeof node !== 'object' ? [] : Array.isArray(node) ? node.flatMap(nodes) : [node, ...nodes(node.props?.children)];
-const button = (tree: any, label: string) => { const found = nodes(tree).find(node => node.type === 'button' && text(node) === label); assert.ok(found, `${label} is available`); return found; };
+const button = (tree: any, label: string) => { const found = nodes(tree).find(node => node.type === 'button' && (node.props['aria-label'] === label || (label === 'More' && node.props['aria-label']?.startsWith('More sections')))); assert.ok(found, `${label} is available`); return found; };
 const dialog = (tree: any) => nodes(tree).find(node => node.props?.title === 'More sections' && node.type !== 'button');
 const icon = () => null;
 const order: ModuleId[] = ['inbox', 'home', 'tasks', 'assistant', 'calendar', 'contacts', 'agents', 'content', 'profile'];
@@ -72,7 +71,7 @@ test('saved custom order reaches every destination without changing that order',
   try {
     for (const id of order.slice(0, 4)) button(h.render(), id).props.onClick();
     for (const id of order.slice(4)) { button(h.render(), 'More').props.onClick(); button(h.render(), id).props.onClick(); }
-    button(h.render(), 'More').props.onClick(); button(h.render(), 'SettingsUpdate available').props.onClick();
+    button(h.render(), 'More').props.onClick(); button(h.render(), 'Settings').props.onClick();
     assert.deepEqual(h.opened, [...order, 'settings']);
     assert.deepEqual(h.props.items, before);
   } finally { h.close(); }
@@ -96,7 +95,7 @@ test('a destination under More keeps its current-page identity and Settings upda
   try {
     assert.match(button(h.render(), 'More').props['aria-label'], /Current page: Settings/);
     button(h.render(), 'More').props.onClick();
-    const settings = button(h.render(), 'SettingsUpdate available');
+    const settings = button(h.render(), 'Settings');
     assert.equal(settings.props['aria-current'], 'page');
     assert.equal(settings.props['aria-description'], 'Software update available');
   } finally { h.close(); }
@@ -119,7 +118,7 @@ test('closing More after widening delegates focus to visible desktop navigation'
 test('at 400 px and below, three saved destinations stay primary and every other section is reachable in More', () => {
   const h = host('assistant', 320), before = [...h.props.items];
   try {
-    assert.equal(nodes(h.render()).find(node => node.type === 'button' && text(node) === 'assistant'), undefined);
+    assert.equal(nodes(h.render()).find(node => node.type === 'button' && node.props['aria-label'] === 'assistant'), undefined);
     assert.match(button(h.render(), 'More').props['aria-label'], /Current page: assistant/);
     for (const id of order.slice(0, 3)) button(h.render(), id).props.onClick();
     for (const id of order.slice(3)) { button(h.render(), 'More').props.onClick(); button(h.render(), id).props.onClick(); }
@@ -133,14 +132,14 @@ test('resizing across 400 px keeps More open, moves the fourth destination and r
   try {
     assert.equal(button(h.render(), 'assistant').props['aria-current'], 'page');
     button(h.render(), 'More').props.onClick();
-    assert.equal(nodes(dialog(h.render())).find(node => node.type === 'button' && text(node) === 'assistant'), undefined);
+    assert.equal(nodes(dialog(h.render())).find(node => node.type === 'button' && node.props['aria-label'] === 'assistant'), undefined);
     h.setWidth(400);
     assert.ok(dialog(h.render()));
     assert.equal(button(dialog(h.render()), 'assistant').props['aria-current'], 'page');
     assert.match(button(h.render(), 'More').props['aria-label'], /Current page: assistant/);
     h.setWidth(401);
     assert.ok(dialog(h.render()));
-    assert.equal(nodes(dialog(h.render())).find(node => node.type === 'button' && text(node) === 'assistant'), undefined);
+    assert.equal(nodes(dialog(h.render())).find(node => node.type === 'button' && node.props['aria-label'] === 'assistant'), undefined);
     assert.equal(button(h.render(), 'More').props['aria-label'], 'More sections');
     assert.deepEqual(h.props.items, before);
     assert.deepEqual(h.opened, []);

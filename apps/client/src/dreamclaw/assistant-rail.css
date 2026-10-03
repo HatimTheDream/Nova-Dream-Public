@@ -113,7 +113,9 @@
 .dc-assistant-rail-header { display: flex; align-items: center; gap: 4px; padding: 12px 10px; border-bottom: 1px solid var(--line); flex: none; }
 .dc-assistant-rail-header button,.dc-assistant-sidebar-reopen { min-height: 44px; height: 44px; border-width: 2px; border-radius: 13px; box-shadow: 0 3px 0 var(--line); }
 .dc-assistant-rail-icon-button { width: 44px; min-width: 44px; padding: 10px; }
-@container assistant-rail (max-width: 267px) {
+/* The text switch needs room for larger interface text and tactile insets. */
+:root .assistant-space-switch > button { white-space:nowrap; overflow-wrap:normal; }
+@container assistant-rail (max-width: 320px) {
   .dc-assistant-rail-header { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dc-assistant-rail-header > .assistant-space-switch { grid-column: 1 / -1; }
   .dc-assistant-rail-header > .dc-assistant-rail-icon-button { justify-self: center; }

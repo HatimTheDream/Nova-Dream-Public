@@ -54,7 +54,14 @@ export function Home(props: Props) {
         })}
         {!activity.length && <div className="quiet-work-row"><div className="quiet-row-copy"><p>{activityRead === 'ready' ? 'No active replies in the loaded Assistant activity.' : 'Your saved conversations remain in Assistant.'}</p></div><button onClick={() => open('assistant')}>Open Assistant</button></div>}
       </section>
-      <button className="home-space-link" onClick={() => { selectView('space'); document.getElementById('home-tab-space')?.focus(); }}><Folder size={23}/><span><strong>My space</strong><small>Notes, links, and saved things.</small></span><ArrowRight size={20}/></button>
+      <section className="home-space-entry" aria-labelledby="home-space-title">
+        <h2 id="home-space-title">My space</h2>
+        <button className="home-space-link" onClick={() => { selectView('space'); document.getElementById('home-tab-space')?.focus(); }}>
+          <span className="quiet-row-icon" aria-hidden="true"><Folder size={23}/></span>
+          <span className="home-space-copy"><strong>My space</strong><small>Notes, links, and saved things.</small></span>
+          <span className="home-space-open" aria-hidden="true"><ArrowRight size={20}/></span>
+        </button>
+      </section>
     </div>
     <div id="home-panel-space" role="tabpanel" aria-labelledby="home-tab-space" hidden={view !== 'space'}>
       {spaceOpened && <HomeSpace {...props}/>}

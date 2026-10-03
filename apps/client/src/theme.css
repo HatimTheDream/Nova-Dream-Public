@@ -33,7 +33,7 @@
     --selection: var(--soft-gold);
     --selection-ink: var(--text);
     --selection-edge: color-mix(in srgb, var(--gold) 40%, var(--line));
-    --control-radius: 10px;
+    --control-radius: 12px;
     --card-radius: 16px;
     --shadow: 0 2px 8px rgb(var(--text-rgb) / .06);
     --type-control: 14px;

@@ -1,6 +1,6 @@
 # Quiet List UI contract
 
-This is the selected shared direction for Nova's interface: clear reading order, useful density, content-driven height, and calm controls. It supplements [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md) and replaces its older fixed-size Home widget arrangement and raised button/card depth values where they conflict. It describes the current source contract, not exhaustive visual acceptance or proof of a live release.
+This is the selected shared direction for Nova's interface: clear reading order, useful density, content-driven height, and familiar raised controls. It supplements [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md) and replaces its older fixed-size Home widget arrangement where they conflict. It describes the current source contract, not exhaustive visual acceptance or proof of a live release.
 
 ## Identity and hierarchy
 
@@ -24,7 +24,9 @@ Use the semantic roles in `theme.css` and the preference handling in `typography
 | Standard / spacious card inset | 16px / 24px |
 | Dialog inset | 24px, reducing to 16px on narrow screens |
 | Action / icon-button minimum target | 44px high / 44px square |
-| Control / card radius | 10px / 16px |
+| Control / card radius | 12px / 16px |
+
+Action buttons retain Nova's 2px outline and solid 2–4px lower edge, with a 12px corner radius. Primary actions and the active global destination use gold; secondary action buttons keep a warm white face. Full content rows, calendar cells and text disclosures keep their own flat geometry. Navigation uses icons only, with accessible names and hover/focus labels; do not add persistent captions beside or beneath navigation icons.
 
 The container owns its content inset. A card's status block, header, body, and actions must have an explicit shared inset; paragraph margins only separate paragraphs. Do not rely on a paragraph's horizontal margin to keep text away from a card edge. Do not add competing blanket descendant resets.
 
@@ -38,7 +40,7 @@ The 44px target is Nova's product default. Spatial cells and inline content requ
 
 | Surface | Application of the contract |
 | --- | --- |
-| Shared shell, cards, dialogs, notices, and action groups | `theme.css`, `buttons.css`, and `quiet-ui.css` provide common roles, flatter controls, wrapping headers, and consistent dialog slots. These shared styles affect existing screens; they do not constitute a separate redesign of every screen. |
+| Shared shell, cards, dialogs, notices, and action groups | `theme.css`, `buttons.css`, and `quiet-ui.css` provide common roles, raised controls, wrapping headers, and consistent dialog slots. These shared styles affect existing screens; they do not constitute a separate redesign of every screen. |
 | Responsive navigation | At 800px and below, a bottom row uses the saved navigation order and offers remaining sections through More. At 400px and below it shows three destinations plus More; from 401px to 800px it shows four plus More. A real layout row and safe-area padding keep it clear of content and composers. Wider windows retain the side rail. Resizing never changes navigation preferences. |
 | Home: Today | A single reading order presents the greeting, upcoming schedule, grouped briefing rows, and Assistant activity. Details and secondary actions expand within the relevant row. |
 | Home: My space | Saved widgets become consistently wide, content-driven sections. There is no mixed-size tile packing or Tetris layout. Existing widget IDs, order, settings, colors, notes, links, hidden items, and saved size metadata are retained; the renderer no longer uses the old sizes to determine geometry. |

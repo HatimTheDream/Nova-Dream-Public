@@ -1,3 +1,11 @@
+## [2.1.1] — 2026-10-03
+
+- Applies the approved Quiet List visual treatment while restoring Nova's raised, outlined buttons across the main modules, including inactive navigation and secondary actions.
+- Keeps navigation icon-only in the sidebar, narrow-screen bottom row and More dialog, with accessible names and hover/focus labels; existing saved navigation order is preserved.
+- Aligns Home spacing, Settings category controls, Agents roster and Profile progress rows with the shared theme. Saved content, selections and existing action boundaries remain intact.
+- Keeps full content rows and calendar geometry quiet while their individual action controls share the same tactile style.
+- Prevents larger interface text from splitting the Assistant's Chat/Work labels and Calendar's Add action inside narrow toolbars.
+
 ## [2.1.0] — 2026-10-03
 
 - Rebuilds Home around Quiet List: a daily briefing, upcoming appointment, Assistant activity, and a separate My space for saved notes, links and widgets. Existing content and ordering are kept; sections use a consistent width and grow with their content.

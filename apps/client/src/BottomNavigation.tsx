@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from 'react';
 import type { ModuleId } from '../../../packages/domain/contracts';
 import { MoreHorizontal, Settings, type Icon } from './icons';
 import { Dialog } from './ui';
+import { NavigationLabels } from './NavigationLabels';
 
 type Destination = { id: ModuleId; label: string; icon: Icon };
 type Props = {
@@ -37,13 +38,13 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
   };
   const choose = (id: ModuleId | 'settings') => { if (open(id)) close(); };
   return <>
-    <nav className="bottom-navigation" aria-label="Main navigation">
-      {primary.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`bottom-navigation-item${route === item.id ? ' active' : ''}`} aria-current={route === item.id ? 'page' : undefined} onClick={() => open(item.id)}><Icon size={22}/><span>{item.label}</span></button>; })}
-      <button type="button" className={`bottom-navigation-item${currentInMore ? ' active' : ''}`} aria-label={currentInMore && currentLabel ? `More sections. Current page: ${currentLabel}` : 'More sections'} aria-haspopup="dialog" aria-expanded={more} onClick={() => setMore(true)}><span className="bottom-navigation-more-icon"><MoreHorizontal size={22}/>{updateAvailable && <span className="settings-update-dot" aria-hidden="true"/>}</span><span>More</span></button>
-    </nav>
-    {more && <Dialog title="More sections" close={close}><nav className="navigation-destinations" aria-label="More sections">
-      {remaining.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={route === item.id ? 'active' : undefined} aria-current={route === item.id ? 'page' : undefined} onClick={() => choose(item.id)}><Icon size={22}/><span>{item.label}</span></button>; })}
-      <button type="button" className={route === 'settings' ? 'active' : undefined} aria-current={route === 'settings' ? 'page' : undefined} aria-description={updateAvailable ? 'Software update available' : undefined} onClick={() => choose('settings')}><Settings size={22}/><span>Settings{updateAvailable && <small>Update available</small>}</span></button>
-    </nav></Dialog>}
+    <NavigationLabels><nav className="bottom-navigation" aria-label="Main navigation">
+      {primary.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`bottom-navigation-item${route === item.id ? ' active' : ''}`} aria-label={item.label} data-navigation-label={item.label} aria-current={route === item.id ? 'page' : undefined} onClick={() => open(item.id)}><Icon size={24}/></button>; })}
+      <button type="button" className={`bottom-navigation-item${currentInMore ? ' active' : ''}`} aria-label={currentInMore && currentLabel ? `More sections. Current page: ${currentLabel}` : 'More sections'} data-navigation-label={currentInMore && currentLabel ? `More · ${currentLabel}` : 'More'} aria-haspopup="dialog" aria-expanded={more} onClick={() => setMore(true)}><span className="bottom-navigation-more-icon"><MoreHorizontal size={24}/>{updateAvailable && <span className="settings-update-dot" aria-hidden="true"/>}</span></button>
+    </nav></NavigationLabels>
+    {more && <Dialog title="More sections" close={close}><NavigationLabels><nav className="navigation-destinations" aria-label="More sections">
+      {remaining.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={route === item.id ? 'active' : undefined} aria-label={item.label} data-navigation-label={item.label} aria-current={route === item.id ? 'page' : undefined} onClick={() => choose(item.id)}><Icon size={24}/></button>; })}
+      <button type="button" className={route === 'settings' ? 'active' : undefined} aria-label="Settings" data-navigation-label={updateAvailable ? 'Settings · update available' : 'Settings'} aria-current={route === 'settings' ? 'page' : undefined} aria-description={updateAvailable ? 'Software update available' : undefined} onClick={() => choose('settings')}><span className="bottom-navigation-more-icon"><Settings size={24}/>{updateAvailable && <span className="settings-update-dot" aria-hidden="true"/>}</span></button>
+    </nav></NavigationLabels></Dialog>}
   </>;
 }

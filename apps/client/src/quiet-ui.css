@@ -77,6 +77,10 @@
 :root .empty { min-width:0; gap:var(--space-3); }
 :root .empty > :is(h3,p) { max-width:60ch; overflow-wrap:anywhere; }
 
+/* Keep the agenda action intact when larger type narrows the date heading. */
+:root .calendar-module section[aria-labelledby=selected-day-heading] > div:first-child { flex-wrap:wrap; }
+:root .calendar-module .dc-calendar-agenda-add { flex:none; white-space:nowrap; }
+
 @media(max-width:650px) {
   :root { --dialog-padding:var(--space-4); }
   :root .dialog-inner > .dialog-header { margin-bottom:var(--space-4); }
