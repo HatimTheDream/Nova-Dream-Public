@@ -20,7 +20,12 @@ jobs:
       - run: npm run quality
       - name: Verify Linux update recovery
         run: |
+          python3 -B tests/release-install-request.test.py -v
           python3 -B tests/update-runner.test.py -v
+          python3 -B tests/update-runtime-profile.test.py -v
+          python3 -B tests/recovery-native98.test.py -v
+          python3 -B tests/recovery-allocation.test.py -v
+          python3 -B tests/update-snapshot-admission.test.py -v
           python3 -B tests/update-closed-readers.test.py -v
           python3 -B tests/update-log-retention.test.py -v
           python3 -B tests/update-startup-window.test.py -v

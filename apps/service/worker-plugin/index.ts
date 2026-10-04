@@ -4,7 +4,7 @@ import { workerCapabilitiesSchema, workerContract, workerIdentitySchema, readNat
 import { workerInputHash, workerNativeIdentity } from './identity.js';
 import { WorkerJournal } from './journal.js';
 
-// Public SDK subset, verified against OpenClaw 2026.9.2 and 2026.9.6. No private Gateway
+// Public SDK subset, verified against OpenClaw 2026.9.2, 2026.9.6 and 2026.9.8. No private Gateway
 // context, global credentials, or generic runtime.gateway access is used.
 export type WorkerPluginApi = {
   config?: { mcp?: unknown; agents?: { entries?: Record<string, unknown>; list?: { id: string; [key: string]: unknown }[] } };

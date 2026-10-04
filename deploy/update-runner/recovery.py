@@ -4,6 +4,7 @@ Derived from the previously reviewed hosted recovery approach. No function runs
 on import. Recovery files are never used as the future live tree through links.
 """
 import contextlib
+import gc
 from contextvars import ContextVar
 from collections import Counter
 from datetime import datetime
@@ -21,6 +22,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 from codex_log_retention import attest_runtime, qualify_logs
 
@@ -122,7 +124,9 @@ NATIVE_96_RETAINED_TABLES = frozenset('''
     session_input_completions session_transcript_cold_archives worker_environment_session_attachments
 '''.split())
 NATIVE_96_DERIVED_TABLES = frozenset({'session_canonical_validation_pending', 'session_transcript_fts_rows'})
-NATIVE_VERSIONS = {'2026.9.2': (19, 15), '2026.9.6': (23, 18)}
+NATIVE_VERSIONS = {'2026.9.2': (19, 15), '2026.9.6': (23, 18), '2026.9.8': (24, 19)}
+NATIVE_MIGRATION_PAIRS = {('2026.9.2', '2026.9.6'), ('2026.9.6', '2026.9.8')}
+NATIVE_98_RETAINED_TABLES = frozenset({'session_entry_snapshots'})
 
 # Active embedded stores beneath the selected runtime only. Unknown database
 # names remain byte-preserved static files; these schemas may not migrate here.
@@ -186,6 +190,29 @@ CODEX_SQL_MIGRATIONS = {
 }
 
 
+# Official rust-v0.155.1 thread-history schema (migrations 1..6).
+THREAD_HISTORY_96 = (0, {
+    '_sqlx_migrations': SQLX_MIGRATION_COLUMNS,
+    'thread_turns': 'thread_id turn_id rollout_ordinal status error_json started_at completed_at duration_ms first_user_item_id final_agent_item_id rollout_byte_offset rollout_end_ordinal rollout_end_byte_offset',
+    'thread_items': 'thread_id turn_id item_id rollout_ordinal created_at_ms item_json item_type updated_at_ordinal',
+    'thread_history_projection_state': 'thread_id next_rollout_byte_offset next_rollout_ordinal',
+    'thread_realtime_items': 'thread_id item_id rollout_ordinal created_at_ms item_type item_json',
+})
+EMBEDDED_DATABASES_96['thread_history_1.sqlite'] = THREAD_HISTORY_96
+EMBEDDED_DATABASES_98 = {name: (version, dict(tables)) for name, (version, tables) in EMBEDDED_DATABASES_96.items()}
+EMBEDDED_DATABASES_98['state_5.sqlite'][1]['threads'] += ' creator_user_id creator_account_id'
+EMBEDDED_DATABASES_98['thread_history_1.sqlite'][1]['thread_items'] += ' started_at_ms completed_at_ms'
+CODEX_SQL_MIGRATIONS_98 = {
+'state_5.sqlite': [
+    (56, 'threads creator identity', '5de44fac5505249be66fcd640e9ac3d36550854c0db1272eb52cbb6c3d18b207db4cb782686d81089e77ebb57f6819b1', 'ALTER TABLE threads ADD COLUMN creator_user_id TEXT;\nALTER TABLE threads ADD COLUMN creator_account_id TEXT;\n'),
+    (57, 'cleanup guardian thread metadata', '729562c57bfa8b43d5ae3476c99cef6e81a54709a74283057ce8d2d6f55cf8eae2594fdb7cff4238ebe1e481e7c049e6', '-- Guardian prompts are synthetic review context, not user-authored messages.\n-- Keep the SQLite projection small; rollout JSONL remains canonical.\n-- Legacy automatic titles were empty or copied first_user_message; preserve a\n-- different non-empty title because it may have been set explicitly.\nUPDATE threads\nSET title = CASE\n        WHEN trim(title) = \'\' OR trim(title) = trim(first_user_message)\n            THEN \'Guardian review\'\n        ELSE title\n    END,\n    name = CASE\n        WHEN trim(COALESCE(name, \'\')) != \'\'\n            THEN name\n        WHEN trim(title) != \'\'\n            AND trim(title) != trim(COALESCE(first_user_message, \'\'))\n            THEN title\n        ELSE \'Guardian review\'\n    END,\n    preview = \'Approval review\',\n    first_user_message = \'\'\nWHERE source = \'{"subagent":{"other":"guardian"}}\';\n'),
+],
+'thread_history_1.sqlite': [
+    (7, 'thread item lifecycle timestamps', '9334adb4cda792116a47b69a19e3840ae3806b08773ef1794043fe0aa72891360acb1a0a8431084d53c568482c5fdd20', 'ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER;\nALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;\n'),
+],
+}
+
+
 class InsufficientStorage(RuntimeError):
     """Safe typed preflight rejection; it conveys no host path or raw exception."""
 
@@ -217,9 +244,32 @@ def write_json(path, value):
     sync_dir(path.parent)
 
 
-def inventory(root):
+def allocation_unit(root):
+    volume = os.statvfs(root)
+    unit = volume.f_frsize or volume.f_bsize
+    require(isinstance(unit, int) and unit > 0, 'Recovery allocation unit is unavailable.')
+    return unit
+
+
+def rounded_allocation(size, unit):
+    require(isinstance(size, int) and size >= 0, 'Recovery allocation size is invalid.')
+    return ((size + unit - 1) // unit) * unit
+
+
+def inventory(root, *, allocation=None):
+    """Capture content once, optionally measuring copy layout in that same walk.
+
+    Allocation is a fresh, invocation-local side result, not manifest content or
+    permission to reuse a prior inventory. The public (entries, inodes) result
+    and saved manifest format remain unchanged.
+    """
     root_info = root.lstat()
     require(stat.S_ISDIR(root_info.st_mode) and not root.is_symlink(), 'Snapshot root must be an ordinary directory.')
+    if allocation is not None:
+        require(isinstance(allocation, dict) and not allocation, 'Recovery allocation context must be fresh.')
+        unit = allocation_unit(root)
+        allocation.update(unitBytes=unit, device=root_info.st_dev, directoryCount=0, directoryObservedBytes=0,
+                          directoryCopyBytes=0, symlinkCount=0, symlinkObservedBytes=0, symlinkCopyBytes=0)
     pending, entries, inodes, groups = [root], {}, {}, {}
     while pending:
         path = pending.pop()
@@ -232,9 +282,26 @@ def inventory(root):
                             for name in sorted(os.listxattr(path, follow_symlinks=False))}}
         if stat.S_ISDIR(info.st_mode):
             entry['kind'] = 'directory'
-            pending.extend(sorted(path.iterdir(), reverse=True))
+            children = sorted(path.iterdir(), reverse=True)
+            pending.extend(children)
+            if allocation is not None:
+                # Copied directories need fresh blocks even when every regular
+                # file links to the old generation. Include names plus one
+                # allocation unit for changed directory packing/index layout.
+                names = 24 + sum(rounded_allocation(8 + len(os.fsencode(child.name)), 4) for child in children)
+                observed = info.st_blocks * 512
+                allocation['directoryCount'] += 1
+                allocation['directoryObservedBytes'] += observed
+                allocation['directoryCopyBytes'] += rounded_allocation(max(observed, info.st_size, names, unit), unit) + unit
         elif stat.S_ISLNK(info.st_mode):
             entry.update(kind='symlink', target=os.readlink(path))
+            if allocation is not None:
+                # Inline symlinks can allocate blocks when copied. Charging the
+                # measured target length at the destination unit is conservative.
+                observed = info.st_blocks * 512
+                allocation['symlinkCount'] += 1
+                allocation['symlinkObservedBytes'] += observed
+                allocation['symlinkCopyBytes'] += rounded_allocation(max(observed, len(os.fsencode(entry['target']))), unit)
         elif stat.S_ISREG(info.st_mode):
             entry.update(kind='file', size=info.st_size, sha256=digest(path))
             inodes[relative] = {'device': info.st_dev, 'inode': info.st_ino,
@@ -251,6 +318,8 @@ def inventory(root):
         if len(relatives) > 1:
             for relative in relatives:
                 entries[relative]['hardlink_group'] = min(relatives)
+    if allocation is not None:
+        allocation['fileInodeCount'] = len(groups)
     return entries, inodes
 
 
@@ -274,7 +343,55 @@ def retained_sparse_allocation(entries, source, copied):
     require(growth <= ALLOWANCE, 'Sparse allocation rounding exceeded its existing copy allowance.')
 
 
-def capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes=0):
+def unique_allocated(inodes, relatives=None):
+    groups = {}
+    for relative in inodes if relatives is None else relatives:
+        item = inodes[relative]
+        identity = item['device'], item['inode']
+        require(identity not in groups or groups[identity] == item['allocated'], 'Hardlink allocation changed during inventory.')
+        groups[identity] = item['allocated']
+    return sum(groups.values())
+
+
+def json_size(value):
+    # Match write_json exactly without retaining another multi-megabyte encoding.
+    return sum(len(part.encode('utf8')) for part in json.JSONEncoder(sort_keys=True, separators=(',', ':')).iterencode(value))
+
+
+def copy_layout(allocation):
+    if allocation is None:
+        return 0
+    return allocation['directoryCopyBytes'] + allocation['symlinkCopyBytes']
+
+
+def independent_copy_bytes(inodes, allocation):
+    return unique_allocated(inodes) + copy_layout(allocation)
+
+
+def budget_verification_record(plan):
+    """Round the future private receipt using the actual JSON encoder.
+
+    Durations are bounded with full-width integer placeholders. Other private
+    records are the two copy logs and containing generation directory; copy
+    output beyond one unit remains guarded by the existing allowance/monitor.
+    """
+    unit = plan['allocationUnitBytes']
+    if not unit:
+        return plan
+    timing_bound = {name: 2 ** 63 - 1 for name in ('sourceInventory', 'baselineInventory', 'copy', 'copiedInventory',
+                    'sourceReverification', 'baselineReverification', 'flush', 'manifestWrite', 'total')}
+    while True:
+        receipt = {'manifestSha256': 'f' * 64, **plan, 'timingsMilliseconds': timing_bound}
+        required = 3 * unit + rounded_allocation(json_size(receipt), unit)
+        extra = max(0, required - plan['recoveryRecordBytes'])
+        if not extra:
+            return plan
+        for field in ('recoveryRecordBytes', 'metadataOverheadBytes', 'requiredFreeBytes'):
+            plan[field] += extra
+
+
+def _capacity_plan(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes=0, *, allocation=None, protected_sizes=()):
+    require(allocation is not None or not protected_sizes, 'Protected copies need measured recovery allocation.')
     require(inode_ids(source_inodes).isdisjoint(inode_ids(baseline_inodes)), 'Live files already share recovery inodes.')
     changed = []
     for relative, entry in source.items():
@@ -287,14 +404,42 @@ def capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_b
                     'Changed hardlink topology requires a separately reviewed copy.')
         if entry != old:
             changed.append(relative)
-    copied = sum(source_inodes[name]['allocated'] for name in changed)
-    independent = sum(item['allocated'] for item in source_inodes.values())
-    required = candidate_bytes + copied + independent + RESERVE + 2 * ALLOWANCE
+    copied = unique_allocated(source_inodes, changed)
+    independent = unique_allocated(source_inodes)
+    layout = copy_layout(allocation)
+    unit = allocation['unitBytes'] if allocation is not None else 0
+    manifest = rounded_allocation(json_size(source), unit) if unit else 0
+    protected = sum(rounded_allocation(size, unit) for size in protected_sizes) if unit else 0
+    # Two private copy logs, verification receipt and containing generation
+    # directory. Fixed units complement measured manifest/protected-file bytes;
+    # they do not replace the existing aggregate 256 MiB copy allowance.
+    records = 4 * unit
+    metadata = 2 * layout + manifest + protected + records
+    required = candidate_bytes + copied + independent + metadata + RESERVE + 2 * ALLOWANCE
+    return budget_verification_record({'freeBytes': free, 'candidateBytes': candidate_bytes, 'snapshotCopyBytes': copied,
+            'independentRestoreBytes': independent, 'closedAllocatedBytes': independent,
+            'independentTotalBytes': independent + layout,
+            'snapshotFileBytes': copied, 'independentFileBytes': independent,
+            'copyLayoutBytes': layout, 'snapshotManifestBytes': manifest, 'protectedCopyBytes': protected,
+            'recoveryRecordBytes': records, 'metadataOverheadBytes': metadata,
+            'metadataOverheadMeasured': allocation is not None,
+            'snapshotDeltaMeasured': allocation is not None,
+            'allocationEstimateKind': 'fresh-input-upper-bound' if allocation is not None else 'file-allocation-only',
+            'directoryObservedBytes': allocation['directoryObservedBytes'] if allocation is not None else 0,
+            'directoryCopyBytes': allocation['directoryCopyBytes'] if allocation is not None else 0,
+            'symlinkObservedBytes': allocation['symlinkObservedBytes'] if allocation is not None else 0,
+            'symlinkCopyBytes': allocation['symlinkCopyBytes'] if allocation is not None else 0,
+            'allocationUnitBytes': unit, 'reserveBytes': RESERVE,
+            'allowanceBytes': 2 * ALLOWANCE, 'requiredFreeBytes': required})
+
+
+def capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes=0, *, allocation=None, protected_sizes=()):
+    plan = _capacity_plan(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes,
+                          allocation=allocation, protected_sizes=protected_sizes)
+    required = plan['requiredFreeBytes']
     if free < required:
         raise InsufficientStorage('Candidate, closed recovery, independent restore and operating reserve do not all fit.')
-    return {'freeBytes': free, 'candidateBytes': candidate_bytes, 'snapshotCopyBytes': copied,
-            'independentRestoreBytes': independent, 'reserveBytes': RESERVE,
-            'allowanceBytes': 2 * ALLOWANCE, 'requiredFreeBytes': required}
+    return plan
 
 
 def run_copy(arguments, log_path, volume, minimum_free):
@@ -334,35 +479,84 @@ def flush_tree(root, entries, inodes):
             sync_dir(root / relative)
 
 
-def snapshot_closed(data, destination, baseline, require_stopped):
+def snapshot_closed(data, destination, baseline, require_stopped, *, admit_plan=None, begin_copy=None,
+                    capacity_volume=None, protected_sizes=()):
+    started = time.monotonic()
+    timings = {}
+    def measured(name, action):
+        before = time.monotonic()
+        result = action()
+        timings[name] = round((time.monotonic() - before) * 1000)
+        return result
     require_stopped()
-    source, source_inodes = inventory(data)
-    old, old_inodes = inventory(baseline)
-    plan = capacity(source, source_inodes, old, old_inodes, shutil.disk_usage(destination.parent).free)
+    allocation = {}
+    source, source_inodes = measured('sourceInventory', lambda: inventory(data, allocation=allocation))
+    old, old_inodes = measured('baselineInventory', lambda: inventory(baseline))
+    volume = pathlib.Path(capacity_volume) if capacity_volume is not None else destination.parent
+    while not volume.exists():
+        require(volume.parent != volume, 'Recovery capacity volume is unavailable.')
+        volume = volume.parent
+    require(volume.lstat().st_dev == allocation['device'] and allocation_unit(volume) == allocation['unitBytes'],
+            'Recovery copy must stay on its measured filesystem.')
+    require(baseline.lstat().st_dev == allocation['device'], 'Deduplication baseline must stay on the measured filesystem.')
+    plan = _capacity_plan(source, source_inodes, old, old_inodes, shutil.disk_usage(volume).free,
+                          allocation=allocation, protected_sizes=protected_sizes)
+    base = dict(plan)
+    try:
+        if admit_plan is not None:
+            plan = admit_plan(dict(plan), source, source_inodes)
+            require(isinstance(plan, dict) and all(plan.get(key) == value for key, value in base.items() if key != 'requiredFreeBytes')
+                    and isinstance(plan.get('requiredFreeBytes'), int) and plan['requiredFreeBytes'] >= base['requiredFreeBytes'],
+                    'Admission cannot weaken measured recovery capacity.')
+        plan = budget_verification_record(plan)
+        if plan['freeBytes'] < plan['requiredFreeBytes']:
+            raise InsufficientStorage('Candidate, closed recovery, independent restore and operating reserve do not all fit.')
+    except InsufficientStorage as error:
+        # Only this pre-write branch conveys safe unchanged admission failure.
+        # A mutation/uncertain stop is an ordinary error and stays held.
+        require_stopped()
+        require(inventory(data) == (source, source_inodes), 'The unchanged closed original changed during capacity review.')
+        require_stopped()
+        # The caller may restart the original while handling this exception.
+        # Release large maps including the completed admission callback frame;
+        # preserving their traceback locals would compete with native startup.
+        del source, source_inodes, old, old_inodes, allocation
+        traceback.clear_frames(error.__traceback__)
+        gc.collect()
+        raise
+    require_stopped()
     require(not destination.exists() and not destination.is_symlink(), 'Snapshot destination already exists.')
+    if begin_copy is not None:
+        begin_copy(plan)
+    require(destination.parent.lstat().st_dev == allocation['device'], 'Snapshot destination left its measured filesystem.')
     destination.mkdir(mode=0o700)
-    run_copy(['/usr/bin/rsync', '-aHAXS', '--numeric-ids', '--checksum', '--modify-window=-1',
+    measured('copy', lambda: run_copy(['/usr/bin/rsync', '-aHAXS', '--numeric-ids', '--checksum', '--modify-window=-1',
               '--link-dest=' + str(baseline), '--', str(data) + '/', str(destination) + '/'],
-             destination.parent / 'snapshot-copy.log', destination.parent, RESERVE + ALLOWANCE)
+             destination.parent / 'snapshot-copy.log', destination.parent, RESERVE + ALLOWANCE))
     require_stopped()
-    actual, actual_inodes = inventory(destination)
-    require(inventory(data) == (source, source_inodes), 'Closed live state changed during the snapshot.')
+    actual, actual_inodes = measured('copiedInventory', lambda: inventory(destination))
+    require(measured('sourceReverification', lambda: inventory(data)) == (source, source_inodes), 'Closed live state changed during the snapshot.')
     require(actual == source, 'Closed recovery bytes or metadata differ.')
     require(inode_ids(actual_inodes).isdisjoint(inode_ids(source_inodes)), 'Recovery must not share live file inodes.')
-    require(inventory(baseline)[0] == old, 'The prior closed recovery changed.')
+    require(measured('baselineReverification', lambda: inventory(baseline))[0] == old, 'The prior closed recovery changed.')
     retained_sparse_allocation(source, source_inodes, actual_inodes)
-    flush_tree(destination, actual, actual_inodes)
-    write_json(destination.parent / 'snapshot-manifest.json', actual)
-    write_json(destination.parent / 'snapshot-verified.json', {'manifestSha256': digest(destination.parent / 'snapshot-manifest.json'), **plan})
+    measured('flush', lambda: flush_tree(destination, actual, actual_inodes))
+    measured('manifestWrite', lambda: write_json(destination.parent / 'snapshot-manifest.json', actual))
+    timings['total'] = round((time.monotonic() - started) * 1000)
+    write_json(destination.parent / 'snapshot-verified.json', {'manifestSha256': digest(destination.parent / 'snapshot-manifest.json'),
+                                                             **plan, 'timingsMilliseconds': timings})
     return actual
 
 
 def prepare_independent(snapshot, destination, failed, require_stopped):
     require_stopped()
     require(not destination.exists() and not destination.is_symlink(), 'Independent restore evidence already exists.')
-    expected, source_inodes = inventory(snapshot)
+    allocation = {}
+    expected, source_inodes = inventory(snapshot, allocation=allocation)
     failed_entries, failed_inodes = inventory(failed)
-    required = sum(item['allocated'] for item in source_inodes.values()) + RESERVE + ALLOWANCE
+    require(destination.parent.lstat().st_dev == allocation['device'] and allocation_unit(destination.parent) == allocation['unitBytes'],
+            'Independent restore must stay on its measured filesystem.')
+    required = independent_copy_bytes(source_inodes, allocation) + RESERVE + ALLOWANCE
     require(shutil.disk_usage(destination.parent).free >= required, 'Independent restore and reserve no longer fit.')
     run_copy(['/usr/bin/cp', '-a', '--reflink=auto', '--', str(snapshot), str(destination)],
              snapshot.parent / 'independent-copy.log', destination.parent, RESERVE + ALLOWANCE)
@@ -666,12 +860,12 @@ def static_sqlite_files(root, selected, active):
     return result
 
 
-def embedded_database_paths(root, selected, active):
+def embedded_database_paths(root, selected, active, engine_version='2026.9.2'):
     native = selected / 'openclaw-runtime'
     candidates = {native / 'assignment-receipts' / 'receipts.sqlite'}
     for relative in active:
         if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}:
-            candidates.update(relative.parent / 'codex-home' / name for name in EMBEDDED_DATABASES if name != 'receipts.sqlite')
+            candidates.update(relative.parent / 'codex-home' / name for name in (EMBEDDED_DATABASES if engine_version == '2026.9.2' else EMBEDDED_DATABASES_96) if name != 'receipts.sqlite')
     found = set()
     for relative in candidates:
         path = root / relative
@@ -686,18 +880,20 @@ def embedded_database_paths(root, selected, active):
 
 
 def embedded_schema(connection, name, engine_version='2026.9.2'):
-    require(engine_version in NATIVE_VERSIONS and name in EMBEDDED_DATABASES, 'An embedded database has no reviewed schema.')
-    version, expected = EMBEDDED_DATABASES[name]
+    require(engine_version in NATIVE_VERSIONS, 'An embedded database has no reviewed engine.')
+    choices = [EMBEDDED_DATABASES]
+    if engine_version in {'2026.9.6', '2026.9.8'}:
+        choices.append(EMBEDDED_DATABASES_96)
+    if engine_version == '2026.9.8':
+        choices.append(EMBEDDED_DATABASES_98)
     require(connection.execute('pragma quick_check').fetchone()[0] == 'ok', 'Embedded database integrity failed.')
-    require(connection.execute('pragma user_version').fetchone()[0] == version, 'An embedded database changed its reviewed version.')
+    version = connection.execute('pragma user_version').fetchone()[0]
     tables = {row[0] for row in connection.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
-    # Codex initializes a dormant home on first use. The reviewed engine may
-    # therefore retain its old complete schema until that bounded migration.
-    if engine_version == '2026.9.6' and tables != expected.keys():
-        version, expected = EMBEDDED_DATABASES_96[name]
-    require(tables == expected.keys(), 'An embedded database contains an unreviewed table set.')
-    for table, columns in expected.items():
-        require([row[1] for row in connection.execute('pragma table_xinfo("' + table + '")')] == columns.split(), 'An embedded database contains unreviewed columns.')
+    actual = {table: ' '.join(row[1] for row in connection.execute('pragma table_xinfo("' + table + '")')) for table in tables}
+    # A dormant home can retain an earlier complete schema until first use;
+    # never mix columns from two versions or infer a schema from table names.
+    require(any(name in choice and choice[name] == (version, actual) for choice in choices),
+            'An embedded database contains unreviewed columns or tables.')
     return tables
 
 
@@ -738,17 +934,77 @@ def migrated_embedded_database(before, after, name):
         require(rows(before, table) == current, 'Retained embedded work or attachment bytes changed during migration.')
 
 
+def migrated_embedded98_database(before, after, name):
+    """Exact SQLx 0.158 migrations, including the complete guardian projection.
+
+    Dormant 0.153 homes may still need the already-reviewed 0.155 migrations.
+    No old value is dropped: the four guardian changes are SQL-derived while
+    the canonical rollout files remain covered by the workspace comparison.
+    """
+    require(name in CODEX_SQL_MIGRATIONS_98 or name == 'memories_1.sqlite', 'Unreviewed embedded 9.8 migration.')
+    old_columns = {table: [row[1] for row in before.execute('pragma table_info("' + table + '")')]
+                   for (table,) in before.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
+    legacy = (name == 'state_5.sqlite' and 'thread_artifacts' in old_columns
+              or name == 'memories_1.sqlite' and 'consolidation_progress' not in old_columns)
+    migrations = (CODEX_SQL_MIGRATIONS.get(name, []) if legacy else []) + CODEX_SQL_MIGRATIONS_98.get(name, [])
+    require(migrations, 'Embedded migration has no reviewed SQL.')
+    with contextlib.closing(sqlite3.connect(':memory:')) as model:
+        for kind in ('table', 'index', 'trigger', 'view'):
+            for row in schema_definitions(before):
+                if row[0] == kind and row[3] is not None:
+                    model.execute(row[3])
+        for _, _, _, sql in migrations:
+            model.executescript(sql)
+        require(schema_definitions(model) == schema_definitions(after), 'Embedded 0.158 migration changed unreviewed definitions.')
+    previous, current = rows(before, '_sqlx_migrations'), rows(after, '_sqlx_migrations')
+    added = current - previous
+    require(previous <= current and sum(added.values()) == len(migrations), 'Embedded migration history was removed or fabricated.')
+    receipts = set()
+    for row, count in added.items():
+        version, description, installed, success, checksum, duration = row
+        require(count == 1 and type(version) is int and isinstance(checksum, bytes) and len(checksum) == 48
+                and success == 1 and isinstance(installed, str) and 0 < len(installed) <= 128
+                and type(duration) is int and duration >= 0, 'Embedded migration receipt is invalid.')
+        receipts.add((version, description, checksum.hex()))
+    require(receipts == {(v, d, c) for v, d, c, _ in migrations}, 'Embedded migration receipt identifies unreviewed SQL.')
+    guardian = "source = '{\"subagent\":{\"other\":\"guardian\"}}'"
+    guardian_fields = {
+        'title': "CASE WHEN trim(title) = '' OR trim(title) = trim(first_user_message) THEN 'Guardian review' ELSE title END",
+        'name': "CASE WHEN trim(COALESCE(name, '')) != '' THEN name WHEN trim(title) != '' AND trim(title) != trim(COALESCE(first_user_message, '')) THEN title ELSE 'Guardian review' END",
+        'preview': "'Approval review'", 'first_user_message': "''",
+    }
+    for table, columns in old_columns.items():
+        if table == '_sqlx_migrations':
+            continue
+        target = 'thread_attachments' if table == 'thread_artifacts' else table
+        new_columns = [row[1] for row in after.execute('pragma table_info("' + target + '")')]
+        expressions = []
+        for column in new_columns:
+            source = 'artifact_type' if table == 'thread_artifacts' and column == 'attachment_type' else column
+            expression = '"' + source + '"' if source in columns else 'NULL'
+            if table == 'threads' and column in guardian_fields:
+                expression = 'CASE WHEN ' + guardian + ' THEN ' + guardian_fields[column] + ' ELSE ' + expression + ' END'
+            expressions.append(expression)
+        expected = Counter(before.execute('select ' + ','.join(expressions) + ' from "' + table + '"'))
+        require(expected == rows(after, target), 'Embedded migration changed retained messages, work, identity or metadata.')
+    if name == 'memories_1.sqlite' and legacy:
+        require(rows(after, 'consolidation_progress') == Counter({(1, 0): 1}), 'Unexpected migrated memory consolidation state.')
+
+
 def retained_embedded_databases(snapshot, live, selected, active, from_version='2026.9.2', to_version=None,
                                 log_retention_window=None, log_retention_reports=None):
     to_version = to_version or from_version
-    require(from_version == to_version or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Unreviewed embedded runtime migration.')
-    paths = embedded_database_paths(snapshot, selected, active)
-    require(paths == embedded_database_paths(live, selected, active), 'The active embedded database set changed.')
+    require(from_version == to_version or (from_version, to_version) in NATIVE_MIGRATION_PAIRS, 'Unreviewed embedded runtime migration.')
+    paths = embedded_database_paths(snapshot, selected, active, from_version)
+    require(paths == embedded_database_paths(live, selected, active, to_version), 'The active embedded database set changed.')
     companion = None
     for relative in sorted(paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:
             tables = embedded_schema(before, relative.name, from_version)
             newer = embedded_schema(after, relative.name, to_version)
+            if (from_version, to_version) == ('2026.9.6', '2026.9.8') and schema_definitions(before) != schema_definitions(after):
+                migrated_embedded98_database(before, after, relative.name)
+                continue
             if from_version != to_version and tables != newer and relative.name in CODEX_SQL_MIGRATIONS:
                 migrated_embedded_database(before, after, relative.name)
                 continue
@@ -758,14 +1014,14 @@ def retained_embedded_databases(snapshot, live, selected, active, from_version='
             for table in tables:
                 require(list(before.execute('pragma table_xinfo("' + table + '")')) == list(after.execute('pragma table_xinfo("' + table + '")')), 'An embedded database changed its column definitions.')
                 append_only = relative.name == 'logs_2.sqlite' and table == 'logs'
-                if append_only and log_retention_window is not None and from_version == to_version == '2026.9.6':
-                    report = qualify_logs(before, after, *log_retention_window)
+                if append_only and log_retention_window is not None and to_version in {'2026.9.6', '2026.9.8'} and (from_version == to_version or (from_version, to_version) == ('2026.9.6', '2026.9.8')):
+                    report = qualify_logs(before, after, *log_retention_window, engine_version=to_version)
                     if report['removedRows']:
                         if companion is None:
                             shared = selected / 'openclaw-runtime' / 'state' / 'state' / 'openclaw.sqlite'
                             require(shared in active, 'Native log retention lacks the active runtime authority.')
                             with contextlib.closing(database(live / shared, True)) as runtime:
-                                companion = attest_runtime(live, selected, runtime)
+                                companion = attest_runtime(live, selected, runtime, engine_version=to_version)
                         if log_retention_reports is not None:
                             log_retention_reports.append({**report, 'companion': companion,
                                 'databasePathSha256': hashlib.sha256(relative.as_posix().encode()).hexdigest()})
@@ -778,7 +1034,7 @@ def retained_embedded_databases(snapshot, live, selected, active, from_version='
 def retained_quarantine_cache(snapshot, live, selected, active, from_version, to_version, *, logical_workspace_root=None):
     relative = selected / 'openclaw-runtime' / 'state' / 'state' / 'openclaw-quarantine.sqlite'
     old_path, new_path = snapshot / relative, live / relative
-    if to_version != '2026.9.6' or not (old_path.exists() or new_path.exists()):
+    if to_version not in {'2026.9.6', '2026.9.8'} or not (old_path.exists() or new_path.exists()):
         return set()
     require(new_path.is_file() and new_path.resolve(strict=True) == new_path, 'Native quarantine cache disappeared or was redirected.')
     expected = {
@@ -827,7 +1083,7 @@ def native_schema(connection, relative, version='2026.9.2', prior_tables=None):
     require(expected is not None and connection.execute('pragma user_version').fetchone()[0] == expected, 'An unreviewed native database needs separate recovery qualification.')
     tables = {item[0] for item in connection.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
     attachment = 'worker_environment_session_attachments'
-    if version == '2026.9.6' and attachment in tables:
+    if version in {'2026.9.6', '2026.9.8'} and attachment in tables:
         # The pinned worker store creates this lazy companion table at startup.
         # Existing 9.6 attachments are retained by the normal row comparison.
         sql = connection.execute('select sql from sqlite_schema where type=\'table\' and name=?', (attachment,)).fetchone()[0]
@@ -837,22 +1093,36 @@ def native_schema(connection, relative, version='2026.9.2', prior_tables=None):
         if prior_tables is not None and attachment not in prior_tables:
             require(connection.execute('select 1 from worker_environment_session_attachments limit 1').fetchone() is None,
                     'Native worker attachments need separate recovery qualification.')
-    known = NATIVE_KNOWN_TABLES | (NATIVE_96_RETAINED_TABLES | NATIVE_96_DERIVED_TABLES if version == '2026.9.6' else set())
+    known = NATIVE_KNOWN_TABLES | (NATIVE_96_RETAINED_TABLES | NATIVE_96_DERIVED_TABLES if version in {'2026.9.6', '2026.9.8'} else set())
+    if version == '2026.9.8':
+        known |= NATIVE_98_RETAINED_TABLES
+        if expected == 24:
+            require({'session_nodes', 'session_entry_snapshots'} <= tables,
+                    'Native schema 24 lacks its canonical session snapshots.')
+            revision = [row for row in connection.execute('pragma table_xinfo(session_nodes)') if row[1] == 'snapshot_revision']
+            require(len(revision) == 1 and revision[0][2:5] == ('INTEGER', 1, '0') and revision[0][6] == 0,
+                    'Native schema 24 snapshot revision changed.')
+            with contextlib.closing(sqlite3.connect(':memory:')) as model:
+                model.executescript(SESSION_SNAPSHOTS_98_SQL)
+                expected_snapshots = schema_definitions(model)
+            actual_snapshots = Counter(row for row in schema_definitions(connection) if row[2] == 'session_entry_snapshots')
+            require(expected_snapshots == actual_snapshots, 'Native schema 24 snapshot definitions changed.')
     require(tables <= known, 'Native database coverage contains an unreviewed table.')
     return tables
 
 
 def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None, *, closed=False):
     selected, epoch, paths = native_scope(root, expected_epoch, closed=closed)
-    for relative in sorted(embedded_database_paths(root, selected, paths)):
+    for relative in sorted(embedded_database_paths(root, selected, paths, version)):
         with contextlib.closing(database(root / relative, closed)) as connection:
             embedded_schema(connection, relative.name, version)
     for relative in sorted(paths):
         with contextlib.closing(database(root / relative, closed)) as connection:
             tables = native_schema(connection, relative, version)
             if target_version is not None and target_version != version:
-                require((version, target_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
-                migration_preflight(connection, tables)
+                require((version, target_version) in NATIVE_MIGRATION_PAIRS, 'Native migration is outside the reviewed pair.')
+                if version == '2026.9.2':
+                    migration_preflight(connection, tables)
     return selected, epoch, paths
 
 
@@ -964,6 +1234,21 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
             # Only this generated field is qualified above. Every other config
             # value (including module permissions and credentials) stays exact.
             bridge.pop('sessionBindings', None)
+        if (from_version, to_version) == ('2026.9.6', '2026.9.8'):
+            # The official writer stamps its version/time. Migration markers,
+            # auth references and every remaining field remain exact.
+            meta = value.get('meta', {})
+            if isinstance(meta, dict):
+                if 'lastTouchedVersion' in meta:
+                    require(meta['lastTouchedVersion'] == (from_version if not normalized else to_version),
+                            'Native configuration has an unreviewed writer version.')
+                    del meta['lastTouchedVersion']
+                if 'lastTouchedAt' in meta:
+                    require(isinstance(meta['lastTouchedAt'], str) and re.fullmatch(r'[0-9]{4}-[0-9TZ:.+-]+', meta['lastTouchedAt']),
+                            'Native configuration writer timestamp changed type.')
+                    del meta['lastTouchedAt']
+                if not meta:
+                    value.pop('meta', None)
         if (from_version, to_version) == ('2026.9.2', '2026.9.6'):
             # The official configuration writer records these two completed
             # migrations and removes the implicit empty main-agent entry.
@@ -1113,7 +1398,7 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
                     parts.append(fields)
                 require(parts[0][0] == from_version, 'Saved native startup version changed.')
                 if parts[1][:3] != parts[0][:3]:
-                    require((from_version, to_version) == ('2026.9.2', '2026.9.6') and parts[1][0] == to_version and node is not None,
+                    require((from_version, to_version) in NATIVE_MIGRATION_PAIRS and parts[1][0] == to_version and node is not None,
                             'Native startup version or build changed outside the reviewed pair.')
                     executable = pathlib.Path(node)
                     require(executable.name == 'node' and executable.parent.name == 'bin' and executable.parent.parent.name == 'node', 'Unreviewed native runtime closure layout.')
@@ -1463,7 +1748,7 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
 def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6',
                           *, app_releases=None, workspace_roots=None):
     """Qualify pinned migration or same-engine catalog effective content."""
-    require((from_version, to_version) in {('2026.9.2', '2026.9.6'), ('2026.9.6', '2026.9.6')},
+    require((from_version, to_version) in NATIVE_MIGRATION_PAIRS | {('2026.9.6', '2026.9.6'), ('2026.9.8', '2026.9.8')},
             'Native machine-state regeneration is outside the reviewed engines.')
     names = ['state_key', 'value_json', 'updated_at_ms']
     for connection in (before, after):
@@ -1526,7 +1811,7 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
     records, updated = old_index['installRecords'], new_index['installRecords']
     require(set(records) == set(updated) and 'codex' in records
             and all(records[name] == updated[name] for name in records if name != 'codex')
-            and records['codex'].get('version') == '2026.9.2', 'An unrelated native plugin installation changed.')
+            and records['codex'].get('version') == from_version, 'An unrelated native plugin installation changed.')
     executable = pathlib.Path(node) if node is not None else None
     require(executable is not None and executable.name == 'node' and executable.parent.name == 'bin'
             and executable.parent.parent.name == 'node' and executable.resolve(strict=True) == executable,
@@ -1534,20 +1819,20 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
     runtime = executable.parent.parent.parent
     package = runtime / 'companions' / 'codex' / 'node_modules' / '@openclaw' / 'codex'
     require(package.resolve(strict=True) == package
-            and bounded_json(runtime / 'node_modules' / 'openclaw' / 'package.json', 1024 * 1024).get('version') == '2026.9.6'
-            and bounded_json(package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
+            and bounded_json(runtime / 'node_modules' / 'openclaw' / 'package.json', 1024 * 1024).get('version') == to_version
+            and bounded_json(package / 'package.json', 1024 * 1024).get('version') == to_version,
             'The Codex install differs from the verified runtime package.')
     record = updated['codex']
     lock = bounded_json(runtime / 'companions' / 'codex' / 'package-lock.json', 16 * 1024 * 1024)
     locked = lock.get('packages', {}).get('node_modules/@openclaw/codex', {})
-    require(locked.get('version') == '2026.9.6' and isinstance(locked.get('integrity'), str)
+    require(locked.get('version') == to_version and isinstance(locked.get('integrity'), str)
             and re.fullmatch(r'sha512-[A-Za-z0-9+/]+={0,2}', locked['integrity']), 'The verified Codex npm resolution is missing.')
     base_fields = {'source', 'spec', 'installPath', 'version', 'installedAt', 'resolvedName', 'resolvedVersion',
                    'resolvedSpec', 'integrity', 'shasum', 'resolvedAt'}
     consent_fields = {'acceptedSurface', 'acceptedSurfaceHash', 'acceptedSurfaceAt'}
     require(set(record) in (base_fields, base_fields | consent_fields)
-            and record['source'] == 'npm' and record['version'] == record['resolvedVersion'] == '2026.9.6'
-            and record['spec'] == record['resolvedSpec'] == '@openclaw/codex@2026.9.6'
+            and record['source'] == 'npm' and record['version'] == record['resolvedVersion'] == to_version
+            and record['spec'] == record['resolvedSpec'] == '@openclaw/codex@' + to_version
             and record['resolvedName'] == '@openclaw/codex' and record['integrity'] == locked['integrity']
             and isinstance(record['shasum'], str) and re.fullmatch('[a-f0-9]{40}', record['shasum'])
             and all(isinstance(record[name], str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z', record[name])
@@ -1565,7 +1850,7 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
     retained_package = pathlib.Path(after_path).parent.parent.joinpath(*installed.parts[-6:])
     require(retained_package.resolve(strict=True) == retained_package
             and bounded_json(retained_package / 'package.json', 1024 * 1024).get('name') == '@openclaw/codex'
-            and bounded_json(retained_package / 'package.json', 1024 * 1024).get('version') == '2026.9.6',
+            and bounded_json(retained_package / 'package.json', 1024 * 1024).get('version') == to_version,
             'The official Codex npm payload changed.')
     if consent_fields <= set(record):
         surface = record['acceptedSurface']
@@ -1673,6 +1958,239 @@ def retained_collection_review_jobs(before, after, node):
     return replacements
 
 
+# Official v2026.9.8 src/state/openclaw-agent-schema.sql; applied to a
+# disposable schema model, never to retained or live data.
+SESSION_SNAPSHOTS_98_SQL = '''CREATE TABLE IF NOT EXISTS session_entry_snapshots (
+  session_key TEXT NOT NULL,
+  field TEXT NOT NULL CHECK (field IN ('sessionDiffBaseline', 'skillsSnapshot', 'systemPromptReport')),
+  value_json TEXT NOT NULL,
+  PRIMARY KEY (session_key, field),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_insert
+AFTER INSERT ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_update
+AFTER UPDATE OF session_key, field, value_json ON session_entry_snapshots
+WHEN NEW.session_key IS NOT OLD.session_key
+  OR NEW.field IS NOT OLD.field OR NEW.value_json IS NOT OLD.value_json
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key IN (OLD.session_key, NEW.session_key);
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_delete
+AFTER DELETE ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = OLD.session_key;
+END;
+
+'''
+
+
+PROFILE_IDENTITIES_98_SQL = '''CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);'''
+
+SESSION_SNAPSHOT_PROJECTION = r'''
+import {readFileSync} from 'node:fs';
+const result=JSON.parse(readFileSync(0,'utf8')).map(row=>{
+ let entry; try {entry=JSON.parse(row.entry_json);} catch {return null;}
+ if (!entry || typeof entry!=='object' || Array.isArray(entry) ||
+     typeof entry.sessionId!=='string' || typeof entry.updatedAt!=='number' ||
+     !Number.isFinite(entry.updatedAt) || entry.sessionId!==row.current_session_id ||
+     entry.updatedAt!==row.updated_at) return null;
+ const {sessionDiffBaseline,skillsSnapshot,systemPromptReport,...hot}=entry;
+ const values={sessionDiffBaseline,skillsSnapshot,systemPromptReport}, snapshots=[];
+ for(const field of ['sessionDiffBaseline','skillsSnapshot','systemPromptReport']) {
+   const value=JSON.stringify(values[field]); if(value!==undefined) snapshots.push([field,value]);
+ }
+ return {entryJson:snapshots.length ? JSON.stringify(hot) : row.entry_json,snapshots};
+});
+process.stdout.write(JSON.stringify(result));
+'''
+
+
+def session_snapshot_projection(batch, node):
+    """Use JS's exact number, property-order and JSON serialization semantics.
+
+    The caller's immutable runtime manifest attests node. This fixed script has
+    no dynamic imports, database writes or caller-provided executable text.
+    """
+    executable = pathlib.Path(node) if node is not None else None
+    require(executable is not None and executable.resolve(strict=True) == executable
+            and executable.is_file(), 'Session migration requires the verified Node executable.')
+    require(len(batch) <= 64, 'Session projection exceeded its bounded batch.')
+    raw = json.dumps(batch, ensure_ascii=True, separators=(',', ':')).encode()
+    require(len(raw) <= 64 * 1024 * 1024, 'Session projection exceeded its byte bound.')
+    result = subprocess.run([str(executable), '--input-type=module', '-e', SESSION_SNAPSHOT_PROJECTION],
+                            input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+    require(result.returncode == 0 and len(result.stdout) <= 128 * 1024 * 1024,
+            'Exact session snapshot projection failed.')
+    projected = json.loads(result.stdout)
+    require(isinstance(projected, list) and len(projected) == len(batch), 'Session projection returned invalid results.')
+    return projected
+
+
+def schema_definitions(connection):
+    return Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
+
+
+def native98_schema_change(before, after, tables, newer, agent):
+    """Only canonical 23→24 snapshots and nullable 18→19 additions."""
+    added = {'session_entry_snapshots'} if agent else (({'user_profile_identities'} - tables) & newer)
+    require(newer == tables | added, 'Native 9.8 migration changed an unreviewed table set.')
+    affected = {'session_nodes', 'session_entry_snapshots'} if agent else {'user_profile_identities', 'worktrees'}
+    expected = schema_definitions(before)
+    with contextlib.closing(sqlite3.connect(':memory:')) as model:
+        for kind in ('table', 'index', 'trigger', 'view'):
+            for entry in expected:
+                if entry[0] == kind and entry[2] in affected and entry[3] is not None:
+                    model.execute(entry[3])
+        if agent:
+            require('session_nodes' in tables and 'session_entry_snapshots' not in tables,
+                    'The session snapshot migration source is not schema 23.')
+            model.execute('ALTER TABLE session_nodes ADD COLUMN snapshot_revision INTEGER NOT NULL DEFAULT 0')
+            model.executescript(SESSION_SNAPSHOTS_98_SQL)
+        else:
+            if 'user_profile_identities' in added:
+                model.executescript(PROFILE_IDENTITIES_98_SQL)
+                require(not rows(after, 'user_profile_identities'), 'Native migration fabricated profile authority.')
+            for table, columns in (('user_profile_identities', ('authorization_id', 'authorization_basis_json')),
+                                   ('worktrees', ('gc_protection_json',))):
+                if table not in tables:
+                    continue
+                old_columns = {row[1] for row in before.execute('pragma table_info("' + table + '")')}
+                new_columns = {row[1] for row in after.execute('pragma table_info("' + table + '")')}
+                for column in columns:
+                    require(column in new_columns, 'Native 9.8 startup omitted a required additive column.')
+                    if column not in old_columns:
+                        model.execute('ALTER TABLE "' + table + '" ADD COLUMN ' + column + ' TEXT')
+                        require(after.execute('select 1 from "' + table + '" where "' + column + '" is not null limit 1').fetchone() is None,
+                                'Native migration fabricated authorization or worktree protection.')
+            if 'user_profile_identities' in tables:
+                index = after.execute("select sql from sqlite_schema where type='index' and name='idx_user_profile_identities_authorization'").fetchone()
+                require(index is not None, 'Native 9.8 startup omitted the authorization identity index.')
+                model.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization ON user_profile_identities(authorization_id)')
+        expected = Counter({row: count for row, count in expected.items() if row[2] not in affected}) + schema_definitions(model)
+        require(expected == schema_definitions(after), 'Native 9.8 migration changed unreviewed schema definitions.')
+
+
+def migrated_session_snapshots(before, after, node):
+    names = [row[1] for row in before.execute('pragma table_info(session_nodes)')]
+    current_names = [row[1] for row in after.execute('pragma table_info(session_nodes)')]
+    require(current_names == names + ['snapshot_revision'], 'Session snapshot columns differ from the official migration.')
+    snapshots = Counter()
+    count = 0
+    with contextlib.closing(before.execute('select * from session_nodes order by session_key')) as cursor:
+        while batch := cursor.fetchmany(64):
+            records = [dict(zip(names, row)) for row in batch]
+            for record in records:
+                require(isinstance(record.get('session_key'), str) and isinstance(record.get('current_session_id'), str)
+                        and type(record.get('updated_at')) in (int, float) and isinstance(record.get('entry_json'), str),
+                        'Unreadable session row during snapshot migration.')
+            projected = session_snapshot_projection(records, node)
+            for previous, split in zip(records, projected):
+                expected = {**previous, 'snapshot_revision': 0}
+                if previous['entry_valid'] == 0:
+                    expected['entry_valid'] = 1 if split is not None else -1
+                if split is not None and split['snapshots']:
+                    expected.update(entry_json=split['entryJson'], entry_valid=1, snapshot_revision=len(split['snapshots']))
+                    for field, value in split['snapshots']:
+                        snapshots[(previous['session_key'], field, value)] += 1
+                actual = list(after.execute('select * from session_nodes where session_key=?', (previous['session_key'],)))
+                require(actual == [tuple(expected[name] for name in current_names)],
+                        'Migrated session content, identity or snapshot revision changed.')
+                count += 1
+    require(after.execute('select count(*) from session_nodes').fetchone()[0] == count
+            and rows(after, 'session_entry_snapshots') == snapshots,
+            'Migrated session snapshots were removed, fabricated or changed.')
+
+
+def settled_session_validity_rows(connection, node, current_rows):
+    """Exact 9.8 ensureSessionEntryValidityProjection for pending rows only.
+
+    JSON, identity, snapshots and every unrelated field remain byte-exact.
+    Already settled flags are never reclassified by this startup projection.
+    An unchanged closed copy may keep pending zero before any startup occurs.
+    """
+    names = [row[1] for row in connection.execute('pragma table_info(session_nodes)')]
+    require('entry_valid' in names, 'Native session validity column is missing.')
+    position = names.index('entry_valid')
+    expected = rows(connection, 'session_nodes')
+    pending = [row for row in expected if row[position] == 0 and current_rows[row] < expected[row]]
+    for offset in range(0, len(pending), 64):
+        batch = pending[offset:offset + 64]
+        projected = session_snapshot_projection([dict(zip(names, row)) for row in batch], node)
+        for row, parsed in zip(batch, projected):
+            current = list(row); current[position] = 1 if parsed is not None else -1
+            count = expected.pop(row)
+            expected[tuple(current)] += count
+    return expected
+
+
+def migrated_native98_rows(before, after, tables, newer, relative, after_path, node, boot_replacements,
+                           app_releases=None, workspace_roots=None):
+    agent = relative.name != 'openclaw.sqlite'
+    native98_schema_change(before, after, tables, newer, agent)
+    if agent:
+        migrated_session_snapshots(before, after, node)
+    for table in tables:
+        if table == 'session_nodes' and agent:
+            continue
+        if table == 'config_machine_state':
+            retained_plugin_index(before, after, node, after_path, '2026.9.6', '2026.9.8',
+                                  app_releases=app_releases, workspace_roots=workspace_roots)
+            continue
+        if table not in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES | NATIVE_RECONNECT_COLUMNS.keys():
+            continue
+        old_names = [row[1] for row in before.execute('pragma table_info("' + table + '")')]
+        new_names = [row[1] for row in after.execute('pragma table_info("' + table + '")')]
+        omitted = set(NATIVE_RECONNECT_COLUMNS.get(table, ()))
+        selected = [name for name in old_names if name not in omitted]
+        old_meta = before.execute("select schema_version,app_version from schema_meta where meta_key='primary'").fetchone() if table == 'schema_meta' else None
+        def project(connection, names, newer_side):
+            result = Counter()
+            source = native_restart_rows(before, after, table, relative, after_path, boot_replacements) if newer_side and table in {'session_key_contract', 'plugin_state_entries'} else rows(connection, table)
+            for row, multiplicity in source.items():
+                value = dict(zip(names, row))
+                if newer_side:
+                    value = native_boot_row(table, value, boot_replacements)
+                    if table == 'schema_meta' and value.get('meta_key') == 'primary':
+                        require(old_meta is not None and value['schema_version'] == (24 if agent else 19)
+                                and value['app_version'] in {'2026.9.8', old_meta[1]}, 'Native migrated schema ownership changed.')
+                        value['schema_version'], value['app_version'] = old_meta
+                    if table == 'agent_databases' and value.get('schema_version') == 24:
+                        value['schema_version'] = 23
+                if table == 'device_pairing_paired' and value.get('tokens_json') is not None:
+                    tokens = json.loads(value['tokens_json'])
+                    for role, token in tokens.items():
+                        require(token.get('role') == role and isinstance(token.get('token'), str), 'Native token identity changed.')
+                        token.pop('lastUsedAtMs', None)
+                    value['tokens_json'] = json.dumps(tokens, sort_keys=True, separators=(',', ':'))
+                result[tuple(value[name] for name in selected)] += multiplicity
+            return result
+        require(project(before, old_names, False) == project(after, new_names, True),
+                'Native 9.8 migration changed retained work, history, configuration or authority.')
+
+
 def migrated_native_rows(before, after, tables, before_path, after_path, node, boot_replacements=None):
     for table in tables:
         require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
@@ -1755,7 +2273,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                        logical_workspace_root=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
-    require(not migrating or (from_version, to_version) == ('2026.9.2', '2026.9.6'), 'Native migration is outside the reviewed pair.')
+    require(not migrating or (from_version, to_version) in NATIVE_MIGRATION_PAIRS, 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
     selected, epoch, paths = native_scope(live, before_epoch, closed=True)
     require(before_selected == selected and before_epoch == epoch and before_paths == paths, 'The selected native database authority changed.')
@@ -1786,6 +2304,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
             old_tables = native_schema(before, relative, from_version)
             new_tables = native_schema(after, relative, to_version, old_tables if migrating else None)
             boot_replacements = native_boot_replacements(before, after, old_tables & new_tables, configuration, from_version, to_version, node)
+            if (from_version, to_version) == ('2026.9.6', '2026.9.8'):
+                migrated_native98_rows(before, after, old_tables, new_tables, relative, live / relative, node, boot_replacements, app_releases, (snapshot, live, logical_workspace_root or live, selected))
+                continue
             if migrating:
                 migration_preflight(before, old_tables)
                 # The pinned agent migration retires its old process lease table;
@@ -1801,15 +2322,21 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
                 if table == 'config_machine_state':
-                    if to_version == '2026.9.6':
+                    if to_version in {'2026.9.6', '2026.9.8'}:
                         retained_plugin_index(before, after, node, live / relative, from_version, to_version,
                                               app_releases=app_releases,
                                               workspace_roots=(snapshot, live, logical_workspace_root or live, selected))
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
-                elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES:
-                    require(rows(before, table) <= (native_restart_rows(before, after, table, relative, live / relative, boot_replacements)
-                            if to_version == '2026.9.6' else native_boot_rows(after, table, boot_replacements)),
+                elif to_version == '2026.9.8' and table == 'session_nodes':
+                    current = rows(after, table)
+                    require(settled_session_validity_rows(before, node, current) <= current,
+                            'Retained session content or exact pending validity projection changed.')
+                elif table in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES | NATIVE_98_RETAINED_TABLES:
+                    retained = rows(before, table)
+                    current = (native_restart_rows(before, after, table, relative, live / relative, boot_replacements)
+                               if to_version in {'2026.9.6', '2026.9.8'} else native_boot_rows(after, table, boot_replacements))
+                    require(retained == current if to_version == '2026.9.8' and table in {'session_entry_snapshots', 'user_profile_identities'} else retained <= current,
                             'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
                     require(native_projected_rows(before, table) <= native_projected_rows(after, table, boot_replacements), 'Retained native identity, account content or permissions changed.')

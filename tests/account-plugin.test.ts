@@ -24,15 +24,19 @@ function fixture() {
   return { api, read, stop: () => stop(), native, counters: () => ({ reads, resolves }), advance: () => { now += 31000; }, failure: () => { fail = true; }, missing: () => { missing = true; }, wrong: () => { wrong = true; } };
 }
 
-test('account SDK accepts only the two reviewed engine versions', async () => {
+test('account SDK accepts the reviewed engines and rejects unknown versions before reading credentials', async () => {
   const f = fixture();
   try {
-    f.api.runtime.version = '2026.9.6';
-    const accepted=await f.read(); assert.equal(accepted.ok,true); assert.equal(accepted.value.accounts.length, 2);
+    for(const version of ['2026.9.6','2026.9.8']){
+      f.api.runtime.version = version;
+      const accepted=await f.read(); assert.equal(accepted.ok,true); assert.equal(accepted.value.accounts.length, 2);
+    }
     const before = f.counters();
-    f.api.runtime.version = '2026.9.5';
-    assert.equal((await f.read()).ok,false);
-    assert.deepEqual(f.counters(), before);
+    for(const version of ['2026.9.5','2026.9.9']){
+      f.api.runtime.version = version;
+      assert.equal((await f.read()).ok,false);
+      assert.deepEqual(f.counters(), before);
+    }
   } finally { await f.stop(); }
 });
 

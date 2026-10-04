@@ -41,10 +41,14 @@ test('source discovery and disabled adapters leave persistent state and existing
 
 test('source receipts remain usable on the reviewed engine upgrade only', async () => {
   const f=fixture(), input=f.input(), prior=await f.invoke(input);
-  f.api.runtime.version='2026.9.6';
-  assert.deepEqual(await f.invoke(input),prior); assert.equal(f.calls.length,1);
-  f.api.runtime.version='2026.9.5';
-  await assert.rejects(f.invoke(input),/original Nova Dream runtime/); assert.equal(f.calls.length,1);
+  for(const version of ['2026.9.6','2026.9.8']){
+    f.api.runtime.version=version;
+    assert.deepEqual(await f.invoke(input),prior); assert.equal(f.calls.length,1);
+  }
+  for(const version of ['2026.9.5','2026.9.9']){
+    f.api.runtime.version=version;
+    await assert.rejects(f.invoke(input),/original Nova Dream runtime/); assert.equal(f.calls.length,1);
+  }
 });
 
 test('whole-file staging joins concurrent identical transfers and reuses verified bytes after restart', async () => {

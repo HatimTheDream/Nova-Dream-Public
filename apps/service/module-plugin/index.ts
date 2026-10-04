@@ -16,7 +16,7 @@ export type ModulePluginApi = {
 export function registerModuleTools(api:ModulePluginApi){
  if(!['full','tool-discovery'].includes(api.registrationMode))return;
  const config=z.object({epoch:z.uuid(),bundlePath:z.string().min(1),url:z.url(),token:z.string().regex(/^[a-f0-9]{64}$/),sessionBindings:z.array(z.object({nativeKey:z.string().min(1).max(300),nativeId:z.uuid()}).strict()).optional()}).strict().parse(api.pluginConfig);
- const runtimeSupported = () => ['2026.9.2', '2026.9.6'].includes(api.runtime.version);
+ const runtimeSupported = () => ['2026.9.2', '2026.9.6', '2026.9.8'].includes(api.runtime.version);
  const protectedSessions = new Set((config.sessionBindings ?? []).map(item => JSON.stringify([item.nativeKey,item.nativeId])));
  const url=new URL(config.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.pathname!=='/workspace'||url.search||url.hash||url.username||url.password)throw new Error('Workspace tools require the owning loopback service.');
  const bridge = async (path:string,body:unknown,signal?:AbortSignal) => {

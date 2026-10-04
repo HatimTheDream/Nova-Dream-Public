@@ -6,7 +6,6 @@ there is deliberately no automatic resume based on a phase label.
 """
 import argparse
 import contextlib
-import gc
 import http.cookiejar
 import http.client
 import json
@@ -24,7 +23,7 @@ import uuid
 sys.dont_write_bytecode = True
 import app_dependencies
 from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, protected_selector, read_json
-from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, inode_ids,
+from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
 from workspace_key import read_workspace_key
@@ -239,7 +238,8 @@ class Rehearsal(Driver):
         require(re.fullmatch('[a-f0-9]{64}', self.prior_id), 'Invalid reviewed prior candidate.')
         self.expected_prior = {'candidateId': self.prior_id, 'workspaceEpoch': fixed_uuid(review['workspaceEpoch'])}
         self.from_engine = self.to_engine = self.active_engine = review['agentVersion']
-        require(self.active_engine == '2026.9.6', 'This rehearsal qualifies only the reviewed unchanged 2026.9.6 engine.')
+        require(self.active_engine in {'2026.9.6', '2026.9.8'},
+                'This rehearsal qualifies only the reviewed unchanged 2026.9.6 or 2026.9.8 engine.')
         require(re.fullmatch(r'\d+\.\d+\.\d+', review['novaVersion']), 'Invalid reviewed prior version.')
         self.release = {'novaVersion': review['novaVersion'], 'compatibility': {'fromNovaVersion': review['novaVersion']},
                         'recovery': {'readinessTimeoutSeconds': 300}}
@@ -530,6 +530,26 @@ class Rehearsal(Driver):
             time.sleep(1)
         raise RuntimeError('Native resume did not settle; preserve the operator evidence.')
 
+    def snapshot_recovery(self):
+        def admit_plan(plan, source, source_inodes):
+            self.closed_allocated = plan['closedAllocatedBytes']
+            self.startup_growth = max(0, self.held_allocated - self.closed_allocated) + ALLOWANCE
+            return {**plan, 'heldRunningAllocatedBytes': self.held_allocated,
+                    'startupGrowthAllowanceBytes': self.startup_growth,
+                    'requiredFreeBytes': plan['requiredFreeBytes'] + self.startup_growth}
+
+        def begin_copy(plan):
+            write_json(self.output / 'closed-capacity.json', plan)
+            self.recovery.mkdir(mode=0o700)
+            sync_dir(self.recovery_root)
+            self.mark('snapshot')
+
+        return snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped,
+                               admit_plan=admit_plan, begin_copy=begin_copy,
+                               protected_sizes=tuple(max(info.st_size, getattr(info, 'st_blocks', 0) * 512)
+                                                     for info in (path.stat() for path in self.config_files)),
+                               capacity_volume=self.recovery_root)
+
     def run_rehearsal(self):
         self.validate_operator()
         self.output.mkdir(mode=0o700)
@@ -551,30 +571,19 @@ class Rehearsal(Driver):
             self.stop_attempted = True
             self.service('stop'); self.require_stopped(); self.mark('stopped')
             self.record('stopped')
-            source = inventory(self.data)
-            baseline = inventory(self.baseline / 'workspace')
-            self.closed_allocated = sum(item['allocated'] for item in source[1].values())
-            self.startup_growth = max(0, self.held_allocated - self.closed_allocated) + ALLOWANCE
             try:
-                plan = capacity(*source, *baseline, shutil.disk_usage(self.recovery_root).free)
-                plan = {**plan, 'heldRunningAllocatedBytes': self.held_allocated, 'closedAllocatedBytes': self.closed_allocated,
-                        'startupGrowthAllowanceBytes': self.startup_growth,
-                        'requiredFreeBytes': plan['requiredFreeBytes'] + self.startup_growth}
-                if plan['freeBytes'] < plan['requiredFreeBytes']:
-                    raise InsufficientStorage('Closed snapshot, independent copy, explicit startup growth and operating reserve do not fit.')
+                self.snapshot_recovery()
             except InsufficientStorage:
-                require(inventory(self.data) == source, 'The unchanged closed original changed during capacity review.')
+                # snapshot_closed reverified the stopped source before refusing;
+                # no copy or recovery role may exist on this unchanged path.
+                require(not self.recovery.exists() and not self.recovery.is_symlink(),
+                        'Closed capacity refusal cannot follow snapshot creation.')
                 self.verify_configuration(); self.record('capacity-refused')
-                del source, baseline; gc.collect()
                 self.mark('checking'); self.service('start')
                 accepted = self.wait_acceptance(self.prior_id, self.review['novaVersion'])
                 self.verify_configuration(); self.proof('unchanged', accepted)
                 return
-            del source, baseline; gc.collect()
-            write_json(self.output / 'closed-capacity.json', plan)
-            self.recovery.mkdir(mode=0o700); sync_dir(self.recovery_root); self.mark('snapshot')
             with verification_scratch(self.recovery_root):
-                snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped)
                 saved_state(self.recovery / 'workspace', self.data, restored=True)
                 native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine)
                 self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)

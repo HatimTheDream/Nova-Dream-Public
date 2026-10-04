@@ -88,10 +88,36 @@ def fixture_embedded_databases(root):
     return paths
 
 
+def fixture_inventory(entries, inodes, allocation=None):
+    # These orchestration fixtures model regular-file allocation only. Actual
+    # filesystem layout and copy proof are exercised by recovery-allocation.
+    if allocation is not None:
+        allocation.update(directoryCopyBytes=0, symlinkCopyBytes=0)
+    return entries, inodes
+
+
+def fixture_snapshot(data, destination, baseline, require_stopped, *, admit_plan, begin_copy, capacity_volume, protected_sizes):
+    require_stopped()
+    source, inodes = driver.inventory(data)
+    old, old_inodes = driver.inventory(baseline)
+    plan = recovery._capacity_plan(source, inodes, old, old_inodes, driver.shutil.disk_usage(capacity_volume).free)
+    plan = admit_plan(plan, source, inodes)
+    if plan['freeBytes'] < plan['requiredFreeBytes']:
+        raise recovery.InsufficientStorage('Synthetic closed capacity does not fit.')
+    begin_copy(plan)
+    return source
+
+
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='nova-update-runner-fixture-')
         self.root = pathlib.Path(self.temporary.name)
+        if sys.platform != 'linux':
+            # Windows has no POSIX ownership/mode model; these tests model the
+            # Driver sequence, while Linux still uses the real protected scratch.
+            scratch = patch.object(driver, 'verification_scratch', side_effect=lambda _: contextlib.nullcontext(self.root))
+            scratch.start()
+            self.addCleanup(scratch.stop)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -148,15 +174,15 @@ class RunnerTests(unittest.TestCase):
                 instance.controller_hold = lambda: None
                 instance.require_stopped = lambda: self.assertFalse(running[0])
                 saved_bytes = (7 if insufficient else 4) * gb
-                def inventory(path):
+                def inventory(path, *, allocation=None):
                     if path == instance.baseline / 'workspace':
-                        return {'saved': {'kind': 'file'}}, {'saved': {'device': 1, 'inode': 3, 'allocated': saved_bytes}}
+                        return fixture_inventory({'saved': {'kind': 'file'}}, {'saved': {'device': 1, 'inode': 3, 'allocated': saved_bytes}}, allocation)
                     entries = {'saved': {'kind': 'file'}}
                     inodes = {'saved': {'device': 1, 'inode': 1, 'allocated': saved_bytes}}
                     if path == instance.data and running[0]:
                         entries['capture'] = {'kind': 'file'}
                         inodes['capture'] = {'device': 1, 'inode': 2, 'allocated': 3 * gb}
-                    return entries, inodes
+                    return fixture_inventory(entries, inodes, allocation)
                 def stage_app():
                     driver.staging_capacity(*inventory(instance.data), *inventory(instance.baseline / 'workspace'), free[0], 32 * 1024 ** 2)
                     free[0] -= 32 * 1024 ** 2;actions.append('staged')
@@ -166,9 +192,11 @@ class RunnerTests(unittest.TestCase):
                     if action == 'stop':free[0] += 3 * gb
                     running[0] = action == 'start'
                 instance.service = service
-                def snapshot(*args):
+                def snapshot(*args, **kwargs):
+                    result = fixture_snapshot(*args, **kwargs)
                     self.assertFalse(running[0]);self.assertIn(scope / 'closed-capacity.json', writes)
                     actions.append('snapshot')
+                    return result
                 instance.switch_runtime = instance.migrate_runtime = lambda: None
                 instance.switch = lambda target: selected.__setitem__(0, target)
                 instance.settled_acceptance = lambda *args, **kwargs: {'health': {'ready': True}}
@@ -1210,8 +1238,8 @@ class RunnerTests(unittest.TestCase):
                         self.assertEqual(starts[0], 2)
                         free = minimum - int(failure == 'operating_space')
                     return types.SimpleNamespace(free=free)
-                inventory = lambda path: ({}, {}) if path == instance.baseline / 'workspace' else ({}, {'snapshot': {'device': 1, 'inode': 2, 'allocated': independent}})
-                with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', side_effect=inventory), patch.object(driver.shutil, 'disk_usage', side_effect=disk_usage), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
+                inventory = lambda path, allocation=None: fixture_inventory({}, {} if path == instance.baseline / 'workspace' else {'snapshot': {'device': 1, 'inode': 2, 'allocated': independent}}, allocation)
+                with patch.object(driver, 'snapshot_closed', side_effect=fixture_snapshot), patch.object(driver, 'saved_state', side_effect=saved), patch.object(driver, 'inventory', side_effect=inventory), patch.object(driver.shutil, 'disk_usage', side_effect=disk_usage), patch.object(driver, 'candidate'), patch.object(driver, 'write_json'), patch.object(driver.os, 'replace'), patch.object(driver, 'sync_dir'):
                     instance.run()
                 if failure:
                     self.assertEqual(actions[-2:], ['failure', 'original-paired-restore'])
@@ -1820,7 +1848,7 @@ export const close=async()=>{};
                     instance.run()
                 self.assertEqual(actions, ['stage-app', 'unchanged'])
                 self.assertEqual(len(calls), 4 if changed else 3)
-                self.assertEqual(instance.recovery.exists(), changed is None)
+                self.assertFalse(instance.recovery.exists())  # Recovery creation now follows closed admission.
                 if instance.recovery.exists():instance.recovery.rmdir()
                 self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
 
@@ -1883,7 +1911,7 @@ export const close=async()=>{};
         instance.service = lambda action: actions.append(action)
         instance.switch = lambda path: (_ for _ in ()).throw(RuntimeError('pointer sync uncertain'))
         instance.restore_prior = lambda: actions.append('paired-restore')
-        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'write_json'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
+        with patch.object(driver, 'snapshot_closed', side_effect=fixture_snapshot), patch.object(driver, 'saved_state'), patch.object(driver, 'write_json'), patch.object(driver, 'sync_dir'), patch.object(driver, 'inventory', side_effect=lambda path, allocation=None: fixture_inventory({}, {}, allocation)), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)):
             instance.run()
         self.assertEqual(actions, ['stop', 'paired-restore'])
         self.assertTrue(instance.switch_attempted)
@@ -1906,7 +1934,7 @@ export const close=async()=>{};
         instance.migrate_runtime = lambda: (_ for _ in ()).throw(RuntimeError(failure_reason))
         instance.switch = lambda path: actions.append('app-pointer')
         instance.restore_prior = lambda: actions.append('restore-engine-node-and-workspace')
-        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
+        with patch.object(driver, 'snapshot_closed', side_effect=fixture_snapshot), patch.object(driver, 'saved_state'), patch.object(driver, 'sync_dir'), patch.object(driver, 'inventory', side_effect=lambda path, allocation=None: fixture_inventory({}, {}, allocation)), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
             instance.run()
         self.assertEqual(actions, ['stop', 'select-new-engine-and-node', 'restore-engine-node-and-workspace'])
         self.assertTrue(instance.switch_attempted)
@@ -1943,7 +1971,7 @@ export const close=async()=>{};
             raise rollback
         instance.restore_prior = fail_restore
         instance.result = lambda outcome: actions.append(outcome)
-        with patch.object(driver, 'snapshot_closed'), patch.object(driver, 'saved_state'), patch.object(driver, 'inventory', return_value=({}, {})), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
+        with patch.object(driver, 'snapshot_closed', side_effect=fixture_snapshot), patch.object(driver, 'saved_state'), patch.object(driver, 'sync_dir'), patch.object(driver, 'inventory', side_effect=lambda path, allocation=None: fixture_inventory({}, {}, allocation)), patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=10 ** 12)), patch.object(os, 'O_NOFOLLOW', getattr(os, 'O_NOFOLLOW', 0), create=True), patch.object(recovery, 'sync_dir'):
             with self.assertRaises(RuntimeError) as raised:
                 instance.run_validated()
         self.assertIs(raised.exception, rollback)

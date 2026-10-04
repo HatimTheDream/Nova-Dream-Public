@@ -1,3 +1,15 @@
+## [2.2.0] — 2026-10-04
+
+### Added
+- Read-only release planning reports exact candidate readiness, missing evidence, storage assumptions and rolling ETA checkpoints.
+- A persistent release coordinator records installation intent before dispatch and resumes by observing the original job, preserving uncertain outcomes instead of repeating an update.
+- Reviewed OpenClaw 2026.9.8 compatibility preserves account selection, plugin permissions, interrupted-request custody and paired recovery with the previous runtime.
+
+### Improved
+- Recovery admission reuses its fresh snapshot inventory, removing duplicate scans while retaining independent copies, content checks and operating reserves.
+- Capacity estimates count unique physical files, directory metadata, native migration space and a separately reviewed managed companion allowance; shortages are detected before snapshot writes.
+- ETA history retains original estimates, requires an explanation after overruns and stops repeated attempts without a changed approach.
+
 ## [2.1.4] — 2026-10-04
 
 ### Fixed

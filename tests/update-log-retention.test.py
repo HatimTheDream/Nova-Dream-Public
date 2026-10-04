@@ -168,7 +168,8 @@ class CodexLogRetentionTests(unittest.TestCase):
 
 
 @contextlib.contextmanager
-def runtime_fixture():
+def runtime_fixture(engine_version='2026.9.6'):
+    codex_version, binary_sha256, binary_bytes, surface = retention.RUNTIME_ATTESTATIONS[engine_version]
     with tempfile.TemporaryDirectory(prefix='nova-log-retention-') as temporary, \
          contextlib.closing(sqlite3.connect(':memory:')) as shared:
         root = Path(temporary).resolve()
@@ -178,9 +179,9 @@ def runtime_fixture():
         modules = project / 'node_modules'
         installed = modules / '@openclaw' / 'codex'
         packages = {
-            installed / 'package.json': dict(name='@openclaw/codex', version='2026.9.6'),
-            modules / '@openai' / 'codex' / 'package.json': dict(name='@openai/codex', version='0.155.1'),
-            modules / '@openai' / 'codex-linux-x64' / 'package.json': dict(name='@openai/codex', version='0.155.1-linux-x64'),
+            installed / 'package.json': dict(name='@openclaw/codex', version=engine_version),
+            modules / '@openai' / 'codex' / 'package.json': dict(name='@openai/codex', version=codex_version),
+            modules / '@openai' / 'codex-linux-x64' / 'package.json': dict(name='@openai/codex', version=codex_version+'-linux-x64'),
         }
         for path, value in packages.items():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,11 +191,11 @@ def runtime_fixture():
         # Actual synthetic file/size/path; only its digest computation is
         # replaced. Sparse truncation avoids writing or hashing a real binary.
         with binary.open('wb') as stream:
-            stream.truncate(retention.CODEX_BINARY_BYTES)
-        record = dict(source='npm', spec='@openclaw/codex@2026.9.6', resolvedSpec='@openclaw/codex@2026.9.6',
-            version='2026.9.6', resolvedVersion='2026.9.6', resolvedName='@openclaw/codex',
+            stream.truncate(binary_bytes)
+        record = dict(source='npm', spec='@openclaw/codex@'+engine_version, resolvedSpec='@openclaw/codex@'+engine_version,
+            version=engine_version, resolvedVersion=engine_version, resolvedName='@openclaw/codex',
             installPath=str(installed), integrity='sha512-Zml4dHVyZQ==')
-        index = dict(version=1, warning='', hostContractVersion='2026.9.6', compatRegistryVersion='a' * 64,
+        index = dict(version=1, warning='', hostContractVersion=engine_version, compatRegistryVersion='a' * 64,
             migrationVersion=1, policyHash='b' * 64, generatedAtMs=1, installRecords={'codex': record},
             plugins=[], diagnostics=[])
         value = dict(revision=1, index=index)
@@ -206,32 +207,33 @@ def runtime_fixture():
             shared.commit()
         save()
         fixture = SimpleNamespace(root=root, selected=selected, shared=shared, record=record, value=value,
-            packages=packages, binary=binary, save=save)
+            packages=packages, binary=binary, save=save, codex_version=codex_version, binary_sha256=binary_sha256, surface=surface)
         with patch.object(retention.hashlib, 'file_digest', return_value=SimpleNamespace(
-                hexdigest=lambda: retention.CODEX_BINARY_SHA256)) as digest:
+                hexdigest=lambda: binary_sha256)) as digest:
             fixture.digest = digest
             yield fixture
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Managed Linux runtime attestation requires POSIX file identity and links.')
 class CodexRuntimeAttestationTests(unittest.TestCase):
+    engine_version = '2026.9.6'
     def attest(self, fixture):
-        return retention.attest_runtime(fixture.root, fixture.selected, fixture.shared)
+        return retention.attest_runtime(fixture.root, fixture.selected, fixture.shared, engine_version=self.engine_version)
 
     def test_selected_runtime_packages_and_actual_binary_path_are_bound(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             proof = self.attest(fixture)
-            self.assertEqual(proof['codexVersion'], '0.155.1')
-            self.assertEqual(proof['binarySha256'], retention.CODEX_BINARY_SHA256)
+            self.assertEqual(proof['codexVersion'], fixture.codex_version)
+            self.assertEqual(proof['binarySha256'], fixture.binary_sha256)
             self.assertEqual(len(proof['packageSha256']), 3)
             self.assertNotIn(str(fixture.root), json.dumps(proof))
             self.assertEqual(Path(fixture.digest.call_args.args[0].name), fixture.binary)
-            fixture.record['acceptedSurfaceHash'] = retention.CODEX_SURFACE
+            fixture.record['acceptedSurfaceHash'] = fixture.surface
             fixture.save()
             self.assertEqual(self.attest(fixture), proof)
 
     def test_unreviewed_install_record_and_paths_are_refused(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             original = dict(fixture.record)
             changes = [('source', 'path'), ('spec', '@openclaw/codex@latest'), ('resolvedVersion', '2026.9.7'),
                 ('resolvedName', '@other/codex'), ('sourcePath', '/unreviewed'), ('integrity', 'not-an-integrity'),
@@ -245,7 +247,7 @@ class CodexRuntimeAttestationTests(unittest.TestCase):
             self.assertEqual(fixture.digest.call_count, 0)
 
     def test_each_package_version_and_executable_identity_is_enforced(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             for path, original in fixture.packages.items():
                 with self.subTest(package=path.parent.name):
                     path.write_text(json.dumps({**original, 'version': 'unreviewed'}), encoding='utf-8')
@@ -261,7 +263,7 @@ class CodexRuntimeAttestationTests(unittest.TestCase):
                 self.attest(fixture)
 
     def test_plugin_index_is_bounded_unique_and_revision_bound(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             with patch.object(retention, 'MAX_INDEX_BYTES', 32), self.assertRaisesRegex(RuntimeError, 'exceeds its bound'):
                 self.attest(fixture)
             fixture.value['revision'] = 2; fixture.save()
@@ -273,13 +275,13 @@ class CodexRuntimeAttestationTests(unittest.TestCase):
                 self.attest(fixture)
 
     def test_selected_directory_cannot_escape_workspace(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             for selected in (Path('..'), fixture.root):
                 with self.subTest(selected=selected), self.assertRaisesRegex(RuntimeError, 'selected runtime authority'):
-                    retention.attest_runtime(fixture.root, selected, fixture.shared)
+                    retention.attest_runtime(fixture.root, selected, fixture.shared, engine_version=self.engine_version)
 
     def test_actual_redirected_executable_is_refused(self):
-        with runtime_fixture() as fixture:
+        with runtime_fixture(self.engine_version) as fixture:
             original = fixture.binary.with_name('original')
             fixture.binary.rename(original)
             try:
@@ -290,6 +292,10 @@ class CodexRuntimeAttestationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'redirected'):
                 self.attest(fixture)
             self.assertEqual(fixture.digest.call_count, 0)
+
+
+class Codex158RuntimeAttestationTests(CodexRuntimeAttestationTests):
+    engine_version = '2026.9.8'
 
 
 if __name__ == '__main__':

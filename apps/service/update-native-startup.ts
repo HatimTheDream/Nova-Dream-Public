@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 
 const record=z.record(z.string(),z.any());
-const schemaVersions={'2026.9.2':{agent:19,shared:15},'2026.9.6':{agent:23,shared:18}} as const;
+const schemaVersions={'2026.9.2':{agent:19,shared:15},'2026.9.6':{agent:23,shared:18},'2026.9.8':{agent:24,shared:19}} as const;
 const plugins=new Set(['openai','codex','browser','document-extract','edition3-worker','edition3-workspace','edition3-sources','edition3-accounts']);
 const message='Automatic Assistant startup needs review before this host can update. Existing settings and work are kept.';
 const regular=(path:string)=>{const stat=lstatSync(path);if(!stat.isFile()||stat.isSymbolicLink())throw Error('Unexpected file.');return stat;};
@@ -25,8 +25,8 @@ const safeSession=(status:unknown,entry:Record<string,any>)=>
   (!entry.goal||['paused','blocked','usage_limited','budget_limited','complete'].includes(entry.goal.status));
 // Native restart marking and dispatch select running sessions. A terminal
 // failure may retain abortedLastRun or recovery receipts; those are history,
-// not permission to resume a task (main-session-restart-recovery 9.2 and 9.6
-// both discover startup recovery targets with statuses: ['running']).
+// not permission to resume a task (the reviewed main-session-restart-recovery
+// versions discover startup recovery targets with statuses: ['running']).
 
 /** Read-only qualification for the pinned managed runtime, before process launch
  * and while its global suspension lease is held. The reviewed OpenClaw builds run restart
@@ -69,6 +69,9 @@ export function qualifyNativeUpdateStartup(root:string, serviceDirectory:string,
             // 9.6's input completions, cold archives, search index and canonical
             // validation projection are retained results/metadata, not a queue
             // for dispatch. Do not delete or terminalize them to qualify.
+            // 9.8 adds session-entry snapshot revisions/projections; shared
+            // profile authorization and worktree GC metadata add no work queue.
+            // These are preserved, never synthesized to obtain startup access.
           });
         }
       }
@@ -95,7 +98,7 @@ export function qualifyNativeUpdateStartup(root:string, serviceDirectory:string,
         ['worker_inference_turns','state',['terminal']],
         ['worker_transcript_commits','state',['terminal']],
       ] as [string,string,string[]][])for(const row of rows(db,table,column))if(!terminal.includes(String(row[column])))throw Error('Unfinished native worker.');
-      if(version==='2026.9.6'){
+      if(version==='2026.9.6'||version==='2026.9.8'){
         for(const row of rows(db,'node_worker_prepared_workspaces','state'))if(row.state!=='retired')throw Error('Unfinished prepared worker.');
         for(const row of rows(db,'node_worker_launch_cleanup','lineage_settled'))if(row.lineage_settled!==1)throw Error('Unfinished worker cleanup.');
         for(const row of rows(db,'worktree_templates','status'))if(row.status!=='ready')throw Error('Unfinished worktree preparation.');

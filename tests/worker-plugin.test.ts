@@ -37,12 +37,16 @@ const identity = (input: Awaited<ReturnType<ReturnType<typeof fixture>['input']>
 
 test('reviewed engine upgrade retains worker contract and original dispatch identity', async () => {
   const f=fixture(), input=await f.input(), prior=await f.invoke('run', input);
-  f.api.runtime.version='2026.9.6';
-  const caps=await f.invoke<{contract:number;runtimeVersion:string}>('capabilities',{epoch:f.epoch});
-  assert.equal(caps.contract,2); assert.equal(caps.runtimeVersion,'2026.9.6');
-  assert.deepEqual(await f.invoke('run',input),prior); assert.equal(f.calls.length,1);
-  f.api.runtime.version='2026.9.5';
-  await assert.rejects(f.invoke('run',input),/verified OpenClaw version/); assert.equal(f.calls.length,1);
+  for(const version of ['2026.9.6','2026.9.8']){
+    f.api.runtime.version=version;
+    const caps=await f.invoke<{contract:number;runtimeVersion:string}>('capabilities',{epoch:f.epoch});
+    assert.equal(caps.contract,2); assert.equal(caps.runtimeVersion,version);
+    assert.deepEqual(await f.invoke('run',input),prior); assert.equal(f.calls.length,1);
+  }
+  for(const version of ['2026.9.5','2026.9.9']){
+    f.api.runtime.version=version;
+    await assert.rejects(f.invoke('run',input),/verified OpenClaw version/); assert.equal(f.calls.length,1);
+  }
 });
 
 test('settled failure category survives journal reload without raw provider details or another native call',async()=>{

@@ -1,13 +1,17 @@
-"""Qualify the reviewed Codex 0.155.1 startup log-retention lifecycle.
+"""Qualify the exact reviewed Codex startup log-retention lifecycles.
 
 The caller supplies the durably recorded startup window and opens stable
 private SQLite copies. This module verifies the selected runtime files and
 log rows without modifying records or relaxing any other table's comparison.
 
-Pinned policy: openai/codex, rust-v0.155.1,
+Pinned policy: openai/codex, rust-v0.155.1 and rust-v0.158.0,
 codex-rs/state/src/runtime/logs.rs (run_logs_startup_maintenance) and
 codex-rs/state/src/runtime.rs (runtime initialization).
 https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/state/src/runtime/logs.rs
+https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/state/src/runtime/logs.rs
+The 0.158.0 logs.rs source SHA256 is
+09d10deee494d96f003a091b9f4972a395e20d18d2e5948a04d8f7fb4b41ef9f;
+runtime.rs is cc074712e6b22f37f12df1c1af831d97c65536de7c500797246c3c22b695f002.
 Startup removes the complete prefix with ts < UTC-now minus ten days. The
 separate per-partition insertion limits are intentionally not qualified here.
 """
@@ -30,6 +34,11 @@ CODEX_VERSION = '0.155.1'
 CODEX_BINARY_SHA256 = '0753dfe1d8b87a52436deb13eb1c549661ef4c84fee2c5aa688385eebeccb761'
 CODEX_BINARY_BYTES = 269273536
 CODEX_SURFACE = 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
+RUNTIME_ATTESTATIONS = {
+    '2026.9.6': ('0.155.1', CODEX_BINARY_SHA256, CODEX_BINARY_BYTES, CODEX_SURFACE),
+    '2026.9.8': ('0.158.0', '167c0148a849d2444f1b5a7fb5f8bb2de1de5ae13a2a504b833fc765980f5cd9',
+                 286594376, CODEX_SURFACE),
+}
 MAX_INDEX_BYTES = 16 * 1024 * 1024
 MAX_PACKAGE_BYTES = 256 * 1024
 
@@ -83,9 +92,9 @@ def _package(path, name, version):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _binary_sha256(path):
-    before = _regular(path, CODEX_BINARY_BYTES)
-    require(before.st_size == CODEX_BINARY_BYTES, 'The active Codex executable size changed.')
+def _binary_sha256(path, expected_bytes=CODEX_BINARY_BYTES):
+    before = _regular(path, expected_bytes)
+    require(before.st_size == expected_bytes, 'The active Codex executable size changed.')
     with path.open('rb') as stream:
         require(_identity(os.fstat(stream.fileno())) == _identity(before), 'Codex executable identity changed.')
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -93,7 +102,7 @@ def _binary_sha256(path):
     return digest
 
 
-def attest_runtime(root, selected, shared_connection):
+def attest_runtime(root, selected, shared_connection, *, engine_version=ENGINE_VERSION):
     """Attest the active managed npm Codex payload; never discover by glob.
 
     root is the closed live/restore workspace whose recorded absolute install
@@ -102,6 +111,8 @@ def attest_runtime(root, selected, shared_connection):
     Failure raises RuntimeError/OSError; callers must retain append-only rules
     unless this proof and a valid durable startup window are both available.
     """
+    require(engine_version in RUNTIME_ATTESTATIONS, 'Unreviewed Codex log-retention engine.')
+    codex_version, binary_sha256, binary_bytes, surface = RUNTIME_ATTESTATIONS[engine_version]
     root, selected = Path(root), Path(selected)
     require(root.is_absolute() and root.resolve(strict=True) == root and root.is_dir()
             and not selected.is_absolute() and '..' not in selected.parts,
@@ -132,7 +143,7 @@ def attest_runtime(root, selected, shared_connection):
     require(isinstance(index, dict) and required <= set(index) <= required | {'workspaceDir', 'refreshReason'}
             and type(index['version']) is int and index['version'] == 1
             and type(index['migrationVersion']) is int and index['migrationVersion'] == 1
-            and index['hostContractVersion'] == ENGINE_VERSION
+            and index['hostContractVersion'] == engine_version
             and isinstance(index['warning'], str) and len(index['warning']) <= 1024
             and all(isinstance(index[name], str) and re.fullmatch('[a-f0-9]{64}', index[name])
                     for name in ('compatRegistryVersion', 'policyHash'))
@@ -149,12 +160,12 @@ def attest_runtime(root, selected, shared_connection):
             'Native plugin index records changed format.')
     record = records.get('codex')
     require(isinstance(record, dict) and record.get('source') == 'npm'
-            and record.get('spec') == record.get('resolvedSpec') == '@openclaw/codex@2026.9.6'
-            and record.get('version') == record.get('resolvedVersion') == ENGINE_VERSION
+            and record.get('spec') == record.get('resolvedSpec') == '@openclaw/codex@' + engine_version
+            and record.get('version') == record.get('resolvedVersion') == engine_version
             and record.get('resolvedName') == '@openclaw/codex' and 'sourcePath' not in record
             and isinstance(record.get('integrity'), str)
             and re.fullmatch(r'sha512-[A-Za-z0-9+/]+={0,2}', record['integrity'])
-            and ('acceptedSurfaceHash' not in record or record['acceptedSurfaceHash'] == CODEX_SURFACE),
+            and ('acceptedSurfaceHash' not in record or record['acceptedSurfaceHash'] == surface),
             'The active Codex installation is outside the reviewed official npm record.')
     raw_path = record.get('installPath')
     require(isinstance(raw_path, str) and 0 < len(raw_path) <= 4096, 'Invalid Codex install path.')
@@ -168,16 +179,16 @@ def attest_runtime(root, selected, shared_connection):
             'The managed Codex payload was redirected or changed layout.')
     modules = installed.parent.parent
     packages = {
-        'plugin': _package(installed / 'package.json', '@openclaw/codex', ENGINE_VERSION),
-        'codex': _package(modules / '@openai' / 'codex' / 'package.json', '@openai/codex', CODEX_VERSION),
+        'plugin': _package(installed / 'package.json', '@openclaw/codex', engine_version),
+        'codex': _package(modules / '@openai' / 'codex' / 'package.json', '@openai/codex', codex_version),
         'platform': _package(modules / '@openai' / 'codex-linux-x64' / 'package.json',
-                             '@openai/codex', CODEX_VERSION + '-linux-x64'),
+                             '@openai/codex', codex_version + '-linux-x64'),
     }
     binary = modules / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
-    digest = _binary_sha256(binary)
-    require(digest == CODEX_BINARY_SHA256, 'The active Codex executable is outside the reviewed retention policy.')
-    return dict(format=1, engineVersion=ENGINE_VERSION, codexVersion=CODEX_VERSION,
-                binarySha256=digest, binaryBytes=CODEX_BINARY_BYTES, packageSha256=packages,
+    digest = _binary_sha256(binary, binary_bytes)
+    require(digest == binary_sha256, 'The active Codex executable is outside the reviewed retention policy.')
+    return dict(format=1, engineVersion=engine_version, codexVersion=codex_version,
+                binarySha256=digest, binaryBytes=binary_bytes, packageSha256=packages,
                 installPathSha256=hashlib.sha256(raw_path.encode('utf-8')).hexdigest())
 
 
@@ -240,7 +251,7 @@ def _indexed_logs(connection):
     return result
 
 
-def qualify_logs(before, after, startup_start_seconds, startup_end_seconds):
+def qualify_logs(before, after, startup_start_seconds, startup_end_seconds, *, engine_version=ENGINE_VERSION):
     """Return content-free evidence or raise RuntimeError on unqualified drift.
 
 Both arguments are SQLite connections exposing execute(). The startup bounds
@@ -265,7 +276,8 @@ must equal the entire timestamp prefix for one cutoff inside that window.
         require(first <= last, 'Removed logs do not equal the exact startup age-retention prefix.')
         require({key for key, (_, timestamp) in old.items() if timestamp < first} == removed,
                 'The complete age-eligible log set differs.')
-        report.update(rule='codex-0.155.1-startup-10-days', cutoffFirst=first, cutoffLast=last,
+        require(engine_version in RUNTIME_ATTESTATIONS, 'Unreviewed Codex log-retention engine.')
+        report.update(rule='codex-' + RUNTIME_ATTESTATIONS[engine_version][0] + '-startup-10-days', cutoffFirst=first, cutoffLast=last,
                       startupFirst=startup_start_seconds, startupLast=startup_end_seconds)
     digest = hashlib.sha256()
     for key in sorted(common):

@@ -45,6 +45,27 @@ def exclusive_json(path, value):
 
 
 class RehearsalTests(unittest.TestCase):
+    def test_review_admits_only_exact_qualified_unchanged_engines(self):
+        fields = {'format', 'kind', 'leaseId', 'candidateId', 'workspaceEpoch', 'novaVersion', 'agentVersion',
+                  'hostConfiguration', 'baselineDirectory', 'baselineManifestSha256', 'labParent',
+                  'startupGuardFile', 'startupGuardSha256', 'startupBarrier', 'helperHashes', 'nodeSha256',
+                  'sourceDependencies', 'sourceHostHashes'}
+        review = {name: None for name in fields}
+        review.update(format=1, kind='operator-rehearsal-review', leaseId='11111111-1111-4111-8111-111111111111',
+                      candidateId='a'*64, workspaceEpoch='22222222-2222-4222-8222-222222222222', novaVersion='invalid-sentinel')
+        instance = operator.Rehearsal(self.root / 'review.json')
+        with patch.object(operator.sys, 'platform', 'linux'), patch.object(operator.os, 'geteuid', return_value=0, create=True), \
+             patch.object(operator, 'protected'), patch.object(operator, 'read_json', return_value=review):
+            for version in ('2026.9.6', '2026.9.8'):
+                review['agentVersion'] = version
+                with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, 'Invalid reviewed prior version'):
+                    instance.validate_operator()
+                self.assertEqual(instance.from_engine, instance.to_engine)
+            for version in ('2026.9.7', '2026.9.9', '2026.9.8-beta.1'):
+                review['agentVersion'] = version
+                with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, 'reviewed unchanged'):
+                    instance.validate_operator()
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='nova-operator-fixture-', dir=os.environ.get('QA_PROTECTED_PARENT'))
         self.root = pathlib.Path(self.temporary.name)
@@ -115,10 +136,27 @@ class RehearsalTests(unittest.TestCase):
         self.fake('native_saved_state', lambda *args, **kwargs: events.append('native-verified'))
         self.fake('read_workspace_key', lambda *args: self.key)
         self.fake('verification_scratch', lambda path: contextlib.nullcontext())
-        self.fake('capacity', lambda *args: {'freeBytes':10**12,'requiredFreeBytes':1,'independentRestoreBytes':4096})
+        self.admission_free = 10**12
+        self.admission_failure = None
         self.stack.enter_context(patch.object(operator.shutil, 'disk_usage', lambda p: types.SimpleNamespace(free=10**12)))
-        def snapshot(source, target, baseline, stopped):
-            stopped(); events.append('snapshot')
+        def snapshot(source, target, baseline, stopped, *, admit_plan, begin_copy, protected_sizes, capacity_volume):
+            stopped()
+            captured = portable_inventory(source)
+            portable_inventory(baseline)
+            events.extend(['admission-source-inventory', 'admission-baseline-inventory'])
+            plan = admit_plan({'freeBytes':self.admission_free,'requiredFreeBytes':1,
+                               'independentRestoreBytes':4096,'closedAllocatedBytes':4096}, *captured)
+            self.assertEqual(capacity_volume, instance.recovery_root)
+            self.assertEqual(protected_sizes, tuple(max(info.st_size, getattr(info, 'st_blocks', 0) * 512)
+                             for info in (path.stat() for path in instance.config_files)))
+            if self.admission_failure:
+                raise self.admission_failure
+            if plan['freeBytes'] < plan['requiredFreeBytes']:
+                stopped()
+                self.assertEqual(portable_inventory(source), captured)
+                raise operator.InsufficientStorage('capacity')
+            begin_copy(plan)
+            events.append('snapshot')
             shutil.copytree(source,target)
             exclusive_json(target.parent/'snapshot-manifest.json', portable_inventory(source)[0])
         def independent(snapshot, target, source, stopped):
@@ -207,7 +245,7 @@ class RehearsalTests(unittest.TestCase):
 
     def test_capacity_refusal_restarts_original_without_saved_work_or_recovery_claim(self):
         instance = self.fixture()
-        self.fake('capacity',lambda *a: (_ for _ in ()).throw(operator.InsufficientStorage('capacity')))
+        self.admission_free = 0
         original = operator.root_identity(instance.data)
         instance.run_rehearsal()
         self.assertEqual(operator.root_identity(instance.data),original)
@@ -216,6 +254,52 @@ class RehearsalTests(unittest.TestCase):
         self.assertNotIn('snapshot',self.events)
         self.assertFalse(instance.recovery.exists())
         self.assertFalse(instance.workspace_mutated)
+
+    def test_fresh_admission_inventory_pair_supplies_startup_and_precedes_snapshot_phase(self):
+        instance = self.fixture()
+        def after_snapshot_only(path):
+            self.assertIn('snapshot', self.events)
+            return portable_inventory(path)
+        self.fake('inventory', after_snapshot_only)
+        instance.run_rehearsal()
+        self.assertEqual(self.events.count('admission-source-inventory'), 1)
+        self.assertEqual(self.events.count('admission-baseline-inventory'), 1)
+        self.assertLess(self.events.index('admission-baseline-inventory'), self.events.index('mark:snapshot'))
+        plan = json.loads((instance.output/'closed-capacity.json').read_text())
+        self.assertEqual(plan['closedAllocatedBytes'], 4096)
+        self.assertEqual(plan['startupGrowthAllowanceBytes'], 4096 + operator.ALLOWANCE)
+        self.assertEqual(plan['requiredFreeBytes'], 1 + plan['startupGrowthAllowanceBytes'])
+
+    def test_startup_growth_refuses_before_any_snapshot_write(self):
+        instance = self.fixture()
+        self.admission_free = operator.ALLOWANCE
+        instance.run_rehearsal()
+        self.assertIn('proof:unchanged', self.events)
+        self.assertNotIn('mark:snapshot', self.events)
+        self.assertFalse(instance.recovery.exists())
+        self.assertFalse((instance.output/'closed-capacity.json').exists())
+
+    def test_changed_source_on_capacity_review_stays_held_without_unchanged_proof(self):
+        instance = self.fixture()
+        self.admission_failure = RuntimeError('The unchanged closed original changed during capacity review.')
+        with self.assertRaisesRegex(RuntimeError, 'closed original changed'):
+            instance.run_rehearsal()
+        self.assertNotIn('service:start', self.events)
+        self.assertFalse(any(event.startswith('proof:') for event in self.events))
+        self.assertFalse(instance.recovery.exists())
+
+    def test_late_space_loss_keeps_verified_copies_and_refuses_workspace_swap(self):
+        instance = self.fixture()
+        self.stack.enter_context(patch.object(operator.shutil, 'disk_usage',
+            lambda path: types.SimpleNamespace(free=operator.RESERVE + 2 * operator.ALLOWANCE)))
+        original = operator.root_identity(instance.data)
+        with self.assertRaisesRegex(RuntimeError, 'startup growth must fit'):
+            instance.run_rehearsal()
+        self.assertEqual(operator.root_identity(instance.data), original)
+        self.assertTrue((instance.restore/'owner-record').exists())
+        self.assertTrue((instance.recovery/'workspace/owner-record').exists())
+        self.assertFalse(instance.original.exists())
+        self.assertFalse(any(event.startswith('proof:') for event in self.events))
 
     def startup_guard_fixture(self, allocated, free):
         instance = self.fixture(); instance.output.mkdir()

@@ -45,7 +45,7 @@ const object = (value: unknown): Record<string, any> => value && typeof value ==
 // This runtime persists input custody by the caller's chat.send idempotency key.
 // Custody proves admission, not execution or completion. Other versions need a
 // separately verified contract before their request IDs can be used as run IDs.
-const inputReceiptRuntime = '2026.9.6';
+const inputReceiptRuntimes = new Set(['2026.9.6', '2026.9.8']);
 const inputReceiptLimit = 50;
 type ReconciliationHistory = ConversationHistory & { inputReceipts?: unknown };
 const hasInputReceipt = (receipts: unknown, runId: string) => {
@@ -1150,7 +1150,7 @@ export class AssistantService {
   async reconcile(id: string) {
     const conversation = this.conversation(id);
     const operations = this.operations().filter(op => op.conversationId === id && (!terminal.has(op.state) || !op.effectiveModel));
-    const recoverInputs = !this.store.updateMaintenanceHeld && this.gateway.serviceInfo?.().version === inputReceiptRuntime;
+    const recoverInputs = !this.store.updateMaintenanceHeld && inputReceiptRuntimes.has(this.gateway.serviceInfo?.().version ?? '');
     const inputRunIds = recoverInputs ? [...new Set(operations.filter(op => !op.nativeRunId && ['dispatching', 'unknown'].includes(op.state)
       && op.requestId.length > 0 && op.requestId.length <= 256 && this.currentOperation(op, conversation)).map(op => op.requestId))].slice(0, inputReceiptLimit) : [];
     // Receipt lookup shares the ordinary bounded history read. The wire API
@@ -1166,7 +1166,7 @@ export class AssistantService {
       let operation = this.currentOperation(captured, conversation);
       if (!operation) continue;
       if (!operation.nativeRunId && !terminal.has(operation.state) && inputRunIds.includes(operation.requestId)
-        && !this.store.updateMaintenanceHeld && this.gateway.serviceInfo?.().version === inputReceiptRuntime) {
+        && !this.store.updateMaintenanceHeld && inputReceiptRuntimes.has(this.gateway.serviceInfo?.().version ?? '')) {
         const expected = operation.requestId;
         const active = history.inFlightRun?.runId === expected || history.activeRunIds?.includes(expected) === true;
         if (active || hasInputReceipt(history.inputReceipts, expected)) {

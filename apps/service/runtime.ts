@@ -26,7 +26,7 @@ export function needsShortRuntimeTemporaryDirectory(root:string,platform:NodeJS.
 export class ManagedRuntime {
   private child?: ChildProcess;
   private childStartedAt?:number;
-  private childVersion?: '2026.9.2' | '2026.9.6';
+  private childVersion?: '2026.9.2' | '2026.9.6' | '2026.9.8';
   private childEntry?: string;
   private browserNetwork=new BrowserNetwork();
   private shortTemporaryDirectory?:string;
@@ -102,7 +102,7 @@ export class ManagedRuntime {
     const entry = candidates.find(p => existsSync(p) && p.endsWith('openclaw.mjs'));
     if (!entry) throw new Fault(503, 'openclaw_missing', 'Install OpenClaw on this host or connect a configured private Gateway.');
     const pkg = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8'));
-    if (pkg.name !== 'openclaw' || !['2026.9.2', '2026.9.6'].includes(pkg.version)) throw new Fault(503, 'openclaw_version', 'This OpenClaw version has not been verified with Nova Dream. Check Software Update.');
+    if (pkg.name !== 'openclaw' || !['2026.9.2', '2026.9.6', '2026.9.8'].includes(pkg.version)) throw new Fault(503, 'openclaw_version', 'This OpenClaw version has not been verified with Nova Dream. Check Software Update.');
     return resolve(entry);
   }
   private paths() {

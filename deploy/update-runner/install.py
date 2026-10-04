@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 
 sys.dont_write_bytecode = True
-from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, capacity, digest, inventory, inode_ids, prepare_independent,
+from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, independent_copy_bytes, inode_ids, prepare_independent,
                       require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json,
                       verification_scratch)
 import app_dependencies
@@ -36,20 +36,80 @@ from codex_log_retention import MAX_STARTUP_WINDOW_SECONDS
 
 SOCKET = '/run/nova-update/control.sock'
 ENGINE = '2026.9.2'
-ENGINES = {'2026.9.2', '2026.9.6'}
+ENGINES = {'2026.9.2', '2026.9.6', '2026.9.8'}
+ENGINE_UPGRADES = {('2026.9.2', '2026.9.6'), ('2026.9.6', '2026.9.8')}
+# Exact exports from the integrity-reviewed official npm packages. These are
+# engine-only profiles; Nova and its controller keep their configured Node.
+RUNTIME_PROFILES = {
+    '2026.9.6': {'codexVersion': '0.155.1', 'priorCompanions': ['2026.9.2', '2026.9.6'],
+        'migrationLock': 'doctor-sqlite-maintenance-lock-8wr_GXh1.mjs',
+        'stateDatabase': 'openclaw-state-db-quM4UOZq.mjs', 'agentDatabase': 'openclaw-agent-db-BrZi20Hq.mjs',
+        'config': 'io.runtime-hPN4FOBi.mjs', 'install': 'management-install-DV30z_Uq.mjs',
+        'records': 'installed-plugin-index-record-reader-B3UvF50J.mjs',
+        'health': 'missing-configured-plugin-install-CFxe2oL4.mjs', 'mutate': 'mutate-CgnqHZzJ.mjs',
+        'refresh': 'registry-refresh-CrMs7Cpq.mjs', 'discovery': 'discovery-D_5mAUI7.mjs'},
+    '2026.9.8': {'codexVersion': '0.158.0', 'priorCompanions': ['2026.9.6', '2026.9.8'],
+        'migrationLock': 'doctor-sqlite-maintenance-lock-BMIeQhbQ.mjs',
+        'stateDatabase': 'openclaw-state-db-CgJKJRub.mjs', 'agentDatabase': 'openclaw-agent-db-1XEgc9wj.mjs',
+        'config': 'io.runtime-BOdk1dW9.mjs', 'install': 'management-install-B7JeR2qp.mjs',
+        'records': 'installed-plugin-index-record-reader-BKR65EEF.mjs',
+        'health': 'missing-configured-plugin-install-DhX3BLYw.mjs', 'mutate': 'mutate-BrQ5d2nB.mjs',
+        'refresh': 'registry-refresh-1L9ixFIb.mjs', 'discovery': 'discovery-BePzXbRd.mjs'}
+}
 MAXIMUM = 128 * 1024 ** 2
 RUNTIME_MAXIMUM = 512 * 1024 ** 2
 RUNTIME_EXPANDED_MAXIMUM = 2 * 1024 ** 3
 SERVICE_ACTION_TIMEOUT_SECONDS = 120
 STARTUP_EXEC_TIMEOUT_SECONDS = 30
+MANAGED_COMPANION_98 = {
+    'runtimeArchiveSha256': '7af79b978af50b9a72997cd7869a0a2a928aff7b3ea5b16f2102f92b78875d3f',
+    'measurementSourceCommit': '5de260fbd7489dae71ac13e23c882f181352d0f1',
+    'measurementRunId': '37243823609',
+    'measuredLockSha256': '3453d00f8a02705f8be2eccb47871182f27ac69101fdc44dc03577a62dccd196',
+    'newProjectComponentBytes': 512 * 1024 ** 2,
+    'newProjectComponents': 2,
+    'cacheComponentBytes': 256 * 1024 ** 2,
+    'cacheComponents': 3,
+    'temporaryAndMetadataBytes': 256 * 1024 ** 2,
+    'estimateOnly': True,
+    'exactUnsampledPeakClaimed': False,
+    'repairBranchesMeasured': False,
+    'productionTransitiveGraphMatchClaimed': False,
+}
+
+
+def managed_companion_capacity(runtime, to_engine):
+    if runtime is None or to_engine != '2026.9.8':
+        return {'managedCompanionBytes': 0}
+    require(runtime['archiveSha256'] == MANAGED_COMPANION_98['runtimeArchiveSha256'],
+            'Managed companion capacity requires the reviewed exact 9.8 runtime.')
+    profile = dict(MANAGED_COMPANION_98)
+    required = (profile['newProjectComponentBytes'] * profile['newProjectComponents']
+                + profile['cacheComponentBytes'] * profile['cacheComponents']
+                + profile['temporaryAndMetadataBytes'])
+    return {'managedCompanionBytes': required, 'managedCompanionEstimate': profile}
+
+
+def require_capacity_filesystem(paths, volume):
+    device = volume.stat().st_dev
+    for path in paths:
+        existing = path
+        while not existing.exists() and not existing.is_symlink():
+            require(existing != existing.parent, 'Managed companion capacity path has no existing ancestor.')
+            existing = existing.parent
+        require(existing.resolve(strict=True).stat().st_dev == device,
+                'Managed companion storage needs the reviewed capacity filesystem.')
+
 NATIVE_MIGRATION = r'''
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 const root=process.argv[1], paths=JSON.parse(process.argv[2]);
+const profile=__RUNTIME_PROFILES__[process.argv[3]??'2026.9.6'];
+if(!profile)throw Error('Unreviewed native migration runtime');
 const load=name=>import(pathToFileURL(join(root,'dist',name)).href);
-const {withDoctorSqliteMaintenanceLock}=await load('doctor-sqlite-maintenance-lock-8wr_GXh1.mjs');
-const {repairOpenClawStateDatabaseSchema,closeOpenClawStateDatabaseAsync}=await load('openclaw-state-db-quM4UOZq.mjs');
-const {withAgentDatabaseMaintenanceLease,migrateOpenClawAgentDatabaseForMaintenance,closeOpenClawAgentDatabasesAsync}=await load('openclaw-agent-db-BrZi20Hq.mjs');
+const {withDoctorSqliteMaintenanceLock}=await load(profile.migrationLock);
+const {repairOpenClawStateDatabaseSchema,closeOpenClawStateDatabaseAsync}=await load(profile.stateDatabase);
+const {withAgentDatabaseMaintenanceLease,migrateOpenClawAgentDatabaseForMaintenance,closeOpenClawAgentDatabasesAsync}=await load(profile.agentDatabase);
 await withDoctorSqliteMaintenanceLock({env:process.env,operation:'reviewed Nova engine migration',protectedPaths:[join(process.env.OPENCLAW_STATE_DIR,'state','openclaw.sqlite'),...paths.map(x=>x.path)],run:async()=>{
  const report=repairOpenClawStateDatabaseSchema({env:process.env});
  if(report.warnings.length)throw Error('Shared schema migration was refused');
@@ -59,43 +119,52 @@ await withDoctorSqliteMaintenanceLock({env:process.env,operation:'reviewed Nova 
  await closeOpenClawAgentDatabasesAsync();
  await closeOpenClawStateDatabaseAsync();
 }});
-'''
+'''.replace('__RUNTIME_PROFILES__', json.dumps(RUNTIME_PROFILES, separators=(',', ':')))
 CODEX_SURFACE = 'd05cd8ba6d0e24e4e81ec442be300da755d818c74be47885f65932a1d5622801'
 CODEX_INSTALL = r'''
 import {pathToFileURL} from 'node:url';
-import {readFileSync,realpathSync} from 'node:fs';
+import {readFileSync,realpathSync,createReadStream} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {join,resolve,relative,isAbsolute,sep} from 'node:path';
 const root=process.argv[1], plugin=process.argv[2], surface=process.argv[3];
-const spec='@openclaw/codex@2026.9.6';
+const version=process.argv[4]??'2026.9.6', profile=__RUNTIME_PROFILES__[version];
+if(!profile)throw Error('Unreviewed Codex companion runtime');
+const spec='@openclaw/codex@'+version;
 const locked=JSON.parse(readFileSync(resolve(plugin,'../../..','package-lock.json'),'utf8')).packages?.['node_modules/@openclaw/codex'];
-if(locked?.version!=='2026.9.6'||typeof locked.integrity!=='string'||!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(locked.integrity))throw Error('The verified Codex npm resolution is missing');
-function verifyRecord(record){
- if(record?.source!=='npm'||record.spec!==spec||record.resolvedSpec!==spec||record.resolvedName!=='@openclaw/codex'||record.resolvedVersion!=='2026.9.6'||record.version!=='2026.9.6'||record.integrity!==locked.integrity||record.sourcePath!==undefined||(record.acceptedSurfaceHash!==undefined&&record.acceptedSurfaceHash!==surface))throw Error('The official Codex npm record did not verify');
+if(locked?.version!==version||typeof locked.integrity!=='string'||!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(locked.integrity))throw Error('The verified Codex npm resolution is missing');
+async function hashFile(path){const h=createHash('sha256');for await(const data of createReadStream(path))h.update(data);return h.digest('hex');}
+async function verifyRecord(record){
+ if(record?.source!=='npm'||record.spec!==spec||record.resolvedSpec!==spec||record.resolvedName!=='@openclaw/codex'||record.resolvedVersion!==version||record.version!==version||record.integrity!==locked.integrity||record.sourcePath!==undefined||(record.acceptedSurfaceHash!==undefined&&record.acceptedSurfaceHash!==surface))throw Error('The official Codex npm record did not verify');
  if(record.acceptedSurfaceHash!==undefined&&createHash('sha256').update(JSON.stringify(record.acceptedSurface??null)).digest('hex')!==surface)throw Error('The accepted Codex capability surface changed');
  const path=record.installPath;
  if(typeof path!=='string'||!isAbsolute(path)||realpathSync(path)!==path)throw Error('The official Codex payload was redirected');
  const rel=relative(join(process.env.OPENCLAW_STATE_DIR,'npm','projects'),path);
  if(isAbsolute(rel)||rel.startsWith('..'+sep)||!new RegExp('^[^/\\\\]+[/\\\\]node_modules[/\\\\]@openclaw[/\\\\]codex$').test(rel))throw Error('The official Codex payload is outside the managed npm store');
  const pkg=JSON.parse(readFileSync(join(path,'package.json'),'utf8'));
- if(pkg.name!=='@openclaw/codex'||pkg.version!=='2026.9.6')throw Error('The official Codex package changed');
+ if(pkg.name!=='@openclaw/codex'||pkg.version!==version)throw Error('The official Codex package changed');
+ if(version==='2026.9.8'){
+  if(pkg.dependencies?.['@openai/codex']!==profile.codexVersion)throw Error('The installed Codex dependency changed');
+  const relative='node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex';
+  const installedBinary=resolve(path,'../../..',relative), verifiedBinary=resolve(plugin,'../../..',relative);
+  if(realpathSync(installedBinary)!==installedBinary||await hashFile(installedBinary)!==await hashFile(verifiedBinary))throw Error('The installed Codex executable differs from its verified closure');
+ }
  return path;
 }
 const load=name=>import(pathToFileURL(join(root,'dist',name)).href);
-const {c:readConfigFileSnapshot}=await load('io.runtime-hPN4FOBi.mjs');
-const {installManagedPluginSource}=await load('management-install-DV30z_Uq.mjs');
-const {r:loadRecords}=await load('installed-plugin-index-record-reader-B3UvF50J.mjs');
-const {a:detectHealth}=await load('missing-configured-plugin-install-CFxe2oL4.mjs');
-const {r:replaceConfigFile}=await load('mutate-CgnqHZzJ.mjs');
-const {n:refreshPluginRegistry}=await load('registry-refresh-CrMs7Cpq.mjs');
-const {n:discoverPlugins}=await load('discovery-D_5mAUI7.mjs');
-const {closeOpenClawStateDatabaseAsync}=await load('openclaw-state-db-quM4UOZq.mjs');
+const {c:readConfigFileSnapshot}=await load(profile.config);
+const {installManagedPluginSource}=await load(profile.install);
+const {r:loadRecords}=await load(profile.records);
+const {a:detectHealth}=await load(profile.health);
+const {r:replaceConfigFile}=await load(profile.mutate);
+const {n:refreshPluginRegistry}=await load(profile.refresh);
+const {n:discoverPlugins}=await load(profile.discovery);
+const {closeOpenClawStateDatabaseAsync}=await load(profile.stateDatabase);
 try {
  const before=await loadRecords();
- if(!before.codex || !['2026.9.2','2026.9.6'].includes(before.codex.version))throw Error('The original Codex companion changed');
+ if(!before.codex || !profile.priorCompanions.includes(before.codex.version))throw Error('The original Codex companion changed');
  const originalConfig=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
- const alreadyOfficial=before.codex.source==='npm'&&before.codex.version==='2026.9.6';
- if(alreadyOfficial)verifyRecord(before.codex);
+ const alreadyOfficial=before.codex.source==='npm'&&before.codex.version===version;
+ if(alreadyOfficial)await verifyRecord(before.codex);
  else {
  const snapshot=await readConfigFileSnapshot();
  const result=await installManagedPluginSource({
@@ -114,7 +183,7 @@ try {
  if(!result.ok)throw Error('The official Codex companion was not installed');
  }
  const after=await loadRecords(), record=after.codex;
- const installed=verifyRecord(record);
+ const installed=await verifyRecord(record);
  for(const [id,record] of Object.entries(before))if(id!=='codex'&&JSON.stringify(record)!==JSON.stringify(after[id]))throw Error('An unrelated plugin record changed');
  if(Object.keys(before).length!==Object.keys(after).length)throw Error('The plugin inventory changed');
  const config=JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
@@ -135,10 +204,10 @@ try {
  if(candidates.length!==1||candidates[0].origin!=='global')throw Error('The installed Codex payload was not discovered');
  const issues=await detectHealth({cfg:finalConfig,env:process.env});
  if(issues.some(issue=>issue.pluginId==='codex'))throw Error('The Codex companion still requires repair');
- console.log(JSON.stringify({companionInstalled:true,pluginVersion:'2026.9.6',codexVersion:'0.155.1'}));
+ console.log(JSON.stringify({companionInstalled:true,pluginVersion:version,codexVersion:profile.codexVersion}));
 } finally { await closeOpenClawStateDatabaseAsync(); }
 process.exit(0);
-'''
+'''.replace('__RUNTIME_PROFILES__', json.dumps(RUNTIME_PROFILES, separators=(',', ':')))
 STARTUP_FILES = {'dist/service/apps/service/http.js', 'dist/service/apps/service/store.js',
                  'dist/service/apps/service/software-updates.js', 'dist/service/apps/service/runtime.js',
                  'dist/service/apps/service/update-native-startup.js', 'dist/service/apps/service/update-native-idle.js',
@@ -324,7 +393,7 @@ class Driver:
         self.from_engine, self.to_engine = compatibility['fromAgentVersion'], self.release['agentVersion']
         self.active_engine = self.from_engine
         require(self.from_engine in ENGINES and self.to_engine in ENGINES
-                and (self.from_engine == self.to_engine or (self.from_engine, self.to_engine) == ('2026.9.2', '2026.9.6'))
+                and (self.from_engine == self.to_engine or (self.from_engine, self.to_engine) in ENGINE_UPGRADES)
                 and (self.target_id != self.prior_id or self.from_engine != self.to_engine)
                 and compatibility['fromSchemaVersion'] == compatibility['toSchemaVersion'] == 55
                 and compatibility['reviewed'] is True and compatibility['gatewayProtocol'] == 4
@@ -591,7 +660,8 @@ class Driver:
                 and runtime['archiveSha256'] == signed['sha256'], 'The reviewed runtime does not match this signed pair.')
         companion = runtime['companion']
         require(isinstance(companion, dict) and set(companion) == {'pluginVersion', 'codexVersion', 'packageLockSha256', 'binarySha256'}
-                and companion['pluginVersion'] == '2026.9.6' and companion['codexVersion'] == '0.155.1'
+                and self.to_engine in RUNTIME_PROFILES and companion['pluginVersion'] == self.to_engine
+                and companion['codexVersion'] == RUNTIME_PROFILES[self.to_engine]['codexVersion']
                 and all(isinstance(companion[key], str) and re.fullmatch('[a-f0-9]{64}', companion[key])
                         for key in ('packageLockSha256', 'binarySha256')), 'The runtime companion is outside this reviewed pair.')
         require(self.agent.is_symlink() and self.agent_node.is_symlink() and self.agent != self.agent_node,
@@ -750,14 +820,14 @@ class Driver:
         self.workspace_mutated = True
         with (self.output / 'native-migration.log').open('xb') as log:
             subprocess.run([str(self.target_agent_node), '--input-type=module', '-e', NATIVE_MIGRATION,
-                            str(self.target_agent), json.dumps(agents, separators=(',', ':'))],
+                            str(self.target_agent), json.dumps(agents, separators=(',', ':')), self.to_engine],
                            cwd=root, env=env, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
         self.require_stopped()
         self.controller_hold()
         with (self.output / 'codex-companion-install.log').open('xb') as log:
             subprocess.run([str(self.target_agent_node), '--input-type=module', '-e', CODEX_INSTALL,
-                            str(self.target_agent), str(self.target_codex), CODEX_SURFACE],
+                            str(self.target_agent), str(self.target_codex), CODEX_SURFACE, self.to_engine],
                            cwd=root, env=env, user=user.pw_uid, group=user.pw_gid, extra_groups=[],
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
         self.require_stopped()
@@ -1130,7 +1200,7 @@ class Driver:
         self.closed_startup = record
 
     def log_retention_window(self):
-        if self.closed_startup is None or self.active_engine != '2026.9.6':
+        if self.closed_startup is None or self.active_engine not in {'2026.9.6', '2026.9.8'}:
             return None
         self.require_stopped()
         ready, ready_hash = self.ready_startup_record()
@@ -1169,13 +1239,21 @@ class Driver:
         return members
 
     def stage_app(self):
-        _, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine)
+        selected, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine)
         members = self.archive_members()
         source, source_inodes = inventory(self.data)
         baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
         required += self.application_dependency_storage_required()
         self.migration_storage_required = 0
+        self.managed_companion_capacity = managed_companion_capacity(self.runtime, self.to_engine)
+        companion_bytes = self.managed_companion_capacity['managedCompanionBytes']
+        if companion_bytes:
+            import pwd
+            service_home = pathlib.Path(pwd.getpwnam(self.settings['serviceUser']).pw_dir)
+            native_root = self.data / selected / 'openclaw-runtime'
+            require_capacity_filesystem((service_home, service_home / '.npm', native_root / 'tmp',
+                                         native_root / 'state' / 'npm' / 'projects'), self.recovery_root)
         if self.runtime is not None:
             required += self.runtime_storage_required()
             # Native23 rebuilds payload tables in SQLite transactions. Preserve
@@ -1185,7 +1263,9 @@ class Driver:
             self.migration_storage_required = 2 * native_bytes
             required += self.migration_storage_required
             require(self.runtime_root.stat().st_dev == self.recovery_root.stat().st_dev, 'Runtime and recovery capacity require the same reviewed filesystem.')
-        plan = staging_capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required)
+        plan = staging_capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required + companion_bytes)
+        plan.update(self.managed_companion_capacity)
+        plan['candidateBytes'] -= companion_bytes
         require(self.releases.stat().st_dev == self.recovery_root.stat().st_dev, 'Candidate and recovery capacity need a separately reviewed filesystem plan.')
         write_json(self.output / 'capacity.json', plan)
         self.stage_runtime()
@@ -1437,6 +1517,24 @@ class Driver:
                 self.session_binding_key[:] = b'\0' * len(self.session_binding_key)
                 self.session_binding_key = None
 
+    def snapshot_recovery(self):
+        def admit_plan(plan, source, source_inodes):
+            migration_bytes = getattr(self, 'migration_storage_required', 0)
+            companion = getattr(self, 'managed_companion_capacity', {'managedCompanionBytes': 0})
+            return {**plan, 'nativeMigrationBytes': migration_bytes, **companion,
+                    'requiredFreeBytes': plan['requiredFreeBytes'] + migration_bytes + companion['managedCompanionBytes']}
+
+        def begin_copy(plan):
+            write_json(self.output / 'closed-capacity.json', plan)
+            self.recovery.mkdir(mode=0o700)
+            sync_dir(self.recovery_root)
+
+        return snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped,
+                               admit_plan=admit_plan, begin_copy=begin_copy,
+                               protected_sizes=tuple(max(info.st_size, getattr(info, 'st_blocks', 0) * 512)
+                                                     for info in (path.stat() for path in self.config_files)),
+                               capacity_volume=self.recovery_root)
+
     def run_validated(self):
         closed_capacity_rejected = False
         try:
@@ -1446,7 +1544,6 @@ class Driver:
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             require(not self.recovery.exists() and not self.restore.exists() and not self.restore.is_symlink(), 'A previous recovery attempt must be retained.')
             self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
-            self.recovery.mkdir(mode=0o700)
             self.verify_configuration()
             # A failed stop is an uncertain mutation, so it can never produce unchanged.
             self.stop_attempted = True
@@ -1455,26 +1552,13 @@ class Driver:
             # The running native process owns disposable source captures.
             # Full snapshot/restore capacity is authoritative only after exit
             # has released them; no application or runtime switch occurred.
-            source, source_inodes = inventory(self.data)
-            baseline, baseline_inodes = inventory(self.baseline / 'workspace')
-            free = shutil.disk_usage(self.recovery_root).free
             try:
-                plan = capacity(source, source_inodes, baseline, baseline_inodes, free, 0)
-                migration_bytes = getattr(self, 'migration_storage_required', 0)
-                if free < plan['requiredFreeBytes'] + migration_bytes:
-                    raise InsufficientStorage('Closed recovery, independent restore, migration and operating reserve do not fit.')
+                self.snapshot_recovery()
             except InsufficientStorage:
+                require(not self.recovery.exists() and not self.recovery.is_symlink(),
+                        'Closed capacity refusal cannot follow snapshot creation.')
                 closed_capacity_rejected = True
                 raise
-            finally:
-                # These full-workspace maps are only needed for closed capacity.
-                # Release them before restarting either native process tree,
-                # including the unchanged-prior capacity-refusal path.
-                del source, source_inodes, baseline, baseline_inodes
-                gc.collect()
-            write_json(self.output / 'closed-capacity.json', {**plan, 'nativeMigrationBytes': migration_bytes})
-            self.require_stopped()
-            snapshot_closed(self.data, self.recovery / 'workspace', self.baseline / 'workspace', self.require_stopped)
             saved_state(self.recovery / 'workspace', self.data, restored=True)
             if getattr(self, 'workspace_key_credential', None) is not None:
                 self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
@@ -1482,7 +1566,8 @@ class Driver:
                 shutil.copy2(path, self.recovery / ('protected-' + str(number)))
                 require(digest(path) == digest(self.recovery / ('protected-' + str(number))), 'Protected configuration copy did not verify.')
             self.verify_configuration()
-            independent = sum(item['allocated'] for item in inventory(self.recovery / 'workspace')[1].values())
+            allocation = {}
+            independent = independent_copy_bytes(inventory(self.recovery / 'workspace', allocation=allocation)[1], allocation)
             require(shutil.disk_usage(self.recovery_root).free >= independent + RESERVE + ALLOWANCE,
                     'Verified snapshot no longer leaves full independent restore capacity and reserve.')
             if getattr(self, 'adopting_prior', False):

@@ -6,7 +6,7 @@ import { dirname, basename, isAbsolute, join } from 'node:path';
 import { canonical } from '../../../packages/domain/contracts.js';
 import { sourcePluginId, supportsSourceTransferRuntime, sourceTransferLimit, sourceStageSchema, sourceMime, type SourceReference } from '../../../packages/domain/source-transfer.js';
 
-// Public OpenClaw 2026.9.2/2026.9.6 SDK subset. This stages bytes only; it cannot
+// Public OpenClaw 2026.9.2/2026.9.6/2026.9.8 SDK subset. This stages bytes only; it cannot
 // execute an agent, change session settings, or write native registry tables.
 export type SourcePluginApi = {
   registrationMode: string; pluginConfig?: Record<string, unknown>;

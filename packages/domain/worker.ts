@@ -4,7 +4,7 @@ import { classifyWorkerFailure, workerFailureSchema } from './worker-failure.js'
 
 export const workerContract = 2;
 export const workerRuntimeVersion = '2026.9.2';
-export const workerRuntimeVersions = ['2026.9.2', '2026.9.6'] as const;
+export const workerRuntimeVersions = ['2026.9.2', '2026.9.6', '2026.9.8'] as const;
 export const supportsWorkerRuntime = (version: string) => workerRuntimeVersions.some(value => value === version);
 export const workerPluginId = 'edition3-worker';
 const hash = z.string().regex(/^[a-f0-9]{64}$/);

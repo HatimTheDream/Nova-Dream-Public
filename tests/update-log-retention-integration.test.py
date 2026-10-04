@@ -27,7 +27,9 @@ END = START + 10
 
 @unittest.skipUnless(sys.platform == 'linux', 'Requires real Linux closed SQLite copies and runtime file identity.')
 class LogRetentionIntegrationTests(unittest.TestCase):
+    engine_version = '2026.9.6'
     def setUp(self):
+        self.codex_version, self.binary_sha256, self.binary_bytes, self.surface = retention.RUNTIME_ATTESTATIONS[self.engine_version]
         self.temporary = tempfile.TemporaryDirectory(prefix='nova-retention-integration-')
         self.root = Path(self.temporary.name).resolve()
         assert self.root.is_relative_to(Path(tempfile.gettempdir()).resolve())
@@ -65,19 +67,19 @@ class LogRetentionIntegrationTests(unittest.TestCase):
         modules = self.live / native / 'state' / 'npm' / 'projects' / 'openclaw-codex-0123456789' / 'node_modules'
         installed = modules / '@openclaw' / 'codex'
         for path, name, version in (
-            (installed, '@openclaw/codex', '2026.9.6'),
-            (modules / '@openai' / 'codex', '@openai/codex', '0.155.1'),
-            (modules / '@openai' / 'codex-linux-x64', '@openai/codex', '0.155.1-linux-x64')):
+            (installed, '@openclaw/codex', self.engine_version),
+            (modules / '@openai' / 'codex', '@openai/codex', self.codex_version),
+            (modules / '@openai' / 'codex-linux-x64', '@openai/codex', self.codex_version+'-linux-x64')):
             path.mkdir(parents=True)
             (path / 'package.json').write_text(json.dumps(dict(name=name, version=version)))
         self.binary = modules / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
         self.binary.parent.mkdir(parents=True)
         with self.binary.open('wb') as stream:
-            stream.truncate(retention.CODEX_BINARY_BYTES)
-        record = dict(source='npm', spec='@openclaw/codex@2026.9.6', resolvedSpec='@openclaw/codex@2026.9.6',
-            version='2026.9.6', resolvedVersion='2026.9.6', resolvedName='@openclaw/codex',
+            stream.truncate(self.binary_bytes)
+        record = dict(source='npm', spec='@openclaw/codex@'+self.engine_version, resolvedSpec='@openclaw/codex@'+self.engine_version,
+            version=self.engine_version, resolvedVersion=self.engine_version, resolvedName='@openclaw/codex',
             installPath=str(installed), integrity='sha512-Zml4dHVyZQ==')
-        self.index = dict(revision=1, index=dict(version=1, warning='', hostContractVersion='2026.9.6',
+        self.index = dict(revision=1, index=dict(version=1, warning='', hostContractVersion=self.engine_version,
             compatRegistryVersion='a' * 64, migrationVersion=1, policyHash='b' * 64, generatedAtMs=1,
             installRecords={'codex': record}, plugins=[], diagnostics=[]))
         self.write_index()
@@ -93,7 +95,7 @@ class LogRetentionIntegrationTests(unittest.TestCase):
         def synthetic_binary_digest(stream, algorithm, **kwargs):
             if isinstance(stream.name, (str, bytes)) and Path(stream.name) == self.binary:
                 self.binary_hash_calls += 1
-                return SimpleNamespace(hexdigest=lambda: retention.CODEX_BINARY_SHA256)
+                return SimpleNamespace(hexdigest=lambda: self.binary_sha256)
             return original_digest(stream, algorithm, **kwargs)
         self.digest_patch = patch.object(retention.hashlib, 'file_digest', side_effect=synthetic_binary_digest)
         self.digest_patch.start()
@@ -115,10 +117,10 @@ class LogRetentionIntegrationTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.live / self.logs)) as connection, connection:
             connection.executescript(sql)
 
-    def verify(self, window=(START, END), from_version='2026.9.6'):
+    def verify(self, window=(START, END), from_version=None):
         with recovery.verification_scratch(self.scratch):
             return recovery.retained_embedded_databases(self.snapshot, self.live, self.selected, self.active,
-                from_version, '2026.9.6', log_retention_window=window, log_retention_reports=self.reports)
+                from_version or self.engine_version, self.engine_version, log_retention_window=window, log_retention_reports=self.reports)
 
     def sqlite_identity(self):
         return {(side, relative): recovery.sqlite_source_identity(root / relative)
@@ -132,7 +134,7 @@ class LogRetentionIntegrationTests(unittest.TestCase):
         self.assertEqual(self.binary_hash_calls, 1)
         self.assertEqual(len(self.reports), 1)
         self.assertEqual(self.reports[0]['removedRows'], 1)
-        self.assertEqual(self.reports[0]['companion']['binarySha256'], retention.CODEX_BINARY_SHA256)
+        self.assertEqual(self.reports[0]['companion']['binarySha256'], self.binary_sha256)
         self.assertEqual(self.sqlite_identity(), before)
 
     def test_without_durable_window_deletion_remains_blocked(self):
@@ -177,6 +179,16 @@ class LogRetentionIntegrationTests(unittest.TestCase):
         self.change_logs("insert into logs values(3,865002,0,'INFO','fixture','new',null,null,null,null,null,10)")
         self.assertEqual(self.verify(), {self.logs, self.receipts})
         self.assertEqual(self.binary_hash_calls, 0)
+
+
+class Log158RetentionIntegrationTests(LogRetentionIntegrationTests):
+    engine_version = '2026.9.8'
+
+    def test_exact_engine_upgrade_pruning_is_attested_to_target_binary(self):
+        self.change_logs('delete from logs where id=1')
+        self.assertEqual(self.verify(from_version='2026.9.6'), {self.logs, self.receipts})
+        self.assertEqual(self.reports[0]['companion']['codexVersion'], '0.158.0')
+        self.assertEqual(self.reports[0]['rule'], 'codex-0.158.0-startup-10-days')
 
 
 if __name__ == '__main__':

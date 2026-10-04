@@ -52,8 +52,8 @@ function fixture(t: TestContext) {
   return { store, gateway, conversation, operation, draft, device, attachment, seed, start };
 }
 
-test('lost acknowledgement survives restart, finds the original durable receipt and never resends', async t => {
-  const f = fixture(t), original = f.start();
+for(const version of ['2026.9.6','2026.9.8'])test(`${version}: lost acknowledgement survives restart, finds the original durable receipt and never resends`, async t => {
+  const f = fixture(t); f.gateway.version=version; const original = f.start();
   const submission = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, draftId: f.draft.id, draftRevision: f.draft.revision, projectRevision: 0 };
   const submitted = original.submit(f.device, submission);
   for (let n = 0; n < 30 && original.operations().find(op => op.id === submitted.id)?.state !== 'unknown'; n++) await flush();
@@ -78,9 +78,9 @@ test('lost acknowledgement survives restart, finds the original durable receipt 
   assert.equal(f.gateway.calls.some(call => call.method === 'chat.history' && call.params.sessionId && !call.params.messageId), false);
 });
 
-test('pending input receipt establishes identity but does not claim execution or completion', async t => {
-  const f = fixture(t); f.seed(); const service = f.start();
-  f.gateway.receipts = [{ runId: f.operation.requestId, state: 'pending' }];
+for(const version of ['2026.9.6','2026.9.8'])test(`${version}: queued input receipt establishes identity without claiming execution or completion`, async t => {
+  const f = fixture(t); f.gateway.version=version; f.seed(); const service = f.start();
+  f.gateway.receipts = [{ runId: f.operation.requestId, state: 'pending', queued:true }];
   await service.reconcile(f.conversation.id);
   const recovered = service.operations()[0];
   assert.equal(recovered.nativeRunId, f.operation.requestId); assert.equal(recovered.state, 'unknown');
@@ -122,8 +122,8 @@ for (const invalid of ['missing', 'wrong-run', 'malformed-state', 'consumed-with
   });
 }
 
-test('an unsupported runtime leaves the receipt lookup disabled and original work unchanged', async t => {
-  const f = fixture(t); f.seed(); f.gateway.version = '2026.9.7'; const service = f.start();
+for(const version of ['2026.9.7','2026.9.9'])test(`${version}: unsupported runtime leaves receipt lookup disabled and original work unchanged`, async t => {
+  const f = fixture(t); f.seed(); f.gateway.version = version; const service = f.start();
   f.gateway.receipts = [{ runId: f.operation.requestId, state: 'pending' }];
   await service.reconcile(f.conversation.id);
   assert.deepEqual(service.operations()[0], f.operation);

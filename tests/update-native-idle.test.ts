@@ -17,11 +17,11 @@ import { updateMaintenanceBlockers } from '../apps/service/update-maintenance.js
 
 function setup(t:TestContext){
   const root=mkdtempSync(join(tmpdir(),'nova-native-lease-')),store=new Store(join(root,'app'));let time=Date.now();
-  let owned={epoch:store.epoch,pid:112,url:'ws://127.0.0.1:55321',generation:randomUUID(),startedAt:time-5000,version:'2026.9.2' as '2026.9.2'|'2026.9.6'},reportedVersion:string|undefined;
+  let owned={epoch:store.epoch,pid:112,url:'ws://127.0.0.1:55321',generation:randomUUID(),startedAt:time-5000,version:'2026.9.2' as '2026.9.2'|'2026.9.6'|'2026.9.8'},reportedVersion:string|undefined;
   let state:AssistantConnection={state:'ready',url:owned.url,generation:owned.generation,message:'',grantedScopes:['operator.read','operator.admin'],methods:['system.info','gateway.suspend.prepare','gateway.suspend.status','gateway.suspend.resume'],modelAuthReady:false};
   let current:{requestId:string;suspensionId:string;expiresAtMs:number}|undefined,busy=false,drop=false,prepares=0,resumes=0,systems=0;
   let transform=(method:string,result:Record<string,unknown>)=>result;
-  const response=(method:string,result:Record<string,unknown>)=>transform(method,owned.version==='2026.9.6'&&method==='gateway.suspend.prepare'?{...result,writeCustody:[]}:result);
+  const response=(method:string,result:Record<string,unknown>)=>transform(method,['2026.9.6','2026.9.8'].includes(owned.version)&&method==='gateway.suspend.prepare'?{...result,writeCustody:[]}:result);
   const requests:string[]=[];const listeners=new Set<(event:EventFrame)=>void>();
   const factory=()=>({start(){},async stop(){},status:()=>state,serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:reportedVersion??owned.version}),subscribe(listener:(event:EventFrame)=>void){listeners.add(listener);return()=>listeners.delete(listener);},async request<T>(method:string,raw:unknown):Promise<T>{
     const input=raw as any;if(current&&current.expiresAtMs<=time)current=undefined;
@@ -40,11 +40,11 @@ function setup(t:TestContext){
   const assistant={status:()=>({...state,grantedScopes:writeScope?['operator.read','operator.write']:['operator.read'],modelAuthReady:modelReady}),serviceInfo:()=>({id:'openclaw',name:'OpenClaw',state:'ready' as const,version:owned.version}),async models(){catalogReads++;assert.equal(current,undefined,'Models must be read only after native resume');return [];}};
   const runtime={updateIdentity:()=>owned,updateStartupBlockers:()=>[] as {code:string;message:string}[]};const lease=new NativeUpdateLease(store,runtime,factory,()=>time,assistant);store.setUpdateMaintenanceHeld(true);
   t.after(async()=>{await lease.close();store.close();rmSync(root,{recursive:true,force:true});});
-  return {root,store,lease,runtime,factory,assistant,response:(modify:typeof transform)=>transform=modify,modelReady:(ready:boolean)=>modelReady=ready,writeScope:(granted:boolean)=>writeScope=granted,catalogReads:()=>catalogReads,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
+  return {root,store,lease,runtime,factory,assistant,response:(modify:typeof transform)=>transform=modify,modelReady:(ready:boolean)=>modelReady=ready,writeScope:(granted:boolean)=>writeScope=granted,catalogReads:()=>catalogReads,job:randomUUID(),requests,now:()=>time,advance:(ms:number)=>time+=ms,busy:(value=true)=>busy=value,drop:()=>drop=true,counts:()=>({prepares,resumes,systems}),version:(version:'2026.9.2'|'2026.9.6'|'2026.9.8')=>owned={...owned,version},reportVersion:(version:string|undefined)=>reportedVersion=version,disconnect:()=>state={...state,state:'disconnected'},event:()=>{for(const listener of listeners)listener({type:'event',event:'gateway.suspension',payload:{phase:'accepting'}});},restart:()=>{owned={...owned,pid:113,startedAt:time};current=undefined;},changeGeneration:()=>{owned={...owned,generation:randomUUID()};state={...state,generation:owned.generation};}};
 }
 
-test('9.6 ready custody response acquires, renews and releases only after authenticated readiness',async t=>{
-  const f=setup(t);f.version('2026.9.6');
+for(const version of ['2026.9.6','2026.9.8'] as const)test(`${version} ready custody response acquires, renews and releases only after authenticated readiness`,async t=>{
+  const f=setup(t);f.version(version);
   assert.deepEqual(await f.lease.acquire(f.job),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,true);
   const receipt=f.store.internalRead<any>('update:native-lease:'+f.job);
   f.advance(30000);assert.deepEqual(await f.lease.acquire(f.job),[]);
@@ -57,10 +57,10 @@ test('9.6 ready custody response acquires, renews and releases only after authen
   assert.equal(f.catalogReads(),2);assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
 });
 
-test('9.6 busy custody facts remain blockers and never establish an idle lease',async t=>{
-  const f=setup(t);f.version('2026.9.6');f.busy();
+for(const version of ['2026.9.6','2026.9.8'] as const)test(`${version} busy custody facts remain blockers and never establish an idle lease`,async t=>{
+  const f=setup(t);f.version(version);f.busy();
   for(const reason of ['active-work','gateway-draining']){
-    // These are the four phases emitted by the pinned 9.6 snapshot producer.
+    // These are the four phases emitted by both reviewed snapshot producers.
     f.response((_,result)=>({...result,reason,activeCount:5,writeCustody:[
       {phase:'backup',count:1},{phase:'migration',count:2},{phase:'session-mutation',count:1},{phase:'terminal-persistence',count:1},
     ]}));
@@ -71,11 +71,15 @@ test('9.6 busy custody facts remain blockers and never establish an idle lease',
 });
 
 test('custody compatibility rejects malformed, active and unknown ready facts without broadening 9.2',async t=>{
-  const cases:[string,'2026.9.2'|'2026.9.6',(result:Record<string,unknown>)=>Record<string,unknown>][]=[
+  const cases:[string,'2026.9.2'|'2026.9.6'|'2026.9.8',(result:Record<string,unknown>)=>Record<string,unknown>][]=[
     ['missing custody','2026.9.6',({writeCustody,...rest})=>rest],
     ['active custody','2026.9.6',result=>({...result,writeCustody:[{phase:'backup',count:1}]})],
     ['malformed custody','2026.9.6',result=>({...result,writeCustody:null})],
     ['unknown field','2026.9.6',result=>({...result,newAuthority:true})],
+    ['9.8 missing custody','2026.9.8',({writeCustody,...rest})=>rest],
+    ['9.8 active custody','2026.9.8',result=>({...result,writeCustody:[{phase:'migration',count:1}]})],
+    ['9.8 malformed custody','2026.9.8',result=>({...result,writeCustody:null})],
+    ['9.8 unknown field','2026.9.8',result=>({...result,newAuthority:true})],
     ['old protocol extra field','2026.9.2',result=>({...result,writeCustody:[]})],
   ];
   for(const [name,version,modify]of cases)await t.test(name,async child=>{
@@ -85,8 +89,8 @@ test('custody compatibility rejects malformed, active and unknown ready facts wi
   });
 });
 
-test('9.6 busy custody validates phase, positive count, uniqueness and total activity',async t=>{
-  const f=setup(t);f.version('2026.9.6');f.busy();
+for(const version of ['2026.9.6','2026.9.8'] as const)test(`${version} busy custody validates phase, positive count, uniqueness and total activity`,async t=>{
+  const f=setup(t);f.version(version);f.busy();
   for(const writeCustody of [
     [{phase:'unreviewed',count:1}],[{phase:'backup',count:0}],[{phase:'backup',count:-1}],
     [{phase:'backup',count:1.5}],[{phase:'backup',count:1,extra:true}],
@@ -97,8 +101,8 @@ test('9.6 busy custody validates phase, positive count, uniqueness and total act
   }
 });
 
-test('9.6 resume retains its strict reviewed response contract',async t=>{
-  const f=setup(t);f.version('2026.9.6');assert.deepEqual(await f.lease.acquire(f.job),[]);
+for(const version of ['2026.9.6','2026.9.8'] as const)test(`${version} resume retains its strict reviewed response contract`,async t=>{
+  const f=setup(t);f.version(version);assert.deepEqual(await f.lease.acquire(f.job),[]);
   f.response((method,result)=>method==='gateway.suspend.resume'?{...result,writeCustody:[]}:result);
   assert.equal((await f.lease.release(f.job))[0].code,'native_unknown');assert.equal(f.catalogReads(),0);
   assert.equal(f.store.internalRead<any>('update:native-lease:'+f.job).state,'releasing');
@@ -162,8 +166,8 @@ test('native global lease renews and never uses terminal destruction or leaks ta
   assert.deepEqual(f.lease.pendingJobIds(),[f.job]);assert.deepEqual(await f.lease.release(f.job),[]);assert.deepEqual(f.lease.pendingJobIds(),[]);assert.equal(f.lease.snapshot(f.job).nativeSuspended,false);
   f.busy();const result=await f.lease.acquire(randomUUID());assert.equal(result[0].code,'native_busy');assert.equal(JSON.stringify(result).includes('private task title'),false);
 });
-test('lost prepare reply and app helper restart recover and release only the original native lease',async t=>{
-  const f=setup(t);f.drop();assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.deepEqual(f.lease.pendingJobIds(),[f.job]);
+for(const version of ['2026.9.2','2026.9.8'] as const)test(`${version}: lost prepare reply and app helper restart recover and release only the original native lease`,async t=>{
+  const f=setup(t);f.version(version);f.drop();assert.equal((await f.lease.acquire(f.job))[0].code,'native_unknown');assert.deepEqual(f.lease.pendingJobIds(),[f.job]);
   const resumed=new NativeUpdateLease(f.store,f.runtime,f.factory,f.now,f.assistant);t.after(()=>resumed.close());assert.equal(resumed.snapshot(f.job).nativeSuspended,false);
   assert.deepEqual(await resumed.release(f.job),[]);assert.equal(new Set(f.requests).size,1);assert.equal(f.counts().resumes,1);assert.equal(f.counts().systems,1);
 });
@@ -240,7 +244,7 @@ test('maintenance startup reads actual configuration and native journals without
   writeFileSync(path,JSON.stringify({...configuration,cron:{enabled:true}}));assert.equal(qualifyNativeUpdateStartup(runtime,service).length,1);
 });
 
-test('9.6 startup accepts only its exact schema pair and settled new journals, preserving terminal history',t=>{
+for(const [version,agentSchema,sharedSchema] of [['2026.9.6',23,18],['2026.9.8',24,19]] as const)test(`${version} startup accepts only its exact schema pair and settled journals, preserving terminal history`,t=>{
   const root=mkdtempSync(join(tmpdir(),'nova-native-startup-96-')),service=join(root,'service'),runtime=join(root,'runtime');
   mkdirSync(join(runtime,'state','agents','main','agent'),{recursive:true});mkdirSync(join(runtime,'state','state'));
   const config={gateway:{bind:'loopback',controlUi:{enabled:false}},agents:{defaults:{heartbeat:{every:'0m'}},entries:{main:{}}},cron:{enabled:false},update:{checkOnStart:false,auto:{enabled:false}},models:{catalogRefresh:{enabled:false}},plugins:{allow:['openai','codex'],entries:{}}};
@@ -251,12 +255,18 @@ test('9.6 startup accepts only its exact schema pair and settled new journals, p
   agent.prepare('INSERT INTO session_nodes VALUES (?,?)').run('failed',JSON.stringify({status:'failed',abortedLastRun:true,restartRecoveryRuns:[{runId:'retained'}]}));
   shared.exec("PRAGMA user_version=18;CREATE TABLE node_worker_prepared_workspaces(state TEXT);CREATE TABLE node_worker_launch_cleanup(lineage_settled INTEGER);CREATE TABLE worktree_templates(status TEXT);CREATE TABLE github_repository_publication_requests(status TEXT,effect_state TEXT);CREATE TABLE local_workspace_projections(pending_ref TEXT,pending_target TEXT,paused_runtimes_json TEXT,journal_json TEXT,journal_pack BLOB);CREATE TABLE worker_transcript_commits(state TEXT);INSERT INTO node_worker_prepared_workspaces VALUES ('retired');INSERT INTO node_worker_launch_cleanup VALUES (1);INSERT INTO worktree_templates VALUES ('ready');INSERT INTO github_repository_publication_requests VALUES ('published','observed');INSERT INTO local_workspace_projections VALUES (NULL,NULL,NULL,NULL,NULL);INSERT INTO worker_transcript_commits VALUES ('terminal');");
   t.after(()=>{agent.close();shared.close();rmSync(root,{recursive:true,force:true});});
-  const check=()=>qualifyNativeUpdateStartup(runtime,service,undefined,'2026.9.6');
+  agent.exec(`PRAGMA user_version=${agentSchema}`);shared.exec(`PRAGMA user_version=${sharedSchema}`);
+  if(version==='2026.9.8'){
+    agent.exec("CREATE TABLE session_entry_snapshots(session_key TEXT,snapshot_revision INTEGER,entry_json TEXT);INSERT INTO session_entry_snapshots VALUES ('kept',4,'{\"status\":\"failed\"}');");
+    shared.exec("CREATE TABLE user_profile_identities(identity_id TEXT,authorization_id TEXT,authorization_basis_json TEXT);INSERT INTO user_profile_identities VALUES ('retained',NULL,NULL);CREATE TABLE worktrees(gc_protection_json TEXT);INSERT INTO worktrees VALUES ('{\"retained\":true}');");
+  }
+  const check=()=>qualifyNativeUpdateStartup(runtime,service,undefined,version);
   const before=[configPath,agentPath,sharedPath].map(path=>readFileSync(path));
   assert.deepEqual(check(),[]);assert.deepEqual([configPath,agentPath,sharedPath].map(path=>readFileSync(path)),before);
   assert.equal(qualifyNativeUpdateStartup(runtime,service).length,1,'New schemas require the matching verified runtime version.');
-  shared.exec('PRAGMA user_version=15');assert.equal(check().length,1);shared.exec('PRAGMA user_version=18');
-  agent.exec('PRAGMA user_version=19');assert.equal(check().length,1);agent.exec('PRAGMA user_version=23');
+  assert.equal(qualifyNativeUpdateStartup(runtime,service,undefined,'2026.9.9' as never).length,1,'A newer version is never inferred from its schema.');
+  shared.exec('PRAGMA user_version=15');assert.equal(check().length,1);shared.exec(`PRAGMA user_version=${sharedSchema}`);
+  agent.exec('PRAGMA user_version=19');assert.equal(check().length,1);agent.exec(`PRAGMA user_version=${agentSchema}`);
   for(const [table,column,busy,settled]of [
     ['node_worker_prepared_workspaces','state','bound','retired'],
     ['node_worker_prepared_workspaces','state','retiring','retired'],
@@ -273,6 +283,11 @@ test('9.6 startup accepts only its exact schema pair and settled new journals, p
   }
   agent.exec("UPDATE session_nodes SET status='running'");assert.equal(check().length,1);
   assert.equal(agent.prepare('SELECT outcome_json FROM session_input_completions').get()?.outcome_json,'{"error":"original outcome"}');
+  if(version==='2026.9.8'){
+    assert.equal(agent.prepare('SELECT snapshot_revision FROM session_entry_snapshots').get()?.snapshot_revision,4);
+    assert.equal(shared.prepare('SELECT authorization_id FROM user_profile_identities').get()?.authorization_id,null);
+    assert.equal(shared.prepare('SELECT gc_protection_json FROM worktrees').get()?.gc_protection_json,'{"retained":true}');
+  }
 });
 
 test('a held startup with unsupported native automation returns status without launching or rewriting configuration',async()=>{

@@ -12,11 +12,11 @@ import { ManagedRuntime, needsShortRuntimeTemporaryDirectory } from '../apps/ser
 import { ChatGptAccount } from '../apps/service/chatgpt-account.js';
 import type { AssistantConnection } from '../packages/domain/assistant.js';
 
-test('reconnecting the owned runtime reuses its live process and leaves a healthy connection alone', async () => {
+for(const version of ['2026.9.2','2026.9.8'])test(`${version}: reconnecting the owned runtime reuses its live process and leaves a healthy connection alone`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'edition3-runtime-'));
   const entry = join(directory, 'openclaw.mjs');
   const previous = process.env.E3_OPENCLAW_ENTRY;
-  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'openclaw', version: '2026.9.2' }));
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'openclaw', version }));
   // A local readiness fixture, not evidence of the actual OpenClaw provider.
   writeFileSync(entry, `import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -82,6 +82,21 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     if (previous === undefined) delete process.env.E3_OPENCLAW_ENTRY; else process.env.E3_OPENCLAW_ENTRY = previous;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('an unreviewed future runtime is rejected before process launch or host connection',async()=>{
+  const directory=mkdtempSync(join(tmpdir(),'edition3-runtime-unreviewed-')),previous=process.env.E3_OPENCLAW_ENTRY;
+  const entry=join(directory,'openclaw.mjs'),marker=join(directory,'unexpected-launch');
+  writeFileSync(join(directory,'package.json'),JSON.stringify({name:'openclaw',version:'2026.9.9'}));
+  writeFileSync(entry,`import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'started');`);
+  process.env.E3_OPENCLAW_ENTRY=entry;
+  const store=new Store(join(directory,'workspace'));let connections=0;
+  const gateway={status:():AssistantConnection=>({state:'disconnected',message:'',methods:[],grantedScopes:[],modelAuthReady:false}),async configure(){connections++;throw Error('must not connect');}};
+  const runtime=new ManagedRuntime(store,gateway);
+  try{
+    assert.equal((await runtime.start()).state,'error');assert.equal(connections,0);assert.equal(existsSync(marker),false);
+    assert.equal(runtime.status().canSignIn,false);assert.equal(store.internalRead('runtime:configuration'),undefined);
+  }finally{await runtime.stop();store.close();if(previous===undefined)delete process.env.E3_OPENCLAW_ENTRY;else process.env.E3_OPENCLAW_ENTRY=previous;rmSync(directory,{recursive:true,force:true});}
 });
 
 test('recovered Linux workspaces need a short temporary socket path without changing durable profile paths',()=>{
