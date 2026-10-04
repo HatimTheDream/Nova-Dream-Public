@@ -1,3 +1,13 @@
+## [2.1.3] — 2026-10-04
+
+### Improved
+- Compact Assistant history toolbar keeps Chat, Work, Search, New and Close together while preserving room for larger text.
+- Narrow-window navigation shows more original-size raised icon buttons in a sliding bottom bar. Swipe, drag or use the keyboard to reach every module and Settings in the saved order.
+- Simplified module header and clearer close controls keep navigation consistent without changing drafts or conversation behavior.
+
+### Fixed
+- Dragging the bottom bar does not open a destination; keyboard focus reveals off-screen buttons and retains their labels.
+
 ## [2.1.2] — 2026-10-03
 
 - Automatically refreshes Home's upcoming calendar range and follows in-progress reads, so an expired cache does not leave the schedule warning stuck. Saved calendar visibility choices are preserved.

@@ -1,14 +1,14 @@
 /* Navigation changes shape with available width, never its saved order.
    All destinations use the shared raised button face, with square icon geometry. */
 :root .app-shell > .bottom-navigation { display:none; }
-:root :is(.primary-rail,.bottom-navigation,.navigation-destinations) button[data-navigation-label] {
+:root :is(.primary-rail,.bottom-navigation) button[data-navigation-label] {
   --button-radius:12px; --button-compact-depth:3px;
   display:inline-flex; align-items:center; justify-content:center; flex:none; gap:0;
   width:var(--app-tile-size); min-width:var(--app-tile-size); max-width:var(--app-tile-size);
   height:var(--app-tile-size); min-height:var(--app-tile-size); max-height:var(--app-tile-size);
   padding:0; border-radius:var(--button-radius); corner-shape:round;
 }
-:root :is(.bottom-navigation,.navigation-destinations) button.active {
+:root .bottom-navigation button.active {
   --button-fill:var(--action); --button-edge:var(--action-edge); --button-border:transparent; --button-border-hover:transparent;
   background:var(--button-fill); border-color:var(--button-border); color:var(--action-ink);
 }
@@ -16,12 +16,7 @@
 :root .primary-rail .nav-item-wrap:last-child { margin-bottom:0; }
 :root .primary-rail .rail-modules { padding-block:var(--space-2); }
 :root .primary-rail .nav-item:focus-visible { outline-offset:-4px; }
-.bottom-navigation-more-icon { display:inline-flex; position:relative; }
-.navigation-destinations {
-  display:grid; grid-template-columns:repeat(auto-fit,minmax(56px,1fr));
-  justify-items:center; align-items:center; gap:var(--space-4); padding-block:var(--space-2);
-}
-:root .navigation-destinations > button[data-navigation-label] { --app-tile-size:48px; }
+.bottom-navigation-settings-icon { display:inline-flex; position:relative; }
 .navigation-label {
   position:fixed; z-index:200; width:max-content; max-width:min(240px,calc(100vw - 24px));
   border:1px solid var(--line); border-radius:8px; padding:6px 10px;
@@ -39,16 +34,38 @@
   :root .app-shell > .topbar .navigation-toggle { display:none; }
   :root .app-shell > .workspace { grid-area:2 / 1; min-width:0; min-height:0; }
   :root .app-shell > .bottom-navigation {
-    grid-area:3 / 1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr));
-    justify-items:center; align-items:center; gap:var(--space-2); min-width:0; position:relative;
-    padding:var(--space-3) max(var(--space-3),env(safe-area-inset-right)) max(var(--space-4),env(safe-area-inset-bottom)) max(var(--space-3),env(safe-area-inset-left));
+    grid-area:3 / 1; display:block; min-width:0; position:relative;
+    height:calc(76px + env(safe-area-inset-bottom));
+    padding:0 max(14px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(14px,env(safe-area-inset-left));
     border-top:var(--surface-border); background:var(--surface);
   }
-  :root .bottom-navigation > button.bottom-navigation-item { --app-tile-size:48px; margin:0; }
-  :root .bottom-navigation > button.bottom-navigation-item:focus-visible { outline-offset:3px; }
+  .bottom-navigation-strip {
+    display:flex; gap:8px; overflow-x:auto; overflow-y:hidden; min-width:0;
+    padding:13px 0 7px; scroll-snap-type:x proximity; scrollbar-width:none;
+    touch-action:pan-x; overscroll-behavior-x:contain; user-select:none;
+  }
+  .bottom-navigation-strip::-webkit-scrollbar { display:none; }
+  :root .bottom-navigation button.bottom-navigation-item {
+    --app-tile-size:44px; margin:0; scroll-snap-align:start;
+  }
+  :root .bottom-navigation button.bottom-navigation-item:focus-visible { outline-offset:-5px; }
+  .bottom-navigation-strip.dragging { scroll-snap-type:none; cursor:grabbing; }
+  .bottom-navigation-strip.dragging > button { cursor:grabbing; }
+  .bottom-navigation-progress {
+    display:block; position:absolute; bottom:calc(8px + env(safe-area-inset-bottom));
+    left:50%; translate:-50% 0; width:58px; height:3px; border-radius:4px;
+    background:var(--line); pointer-events:none;
+  }
+  .bottom-navigation-progress[hidden] { display:none; }
+  .bottom-navigation-progress > span {
+    position:absolute; top:0; height:100%; border-radius:inherit; background:var(--muted);
+  }
   :root .app-shell > .topbar .topbar-actions { gap:var(--space-2); }
 }
 
-@media(max-width:400px) {
-  :root .app-shell > .bottom-navigation { grid-template-columns:repeat(4,minmax(0,1fr)); }
+@media(max-width:800px) and (pointer:fine) {
+  .bottom-navigation-strip { cursor:grab; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .bottom-navigation-strip { scroll-behavior:auto; }
 }

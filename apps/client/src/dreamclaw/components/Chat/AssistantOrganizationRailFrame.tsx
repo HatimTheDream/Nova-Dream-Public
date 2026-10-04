@@ -1,7 +1,7 @@
 // Frame, resize handlers and focus return extracted from Dream Claw's actual
 // AssistantOrganizationRail. E3 supplies the saved-work body and host actions.
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { PanelLeft, Plus, Search } from '../../../icons';
+import { Plus, Search, X } from '../../../icons';
 import { ASSISTANT_RAIL_MAX_WIDTH, ASSISTANT_RAIL_MIN_WIDTH, clampAssistantRailWidth } from '../../services/assistant/railLayout';
 
 type Props = { spaceSwitch: ReactNode; newDraftLabel?: string; open: boolean; width: number; setWidth(width: number): void; onToggle(): void; onNewDraft(): void; onSearch(): void; children: ReactNode };
@@ -75,9 +75,11 @@ export function AssistantOrganizationRailFrame({ open, width, setWidth, onToggle
       style={{ '--dc-assistant-rail-width': `${draftWidth}px` } as CSSProperties}>
       <div className="dc-assistant-rail-header">
         {spaceSwitch}
-        <button type="button" onClick={onSearch} className="dc-assistant-rail-icon-button" aria-label="Search conversations" title="Search conversations"><Search size={18}/></button>
-        <button type="button" onClick={onNewDraft} className="dc-assistant-rail-icon-button" aria-label={newDraftLabel} title={newDraftLabel}><Plus size={18}/></button>
-        <button type="button" onClick={onToggle} className="dc-assistant-rail-icon-button" aria-label="Hide assistant sidebar" aria-expanded="true" aria-controls="assistant-organization" title="Hide sidebar (Ctrl+Shift+O)"><PanelLeft size={18}/></button>
+        <div className="dc-assistant-rail-actions" role="group" aria-label="Conversation list actions">
+          <button type="button" onClick={onSearch} className="dc-assistant-rail-icon-button" aria-label="Search conversations" title="Search conversations"><Search size={18}/></button>
+          <button type="button" onClick={onNewDraft} className="dc-assistant-rail-icon-button" aria-label={newDraftLabel} title={newDraftLabel}><Plus size={18}/></button>
+          <button type="button" onClick={onToggle} className="dc-assistant-rail-icon-button" aria-label="Close assistant sidebar" aria-expanded="true" aria-controls="assistant-organization" title="Close assistant sidebar (Ctrl+Shift+O)"><X size={18}/></button>
+        </div>
       </div>
       {children}
       <div

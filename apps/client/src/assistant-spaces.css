@@ -1,10 +1,10 @@
-.assistant-workspace .assistant-space-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1; min-width: 104px; height: 44px; border: 0; border-radius: 13px; background: var(--surface); box-shadow: 0 3px 0 var(--line); }
-.assistant-workspace .assistant-space-switch > button { min-width: 0; width: 100%; min-height: 44px; height: 44px; padding: 0 5px; border: 2px solid var(--line); border-radius: 0; box-shadow: none; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; }
-.assistant-workspace .assistant-space-switch > button:first-child { border-start-start-radius: 13px; border-end-start-radius: 13px; border-inline-end: 1px solid var(--line); }
-.assistant-workspace .assistant-space-switch > button:last-child { border-start-end-radius: 13px; border-end-end-radius: 13px; border-inline-start: 1px solid var(--line); }
-.assistant-workspace .assistant-space-switch > button[aria-pressed=true] { background: var(--soft-gold); color: var(--gold-ink); }
-.assistant-workspace .assistant-space-switch > button:hover:not(:disabled):not([aria-pressed=true]) { background: var(--canvas); }
-.assistant-workspace .assistant-space-switch > button:focus-visible { position: relative; outline: 2px solid var(--focus); outline-offset: -3px; }
+:root .assistant-workspace .assistant-space-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1 0 calc(104px * var(--interface-text-scale, 1)); min-width: calc(104px * var(--interface-text-scale, 1)); height: 44px; border: 0; border-radius: 13px; background: var(--surface); box-shadow: 0 3px 0 var(--line); }
+:root .assistant-workspace .assistant-space-switch > button { min-width: 0; width: 100%; min-height: 44px; height: 44px; padding: 0 5px; border: 2px solid var(--line); border-radius: 0; box-shadow: none; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; }
+:root .assistant-workspace .assistant-space-switch > button:first-child { border-start-start-radius: 13px; border-end-start-radius: 13px; border-inline-end: 1px solid var(--line); }
+:root .assistant-workspace .assistant-space-switch > button:last-child { border-start-end-radius: 13px; border-end-end-radius: 13px; border-inline-start: 1px solid var(--line); }
+:root .assistant-workspace .assistant-space-switch > button[aria-pressed=true] { background: var(--soft-gold); color: var(--gold-ink); }
+:root .assistant-workspace .assistant-space-switch > button:hover:not(:disabled):not([aria-pressed=true]) { background: var(--canvas); }
+:root .assistant-workspace .assistant-space-switch > button:focus-visible { position: relative; outline: 2px solid var(--focus); outline-offset: -3px; }
 
 .work-project-changes { overflow-wrap: anywhere; min-width: 0; margin-bottom: 20px; }
 .work-project-changes details { padding: 8px 0; border-top: 1px solid var(--line); }

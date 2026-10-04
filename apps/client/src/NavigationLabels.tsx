@@ -15,12 +15,14 @@ export function NavigationLabels({ children, placement = 'top' }: {
   const clearTimer = () => { clearTimeout(timer.current); };
   const hide = () => { clearTimer(); anchor.current = null; setLabel(null); };
   const buttonAt = (target: EventTarget | null) => target instanceof Element ? target.closest<HTMLButtonElement>('button[data-navigation-label]') : null;
-  const show = (button: HTMLButtonElement | null) => {
+  const show = (button: HTMLButtonElement | null, reposition = false) => {
     clearTimer();
-    if (!button || button === anchor.current) return;
+    if (!button || (!reposition && button === anchor.current)) return;
+    if (!button.getClientRects().length) { hide(); return; }
     const bounds = button.getBoundingClientRect();
     anchor.current = button;
-    setLabel({ text: button.dataset.navigationLabel ?? '', left: placement === 'right' ? bounds.right + 10 : bounds.left + bounds.width / 2, top: placement === 'right' ? bounds.top + bounds.height / 2 : bounds.top - 10 });
+    const next = { text: button.dataset.navigationLabel ?? '', left: placement === 'right' ? bounds.right + 10 : bounds.left + bounds.width / 2, top: placement === 'right' ? bounds.top + bounds.height / 2 : bounds.top - 10 };
+    setLabel(previous => previous?.text === next.text && previous.left === next.left && previous.top === next.top ? previous : next);
   };
   const leave = (relatedTarget: EventTarget | null) => {
     if (relatedTarget instanceof Node && (anchor.current?.contains(relatedTarget) || tooltip.current?.contains(relatedTarget))) return;
@@ -40,13 +42,19 @@ export function NavigationLabels({ children, placement = 'top' }: {
   useEffect(() => {
     if (!label) return;
     const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') hide(); };
+    // Revealing an off-screen dock button scrolls after focus capture. Keep its
+    // keyboard label attached while scrolling; pointer hover labels dismiss.
+    const move = () => {
+      if (anchor.current?.contains(document.activeElement)) show(anchor.current, true);
+      else hide();
+    };
     window.addEventListener('keydown', dismiss);
-    window.addEventListener('resize', hide);
-    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', move);
+    window.addEventListener('scroll', move, true);
     return () => {
       window.removeEventListener('keydown', dismiss);
-      window.removeEventListener('resize', hide);
-      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', move);
+      window.removeEventListener('scroll', move, true);
     };
   }, [label]);
   return <>{cloneElement(children, {
