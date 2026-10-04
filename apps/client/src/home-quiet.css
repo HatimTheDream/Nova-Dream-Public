@@ -79,6 +79,7 @@
   .home-activity .quiet-work-row > button { grid-column:2; justify-self:start; }
   .home-quiet .home-activity .quiet-work-row:has(> .quiet-row-copy:first-child) { display:flex; flex-wrap:wrap; }
   .home-agenda .home-appointment { flex-wrap:wrap; gap:12px; }
+  .home-agenda .home-appointment-events,.home-agenda .home-appointment > h3,.home-agenda .home-appointment > .home-save-notice { flex-basis:100%; }
   .home-agenda .home-actions { margin:0; }
   .home-space-intro { flex-wrap:wrap; gap:16px; }
   .home-page.home-quiet .home-space-link { gap:12px; }

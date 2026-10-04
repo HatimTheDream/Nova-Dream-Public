@@ -74,9 +74,8 @@ export function HomeAppointmentContent({ state, error = '', timezone, now, size,
         <h3 title={item.event.title}>{item.event.title}</h3>
         {!compact && <p className="home-appointment-status">{item.start <= now ? item.event.interval.kind === 'date' ? 'Today’s event' : 'Happening now' : index === 0 ? 'Coming up' : 'Later'}{item.event.status === 'tentative' ? ' · Tentative' : ''}</p>}
         {size === 'large' && item.event.location && <p className="home-appointment-location" title={item.event.location}>{item.event.location}</p>}
-      </div>)}</div>
+      </div>)}{status && <p className="home-save-notice" role="status">{status}{unavailable ? '. Check the account in Settings → Accounts.' : !pending ? '. Showing saved events.' : ''}</p>}</div>
     </> : <><h3 role="status">{state ? status || (compact ? 'No upcoming event' : 'No upcoming event in the saved calendar') : error ? 'Calendar unavailable' : 'Loading your schedule…'}</h3>{state && !compact && <p>Looking 30 days ahead in the calendars you have selected.</p>}</>}
-    {next && status && <p className="home-save-notice" role="status">{status}{unavailable ? '. Check the account in Settings → Accounts.' : !pending ? '. Showing saved events.' : ''}</p>}
     {!next && unavailable && <p className="home-save-notice">Check the account in Settings → Accounts.</p>}
     <div className="home-actions"><button className="home-action" onClick={openCalendar}>Open Calendar</button>{refresh && <button className="home-action" disabled={pending} onClick={refresh}>{pending ? 'Refreshing…' : 'Refresh'}</button>}</div>
   </div>;

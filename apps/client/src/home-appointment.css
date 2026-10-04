@@ -5,6 +5,7 @@
 .home-appointment-date span { font-size:12px; font-weight:600; text-transform:uppercase; }
 .home-appointment-date strong { font-size:38px; line-height:1; font-weight:500; }
 .home-appointment-events { display:grid; gap:12px; min-width:0; }
+.home-page .home-appointment .home-save-notice { min-width:0; max-width:100%; flex-shrink:1; white-space:normal; overflow-wrap:anywhere; display:block; overflow:visible; -webkit-line-clamp:unset; }
 .home-appointment-event { min-width:0; display:flex; flex-direction:column; gap:5px; border-inline-start:3px solid var(--appointment-accent); padding:8px 12px; background:color-mix(in srgb,var(--appointment-accent) 4%,transparent); }
 .home-page .home-appointment-event h3 { font-size:var(--widget-item-size,13px); font-weight:600; line-height:1.4; }
 .home-page .home-appointment-event .home-appointment-time { font-size:12px; line-height:1.4; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
