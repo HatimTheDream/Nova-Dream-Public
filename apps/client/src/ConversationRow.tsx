@@ -9,16 +9,17 @@ import { Archive, Folder, MessageSquare, Trash2 } from './icons';
 import { ArrowLeft } from './icons';
 import { formatSaved } from './ui';
 import { conversationWorkStatus } from './conversation-work-status';
+import { conversationVisibilityBlocked, conversationWritePending } from './conversation-visibility';
 
 export function ConversationRow({ conversation, controller, snapshot, selected, hasDraft, updatedAt, open, refreshWorkspace }: { conversation: Conversation; controller: AssistantController; snapshot: Snapshot; selected: boolean; hasDraft: boolean; updatedAt: string; open: () => void; refreshWorkspace: () => Promise<void> }) {
   const [view, setView] = useState<'actions' | 'rename' | 'project' | 'remove'>('actions');
   const [title, setTitle] = useState(conversation.title), [projectId, setProjectId] = useState(conversation.projectId ?? ''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const active = controller.operations.some(op => op.conversationId === conversation.id && !['completed', 'failed', 'cancelled'].includes(op.state));
+  const interrupted = controller.operations.some(op => op.conversationId === conversation.id && op.state === 'unknown');
   const workStatus = conversationWorkStatus(conversation.id, controller);
   const removal = controller.removals?.find(item => item.conversationId === conversation.id && ['prepared', 'unknown'].includes(item.state));
-  const blocked = !!removal || !conversation.nativeId || busy || active || !!conversation.pendingSettings || controller.connection.state !== 'ready';
-  const localDeleteBlocked = !!removal || busy || active || !!conversation.pendingSettings || conversation.state === 'creating';
-  const deleteBlocked = conversation.nativeId ? blocked : localDeleteBlocked;
+  const blocked = !!removal || !conversation.nativeId || busy || active || conversationWritePending(conversation) || controller.connection.state !== 'ready';
+  const visibilityBlocked = (hiding: boolean) => conversationVisibilityBlocked(conversation, controller.operations, controller.removals, busy, hiding);
   const save = async (changes: ConversationChanges, close: () => void) => {
     setBusy(true); setError('');
     try { await controller.edit(conversation, changes); close(); }
@@ -37,10 +38,10 @@ export function ConversationRow({ conversation, controller, snapshot, selected, 
         <button role="menuitem" disabled={blocked} onClick={() => { setTitle(conversation.title); setView('rename'); }}>Rename</button>
         {assistantSpace(conversation) === 'chat' && <button role="menuitem" disabled={blocked} onClick={() => { setProjectId(conversation.projectId ?? ''); setView('project'); }}><Folder size={17}/>Move to Project</button>}
         <button role="menuitem" disabled={blocked} onClick={() => void save({ unread: !conversation.unread }, close)}>{conversation.unread ? 'Mark read' : 'Mark unread'}</button></>}
-        {(conversation.nativeId || conversation.deleted) && <button role="menuitem" disabled={conversation.deleted ? deleteBlocked : blocked} onClick={() => void save(conversation.deleted ? { deleted: false } : { archived: !conversation.archived }, close)}><Archive size={17}/>{conversation.archived ? 'Restore' : 'Archive'}</button>}
-        {conversation.deleted && <button role="menuitem" className="chat-delete-action" disabled={busy || active || !!conversation.pendingSettings} onClick={() => setView('remove')}><Trash2 size={17}/>{removal ? 'Check removal' : 'Remove permanently'}</button>}
-        {!conversation.deleted && <button role="menuitem" className="chat-delete-action" disabled={deleteBlocked} onClick={() => void save({ deleted: true }, close)}><Trash2 size={17}/>Delete</button>}
-        {(active || conversation.pendingSettings) && <p className="metadata">{active ? 'Finish the current reply to change this chat.' : 'Waiting for confirmation.'}</p>}
+        <button role="menuitem" disabled={visibilityBlocked(!conversation.deleted && !conversation.archived)} onClick={() => void save(conversation.deleted ? { deleted: false } : { archived: !conversation.archived }, close)}><Archive size={17}/>{conversation.deleted || conversation.archived ? 'Restore chat' : 'Archive'}</button>
+        {conversation.deleted && <button role="menuitem" className="chat-delete-action" disabled={busy || active || conversationWritePending(conversation)} onClick={() => setView('remove')}><Trash2 size={17}/>{removal ? 'Check removal' : 'Remove permanently'}</button>}
+        {!conversation.deleted && <button role="menuitem" className="chat-delete-action" disabled={visibilityBlocked(true)} onClick={() => void save({ deleted: true }, close)}><Trash2 size={17}/>Delete</button>}
+        {(active || conversation.pendingSettings) && <p className="metadata">{interrupted ? 'Moving this chat keeps its draft and history; it does not stop unconfirmed work.' : active ? 'Finish the current reply to move this chat.' : 'Settings are awaiting confirmation. You can still move this chat.'}</p>}
         {error && <p className="field-error" role="alert">{error}</p>}
       </> : view === 'remove' ? <div className="chat-action-form">
         <strong>Remove this chat permanently?</strong>

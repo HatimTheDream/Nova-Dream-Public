@@ -12,13 +12,22 @@ import { ConversationRemovals } from '../apps/service/conversation-removal.js';
 import { AssistantService } from '../apps/service/assistant.js';
 
 class NativeFixture implements AssistantTransport {
-  generation: string = randomUUID(); native = new Map<string, string>(); deletes: unknown[] = []; lose = false; hold?: Promise<void>;
+  generation: string = randomUUID(); native = new Map<string, string>(); deletes: unknown[] = []; patches: unknown[] = []; lose = false; hold?: Promise<void>;
+  archived = true; active = false; activityKnown = true; afterPatch?: () => void; loseArchive = false;
+  historyActivity?: boolean; historyNativeId?: string; historyReads = 0;
   status(): AssistantConnection { return { state: 'ready', generation: this.generation, methods: ['sessions.delete', 'sessions.describe'], grantedScopes: ['operator.read', 'operator.write'], message: '', modelAuthReady: true }; }
   async request<T>(method: string, raw: unknown): Promise<T> {
-    const p = raw as { key: string; expectedSessionId?: string; archivedOnly?: boolean; deleteTranscript?: boolean };
-    if (method === 'sessions.describe') { await this.hold; return (this.native.has(p.key) ? { session: { key: p.key, sessionId: this.native.get(p.key) } } : { session: null }) as T; }
+    const p = raw as { key: string; expectedSessionId?: string; archivedOnly?: boolean; deleteTranscript?: boolean; archived?: boolean };
+    if (method === 'sessions.describe') { await this.hold; return (this.native.has(p.key) ? { session: { key: p.key, sessionId: this.native.get(p.key), archived: this.archived, ...(this.activityKnown ? { hasActiveRun: this.active, activeRunIds: this.active ? ['active-native-run'] : [] } : {}) } } : { session: null }) as T; }
+    if (method === 'chat.history') { this.historyReads++; const key = (raw as { sessionKey: string }).sessionKey; return { sessionId: this.historyNativeId ?? this.native.get(key), sessionInfo: this.historyActivity === undefined ? {} : { hasActiveRun: this.historyActivity, activeRunIds: this.historyActivity ? ['active-native-run'] : [] } } as T; }
+    if (method === 'sessions.patch') {
+      assert.equal(p.expectedSessionId, this.native.get(p.key)); assert.equal(p.archived, true); this.patches.push(p);
+      this.archived = true; this.afterPatch?.();
+      if (this.loseArchive) { this.loseArchive = false; throw new Error('Response lost after archive'); }
+      return { entry: { sessionId: this.native.get(p.key), archived: this.archived } } as T;
+    }
     if (method === 'sessions.delete') {
-      assert.equal(p.archivedOnly, true); assert.equal(p.deleteTranscript, true); this.deletes.push(p);
+      assert.equal(p.archivedOnly, true); assert.equal(p.deleteTranscript, true); assert.equal(this.archived, true); assert.equal(this.active, false); this.deletes.push(p);
       if (this.native.get(p.key) !== p.expectedSessionId) throw new GatewayClientRequestError({ code: 'INVALID_REQUEST', message: 'Exact session changed' });
       this.native.delete(p.key); if (this.lose) { this.lose = false; throw new Error('Response lost after native deletion'); }
       return { ok: true, key: p.key, deleted: true, archived: [] } as T;
@@ -91,5 +100,57 @@ test('concurrent removal retries join one request and host replacement fences di
     assert.equal((await first).state, 'unknown'); assert.equal((await second).state, 'unknown'); assert.equal(f.gateway.deletes.length, 0);
     f.gateway.generation = f.chat.connectionGeneration; f.gateway.hold = undefined;
     const fromOtherDevice = await removals.remove(f.store.session().deviceId, { ...f.input, requestId: randomUUID() }); assert.equal(fromOtherDevice.state, 'completed'); assert.equal(fromOtherDevice.requestId, f.input.requestId); assert.equal(f.gateway.deletes.length, 1);
+  } finally { removals.close(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('permanent removal archives a locally deleted exact idle native chat, and recovers a lost archive receipt without repeating it', async () => {
+  const f = setup(), removals = new ConversationRemovals(f.store, f.gateway, () => false);
+  try {
+    f.gateway.archived = false; f.gateway.loseArchive = true;
+    assert.equal((await removals.remove(f.device, f.input)).state, 'unknown');
+    assert.equal(f.gateway.patches.length, 1); assert.equal(f.gateway.deletes.length, 0);
+    assert.ok(f.store.internalRead(`assistant:conversation:${f.chat.id}`));
+    assert.equal((await removals.remove(f.device, f.input)).state, 'completed');
+    assert.equal(f.gateway.patches.length, 1); assert.equal(f.gateway.deletes.length, 1);
+    assert.equal(f.store.internalRead(`assistant:conversation:${f.chat.id}`), undefined);
+  } finally { removals.close(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+for (const changed of ['identity', 'activity', 'archive', 'activity-unknown'] as const) test(`permanent removal refuses ${changed} changed during the archive readback`, async () => {
+  const f = setup(), removals = new ConversationRemovals(f.store, f.gateway, () => false);
+  try {
+    f.gateway.archived = false;
+    f.gateway.afterPatch = () => {
+      if (changed === 'identity') f.gateway.native.set(f.chat.nativeKey, randomUUID());
+      if (changed === 'activity') f.gateway.active = true;
+      if (changed === 'archive') f.gateway.archived = false;
+      if (changed === 'activity-unknown') f.gateway.activityKnown = false;
+    };
+    const result = await removals.remove(f.device, f.input);
+    assert.equal(result.state, ['identity', 'activity'].includes(changed) ? 'rejected' : 'unknown');
+    assert.equal(f.gateway.patches.length, 1); assert.equal(f.gateway.deletes.length, 0);
+    assert.ok(f.store.internalRead(`assistant:conversation:${f.chat.id}`));
+  } finally { removals.close(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+for (const active of [true, false]) test(`permanent removal does not archive when native activity is ${active ? 'active' : 'unknown'}`, async () => {
+  const f = setup(), removals = new ConversationRemovals(f.store, f.gateway, () => false);
+  try {
+    f.gateway.archived = false; f.gateway.active = active; f.gateway.activityKnown = active;
+    assert.equal((await removals.remove(f.device, f.input)).state, active ? 'rejected' : 'unknown');
+    assert.equal(f.gateway.patches.length, 0); assert.equal(f.gateway.deletes.length, 0);
+  } finally { removals.close(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+for (const state of ['idle', 'active', 'replacement'] as const) test(`native describe without activity uses exact history before permanent removal: ${state}`, async () => {
+  const f = setup(), removals = new ConversationRemovals(f.store, f.gateway, () => false);
+  try {
+    f.gateway.archived = false; f.gateway.activityKnown = false; f.gateway.historyActivity = state === 'active';
+    if (state === 'replacement') f.gateway.historyNativeId = randomUUID();
+    const result = await removals.remove(f.device, f.input);
+    assert.equal(result.state, state === 'idle' ? 'completed' : 'rejected');
+    assert.equal(f.gateway.deletes.length, state === 'idle' ? 1 : 0);
+    assert.equal(f.gateway.patches.length, state === 'idle' ? 1 : 0);
+    assert.equal(f.gateway.historyReads, state === 'idle' ? 2 : 1);
   } finally { removals.close(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });

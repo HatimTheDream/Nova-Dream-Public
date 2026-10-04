@@ -16,6 +16,14 @@ Realtime audio follows the host's shared account order. The per-chat preference 
 
 If a final transcription is missing or empty, visible words remain marked **Unconfirmed Transcription · Kept On This Device** after closing the call. They survive reloads and later calls in this browser, including resuming the same Nova chat with another Assistant connection. These review captions are not confirmed server history and do not sync to other devices. If browser storage cannot retain them, Nova keeps the original call available instead of clearing it.
 
+## Delete And Restore Chats
+
+Open a chat's options and choose **Move to Deleted** to remove it from Recents. This also works for **Status unconfirmed** chats and when the Assistant connection is offline. Drafts, saved history and the original request remain available in Deleted; moving a chat does not stop or resend an unconfirmed reply.
+
+Choose **Restore chat** to return it to Recents. Known active replies and voice calls must finish before hiding a chat, but you can restore one to check or stop work that becomes active later. Permanent removal remains separate and requires the original work to be settled.
+
+If an older version archived the native conversation, restoring its place in the list still works offline. New work waits until Nova reconnects and verifies that the original native conversation is restored.
+
 ## Saved History And Recovery
 
 Saved messages, partial replies, captions, pins and verified file contents remain readable without a connected ChatGPT account. Older history is captured in bounded background pages when its original Assistant is available. A partial archive is labelled; Nova cannot recover messages or file bytes it never received.

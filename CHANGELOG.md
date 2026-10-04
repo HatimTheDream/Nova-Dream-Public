@@ -1,3 +1,10 @@
+## [2.1.4] — 2026-10-04
+
+### Fixed
+- Chats with an unconfirmed reply can be moved to Deleted or Archive and restored while keeping their drafts, history and original run status.
+- Conversation organization no longer submits unrelated settings or gets stuck behind an earlier unconfirmed settings request.
+- Delayed native responses cannot undo a newer Delete or Restore action. Permanent removal still requires a settled, verified conversation.
+
 ## [2.1.3] — 2026-10-04
 
 ### Improved

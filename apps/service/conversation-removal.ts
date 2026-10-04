@@ -58,11 +58,32 @@ export class ConversationRemovals {
         this.connection(item);
         // Describe never creates a missing chat. An absent original after a
         // lost acknowledgement settles without another destructive command.
-        const resolved = await this.gateway.request<{ session: { key: string; sessionId: string; hasActiveRun?: boolean; activeRunIds?: string[] } | null }>('sessions.describe', { key: item.nativeKey });
+        type NativeSession = { key: string; sessionId: string; archived?: boolean; hasActiveRun?: boolean; activeRunIds?: string[] };
+        const describe = () => this.gateway.request<{ session: NativeSession | null }>('sessions.describe', { key: item.nativeKey });
+        let resolved = await describe();
         this.connection(item);
         if (resolved.session) {
-          if (resolved.session.key !== item.nativeKey || resolved.session.sessionId !== item.nativeId) throw new Fault(409, 'removal_identity', 'The host returned a different chat. Reopen its current status.');
-          if (resolved.session.hasActiveRun || resolved.session.activeRunIds?.length) throw new Fault(409, 'removal_busy', 'Finish the native reply before removing this chat.');
+          const verifyIdle = async (session: NativeSession | null) => {
+            if (!session || session.key !== item.nativeKey || session.sessionId !== item.nativeId) throw new Fault(409, 'removal_identity', 'The host returned a different chat. Reopen its current status.');
+            if (session.hasActiveRun || session.activeRunIds?.length) throw new Fault(409, 'removal_busy', 'Finish the native reply before removing this chat.');
+            if (session.hasActiveRun === false || Array.isArray(session.activeRunIds)) return;
+            // sessions.describe on supported hosts reports archive/identity but
+            // omits activity. Read bounded history, verifying its incarnation.
+            const history = await this.gateway.request<{ sessionId?: string; sessionInfo?: { sessionId?: string; hasActiveRun?: boolean; activeRunIds?: string[] }; inFlightRun?: { runId?: string } }>('chat.history', { sessionKey: item.nativeKey, limit: 1, maxChars: 1024 });
+            this.connection(item);
+            if ((history.sessionId ?? history.sessionInfo?.sessionId) !== item.nativeId) throw new Fault(409, 'removal_identity', 'The host returned a different chat. Reopen its current status.');
+            if (history.inFlightRun?.runId || history.sessionInfo?.hasActiveRun || history.sessionInfo?.activeRunIds?.length) throw new Fault(409, 'removal_busy', 'Finish the native reply before removing this chat.');
+            if (history.sessionInfo?.hasActiveRun !== false && !Array.isArray(history.sessionInfo?.activeRunIds)) throw new Error('Native activity is unconfirmed');
+          };
+          await verifyIdle(resolved.session);
+          // Deleted is now local and reversible. Only this separately confirmed
+          // permanent removal may archive the exact idle native session.
+          if (resolved.session.archived !== true) {
+            await this.gateway.request('sessions.patch', { key: item.nativeKey, expectedSessionId: item.nativeId, archived: true });
+            this.connection(item);
+            resolved = await describe(); this.connection(item); await verifyIdle(resolved.session);
+            if (resolved.session?.archived !== true) throw new Error('Native archive is unconfirmed');
+          }
           const result = await this.gateway.request<{ ok: boolean; key: string; deleted: boolean }>('sessions.delete', { key: item.nativeKey, expectedSessionId: item.nativeId, archivedOnly: true, deleteTranscript: true });
           this.connection(item);
           if (result.ok !== true || result.key !== item.nativeKey || result.deleted !== true) throw new Error('Unconfirmed native removal');

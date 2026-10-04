@@ -64,16 +64,26 @@ export type Conversation = {
   workspace?: { folder: string; environment: 'local' | 'worktree'; path?: string; branch?: string };
   id: string; revision: number; title: string; autoTitle?: boolean; autoTitleSeeded?: boolean; projectId: string | null; archived: boolean;
   deleted?: boolean; pinned?: boolean; unread?: boolean; permissionMode?: PermissionMode;
+  /** Local organization has its own ordering, independent of delayed native settings. */
+  visibilityRevision?: number;
+  /** A local restore awaits exact native unarchive readback before new work. */
+  nativeRestorePending?: boolean;
   model: string | null; thinking: string | null; createdAt: string; updatedAt: string;
   fastMode?: boolean | 'auto' | null;
   connectionGeneration: string; nativeKey: string; nativeId: string | null;
   state: 'creating' | 'ready' | 'unknown' | 'failed'; error?: string;
   settingsResult?: { requestId: string; state: 'completed' | 'rejected' | 'kept-current'; message?: string };
-  pendingSettings?: { permissionMode?: PermissionMode; requestId: string; title?: string; archived?: boolean; deleted?: boolean; pinned?: boolean; unread?: boolean; projectId?: string | null; model?: string | null; thinking?: string | null; fastMode?: boolean | 'auto' | null };
+  pendingSettings?: { permissionMode?: PermissionMode; requestId: string; visibilityRevision?: number; title?: string; archived?: boolean; deleted?: boolean; pinned?: boolean; unread?: boolean; projectId?: string | null; model?: string | null; thinking?: string | null; fastMode?: boolean | 'auto' | null };
   refineSource?: z.infer<typeof refineSourceSchema>;
   forkSource?: { conversationId: string; nativeId: string; messageId: string; messageHash: string; purpose: 'branch' | 'edit' | 'retry'; requestId: string; resolved?: boolean };
 };
 export type ConversationChanges = Partial<Pick<Conversation, 'title' | 'archived' | 'deleted' | 'pinned' | 'unread' | 'projectId' | 'model' | 'thinking' | 'fastMode' | 'permissionMode'>>;
+export function isConversationVisibilityChange(value: unknown, withEnvelope = false): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const changes = value as Record<string, unknown>, keys = Object.keys(changes);
+  return keys.some(key => key === 'archived' || key === 'deleted')
+    && keys.every(key => key === 'archived' || key === 'deleted' ? typeof changes[key] === 'boolean' : withEnvelope && ['requestId', 'epoch', 'conversationId', 'expectedRevision'].includes(key));
+}
 export type ContextManifest = {
   /** Captured only for new Chat Research requests. Historical and Work research stay direct. */
   researchWorkflow?: 'chat-research-v1';

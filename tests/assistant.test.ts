@@ -28,7 +28,7 @@ class Transport implements AssistantTransport {
   forkHistories = new Map<string, any[]>();
   rejectEdit = false;
   holdEdit?: Promise<void>;
-  sessionInfo: Record<string, unknown> = {};
+  sessionInfo: Record<string, unknown> = { archived: false };
   inFlightRun?: { runId: string; text: string };
   artifactReply: any;
   status(): AssistantConnection { return { state: 'ready', generation: this.generation, message: 'Fixture transport', grantedScopes: ['operator.read', 'operator.write'], methods: ['artifacts.download', 'sessions.fork', ...(this.protectedPlanning ? ['e3.workspace.policy'] : [])], modelAuthReady: true }; }
@@ -44,7 +44,7 @@ class Transport implements AssistantTransport {
     if (method === 'sessions.fork') { const key = `fixture:fork:${randomUUID()}`; this.sessions.set(key, randomUUID()); this.forkHistories.set(key, this.messages.slice(0, this.messages.findIndex(m => m.__openclaw?.id === params.entryId))); return { sessionKey: key } as T; }
     if (method === 'chat.history') { await this.holdHistory; return { sessionId: this.replaceSession ? randomUUID() : (params.sessionId ?? this.sessions.get(params.sessionKey)), messages: this.forkHistories.get(params.sessionKey) ?? this.messages, hasMore: false, inFlightRun: this.inFlightRun, sessionInfo: { activeRunIds: [], hasActiveRun: false, ...this.sessionInfo } } as T; }
     if (method === 'chat.send') { if (this.rejectSend) throw new Error('Response lost after send'); return { runId: `native:${params.idempotencyKey}` } as T; }
-    if (method === 'sessions.patch') { await this.holdEdit; if (this.rejectEdit) throw new Error('Response lost after patch'); return { entry: { sessionId: this.sessions.get(params.key), thinkingLevel: params.thinkingLevel ?? undefined, fastMode: params.fastMode ?? undefined } } as T; }
+    if (method === 'sessions.patch') { await this.holdEdit; if (this.rejectEdit) throw new Error('Response lost after patch'); if (typeof params.archived === 'boolean') this.sessionInfo.archived = params.archived; return { entry: { sessionId: this.sessions.get(params.key), thinkingLevel: params.thinkingLevel ?? undefined, fastMode: params.fastMode ?? undefined } } as T; }
     return {} as T;
   }
 }
@@ -693,7 +693,7 @@ test('queue revisions and order retain originals, reject stale changes, and repl
 test('Deleted is reversible and prevents submission while retaining history and drafts', () => fixture(async f => {
   const deleted = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true });
   assert.equal(deleted.deleted, true); assert.equal(deleted.archived, true);
-  assert.equal(f.gateway.calls.find(c => c.method === 'sessions.patch')!.params.archived, true);
+  assert.equal(f.gateway.calls.some(c => c.method === 'sessions.patch'), false, 'reversible deletion does not require a native settings mutation');
   assert.throws(() => f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, conversationRevision: deleted.revision, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }), /Review the current/);
   assert.equal(f.store.readEntity('draft', `draft:${f.device}`)!.value.text, 'Use the selected context.');
   const restored = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, expectedRevision: deleted.revision, deleted: false });
@@ -757,6 +757,142 @@ test('unfinished conversations can move to Deleted and restore without a native 
   assert.equal(restored.deleted, false); assert.equal(restored.state, 'unknown');
   assert.equal(f.gateway.calls.length, calls); assert.deepEqual(f.store.snapshot(f.device).drafts, drafts);
   await assert.rejects(f.service.edit(f.device, { ...input, requestId: randomUUID() }), /still changing/);
+}));
+
+test('unconfirmed chats can move to Deleted offline and restore after restart without changing the original run or draft', () => fixture(async f => {
+  f.gateway.rejectSend = true;
+  f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }); await tick();
+  const original = f.service.operations()[0], drafts = f.store.snapshot(f.device).drafts;
+  assert.equal(original.state, 'unknown'); assert.equal(original.nativeRunId, null);
+  const status = f.gateway.status.bind(f.gateway);
+  f.gateway.status = () => ({ ...status(), state: 'disconnected' });
+  const calls = f.gateway.calls.length;
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true };
+  const deleted = await f.service.edit(f.device, input);
+  assert.equal(deleted.deleted, true); assert.equal(deleted.nativeId, original.nativeId);
+  assert.deepEqual(f.service.operations()[0], original); assert.deepEqual(f.store.snapshot(f.device).drafts, drafts);
+  assert.equal((await f.service.edit(f.device, input)).revision, deleted.revision);
+  await assert.rejects(f.service.edit(f.device, { ...input, requestId: randomUUID() }), { code: 'conversation_changed' });
+  await assert.rejects(f.service.edit(f.device, { ...input, requestId: randomUUID(), epoch: randomUUID(), expectedRevision: deleted.revision }), /workspace|changed|epoch/i);
+  await assert.rejects(f.service.edit(f.device, { ...input, deleted: false }), { code: 'request_reused' });
+  await assert.rejects(f.service.removals.remove(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, expectedRevision: deleted.revision }), { code: 'removal_busy' });
+  f.service.close(); const fresh = new AssistantService(f.store, f.gateway);
+  try {
+    assert.equal(fresh.conversations()[0].deleted, true);
+    const restored = await fresh.edit(f.device, { ...input, requestId: randomUUID(), expectedRevision: deleted.revision, deleted: false });
+    assert.equal(restored.deleted, false); assert.equal(restored.archived, false);
+    assert.deepEqual(fresh.operations()[0], original); assert.deepEqual(f.store.snapshot(f.device).drafts, drafts);
+    assert.equal(f.gateway.calls.length, calls, 'neither delete nor restore sends, aborts, or creates native work');
+  } finally { fresh.close(); }
+}));
+
+test('known running work and voice prevent hiding, while a deleted chat can always be restored to inspect it', () => fixture(async f => {
+  f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }); await tick();
+  const operation = f.service.operations()[0], key = `assistant:operation:${operation.id}`;
+  for (const state of ['prepared', 'dispatching', 'accepted', 'running'] as const) {
+    f.store.internalWrite(key, { ...operation, state });
+    for (const change of [{ deleted: true }, { archived: true }]) await assert.rejects(f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, ...change }), { code: 'run_unsettled' });
+  }
+  f.store.internalWrite(key, { ...operation, state: 'unknown', error: 'Awaiting exact native receipt' });
+  f.service.setVoiceGuard(() => true);
+  await assert.rejects(f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true }), { code: 'run_unsettled' });
+  f.service.setVoiceGuard(() => false);
+  const deleted = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true });
+  f.store.internalWrite(key, { ...operation, state: 'running' });
+  const restored = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, expectedRevision: deleted.revision, deleted: false });
+  assert.equal(restored.deleted, false); assert.equal(f.service.operations()[0].state, 'running');
+  assert.throws(() => f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: restored.id, conversationRevision: restored.revision, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }), { code: 'run_unsettled' });
+}));
+
+test('a delayed native archive result retains its receipt but cannot undo a later local restore', () => fixture(async f => {
+  const gate = deferred(); f.gateway.holdEdit = gate.promise;
+  const requestId = randomUUID();
+  const nativeEdit = f.service.edit(f.device, { requestId, epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, archived: true, title: 'Delayed title' });
+  const deleted = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true });
+  assert.equal(deleted.pendingSettings?.requestId, requestId);
+  const restored = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, expectedRevision: deleted.revision, deleted: false });
+  gate.resolve(); const result = await nativeEdit;
+  assert.equal(result.deleted, false); assert.equal(result.archived, false); assert.equal(result.title, 'Delayed title');
+  assert.equal(result.visibilityRevision, restored.visibilityRevision); assert.equal(result.settingsResult?.requestId, requestId);
+  assert.equal(result.pendingSettings, undefined); assert.equal(f.store.internalRead<any>(`assistant:edit:${requestId}`).state, 'completed');
+  await tick();
+  assert.equal(f.gateway.calls.filter(c => c.method === 'sessions.patch').length, 2);
+  assert.equal(f.gateway.sessionInfo.archived, false); assert.equal(f.service.conversations()[0].nativeRestorePending, undefined);
+}));
+
+test('legacy pending settings and use-current recovery cannot undo local Deleted', () => fixture(async f => {
+  f.gateway.rejectEdit = true; const requestId = randomUUID();
+  await assert.rejects(f.service.edit(f.device, { requestId, epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, archived: false, title: 'Unconfirmed title' }), { code: 'edit_unknown' });
+  const pending = f.service.conversations()[0]; delete pending.pendingSettings!.visibilityRevision;
+  f.store.internalWrite(`assistant:conversation:${pending.id}`, pending);
+  const deleted = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: pending.id, expectedRevision: pending.revision, deleted: true });
+  f.gateway.sessionInfo = { label: 'Original native title', archived: false };
+  const recovered = await f.service.recoverSettings(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: deleted.id, expectedRevision: deleted.revision, pendingRequestId: requestId, action: 'use-current' });
+  assert.equal(recovered.deleted, true); assert.equal(recovered.archived, true); assert.equal(recovered.title, 'Original native title');
+  assert.equal(recovered.pendingSettings, undefined); assert.equal(recovered.settingsResult?.state, 'kept-current');
+}));
+
+test('history that resolves an unknown setup cannot resurrect a chat moved to Deleted during its read', () => fixture(async f => {
+  f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, nativeId: null, state: 'unknown' });
+  const gate = deferred(); f.gateway.holdHistory = gate.promise;
+  const history = f.service.history(f.conversation.id);
+  const deleted = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: true });
+  gate.resolve(); await history;
+  const saved = f.service.conversations()[0];
+  assert.equal(saved.deleted, true); assert.equal(saved.archived, true); assert.equal(saved.revision, deleted.revision);
+  assert.equal(saved.nativeId, f.conversation.nativeId); assert.equal(saved.visibilityRevision, deleted.visibilityRevision);
+}));
+
+test('a legacy native archive restores locally offline and unarchives the exact idle session on reconnect before allowing new writes', () => fixture(async f => {
+  const legacy = { ...f.conversation, archived: true, deleted: true };
+  f.store.internalWrite(`assistant:conversation:${legacy.id}`, legacy); f.gateway.sessionInfo.archived = true;
+  const status = f.gateway.status.bind(f.gateway); f.gateway.status = () => ({ ...status(), state: 'disconnected' });
+  const input = { requestId: randomUUID(), epoch: f.store.epoch, conversationId: legacy.id, expectedRevision: legacy.revision, deleted: false };
+  const restored = await f.service.edit(f.device, input);
+  assert.equal(restored.deleted, false); assert.equal(restored.archived, false); assert.equal(restored.nativeRestorePending, true);
+  assert.equal(f.gateway.calls.some(c => c.method === 'sessions.patch'), false);
+  await assert.rejects(f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: legacy.id, expectedRevision: restored.revision, pinned: true }), { code: 'restore_pending' });
+  f.gateway.status = status;
+  assert.throws(() => f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: restored.id, conversationRevision: restored.revision, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }), { code: 'restore_pending' });
+  await f.service.reconcile(restored.id);
+  assert.equal(f.service.conversations()[0].nativeRestorePending, undefined); assert.equal(f.gateway.sessionInfo.archived, false);
+  const patch = f.gateway.calls.filter(c => c.method === 'sessions.patch'); assert.equal(patch.length, 1);
+  assert.deepEqual(patch[0].params, { key: legacy.nativeKey, expectedSessionId: legacy.nativeId, archived: false });
+  await f.service.reconcile(restored.id); assert.equal(f.gateway.calls.filter(c => c.method === 'sessions.patch').length, 1);
+  assert.equal((await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: legacy.id, expectedRevision: restored.revision, pinned: true })).pinned, true);
+}));
+
+test('unknown work is kept and never patched while a restored legacy native archive awaits its original receipt', () => fixture(async f => {
+  f.gateway.rejectSend = true;
+  f.service.submit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, conversationRevision: 1, draftId: `draft:${f.device}`, draftRevision: f.draftRevision, projectRevision: 1 }); await tick();
+  const original = f.service.operations()[0];
+  f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, archived: true, deleted: true }); f.gateway.sessionInfo.archived = true;
+  const restored = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, deleted: false });
+  assert.equal(restored.deleted, false); assert.equal(restored.nativeRestorePending, true);
+  assert.deepEqual(f.service.operations()[0], original); assert.equal(f.gateway.calls.some(c => c.method === 'sessions.patch'), false);
+  assert.equal(f.gateway.calls.filter(c => c.method === 'chat.send').length, 1);
+}));
+
+for (const unsafe of ['active', 'replaced'] as const) test(`a deferred native restore keeps its fence when the original session is ${unsafe}`, () => fixture(async f => {
+  f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, archived: true }); f.gateway.sessionInfo.archived = true;
+  if (unsafe === 'active') f.gateway.inFlightRun = { runId: 'other-run', text: '' }; else f.gateway.replaceSession = true;
+  const result = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, archived: false });
+  assert.equal(result.archived, false); assert.equal(result.nativeRestorePending, true);
+  assert.equal(f.gateway.calls.some(c => c.method === 'sessions.patch'), false);
+  if (unsafe === 'replaced') await assert.rejects(f.service.reconcile(result.id), { code: 'session_replaced' });
+}));
+
+test('a lost native unarchive acknowledgement settles from exact readback without another patch', () => fixture(async f => {
+  f.store.internalWrite(`assistant:conversation:${f.conversation.id}`, { ...f.conversation, archived: true }); f.gateway.sessionInfo.archived = true;
+  const request = f.gateway.request.bind(f.gateway); let patches = 0;
+  f.gateway.request = async <T>(method: string, raw: unknown): Promise<T> => {
+    if (method === 'sessions.patch' && (raw as any).archived === false) { patches++; f.gateway.sessionInfo.archived = false; throw new Error('Lost native archive receipt'); }
+    return request<T>(method, raw);
+  };
+  const restored = await f.service.edit(f.device, { requestId: randomUUID(), epoch: f.store.epoch, conversationId: f.conversation.id, expectedRevision: 1, archived: false });
+  assert.equal(restored.nativeRestorePending, true); assert.equal(patches, 1);
+  await f.service.reconcile(restored.id);
+  assert.equal(f.service.conversations()[0].nativeRestorePending, undefined); assert.equal(patches, 1);
 }));
 
 test('permission changes require effective readback and retain mismatched changes for reconciliation', () => fixture(async f => {

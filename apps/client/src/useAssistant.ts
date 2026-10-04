@@ -6,13 +6,13 @@ import type { ConversationChanges, AssistantModel, AssistantOutput, AssistantSta
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { canonical } from '../../../packages/domain/contracts';
 import { ApiError, mayPoll, readLocal, request, saveLocal } from './api';
-import { releaseRejectedProjectRequest } from './project-admission';
 import { cacheTranscriptWindow, readTranscriptPosition, transcriptPositionKey } from './transcript-position';
 import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from './assistant-history';
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
 import { pollReader } from './polling';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
+import { editConversation } from './conversation-edit';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
 export function useAssistant(snapshot: Snapshot, visible = true) {
@@ -140,19 +140,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
     const conversation = await request<Conversation>('assistant/conversations', { ...input, epoch: snapshot.epoch }, undefined, 30000); await refresh(); return conversation;
   };
   const edit = async (conversation: Conversation, changes: ConversationChanges) => {
-    const key = `e3:conversation-edit:${conversation.id}`;
-    const kept = readLocal<ConversationChanges & { requestId: string; expectedRevision: number }>(key);
-    // No pending edit and a newer revision mean the old intent was resolved or
-    // superseded, even if another device has since chosen different settings.
-    const settled = kept && !conversation.pendingSettings && (conversation.revision > kept.expectedRevision || conversation.settingsResult?.requestId === kept.requestId);
-    if (settled) localStorage.removeItem(key);
-    const intent = (settled ? undefined : kept) ?? { requestId: crypto.randomUUID(), epoch: snapshot.epoch, conversationId: conversation.id, expectedRevision: conversation.revision, ...changes };
-    if (!saveLocal(key, intent)) throw new Error('Free browser storage before changing this conversation.');
-    try {
-      const result = await request<Conversation>('assistant/conversation/edit', intent, undefined, 30000);
-      if (!result.pendingSettings) localStorage.removeItem(key);
-      return result;
-    } catch (e) { if (e instanceof ApiError && e.code === 'edit_rejected') localStorage.removeItem(key); else releaseRejectedProjectRequest(key, intent.requestId, e); throw e; }
+    try { return await editConversation(snapshot.epoch, conversation, changes); }
     finally { await refresh(); if (selectedRef.current === conversation.id) await loadHistory(conversation.id); }
   };
   const remove = async (conversation: Conversation) => {

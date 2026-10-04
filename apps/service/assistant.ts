@@ -32,7 +32,7 @@ import { ConversationSearch } from './conversation-search.js';
 import { ArtifactReader } from './artifacts.js';
 import { SavedHistory } from './saved-history.js';
 import { matchesMessageSource } from '../../packages/domain/conversation-source.js';
-import { conversationAccountSchema } from '../../packages/domain/assistant.js';
+import { conversationAccountSchema, isConversationVisibilityChange } from '../../packages/domain/assistant.js';
 import { ConversationContinuation } from './conversation-continuation.js';
 import { effortPreference, nativeThinking, resolveAutoEffort, taskEffortDemand, type EffortDemand } from '../../packages/domain/auto-effort.js';
 
@@ -149,6 +149,7 @@ export class AssistantService {
   private interruptedOperations: AssistantOperation[] = [];
   private interruptedConversations: Conversation[] = [];
   private reconnectPending = false;
+  private restoringVisibility = new Set<string>();
   constructor(private store: Store, private gateway: AssistantTransport, artifactExchange?: typeof fetch, private accessControl?: Pick<SessionSettingsControl, 'request'>, private responseControl?: Pick<SessionSettingsControl, 'request'>) {
     this.researchProgress = new AssistantResearchProgress(store, { conversation: id => this.conversation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (this.closed || this.voiceBusy(conversation.id)) throw new Fault(409, 'research_unavailable', 'Reconnect the original research conversation.'); }, save: operation => this.saveOperation(operation) });
     this.plans = new AssistantPlans(store, { conversation: id => this.conversation(id), operation: id => this.operation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (conversation.archived || conversation.deleted || conversation.pendingSettings || this.voiceBusy(conversation.id)) throw new Fault(409, 'plan_unavailable', 'Restore and reconnect this chat before continuing its plan.'); }, save: operation => this.saveOperation(operation), dispatch: id => { void this.dispatch(id); } });
@@ -354,7 +355,14 @@ export class AssistantService {
     return this.store.internalWrite(`assistant:output:${original.id}`, { ...prepared, file, state: 'ready' as const });
   }
   state(): AssistantState { return { plans: this.plans.list(), removals: this.removals.list(), connection: this.gateway.status(), conversations: this.conversations(), operations: this.operations(), queue: this.queue(), pins: this.pins.list(), memory: this.memory.state(), historyVersions: { ...this.historyVersions } }; }
-  private saveConversation(value: Conversation) { if (this.closed || this.removals.removed(value.id) || this.removals.pending(value.id)) return value; return this.store.internalWrite(conversationKey(value.id), { ...value, updatedAt: now() }); }
+  private saveConversation(value: Conversation) {
+    if (this.closed || this.removals.removed(value.id) || this.removals.pending(value.id)) return value;
+    const current = this.store.internalRead<Conversation>(conversationKey(value.id));
+    // A history/setup response captured before a local move cannot bring the
+    // chat back out of Deleted or overwrite a later restore.
+    if (current && (current.visibilityRevision ?? 0) > (value.visibilityRevision ?? 0)) value = { ...value, archived: current.archived, deleted: current.deleted, visibilityRevision: current.visibilityRevision, nativeRestorePending: current.nativeRestorePending, revision: Math.max(current.revision, value.revision) };
+    return this.store.internalWrite(conversationKey(value.id), { ...value, updatedAt: now() });
+  }
   private saveOperation(value: AssistantOperation) {
     if (this.closed || this.removals.removed(value.conversationId)) return value;
     const current = this.store.internalRead<AssistantOperation>(operationKey(value.id)), observedAt = now();
@@ -403,8 +411,9 @@ export class AssistantService {
       || current.nativeKey !== captured.nativeKey || current.nativeId !== captured.nativeId || current.connectionGeneration !== captured.connectionGeneration) return;
     return current;
   }
-  private assertConnection(conversation?: Conversation, write = true) {
+  private assertConnection(conversation?: Conversation, write = true, allowPendingRestore = false) {
     if (conversation) this.removals.assertAvailable(conversation.id);
+    if (write && conversation?.nativeRestorePending && !allowPendingRestore) throw new Fault(409, 'restore_pending', 'This chat is restored. Check its status after reconnecting before starting new work.');
     if (write && conversation?.pendingResume) throw new Fault(409, 'continuation_pending', 'Check this chat’s pending connection before starting new work. Your draft is kept.');
     const status = this.gateway.status();
     if (status.state !== 'ready') throw new Fault(503, 'gateway_disconnected', 'Connect OpenClaw before continuing. Saved work is kept.');
@@ -999,14 +1008,18 @@ export class AssistantService {
   }
   async edit(device: string, raw: unknown) {
     const input = conversationEditSchema.parse(raw), conversation = this.conversation(input.conversationId);
-    // A failed/unknown setup has no native session to archive. Trash only its
-    // retained local record, leaving setup receipts, drafts and files intact.
-    if (!conversation.nativeId && input.deleted !== undefined && Object.keys(input).every(key => ['requestId', 'epoch', 'conversationId', 'expectedRevision', 'deleted'].includes(key))) {
-      return this.store.admit(device, input, { type: 'conversation.edit', ...input }, () => {
-        if (conversation.revision !== input.expectedRevision || conversation.pendingSettings || conversation.state === 'creating') throw new Fault(409, 'conversation_changed', 'This chat is still changing. Check its current status.');
-        if (this.voiceBusy(conversation.id) || this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Finish the current reply before deleting this chat.');
-        return this.saveConversation({ ...conversation, revision: conversation.revision + 1, deleted: !!input.deleted, archived: !!input.deleted });
-      }).value;
+    // Moving a chat is reversible local organization, not a native settings or
+    // stop request. Keep uncertain work, drafts and original identities intact.
+    if (isConversationVisibilityChange(input, true)) {
+      const receipt = this.store.admit(device, input, { type: 'conversation.edit', ...input }, () => {
+        if (conversation.revision !== input.expectedRevision || conversation.state === 'creating' || conversation.pendingResume) throw new Fault(409, 'conversation_changed', 'This chat is still changing. Check its current status.');
+        if ((input.deleted === true || input.archived === true) && (this.voiceBusy(conversation.id) || this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state) && op.state !== 'unknown'))) throw new Fault(409, 'run_unsettled', 'Finish the current reply or voice call before moving this chat.');
+        if (input.deleted !== undefined && input.archived !== undefined && input.archived !== input.deleted || conversation.deleted && input.deleted === undefined && input.archived === false) throw new Fault(409, 'conversation_changed', 'Restore this chat from Deleted before changing its archive status.');
+        const hiding = input.deleted === true || input.archived === true;
+        return this.saveConversation({ ...conversation, revision: conversation.revision + 1, visibilityRevision: (conversation.visibilityRevision ?? 0) + 1, nativeRestorePending: !hiding && !!conversation.nativeId || undefined, ...(input.deleted !== undefined ? { deleted: input.deleted, archived: input.deleted } : { archived: input.archived! }) });
+      });
+      if (receipt.fresh && !this.closed && this.conversation(conversation.id).nativeRestorePending) await this.reconcile(conversation.id).catch(() => undefined);
+      return receipt.fresh ? this.conversation(conversation.id) : receipt.value;
     }
     if (input.deleted !== undefined) input.archived = input.deleted;
     const nextProject = input.projectId ? this.store.readEntity('project', input.projectId) : undefined;
@@ -1019,7 +1032,7 @@ export class AssistantService {
       if (input.projectId && input.projectId !== conversation.projectId && this.store.projectIsDeleted(input.projectId)) throw new Fault(409, 'project_deleted', 'Restore this Project from Deleted before moving a conversation into it.');
       if (conversation.revision !== input.expectedRevision || conversation.pendingSettings || !conversation.nativeId) throw new Fault(409, 'conversation_changed', 'The conversation changed. Review its current state.');
       if (this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'run_unsettled', 'Settle the current run before changing conversation settings.');
-      this.saveConversation({ ...conversation, settingsResult: undefined, pendingSettings: { permissionMode: input.permissionMode, requestId: input.requestId, title: input.title, archived: input.archived, deleted: input.deleted, pinned: input.pinned, unread: input.unread, projectId: input.projectId, model: input.model, thinking: input.thinking, fastMode: input.fastMode } });
+      this.saveConversation({ ...conversation, settingsResult: undefined, pendingSettings: { permissionMode: input.permissionMode, requestId: input.requestId, visibilityRevision: conversation.visibilityRevision ?? 0, title: input.title, archived: input.archived, deleted: input.deleted, pinned: input.pinned, unread: input.unread, projectId: input.projectId, model: input.model, thinking: input.thinking, fastMode: input.fastMode } });
       return this.store.internalWrite(`assistant:edit:${input.requestId}`, { conversationId: conversation.id, state: 'prepared' });
     });
     if (!intent.fresh) return this.conversation(conversation.id);
@@ -1038,7 +1051,7 @@ export class AssistantService {
     try {
       const transport = input.permissionMode === 'full' && this.accessControl ? this.accessControl : (input.thinking !== undefined || input.fastMode !== undefined) && this.responseControl ? this.responseControl : this.gateway;
       const response = await transport.request<Record<string, any>>('sessions.patch', { key: conversation.nativeKey, expectedSessionId: conversation.nativeId, ...(input.permissionMode !== undefined ? { permissionMode: input.permissionMode } : {}), ...(input.title !== undefined ? { label: input.title } : {}), ...(input.archived !== undefined ? { archived: input.archived } : {}), ...(input.pinned !== undefined ? { pinned: input.pinned } : {}), ...(input.unread !== undefined ? { unread: input.unread } : {}), ...(input.model !== undefined && input.model !== conversation.model ? { model: input.model } : {}), ...(input.thinking !== undefined ? { thinkingLevel: nativeThinking(input.thinking) } : {}), ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}) });
-      this.assertConnection(conversation);
+      this.assertConnection(conversation, true, true);
       const actual = object(response.entry);
       if (actual.sessionId !== conversation.nativeId || (input.permissionMode !== undefined && (actual.permissionMode !== input.permissionMode || actual.permissionModePending === true)) || (input.thinking !== undefined && (actual.thinkingLevel ?? null) !== nativeThinking(input.thinking)) || (input.fastMode !== undefined && (actual.fastMode ?? null) !== input.fastMode)) throw new Error('Response settings await effective readback');
       return this.settleSettings(id, requestId);
@@ -1052,11 +1065,11 @@ export class AssistantService {
         throw new Fault(409, 'edit_rejected', message);
       }
       throw new Fault(409, 'edit_unknown', 'This settings change is not confirmed. Check status, retry the same settings, or keep the settings currently on the host.');
-    } finally { this.settingRequests.delete(requestId); }
+    } finally { this.settingRequests.delete(requestId); if (!this.closed && this.conversation(id).nativeRestorePending) void this.reconcile(id).catch(() => undefined); }
   }
   async recoverSettings(device: string, raw: unknown): Promise<Conversation> {
     const input = recoverSettingsSchema.parse(raw), conversation = this.conversation(input.conversationId);
-    this.assertConnection(conversation);
+    this.assertConnection(conversation, true, true);
     if ([...this.settingRequests.values()].includes(conversation.id) || this.voiceBusy(conversation.id) || this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))) throw new Fault(409, 'settings_busy', 'Wait for the current reply or settings change to finish.');
     const receipt = this.store.admit(device, input, { type: 'conversation.recover-settings', ...input }, () => {
       if (conversation.revision !== input.expectedRevision || conversation.pendingSettings?.requestId !== input.pendingRequestId) throw new Fault(409, 'conversation_changed', 'These settings changed. Review the current conversation.');
@@ -1067,19 +1080,20 @@ export class AssistantService {
     this.settingRequests.set(input.requestId, conversation.id);
     try {
       const history = await this.history(conversation.id), current = this.conversation(conversation.id), actual = history.nativeSettings;
-      this.assertConnection(conversation);
+      this.assertConnection(conversation, true, true);
       if (current.revision !== input.expectedRevision || current.pendingSettings?.requestId !== input.pendingRequestId || history.nativeId !== conversation.nativeId || !actual || actual.permissionModePending) throw new Fault(409, 'settings_unverified', 'The host settings are still changing. Check their status before continuing.');
       const pending = current.pendingSettings, patch: Partial<Conversation> = {};
+      const visibilityUnchanged = (pending.visibilityRevision ?? 0) === (current.visibilityRevision ?? 0);
       const fields = ['title', 'archived', 'pinned', 'unread', 'model', 'thinking', 'fastMode', 'permissionMode'] as const;
       for (const field of fields) if (pending[field] !== undefined) {
         const value = actual[field];
         if (value === undefined || value === null && !['model', 'thinking', 'fastMode'].includes(field)) throw new Fault(409, 'settings_unverified', 'The host did not return every changed setting. Check status or retry the original settings.');
-        Object.assign(patch, { [field]: value });
+        if (field !== 'archived' || visibilityUnchanged) Object.assign(patch, { [field]: value });
       }
-      if (pending.deleted !== undefined) patch.deleted = actual.archived ? current.deleted : false;
+      if (pending.deleted !== undefined && visibilityUnchanged) patch.deleted = actual.archived ? current.deleted : false;
       this.store.internalWrite(`assistant:edit:${input.pendingRequestId}`, { conversationId: current.id, state: 'superseded', observedAt: now(), nativeId: history.nativeId });
       return this.saveConversation({ ...current, ...patch, revision: current.revision + 1, pendingSettings: undefined, settingsResult: { requestId: input.pendingRequestId, state: 'kept-current' } });
-    } finally { this.settingRequests.delete(input.requestId); }
+    } finally { this.settingRequests.delete(input.requestId); if (!this.closed && this.conversation(conversation.id).nativeRestorePending) void this.reconcile(conversation.id).catch(() => undefined); }
   }
 
   private settleSettings(id: string, requestId: string) {
@@ -1087,7 +1101,8 @@ export class AssistantService {
     // arrives. Only the still-pending intent may change the current revision.
     const current = this.conversation(id), pending = current.pendingSettings;
     if (!pending || pending.requestId !== requestId) return current;
-    const result = this.saveConversation({ ...current, revision: current.revision + 1, permissionMode: pending.permissionMode ?? current.permissionMode, title: pending.title ?? current.title, ...(pending.title !== undefined ? { autoTitle: false } : {}), archived: pending.archived ?? current.archived, deleted: pending.deleted ?? current.deleted, pinned: pending.pinned ?? current.pinned, unread: pending.unread ?? current.unread, projectId: pending.projectId !== undefined ? pending.projectId : current.projectId, model: pending.model !== undefined ? pending.model : current.model, thinking: pending.thinking !== undefined ? pending.thinking : current.thinking, fastMode: pending.fastMode !== undefined ? pending.fastMode : current.fastMode, pendingSettings: undefined, settingsResult: { requestId, state: 'completed' } });
+    const visibilityUnchanged = (pending.visibilityRevision ?? 0) === (current.visibilityRevision ?? 0);
+    const result = this.saveConversation({ ...current, revision: current.revision + 1, permissionMode: pending.permissionMode ?? current.permissionMode, title: pending.title ?? current.title, ...(pending.title !== undefined ? { autoTitle: false } : {}), archived: visibilityUnchanged ? pending.archived ?? current.archived : current.archived, deleted: visibilityUnchanged ? pending.deleted ?? current.deleted : current.deleted, pinned: pending.pinned ?? current.pinned, unread: pending.unread ?? current.unread, projectId: pending.projectId !== undefined ? pending.projectId : current.projectId, model: pending.model !== undefined ? pending.model : current.model, thinking: pending.thinking !== undefined ? pending.thinking : current.thinking, fastMode: pending.fastMode !== undefined ? pending.fastMode : current.fastMode, pendingSettings: undefined, settingsResult: { requestId, state: 'completed' } });
     this.store.internalWrite(`assistant:edit:${requestId}`, { conversationId: id, state: 'completed' });
     return result;
   }
@@ -1127,7 +1142,7 @@ export class AssistantService {
     if (!original.nativeRunId) throw new Fault(409, 'run_identity_unknown', 'The exact native run is not known yet. Check its status first.');
     const admitted = this.store.admit(device, input, { type: 'assistant.cancel', ...input }, () => this.saveOperation({ ...original, cancelRequested: true }));
     if (admitted.fresh && !terminal.has(original.state)) {
-      try { this.assertConnection(this.conversation(original.conversationId)); await this.gateway.request('chat.abort', { sessionKey: original.nativeKey, runId: original.nativeRunId, preserveSideRuns: true }); }
+      try { this.assertConnection(this.conversation(original.conversationId), true, true); await this.gateway.request('chat.abort', { sessionKey: original.nativeKey, runId: original.nativeRunId, preserveSideRuns: true }); }
       catch { this.saveOperation({ ...this.operation(original.id), state: 'unknown', error: 'Cancellation has not been confirmed. Check the original run.' }); }
     }
     return this.operation(original.id);
@@ -1173,7 +1188,39 @@ export class AssistantService {
       }
       // An idle session alone cannot prove a particular unknown send succeeded or failed.
     }
+    await this.synchronizeNativeRestore(id, history);
     return history;
+  }
+  private async synchronizeNativeRestore(id: string, history: ReconciliationHistory) {
+    const original = this.conversation(id), epoch = this.store.epoch;
+    const current = () => {
+      if (this.closed || epoch !== this.store.epoch || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused) return;
+      const chat = this.store.internalRead<Conversation>(conversationKey(id)), status = this.gateway.status();
+      if (!chat?.nativeRestorePending || chat.archived || chat.deleted || chat.pendingSettings || chat.pendingResume
+        || chat.visibilityRevision !== original.visibilityRevision || chat.nativeId !== original.nativeId || chat.nativeKey !== original.nativeKey
+        || chat.connectionGeneration !== original.connectionGeneration || status.state !== 'ready' || status.generation !== chat.connectionGeneration
+        || !status.grantedScopes.includes('operator.write') || this.voiceBusy(id) || [...this.settingRequests.values()].includes(id)) return;
+      return chat;
+    };
+    if (this.restoringVisibility.has(id) || !current() || !original.nativeId || history.nativeId !== original.nativeId) return;
+    this.restoringVisibility.add(id);
+    try {
+      let observed = history;
+      if (observed.nativeSettings?.archived !== false) {
+        // Unknown does not mean idle, even when a session has no current run.
+        // Observe its original receipt; never replay or interrupt that work.
+        if (observed.nativeSettings?.archived !== true || observed.inFlightRun || observed.activeRunIds?.length !== 0
+          || this.operations().some(op => op.conversationId === id && !terminal.has(op.state))) return;
+        this.store.assertUpdateAdmission();
+        if (!current()) return;
+        await this.gateway.request('sessions.patch', { key: original.nativeKey, expectedSessionId: original.nativeId, archived: false });
+        if (!current()) return;
+        observed = await this.history(id);
+      }
+      const chat = current();
+      if (chat && observed.nativeId === original.nativeId && observed.nativeSettings?.archived === false) this.saveConversation({ ...chat, nativeRestorePending: undefined });
+    } catch { /* Keep the same restore pending until exact native readback. */ }
+    finally { this.restoringVisibility.delete(id); }
   }
   private async event(event: EventFrame) {
     if (this.closed) return;
