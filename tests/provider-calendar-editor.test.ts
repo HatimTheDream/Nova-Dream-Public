@@ -211,7 +211,7 @@ test('an explicitly rejected stale-source preparation unlocks its kept writing w
 test('the original Calendar host permits read-only refresh of retained writing after account permission changes', async t => {
   const f = setup(t, remoteDraft()), connected = { ...source, generation: randomUUID(), accountCanWrite: false };
   t.mock.method(globalThis, 'fetch', async (route: any) => wire(route.startsWith('/api/calendar/state')
-    ? { epoch, deviceId, range: { from: '2026-09-01', to: '2026-10-01', timezone: 'America/Los_Angeles' }, events: [], localEvents: [], sources: [{ ...connected, selected: true, state: 'ready' }], jobs: [], selection: { revision: 1, sourceIds: [source.id], showLocal: true, showTasks: true }, accountMessages: [], eventsLimited: false }
+    ? { epoch, deviceId, range: Object.fromEntries(new URL(String(route), 'http://nova.test').searchParams), events: [], localEvents: [], sources: [{ ...connected, selected: true, state: 'ready' }], jobs: [], selection: { revision: 1, sourceIds: [source.id], showLocal: true, showTasks: true }, accountMessages: [], eventsLimited: false }
     : { ...editable, source: connected, target: { ...target, generation: connected.generation } }));
   const host = createCalendarHost({ snapshot: { epoch, deviceId, layout: { value: { timezone: 'America/Los_Angeles' } } } as any, windowId, navigate() {}, keepView() {}, async changed() {} });
   await host.read({ startDate: '2026-09-01' } as any, false, new AbortController().signal);

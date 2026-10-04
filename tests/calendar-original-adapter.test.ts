@@ -76,7 +76,11 @@ test('original Calendar opens the exact one-off or recurring provider checklist 
   ];
   events.push({ id: local.id, sourceId: 'local', title: value.title, notes: value.notes, location: value.location, status: 'confirmed', interval: { kind: 'instant', start: '2026-09-09T00:00:00Z', end: '2026-09-09T01:00:00Z' } });
   const response = { ...state, sources, events, selection: { ...state.selection, revision: 1 } };
-  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } }));
+  t.mock.method(globalThis, 'fetch', async (route: any) => {
+    const url = new URL(String(route), 'http://nova.test');
+    assert.equal(url.pathname, '/api/calendar/state');
+    return new Response(JSON.stringify({ ...response, range: Object.fromEntries(url.searchParams) }), { headers: { 'Content-Type': 'application/json' } });
+  });
   const host = createCalendarHost({ snapshot: { epoch: state.epoch, deviceId: state.deviceId, layout: { value: { timezone: 'UTC' } } } as any, windowId: 'subtasks', keepView() {}, changed: async () => {}, navigate: route => navigated.push(route), openSubtasks: (row, captured, original) => received.push({ row, captured, original }) });
   const read = await host.read({ startDate: '2026-09-01', endDate: '2026-10-01' } as any, false, new AbortController().signal);
   for (const event of read.events.filter(e => e.source !== 'local')) host.openSubtasks!(event);
