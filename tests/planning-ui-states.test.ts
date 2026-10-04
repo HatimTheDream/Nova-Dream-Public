@@ -50,7 +50,7 @@ test('compact Home never presents incomplete or failed calendar reads as a confi
     assert.match(render(state, '', 'square'), /Schedule needs refreshing/);
     assert.deepEqual(state, before);
   }
-  assert.match(render(savedCalendar, 'Refresh failed'), /Schedule needs refreshing/);
+  assert.match(render(savedCalendar, 'Refresh failed'), /Calendar could not refresh/);
   assert.match(render(undefined, 'Refresh failed'), /Calendar unavailable/);
   assert.match(render(), /Loading your schedule/);
   assert.match(render(savedCalendar), /No upcoming event/);

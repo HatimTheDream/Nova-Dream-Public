@@ -1,3 +1,9 @@
+## [2.1.2] — 2026-10-03
+
+- Automatically refreshes Home's upcoming calendar range and follows in-progress reads, so an expired cache does not leave the schedule warning stuck. Saved calendar visibility choices are preserved.
+- Keeps appointment dates and times visible during refreshes and failures, distinguishes account connection problems from refresh progress, and adds a direct Refresh action.
+- Rejects calendar responses for a different date range before applying selection or refresh commands.
+
 ## [2.1.1] — 2026-10-03
 
 - Applies the approved Quiet List visual treatment while restoring Nova's raised, outlined buttons across the main modules, including inactive navigation and secondary actions.

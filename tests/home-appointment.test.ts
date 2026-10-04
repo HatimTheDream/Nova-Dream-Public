@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextAppointment } from '../apps/client/src/HomeAppointmentWidget';
-import type { CalendarDisplayEvent } from '../packages/domain/calendar';
+import { nextAppointment, appointmentRefreshPending, HomeAppointmentContent } from '../apps/client/src/HomeAppointmentWidget';
+import type { CalendarDisplayEvent, CalendarState } from '../packages/domain/calendar';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const now = Date.parse('2026-09-19T18:00:00Z');
 const event = (id: string, patch: Partial<CalendarDisplayEvent> = {}): CalendarDisplayEvent => ({
@@ -59,4 +61,38 @@ test('Invalid and reversed event intervals cannot replace a valid upcoming appoi
     event('Empty', { interval: { kind: 'instant', start: '2026-09-19T18:30:00Z', end: '2026-09-19T18:30:00Z' } }),
   ];
   assert.equal(nextAppointment([...invalid, valid], 'UTC', now)?.event, valid);
+});
+
+test('Home retains appointment time and distinguishes active refresh, stale data and connection failures', () => {
+  const source: CalendarState['sources'][number] = { id: 'calendar:fixture', accountId: 'account', generation: 'generation', provider: 'google', calendarId: 'calendar', name: 'Calendar', accountLabel: 'Account', primary: true, providerCanWrite: false, selected: true, state: 'ready' };
+  const state: CalendarState = { epoch: 'epoch', deviceId: 'device', eventsLimited: false, range: { from: '2026-09-19', to: '2026-10-19', timezone: 'UTC' }, sources: [source], selection: { revision: 1, sourceIds: [source.id], showLocal: true, showTasks: false }, events: [event('Saved appointment')], localEvents: [], jobs: [], accountMessages: [] };
+  const render = (error = '') => renderToStaticMarkup(createElement(HomeAppointmentContent, { state, error, timezone: 'UTC', now, size: 'compact', openCalendar() {}, refresh() {} }));
+  const ready = render(), time = ready.match(/<p class="home-appointment-time">([^<]+)<\/p>/)![1];
+  assert.equal(appointmentRefreshPending(state), false);
+  source.state = 'refreshing';
+  assert.equal(appointmentRefreshPending(state), true);
+  assert.ok(render().includes(time)); assert.match(render(), /Refreshing schedule/); assert.doesNotMatch(render(), /Schedule needs refreshing|No upcoming event/);
+  assert.match(render(), /disabled=""/);
+  assert.match(render('Read failed'), /Calendar could not refresh/);
+  assert.doesNotMatch(render('Read failed'), /disabled=""|Refreshing schedule/);
+  assert.ok(render('Read failed').includes(time));
+  source.state = 'stale';
+  assert.equal(appointmentRefreshPending(state), false);
+  assert.ok(render().includes(time)); assert.match(render(), /Schedule needs refreshing/);
+  assert.ok(render('Read failed').includes(time)); assert.match(render('Read failed'), /Calendar could not refresh/);
+  source.state = 'unavailable';
+  assert.ok(render().includes(time)); assert.match(render(), /Calendar connection needs attention/); assert.match(render(), /Settings/);
+  state.events = [];
+  assert.match(render(), /Calendar connection needs attention/); assert.doesNotMatch(render(), /No upcoming event/);
+  source.state = 'ready';
+  assert.match(render(), /No upcoming event/);
+});
+
+test('Home follows source discovery without treating unrelated event refresh jobs as its own', () => {
+  const state = { sources: [], jobs: [{ kind: 'events', state: 'running' }] } as unknown as CalendarState;
+  assert.equal(appointmentRefreshPending(state), false);
+  state.jobs[0].kind = 'sources';
+  assert.equal(appointmentRefreshPending(state), true);
+  state.jobs[0].state = 'completed';
+  assert.equal(appointmentRefreshPending(state), false);
 });

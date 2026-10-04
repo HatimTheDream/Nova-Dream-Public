@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CalendarDisplayEvent, CalendarState } from '../../../packages/domain/calendar';
 import { addDays } from '../../../packages/domain/calendar';
 import { dayStart } from '../../../packages/domain/calendar-time';
 import { dayInZone } from '../../../packages/domain/tasks';
-import { request } from './api';
+import { createCalendarSync } from './calendar-sync';
 import type { HomeWidget } from '../../../packages/domain/home-widgets';
 
 export function upcomingAppointments(events: CalendarDisplayEvent[], timezone: string, now: number) {
@@ -15,38 +15,53 @@ export function upcomingAppointments(events: CalendarDisplayEvent[], timezone: s
 
 export function nextAppointment(events: CalendarDisplayEvent[], timezone: string, now: number) { return upcomingAppointments(events, timezone, now)[0]; }
 
+export function appointmentRefreshPending(state: CalendarState) {
+  return state.sources.some(source => source.selected && source.state === 'refreshing') || state.jobs.some(job => job.state === 'running' && job.kind === 'sources');
+}
+
 export function HomeAppointmentWidget({ epoch, deviceId, timezone, now, size, openCalendar }: { epoch: string; deviceId: string; timezone: string; now: number; size?: HomeWidget['size']; openCalendar: () => void }) {
   const today = dayInZone(timezone, now), until = addDays(today, 30);
   const identity = `${epoch}:${deviceId}:${today}:${timezone}`;
   const [result, setResult] = useState<{ identity: string; state: CalendarState }>();
   const [failure, setFailure] = useState<{ identity: string; message: string }>();
+  const sync = useMemo(() => createCalendarSync(epoch, deviceId), [epoch, deviceId]);
+  const [retry, setRetry] = useState(0);
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
-    let active = true, busy = false;
+    let active = true, busy = false, force = retry > 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const load = async () => {
-      if (busy) return; busy = true;
+      if (busy || document.hidden) return; busy = true; setLoading(true);
+      let delay = 60000;
       try {
-        const state = await request<CalendarState>(`calendar/state?${new URLSearchParams({ from: today, to: until, timezone })}`, undefined, controller.signal);
+        const requestedForce = force; force = false;
+        const state = await sync.load({ from: today, to: until, timezone }, requestedForce, controller.signal);
         if (!active) return;
         if (state.epoch !== epoch || state.deviceId !== deviceId || state.range.from !== today || state.range.to !== until || state.range.timezone !== timezone) throw Error('Calendar changed. Reopen Home to load the current schedule.');
         setResult({ identity, state }); setFailure(undefined);
+        if (appointmentRefreshPending(state)) delay = 1500;
       } catch { if (active) setFailure({ identity, message: 'Calendar could not be updated. Open Calendar to check your schedule.' }); }
-      finally { busy = false; }
+      finally { busy = false; if (active) { setLoading(false); timer = setTimeout(() => void load(), delay); } }
     };
+    const visible = () => { if (!document.hidden && !busy) { clearTimeout(timer); void load(); } };
     void load();
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, 60000);
-    return () => { active = false; controller.abort(); clearInterval(timer); };
-  }, [identity]);
+    document.addEventListener('visibilitychange', visible);
+    return () => { active = false; controller.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
+  }, [identity, sync, retry]);
   const state = result?.identity === identity ? result.state : undefined;
   const error = failure?.identity === identity ? failure.message : '';
-  return <HomeAppointmentContent state={state} error={error} timezone={timezone} now={now} size={size} openCalendar={openCalendar}/>;
+  return <HomeAppointmentContent state={state} error={error} timezone={timezone} now={now} size={size} openCalendar={openCalendar} refreshing={loading} refresh={() => setRetry(value => value + 1)}/>;
 }
 
-export function HomeAppointmentContent({ state, error = '', timezone, now, size, openCalendar }: { state?: CalendarState; error?: string; timezone: string; now: number; size?: HomeWidget['size']; openCalendar: () => void }) {
+export function HomeAppointmentContent({ state, error = '', timezone, now, size, openCalendar, refreshing = false, refresh }: { state?: CalendarState; error?: string; timezone: string; now: number; size?: HomeWidget['size']; openCalendar: () => void; refreshing?: boolean; refresh?: () => void }) {
   const compact = size === 'compact', today = dayInZone(timezone, now);
   const upcoming = state ? upcomingAppointments(state.events, timezone, now) : [];
   const next = upcoming[0];
   const incomplete = state && (state.eventsLimited || state.sources.some(source => source.selected && source.state !== 'ready') || state.selection.sourceIds.some(id => !state.sources.some(source => source.id === id)) || state.accountMessages.some(account => account.limited));
+  const pending = refreshing || !error && !!state && appointmentRefreshPending(state);
+  const unavailable = state?.sources.some(source => source.selected && source.state === 'unavailable');
+  const status = unavailable ? 'Calendar connection needs attention' : pending ? 'Refreshing schedule…' : error ? 'Calendar could not refresh' : incomplete ? 'Schedule needs refreshing' : '';
   const eventLabel = (item: typeof upcoming[number]) => item.event.interval.kind === 'date'
     ? `${item.event.interval.start === today ? 'Today' : new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${item.event.interval.start}T12:00:00Z`))} · All day`
     : new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(item.start);
@@ -55,13 +70,14 @@ export function HomeAppointmentContent({ state, error = '', timezone, now, size,
     {next ? <>
       {!compact && <div className="home-appointment-date" aria-hidden="true"><span>{new Intl.DateTimeFormat(undefined, { weekday: 'short', timeZone: timezone }).format(date!)}</span><strong>{new Intl.DateTimeFormat(undefined, { day: 'numeric', timeZone: timezone }).format(date!)}</strong></div>}
       <div className="home-appointment-events">{upcoming.slice(0, size === 'large' ? 3 : 1).map((item, index) => <div className="home-appointment-event" key={item.event.id}>
-        <p className="home-appointment-time">{compact && (error || incomplete) ? 'Schedule needs refreshing' : eventLabel(item)}</p>
+        <p className="home-appointment-time">{eventLabel(item)}</p>
         <h3 title={item.event.title}>{item.event.title}</h3>
         {!compact && <p className="home-appointment-status">{item.start <= now ? item.event.interval.kind === 'date' ? 'Today’s event' : 'Happening now' : index === 0 ? 'Coming up' : 'Later'}{item.event.status === 'tentative' ? ' · Tentative' : ''}</p>}
         {size === 'large' && item.event.location && <p className="home-appointment-location" title={item.event.location}>{item.event.location}</p>}
       </div>)}</div>
-    </> : <><h3 role="status">{error || incomplete ? state ? 'Schedule needs refreshing' : 'Calendar unavailable' : state ? compact ? 'No upcoming event' : 'No upcoming event in the saved calendar' : 'Loading your schedule…'}</h3>{state && !compact && <p>Looking 30 days ahead in the calendars you have selected.</p>}</>}
-    {!compact && (error || incomplete) && <p className="home-save-notice">{error || 'Some calendar data needs refreshing. Open Calendar to check for changes.'}</p>}
-    <div className="home-actions"><button className="home-action" onClick={openCalendar}>Open Calendar</button></div>
+    </> : <><h3 role="status">{state ? status || (compact ? 'No upcoming event' : 'No upcoming event in the saved calendar') : error ? 'Calendar unavailable' : 'Loading your schedule…'}</h3>{state && !compact && <p>Looking 30 days ahead in the calendars you have selected.</p>}</>}
+    {next && status && <p className="home-save-notice" role="status">{status}{unavailable ? '. Check the account in Settings → Accounts.' : !pending ? '. Showing saved events.' : ''}</p>}
+    {!next && unavailable && <p className="home-save-notice">Check the account in Settings → Accounts.</p>}
+    <div className="home-actions"><button className="home-action" onClick={openCalendar}>Open Calendar</button>{refresh && <button className="home-action" disabled={pending} onClick={refresh}>{pending ? 'Refreshing…' : 'Refresh'}</button>}</div>
   </div>;
 }

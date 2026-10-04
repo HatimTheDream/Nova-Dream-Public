@@ -7,9 +7,12 @@ export function createCalendarSync(epoch: string, deviceId: string, api: typeof 
   const read = async (range: CalendarRange, signal?: AbortSignal) => {
     const state = await api<CalendarState>(`calendar/state?${new URLSearchParams(range)}`, undefined, signal);
     if (state.epoch !== epoch || state.deviceId !== deviceId) throw Error('Reconnect this workspace before using its calendar.');
+    if (state.range.from !== range.from || state.range.to !== range.to || state.range.timezone !== range.timezone) throw Error('Calendar dates changed. Reopen this view to load the current schedule.');
+    signal?.throwIfAborted();
     return state;
   };
   const command = async (path: string, body: object, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     try { await api(path, { requestId: crypto.randomUUID(), epoch, ...body }, signal); return true; }
     catch (error) {
       if (['calendar_busy', 'calendar_selection_changed'].includes((error as { code?: string }).code ?? '')) return false;

@@ -11,7 +11,7 @@ function fixture() {
   let conflict = false;
   const api = (async (path: string, body?: any, signal?: AbortSignal) => {
     signal?.throwIfAborted();
-    if (path.startsWith('calendar/state?')) return structuredClone(state);
+    if (path.startsWith('calendar/state?')) return { ...structuredClone(state), range: Object.fromEntries(new URLSearchParams(path.split('?')[1])) };
     calls.push({ path, body }); assert.equal(body.epoch, 'epoch');
     if (path === 'calendar/selection') {
       if (conflict) { state.selection = { ...state.selection, revision: 3, sourceIds: ['other'] }; state.sources.forEach(s => { s.selected = s.id === 'other'; }); conflict = false; throw new ApiError('calendar_selection_changed', 'Another window changed it'); }
@@ -69,4 +69,23 @@ test('refresh follows month and account-generation changes, skips active jobs an
   f.state.sources[0].state = 'stale'; f.state.sources[0].generation = 'replacement';
   await f.sync.load(range, false); assert.deepEqual(f.calls.at(-1)!.body.sourceIds, ['work']);
   await f.sync.load(range, true); assert.equal(f.calls.at(-1)!.path, 'calendar/refresh');
+});
+
+test('wrong calendar ranges and aborted reads stop before any selection or provider command', async () => {
+  for (const changed of [{ from: '2026-08-29' }, { to: '2026-10-12' }, { timezone: 'UTC' }]) {
+    const f = fixture(); let commands = 0;
+    const api = (async (_path: string, body?: unknown) => {
+      if (body) commands++;
+      return { ...f.state, range: { ...range, ...changed } };
+    }) as typeof request;
+    await assert.rejects(createCalendarSync('epoch', 'device', api).load(range, true), /Calendar dates changed/);
+    assert.equal(commands, 0);
+  }
+  const f = fixture(), controller = new AbortController(); let commands = 0;
+  const api = (async (_path: string, body?: unknown) => {
+    if (body) commands++;
+    controller.abort(); return f.state;
+  }) as typeof request;
+  await assert.rejects(createCalendarSync('epoch', 'device', api).load(range, true, controller.signal), { name: 'AbortError' });
+  assert.equal(commands, 0);
 });
