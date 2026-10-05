@@ -3,12 +3,15 @@ import contextlib
 from collections import Counter
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import sqlite3
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy/update-runner'))
@@ -287,6 +290,256 @@ class Codex158Tests(unittest.TestCase):
             recovery.embedded_schema(db, 'state_5.sqlite', '2026.9.8')
             db.execute('alter table threads add column creator_user_id TEXT')
             with self.assertRaises(RuntimeError): recovery.embedded_schema(db, 'state_5.sqlite', '2026.9.8')
+
+
+class ProcessLeaseTests(unittest.TestCase):
+    # Qualified official empty retirement token; no private workspace/owner data.
+    TOKEN_HEADER = bytes.fromhex('53514c69746520666f726d61742033001000010100402020000000010000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001002e95cc')
+    TOKEN = TOKEN_HEADER + bytes.fromhex('0d00000000100000') + bytes(3988)
+    SELECTED = pathlib.Path('selected-workspace')
+    LEASE = SELECTED / 'openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111111/owner.sqlite'
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-process-lease-test-')
+        self.root = pathlib.Path(self.temporary.name).resolve()
+        self.scratch = self.root / 'scratch'; self.scratch.mkdir(mode=0o700)
+        self.token = recovery._VERIFICATION_SCRATCH.set(self.scratch)
+        self.counter = 0
+
+    def tearDown(self):
+        recovery._VERIFICATION_SCRATCH.reset(self.token)
+        self.temporary.cleanup()
+
+    def fixture(self, data=None):
+        self.counter += 1
+        root = self.root / str(self.counter)
+        native = root / self.SELECTED / 'openclaw-runtime'; native.mkdir(parents=True, mode=0o700)
+        capture = native / 'state/tmp/plugin-captures'; capture.mkdir(parents=True, mode=0o700)
+        directory = root / self.LEASE.parent; directory.mkdir(mode=0o700)
+        path = root / self.LEASE; path.write_bytes(self.TOKEN if data is None else data); path.chmod(0o600)
+        return root, path
+
+    def static(self, root, version):
+        owners = recovery.native_capture_owner_paths(root, self.SELECTED, version)
+        return recovery.static_sqlite_files(root, self.SELECTED, owners)
+
+    def test_qualified_retirement_token_is_read_through_a_copy_without_mutation(self):
+        root, path = self.fixture()
+        self.assertEqual(hashlib.sha256(self.TOKEN).hexdigest(), recovery.CAPTURE_OWNER_RETIRED_SHA256)
+        before = recovery.sqlite_source_identity(path)
+        recovery.capture_owner_format(path, '2026.9.8')
+        self.assertEqual(recovery.sqlite_source_identity(path), before)
+        self.assertEqual(list(self.scratch.iterdir()), [])
+
+    def test_legacy_empty_marker_is_distinct_from_unqualified_database_formats(self):
+        root, marker = self.fixture(b'')
+        for version in ('2026.9.6', '2026.9.8'):
+            recovery.capture_owner_format(marker, version)
+        with self.assertRaises(RuntimeError): recovery.capture_owner_format(marker, '2026.9.2')
+        root, retired = self.fixture()
+        with self.assertRaises(RuntimeError): recovery.capture_owner_format(retired, '2026.9.6')
+        active = bytearray(self.TOKEN); active[60:64] = bytes(4)
+        retired.write_bytes(active)
+        with self.assertRaises(RuntimeError): recovery.capture_owner_format(retired, '2026.9.8')
+
+    def test_nonempty_schema_user_rows_and_altered_empty_bytes_are_rejected(self):
+        for sql in ('create table saved(value text)', "create table saved(value text); insert into saved values('retained')"):
+            root, path = self.fixture(b'')
+            with contextlib.closing(sqlite3.connect(path)) as connection: connection.executescript(sql)
+            with self.subTest(sql=sql), self.assertRaises(RuntimeError): recovery.capture_owner_format(path, '2026.9.8')
+        root, path = self.fixture()
+        altered = bytearray(self.TOKEN); altered[-1] = 1; path.write_bytes(altered)
+        with self.assertRaises(RuntimeError): recovery.capture_owner_format(path, '2026.9.8')
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_added_retirement_and_removed_legacy_leases_leave_all_other_stores_strict(self):
+        before, old = self.fixture(b''); after, new = self.fixture()
+        self.assertEqual(self.static(before, '2026.9.6'), self.static(after, '2026.9.8'))
+        new.unlink()
+        self.assertEqual(self.static(before, '2026.9.6'), self.static(after, '2026.9.8'))
+        old.unlink(); new.write_bytes(self.TOKEN); new.chmod(0o600)
+        self.assertEqual(self.static(before, '2026.9.6'), self.static(after, '2026.9.8'))
+        for root in (before, after): (root / self.LEASE.parent / 'retained.sqlite').write_bytes(b'saved')
+        self.assertEqual(self.static(before, '2026.9.6'), self.static(after, '2026.9.8'))
+        (after / self.LEASE.parent / 'retained.sqlite').write_bytes(b'changed')
+        self.assertNotEqual(self.static(before, '2026.9.6'), self.static(after, '2026.9.8'))
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_nested_malformed_nonselected_and_unsupported_namespaces_remain_static(self):
+        for relative in (self.LEASE.parent / 'captures/fixture/owner.sqlite',
+                         self.LEASE.parent.parent / 'not-a-uuid/owner.sqlite',
+                         pathlib.Path('archived-workspace') / self.LEASE.relative_to(self.SELECTED)):
+            before, old = self.fixture(); after, new = self.fixture()
+            path = after / relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(self.TOKEN)
+            with self.subTest(path=relative):
+                self.assertNotEqual(self.static(before, '2026.9.8'), self.static(after, '2026.9.8'))
+                self.assertIn(relative, self.static(after, '2026.9.8'))
+        before, old = self.fixture(); after, new = self.fixture(); old.unlink()
+        self.assertNotEqual(self.static(before, '2026.9.2'), self.static(after, '2026.9.2'))
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_links_permissions_owners_and_sidecars_are_rejected(self):
+        for kind in ('symlink', 'hardlink', 'file-mode', 'directory-mode', 'root-mode', 'sidecar', 'owner'):
+            root, path = self.fixture()
+            if kind == 'symlink':
+                outside = root / 'outside'; outside.write_bytes(self.TOKEN); path.unlink(); path.symlink_to(outside)
+            elif kind == 'hardlink': os.link(path, root / 'alias')
+            elif kind == 'file-mode': path.chmod(0o644)
+            elif kind == 'directory-mode': path.parent.chmod(0o755)
+            elif kind == 'root-mode': path.parent.parent.chmod(0o755)
+            elif kind == 'sidecar': pathlib.Path(str(path) + '-journal').write_bytes(b'')
+            if kind == 'owner':
+                original = pathlib.Path.lstat
+                fields = ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+                def changed_owner(candidate, *args, **kwargs):
+                    info = original(candidate, *args, **kwargs)
+                    if candidate == path:
+                        value = {name: getattr(info, name) for name in fields}; value['st_uid'] += 1
+                        return SimpleNamespace(**value)
+                    return info
+                with patch.object(pathlib.Path, 'lstat', changed_owner), self.assertRaises(RuntimeError):
+                    recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
+            else:
+                with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                    recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_redirected_ancestry_is_rejected_and_full_inventory_retains_capture_files(self):
+        root, path = self.fixture()
+        native = root / self.SELECTED / 'openclaw-runtime'
+        contents = path.parent / 'captures/plugin/source.txt'; contents.parent.mkdir(parents=True); contents.write_bytes(b'captured')
+        owners = recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
+        self.assertEqual(owners, {self.LEASE})
+        inventory, _ = recovery.inventory(root)
+        self.assertIn(self.LEASE.as_posix(), inventory)
+        self.assertEqual(inventory[self.LEASE.as_posix()]['sha256'], recovery.CAPTURE_OWNER_RETIRED_SHA256)
+        self.assertIn(contents.relative_to(root).as_posix(), inventory)
+        moved = root / 'moved-state'; (native / 'state').rename(moved); (native / 'state').symlink_to(moved, target_is_directory=True)
+        with self.assertRaises(RuntimeError): recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
+
+
+class NeutralChannelPolicyTests(unittest.TestCase):
+    SQL = 'CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at_ms INTEGER NOT NULL) STRICT;'
+    NEUTRAL = '{"roles":null,"identityScopes":null}'
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        base = pathlib.Path(self.temporary.name).resolve()
+        self.snapshot, self.live = base / 'snapshot', base / 'live'
+        self.selected = pathlib.Path('selected')
+        self.relative = self.selected / 'openclaw-runtime/openclaw.json'
+        for root in (self.snapshot, self.live):
+            path = root / self.relative
+            path.parent.mkdir(parents=True)
+            path.write_text('{"gateway":{"auth":{}},"commands":{"ownerAllowFrom":[]},"retained":"unchanged"}', encoding='utf-8')
+        self.context = self.authority()
+
+    def authority(self):
+        return {'workspace_roots': (self.snapshot, self.live, self.live, self.selected),
+                'configuration': {'path': str(self.live / self.relative),
+                                  'hashes': [recovery.digest(root / self.relative) for root in (self.snapshot, self.live)]},
+                'startup_window': (100, 110)}
+
+    def verify(self, before, after, **options):
+        context = self.context | options
+        recovery.retained_plugin_index(before, after, None,
+            self.live / self.selected / 'openclaw-runtime/state/state/openclaw.sqlite',
+            '2026.9.6', '2026.9.8', **context)
+
+    def insert(self, db, value=None, timestamp=105000):
+        db.execute('insert into config_machine_state values(?,?,?)',
+                   ('operator.channelPolicy', self.NEUTRAL if value is None else value, timestamp))
+
+    def test_exact_default_is_qualified_without_changing_either_database_or_other_keys(self):
+        with pair(self.SQL) as (before, after):
+            for db in (before, after): db.execute("insert into config_machine_state values('retained','saved',7)")
+            self.insert(after)
+            original = list(after.execute('select * from config_machine_state'))
+            self.verify(before, after)
+            self.assertEqual(list(after.execute('select * from config_machine_state')), original)
+            self.assertIsNone(before.execute("select 1 from config_machine_state where state_key='operator.channelPolicy'").fetchone())
+            after.execute("update config_machine_state set value_json='changed' where state_key='retained'")
+            with self.assertRaisesRegex(RuntimeError, 'machine configuration changed'): self.verify(before, after)
+
+    def test_permission_owner_nested_unknown_and_noncanonical_policy_values_are_rejected(self):
+        values = [
+            '{"roles":{"admin":["owner"]},"identityScopes":null}',
+            '{"roles":null,"identityScopes":["operator.admin"]}',
+            '{"roles":null,"identityScopes":null,"configuredOwnerPolicy":{"id":"new-owner"}}',
+            '{"roles":null,"identityScopes":null,"unknown":null}',
+            '{"roles":null,"identityScopes":null,"nested":{"roles":null}}',
+            '{ "roles":null,"identityScopes":null}',
+            '{"roles":null,"identityScopes":null,"roles":null}',
+        ]
+        for value in values:
+            with self.subTest(value=value), pair(self.SQL) as (before, after):
+                self.insert(after, value)
+                with self.assertRaises(RuntimeError): self.verify(before, after)
+
+    def test_existing_policy_changes_and_removal_stay_exact(self):
+        for value in (self.NEUTRAL, '{"roles":{"saved":"permission"},"identityScopes":null}'):
+            with self.subTest(value=value), pair(self.SQL) as (before, after):
+                for db in (before, after): self.insert(db, value)
+                self.verify(before, after, configuration=None, startup_window=None)
+                after.execute('update config_machine_state set updated_at_ms=105001')
+                with self.assertRaises(RuntimeError): self.verify(before, after)
+                after.execute('update config_machine_state set updated_at_ms=105000,value_json=?', (self.NEUTRAL,))
+                if value != self.NEUTRAL:
+                    with self.assertRaises(RuntimeError): self.verify(before, after)
+                after.execute('delete from config_machine_state')
+                with self.assertRaises(RuntimeError): self.verify(before, after)
+
+    def test_missing_startup_configuration_or_workspace_authority_is_rejected(self):
+        with pair(self.SQL) as (before, after):
+            self.insert(after)
+            for name in ('startup_window', 'configuration', 'workspace_roots'):
+                with self.subTest(missing=name), self.assertRaises(RuntimeError): self.verify(before, after, **{name: None})
+            for versions in (('2026.9.8', '2026.9.8'), ('2026.9.6', '2026.9.6'), ('2026.9.2', '2026.9.6')):
+                with self.subTest(versions=versions), self.assertRaises(RuntimeError):
+                    recovery.retained_plugin_index(before, after, None, self.live / 'openclaw.sqlite', *versions, **self.context)
+
+    def test_invalid_timestamps_or_nonfinite_reversed_and_outside_windows_are_rejected(self):
+        with pair(self.SQL) as (before, after):
+            self.insert(after)
+            for window in ((float('nan'), 110), (100, float('inf')), (110, 100), (-1, 110), (True, 110), (100,), (106, 110), (100, 104)):
+                with self.subTest(window=window), self.assertRaises(RuntimeError): self.verify(before, after, startup_window=window)
+            for timestamp in (99999, 110001, -1, 9007199254740992):
+                after.execute('update config_machine_state set updated_at_ms=?', (timestamp,))
+                with self.subTest(timestamp=timestamp), self.assertRaises(RuntimeError): self.verify(before, after)
+            for timestamp in (100000, 110000):
+                after.execute('update config_machine_state set updated_at_ms=?', (timestamp,))
+                self.verify(before, after)
+            for timestamp in (True, 105000.0, '105000'):
+                with self.subTest(type=type(timestamp)), self.assertRaises(RuntimeError):
+                    recovery.retained_neutral_channel_policy(('operator.channelPolicy', self.NEUTRAL, timestamp),
+                        self.live / self.selected / 'openclaw-runtime/state/state/openclaw.sqlite',
+                        self.context['workspace_roots'], self.context['configuration'], (100, 110))
+
+    def test_non_neutral_retained_permissions_owners_and_wrong_shapes_are_rejected(self):
+        values = [{'gateway': {'roles': {}}}, {'gateway': {'auth': {'identityScopes': []}}},
+                  {'gateway': {'identityScopes': ['hidden']}}, {'gateway': {'auth': {'roles': {}}}},
+                  {'commands': {'ownerAllowFrom': ['owner']}}, {'commands': {'ownerAllowFrom': None}},
+                  {'gateway': None}, {'gateway': {'auth': None}}, {'commands': None}]
+        for value in values:
+            with self.subTest(value=value), pair(self.SQL) as (before, after):
+                for root in (self.snapshot, self.live): (root / self.relative).write_text(json.dumps(value), encoding='utf-8')
+                self.context = self.authority()
+                self.insert(after)
+                with self.assertRaises(RuntimeError): self.verify(before, after)
+
+    def test_configuration_hash_and_selected_database_namespace_are_bound(self):
+        with pair(self.SQL) as (before, after):
+            self.insert(after)
+            changed = self.context['configuration'] | {'hashes': ['0' * 64, self.context['configuration']['hashes'][1]]}
+            with self.assertRaises(RuntimeError): self.verify(before, after, configuration=changed)
+            with self.assertRaises(RuntimeError):
+                recovery.retained_plugin_index(before, after, None, self.live / 'archived/openclaw.sqlite',
+                    '2026.9.6', '2026.9.8', **self.context)
+            with self.assertRaises(RuntimeError):
+                self.verify(before, after, workspace_roots=(self.snapshot, self.live, self.snapshot, self.selected))
+            (self.snapshot / self.relative).write_text('{}', encoding='utf-8')
+            with self.assertRaises(RuntimeError): self.verify(before, after)
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,3 +1,9 @@
+## [2.2.2] — 2026-10-04
+
+### Fixed
+
+- Qualify the empty capture ownership locks and first neutral channel-policy record created by official OpenClaw 9.8 startup. Saved content, account permissions, existing policies, and other databases retain their strict preservation checks.
+
 ## [2.2.1] — 2026-10-04
 
 ### Fixed

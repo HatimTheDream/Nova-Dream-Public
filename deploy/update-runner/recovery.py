@@ -832,6 +832,89 @@ def native_scope(root, expected_epoch=None, closed=False):
     return selected.relative_to(root), epoch, paths
 
 
+CAPTURE_OWNER_RETIRED_SHA256 = 'f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
+
+
+def capture_owner_format(path, engine_version):
+    """Only the qualified empty process token, never an arbitrary empty DB.
+
+    Official 9.6 leaves a zero-byte coordinator marker. Official 9.8 commits
+    user_version=1 when retiring its staging token; its exact one-page empty
+    producer bytes are qualified separately from application SQLite stores.
+    """
+    require(engine_version in {'2026.9.6', '2026.9.8'}, 'Unreviewed native capture lease version.')
+    size = path.lstat().st_size
+    if size == 0:
+        require(digest(path) == hashlib.sha256(b'').hexdigest(), 'Native capture marker changed.')
+        return
+    require(engine_version == '2026.9.8' and size == 4096 and digest(path) == CAPTURE_OWNER_RETIRED_SHA256,
+            'Unreviewed native capture ownership format.')
+    with contextlib.closing(database(path, True)) as connection:
+        require(connection.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native capture ownership integrity failed.')
+        expected = {'page_size': 4096, 'page_count': 1, 'freelist_count': 0, 'schema_version': 0,
+                    'user_version': 1, 'application_id': 0, 'encoding': 'UTF-8', 'journal_mode': 'delete'}
+        require(all(connection.execute('pragma ' + name).fetchone()[0] == value for name, value in expected.items()),
+                'Native capture ownership metadata changed.')
+        require(connection.execute('select count(*) from sqlite_master').fetchone()[0] == 0,
+                'Native capture ownership contains application schema.')
+
+
+def native_capture_owner_paths(root, selected, engine_version):
+    """Classify direct selected-runtime process leases on the qualified host.
+
+    The capture closure remains in every inventory/copy/restore. Only validated
+    empty owner.sqlite files leave the exact durable SQLite comparison; nested
+    fixtures, other workspaces and every sibling database retain their bytes.
+    """
+    if engine_version not in {'2026.9.6', '2026.9.8'} or os.name != 'posix':
+        return set()
+    native = root / selected / 'openclaw-runtime'
+    capture_root = native / 'state' / 'tmp' / 'plugin-captures'
+    if not capture_root.exists() and not capture_root.is_symlink():
+        return set()
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                             info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    owner = (native.lstat().st_uid, native.lstat().st_gid)
+    ancestors = {}
+    for directory in (native, native / 'state', native / 'state' / 'tmp', capture_root):
+        info = directory.lstat()
+        require(directory.resolve(strict=True) == directory and stat.S_ISDIR(info.st_mode)
+                and (info.st_uid, info.st_gid) == owner and not info.st_mode & 0o022,
+                'Native capture lease ancestry is not protected.')
+        ancestors[directory] = identity(info)
+    require(stat.S_IMODE(capture_root.lstat().st_mode) == 0o700, 'Native capture lease root is not private.')
+    entries = list(capture_root.iterdir())
+    require(len(entries) <= 1000, 'Native capture lease inventory exceeded its bound.')
+    found = set()
+    for directory in entries:
+        try:
+            canonical = str(uuid.UUID(directory.name)) == directory.name
+        except ValueError:
+            canonical = False
+        if not canonical:
+            continue  # Unqualified names remain in the exact static map.
+        path = directory / 'owner.sqlite'
+        if not path.exists() and not path.is_symlink():
+            continue
+        directory_info, info = directory.lstat(), path.lstat()
+        require(directory.resolve(strict=True) == directory and stat.S_ISDIR(directory_info.st_mode)
+                and (directory_info.st_uid, directory_info.st_gid) == owner
+                and stat.S_IMODE(directory_info.st_mode) == 0o700,
+                'Native capture lease directory is not private.')
+        require(path.resolve(strict=True) == path and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                and (info.st_uid, info.st_gid) == owner and stat.S_IMODE(info.st_mode) == 0o600,
+                'Native capture lease file is not an ordinary private owner.')
+        require(not any(os.path.lexists(str(path) + suffix) for suffix in ('-wal', '-shm', '-journal')),
+                'Native capture lease has an unexpected sidecar.')
+        capture_owner_format(path, engine_version)
+        require(identity(path.lstat()) == identity(info) and identity(directory.lstat()) == identity(directory_info),
+                'Native capture lease changed during verification.')
+        found.add(path.relative_to(root))
+    require(all(identity(directory.lstat()) == before for directory, before in ancestors.items()),
+            'Native capture lease ancestry changed during verification.')
+    return found
+
+
 def static_sqlite_files(root, selected, active):
     """Dormant stores, nested archives, plugin fixtures and nonactive caches keep
     their exact bytes, even when they are not readable canonical SQLite stores.
@@ -1745,8 +1828,54 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
         # Unknown changed records are deliberately left for exact comparison.
 
 
+def retained_neutral_channel_policy(row, after_path, workspace_roots, configuration, startup_window):
+    """Bind the official 9.8 first publication to retained neutral authority.
+
+    This qualifies creation of the exact default, never an existing policy
+    change, owner grant or arbitrary permission-sensitive machine record.
+    """
+    require(workspace_roots is not None and len(workspace_roots) == 4
+            and isinstance(configuration, dict) and startup_window is not None,
+            'Neutral channel policy lacks retained startup authority.')
+    snapshot, live, logical, selected = map(pathlib.Path, workspace_roots)
+    relative = selected / 'openclaw-runtime/openclaw.json'
+    require(not selected.is_absolute() and '..' not in selected.parts and logical == live
+            and pathlib.Path(after_path) == live / selected / 'openclaw-runtime/state/state/openclaw.sqlite'
+            and configuration.get('path') == str(live / relative)
+            and isinstance(configuration.get('hashes'), list) and len(configuration['hashes']) == 2,
+            'Neutral channel policy is outside the selected shared database.')
+    require(isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
+            and all(type(value) in (int, float) and math.isfinite(value) for value in startup_window)
+            and 0 <= startup_window[0] <= startup_window[1] <= 9007199254740991 / 1000,
+            'Neutral channel policy lacks a finite closed startup window.')
+    require(len(row) == 3 and row[0] == 'operator.channelPolicy'
+            and row[1] == '{"roles":null,"identityScopes":null}'
+            and type(row[2]) is int and 0 <= row[2] <= 9007199254740991
+            and startup_window[0] * 1000 <= row[2] <= startup_window[1] * 1000,
+            'New channel policy differs from the closed-start neutral default.')
+    for root, expected_hash in zip((snapshot, live), configuration['hashes']):
+        path = root / relative
+        require(isinstance(expected_hash, str) and re.fullmatch('[a-f0-9]{64}', expected_hash)
+                and path.resolve(strict=True) == path and digest(path) == expected_hash,
+                'Neutral channel policy retained configuration identity changed.')
+        identity = path.stat()
+        value = bounded_json(path, 4 * 1024 * 1024)
+        require(isinstance(value, dict), 'Neutral channel policy configuration changed shape.')
+        gateway, commands = value.get('gateway', {}), value.get('commands', {})
+        require(isinstance(gateway, dict) and isinstance(commands, dict)
+                and isinstance(gateway.get('auth', {}), dict),
+                'Neutral channel policy configuration authority changed shape.')
+        auth = gateway.get('auth', {})
+        require(gateway.get('roles') is None and auth.get('identityScopes') is None
+                and gateway.get('identityScopes') is None and auth.get('roles') is None
+                and ('ownerAllowFrom' not in commands or commands['ownerAllowFrom'] == []),
+                'Neutral channel policy would change retained permissions or owners.')
+        require(path.resolve(strict=True) == path and path.stat() == identity and digest(path) == expected_hash,
+                'Neutral channel policy configuration changed during qualification.')
+
+
 def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6',
-                          *, app_releases=None, workspace_roots=None):
+                          *, app_releases=None, workspace_roots=None, configuration=None, startup_window=None):
     """Qualify pinned migration or same-engine catalog effective content."""
     require((from_version, to_version) in NATIVE_MIGRATION_PAIRS | {('2026.9.6', '2026.9.6'), ('2026.9.8', '2026.9.8')},
             'Native machine-state regeneration is outside the reviewed engines.')
@@ -1756,6 +1885,10 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
                 'Native machine-state columns changed.')
     old = {row[0]: row for row in rows(before, 'config_machine_state')}
     new = {row[0]: row for row in rows(after, 'config_machine_state')}
+    policy = 'operator.channelPolicy'
+    if (from_version, to_version) == ('2026.9.6', '2026.9.8') and policy not in old and policy in new:
+        retained_neutral_channel_policy(new[policy], after_path, workspace_roots, configuration, startup_window)
+        del new[policy]
     key = 'plugins.installedIndex'
     audit = 'config.lastTouchedAt'
     if audit in old and audit in new and old[audit] != new[audit]:
@@ -2153,7 +2286,7 @@ def settled_session_validity_rows(connection, node, current_rows):
 
 
 def migrated_native98_rows(before, after, tables, newer, relative, after_path, node, boot_replacements,
-                           app_releases=None, workspace_roots=None):
+                           app_releases=None, workspace_roots=None, configuration=None, startup_window=None):
     agent = relative.name != 'openclaw.sqlite'
     native98_schema_change(before, after, tables, newer, agent)
     if agent:
@@ -2163,7 +2296,8 @@ def migrated_native98_rows(before, after, tables, newer, relative, after_path, n
             continue
         if table == 'config_machine_state':
             retained_plugin_index(before, after, node, after_path, '2026.9.6', '2026.9.8',
-                                  app_releases=app_releases, workspace_roots=workspace_roots)
+                                  app_releases=app_releases, workspace_roots=workspace_roots,
+                                  configuration=configuration, startup_window=startup_window)
             continue
         if table not in NATIVE_RETAINED_TABLES | NATIVE_96_RETAINED_TABLES | NATIVE_RECONNECT_COLUMNS.keys():
             continue
@@ -2303,7 +2437,11 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                                           log_retention_window, log_retention_reports)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version,
                                           logical_workspace_root=logical_workspace_root)
-    require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine) == static_sqlite_files(live, selected, paths | embedded | quarantine), 'An inactive database, archived store or nonactive cache changed.')
+    before_owners = native_capture_owner_paths(snapshot, selected, from_version)
+    owners = native_capture_owner_paths(live, selected, to_version)
+    require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine | before_owners)
+            == static_sqlite_files(live, selected, paths | embedded | quarantine | owners),
+            'An inactive database, archived store or nonactive cache changed.')
     for relative in sorted(before_paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
@@ -2311,7 +2449,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
             new_tables = native_schema(after, relative, to_version, old_tables if migrating else None)
             boot_replacements = native_boot_replacements(before, after, old_tables & new_tables, configuration, from_version, to_version, node)
             if (from_version, to_version) == ('2026.9.6', '2026.9.8'):
-                migrated_native98_rows(before, after, old_tables, new_tables, relative, live / relative, node, boot_replacements, app_releases, (snapshot, live, logical_workspace_root or live, selected))
+                migrated_native98_rows(before, after, old_tables, new_tables, relative, live / relative, node, boot_replacements,
+                                       app_releases, (snapshot, live, logical_workspace_root or live, selected),
+                                       configuration, log_retention_window)
                 continue
             if migrating:
                 migration_preflight(before, old_tables)
