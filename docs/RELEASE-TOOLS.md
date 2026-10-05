@@ -233,3 +233,67 @@ Focused checks: `node --test tests/release-plan.test.mjs tests/release-observe-h
 The requester's standalone check is `python3 -B tests/release-install-request.test.py`.
 The fixtures are synthetic and do not exercise a live deployment.
 `managedCompanionBytes` is a required separate component, zero only when no managed installation is expected. For the reviewed 9.8 runtime use the documented conservative estimate; never merge it into native SQLite migration space or treat it as an enforced ceiling.
+
+## Operating protocol for implementation and delivery
+
+Record the requested outcome, smallest scope, risk class, meaningful checks and
+delivery route in the existing task record. Use current authorization and keep
+technical verification separate from an owner-confirmation flow. Documentation
+and protocol changes receive diff/link/sanitization checks without an application
+version bump, package or live installation. Inspect CI/publication side effects;
+a supported documentation-only CI skip is eligible only when repository policy
+permits it and the exact commit contains no executable, dependency, manifest or
+workflow changes. It never waives a required check. See
+[GitHub's skip behavior and required-check limitations](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs).
+
+Before expensive preparation, make one lightweight preflight of the configured
+route, authorized access, authenticated artifact downloads, capacity across
+runtime/recovery/companion/cache/temp filesystems, compatible rollback and the
+required browser-control surface. Discover paths from maintained configuration;
+reconcile an uncertain job or already completed purchase before another effect.
+Refresh mutable prerequisites before maintenance. An early feasibility check
+does not replace fresh closed/admission checks or new-candidate acceptance.
+
+For runtime, dependency, startup, schema, updater or recovery changes, qualify the complete
+retained-state verifier after actual settled startup on supported isolated copies
+before source freeze. Include relevant first start, restart and existing-state
+behavior, generated paths/process leases, machine-policy/database changes and
+account/permission preservation. Synthetic database migrations and pre-start
+copies alone cannot certify settled startup. Allow derived changes only through
+narrow official contracts with refusal tests. Keep private fixture data outside
+source and published CI artifacts. The fresh post-freeze rehearsal, independent
+recovery verification and live acceptance remain separate gates.
+
+The reviewed first neutral-policy publication for the 2026.9.6-to-2026.9.8
+transition does not qualify refresh of an already-existing policy timestamp.
+The existing-policy 2026.9.8-to-2026.9.8 case remains strict and needs qualification
+before a future affected delivery. This documentation does not implement that fix.
+
+Keep one operation record linking immutable source/helper/artifact and receipt
+hashes, candidate lineage, actual external job/key, phases and original ETA
+history. Handoffs refresh drift-prone state without recreating the operation.
+Derived receipts identify their original source and field mappings. Keep genuine
+saved backend reply proof separate from actual browser visibility/reload proof.
+A browser timeout resumes observation of the existing conversation, not another
+installation or model submission. A blocked helper or security alert needs
+bounded diagnosis; exact command/event attribution stays unknown until evidenced.
+Use the supported route and preserve the working app, protected journal and
+recovery evidence instead of repeating an unchanged blocked action or bypassing it.
+
+Estimate and report total request time, development/preparation, rehearsal hold,
+installation observation, acceptance and closeout separately. Count concurrent
+branches once. File mtimes and sampled health are not exact downtime; an absent
+send/hold timestamp stays unknown. Record each missed deadline review with its
+actual time/location; local records cannot be described as journal writes.
+Once checks pass, reuse exact evidence for one focused final audit and close
+task-owned QA resources. Expired historical admission receipts do not require a
+new live rehearsal solely to close an already verified completed job; they also
+do not authorize a next installation.
+
+The delivered coordinator integrates normal installation dispatch/observation
+and persists issued timeline checkpoints. Broader preparation/publication
+adapters, generated closeout, automatic checkpoint scheduling and a faster whole
+release path remain future engineering. Prefer eliminating failed candidates
+and repeated manual coordination before optimizing minor scan costs. Keep the
+existing quality, signature, capacity, compatibility and recovery gates until a
+tested implementation qualifies a replacement.
