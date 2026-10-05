@@ -26,6 +26,7 @@ jobs:
           python3 -B tests/recovery-native98.test.py -v
           python3 -B tests/recovery-allocation.test.py -v
           python3 -B tests/update-snapshot-admission.test.py -v
+          python3 -B tests/recovery-managed-generation.test.py -v
           python3 -B tests/update-closed-readers.test.py -v
           python3 -B tests/update-log-retention.test.py -v
           python3 -B tests/update-startup-window.test.py -v

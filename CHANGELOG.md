@@ -1,3 +1,9 @@
+## [2.2.1] — 2026-10-04
+
+### Fixed
+- Recognizes OpenClaw 9.8's official Codex installation generation while preserving the selected npm store, package integrity and saved-data checks.
+- Adds regression coverage for genuine generation paths and rejects malformed, redirected or unrelated installations.
+
 ## [2.2.0] — 2026-10-04
 
 ### Added

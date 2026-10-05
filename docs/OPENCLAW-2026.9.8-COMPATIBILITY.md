@@ -28,6 +28,17 @@ The official runtime also migrated synthetic native databases in two scenarios, 
 
 Final release acceptance must separately record stopped migration/recovery verification, native hold clearance and one real Assistant reply after restart. The official managed companion installer also requires its own peak-storage measurement because its staged dependency tree and npm cache differ from the offline runtime archive. No SDK or database fixture qualifies those delivery steps.
 
+The initial official managed-companion qualification did not run the maintained
+native saved-state verifier against its resulting plugin index. That omission
+missed 9.8's official generation project directory: the older verifier accepted
+only the legacy npm project basename. The transition verifier now accepts the
+exact package-owned generation grammar for 9.6 to 9.8, preserving the prior npm
+namespace, retained payload resolution, version, integrity and consent checks.
+The focused generation regression exercises the maintained plugin-index verifier
+with the observed official basename and rejects malformed generations, changed
+namespaces, redirected payloads and retained-policy changes. It does not by
+itself establish complete official-producer or live acceptance.
+
 Managed companion capacity is separately reported in staging and stopped admission.
 The exact qualified 9.8 runtime uses a conservative 2 GiB estimate: two 512 MiB
 new-project components, three 256 MiB cache components and a 256 MiB temporary

@@ -1840,9 +1840,15 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             'The Codex installation is outside the reviewed transition.')
     installed = pathlib.Path(record['installPath'])
     prior = pathlib.Path(records['codex'].get('installPath', ''))
+    # Official 9.8 update generations retain the previous project and publish a
+    # new package-owned project. The fixed prefix and 16-hex generation suffix
+    # come from install-paths-BylxcuP5.mjs; older transitions retain their rule.
+    project_pattern = (r'openclaw-codex-8902d781d4(?:__openclaw-generation__g-[a-f0-9]{16})?'
+                       if (from_version, to_version) == ('2026.9.6', '2026.9.8')
+                       else r'openclaw-codex-[a-f0-9]{10}')
     require(installed.is_absolute() and prior.is_absolute() and len(installed.parts) >= 7
             and installed.parts[-6:-4] == ('npm', 'projects')
-            and re.fullmatch(r'openclaw-codex-[a-f0-9]{10}', installed.parts[-4])
+            and re.fullmatch(project_pattern, installed.parts[-4])
             and installed.parts[-3:] == ('node_modules', '@openclaw', 'codex')
             and installed.parts[:-6] == prior.parts[:-6], 'The official Codex npm store changed.')
     # Stored absolute paths retain the selected workspace namespace in closed
