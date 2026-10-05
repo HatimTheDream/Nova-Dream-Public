@@ -19,7 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy/update-runner'))
 import recovery
 
-NODE = pathlib.Path(shutil.which('node')).resolve() if shutil.which('node') else None
+NODE_PATH = os.environ.get('NODE_BINARY') or shutil.which('node')
+NODE = pathlib.Path(NODE_PATH).resolve() if NODE_PATH else None
 AGENT = pathlib.Path('openclaw-agent.sqlite')
 SHARED = pathlib.Path('openclaw.sqlite')
 
@@ -640,7 +641,7 @@ class NeutralChannelPolicyTests(unittest.TestCase):
 class CopiedCodexAdmissionsTests(unittest.TestCase):
     """Real disposable copy/restart roles, not a blanket catalog projection."""
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='nova-codex-admission-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-codex-admission-', dir=os.environ.get('QA_PROTECTED_PARENT'))
         self.root = pathlib.Path(self.temporary.name).resolve()
         self.live, self.snapshot, self.trial, self.original = [self.root / value for value in ('live', 'snapshot', 'trial', 'original')]
         self.selected = pathlib.Path('selected')
@@ -755,6 +756,12 @@ class CopiedCodexAdmissionsTests(unittest.TestCase):
         for value, build in ((self.old, {}), (self.new, full)):
             value['plugins'][0].update(packageBuild=copy.deepcopy(build), packageJson=copy.deepcopy(package),
                                        packageName='@openclaw/codex', origin='global')
+        if os.name == 'posix' and os.geteuid() != 0:
+            # CI also runs this class in its protected root phase. Here prove
+            # that an unprivileged package cannot supply runtime authority.
+            with self.assertRaisesRegex(RuntimeError, 'Catalog build runtime is not protected'):
+                self.compare(catalog_runtime_root=runtime)
+            return
         self.compare(catalog_runtime_root=runtime)
         self.old['plugins'][0]['packageBuild'], self.new['plugins'][0]['packageBuild'] = copy.deepcopy(full), {}
         self.compare(catalog_runtime_root=runtime)
@@ -870,7 +877,7 @@ class CopiedCodexAdmissionsTests(unittest.TestCase):
 
 class PackageBuildProjectionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='nova-package-build-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-package-build-', dir=os.environ.get('QA_PROTECTED_PARENT'))
         self.root = pathlib.Path(self.temporary.name).resolve()
         self.runtime = self.root / 'openclaw-2026.9.8-aaaaaaaaaaaa/node_modules/openclaw'
         self.package = self.runtime / 'dist/extensions/build-fixture'
@@ -907,12 +914,20 @@ class PackageBuildProjectionTests(unittest.TestCase):
                                            catalog_runtime_root=self.runtime if runtime is True else runtime or None)
 
     def test_exact_full_and_cached_forms_in_both_directions_preserve_restart(self):
+        if os.name == 'posix' and os.geteuid() != 0:
+            with self.assertRaisesRegex(RuntimeError, 'Catalog build runtime is not protected'):
+                self.compare()
+            return
         before = {str(path): (recovery.digest(path), path.stat().st_mtime_ns) for path in self.root.rglob('*') if path.is_file()}
         self.compare(); self.compare(self.full, {'bundledDist': True}); self.compare(self.full, self.full)
         self.compare({'bundledDist': True}, {'bundledDist': True})
         self.assertEqual(before, {str(path): (recovery.digest(path), path.stat().st_mtime_ns) for path in self.root.rglob('*') if path.is_file()})
 
     def test_absent_and_false_bundled_dist_are_exact_boolean_projections(self):
+        if os.name == 'posix' and os.geteuid() != 0:
+            with self.assertRaisesRegex(RuntimeError, 'Catalog build runtime is not protected'):
+                self.compare()
+            return
         for value in (None, False):
             full = copy.deepcopy(self.full)
             if value is None: del full['bundledDist']

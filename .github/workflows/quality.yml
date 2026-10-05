@@ -50,6 +50,9 @@ jobs:
               if path != pathlib.Path('/opt') and (info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or mode & 0o022):
                   raise SystemExit(f'Unprotected recovery fixture ancestor: {path}')
           PY
+          # Execute every physical package/admission positive and semantic
+          # refusal under the same root-protected authority used in production.
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-native98.test.py CopiedCodexAdmissionsTests PackageBuildProjectionTests -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-startup-exec.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-derived-state.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-catalog-files.test.py -v
