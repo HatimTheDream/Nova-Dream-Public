@@ -729,7 +729,7 @@ class CopiedCodexAdmissionsTests(unittest.TestCase):
             'nativeNamespaces': {str(captured): {'sourceDirectory': str(self.source), 'capturedRoot': str(captured),
                                                'managed': True, 'members': members}}}}
 
-    def compare(self, mutation=None, *, roots=None, window=None):
+    def compare(self, mutation=None, *, roots=None, window=None, catalog_runtime_root=None):
         before, after = copy.deepcopy(self.old), copy.deepcopy(self.new)
         if mutation: mutation(after)
         with pair('CREATE TABLE config_machine_state(state_key TEXT,value_json TEXT,updated_at_ms INTEGER);') as (old, new):
@@ -737,7 +737,32 @@ class CopiedCodexAdmissionsTests(unittest.TestCase):
                 db.execute('insert into config_machine_state values(?,?,?)',
                            ('plugins.installedIndex', json.dumps({'revision': value['generatedAtMs'], 'index': value}), value['generatedAtMs']))
             recovery.retained_plugin_index(old, new, None, self.live / 'unused', '2026.9.8', '2026.9.8',
-                workspace_roots=roots or self.roots, startup_window=self.window if window is None else window)
+                workspace_roots=roots or self.roots, startup_window=self.window if window is None else window,
+                catalog_runtime_root=catalog_runtime_root)
+
+    def test_copied_codex_build_forms_require_exact_package_and_complete_admission(self):
+        runtime = self.root / 'openclaw-2026.9.8-aaaaaaaaaaaa/node_modules/openclaw'
+        runtime.mkdir(parents=True)
+        (runtime / 'package.json').write_text('{"name":"openclaw","version":"2026.9.8"}')
+        full = {'openclawVersion': '2026.9.8', 'workerEntries': ['./catalog-page.worker.ts']}
+        content = json.dumps({'name': '@openclaw/codex', 'version': '2026.9.8', 'openclaw': {'build': full}})
+        for root in (self.original, self.snapshot, self.live):
+            path = root / self.relative / 'package.json'
+            path.write_text(content)
+            os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        package = {'path': 'package.json', 'hash': recovery.digest(self.original / self.relative / 'package.json'),
+                   'fileSignature': self.signature(self.original / self.relative / 'package.json')}
+        for value, build in ((self.old, {}), (self.new, full)):
+            value['plugins'][0].update(packageBuild=copy.deepcopy(build), packageJson=copy.deepcopy(package),
+                                       packageName='@openclaw/codex', origin='global')
+        self.compare(catalog_runtime_root=runtime)
+        self.old['plugins'][0]['packageBuild'], self.new['plugins'][0]['packageBuild'] = copy.deepcopy(full), {}
+        self.compare(catalog_runtime_root=runtime)
+        with self.assertRaises(RuntimeError): self.compare()
+        with self.assertRaises(RuntimeError):
+            self.compare(lambda value: value['plugins'][0].pop('sourceAdmissions'), catalog_runtime_root=runtime)
+        (self.snapshot / self.relative / 'package.json').write_text('{}')
+        with self.assertRaises(RuntimeError): self.compare(catalog_runtime_root=runtime)
 
     def admission(self, value): return next(iter(value['plugins'][0]['sourceAdmissions'].values()))
     def namespace(self, value): return next(iter(self.admission(value)['nativeNamespaces'].values()))
@@ -841,6 +866,129 @@ class CopiedCodexAdmissionsTests(unittest.TestCase):
             artifact = next(iter(self.admission(value)['nativeArtifacts'].values()))
             artifact.update(sourceIdentity=member['sourceIdentity'], capturedIdentity=member['capturedIdentity'])
         with self.assertRaisesRegex(RuntimeError, 'ownership changed across roles'): self.compare(truthful)
+
+
+class PackageBuildProjectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-package-build-')
+        self.root = pathlib.Path(self.temporary.name).resolve()
+        self.runtime = self.root / 'openclaw-2026.9.8-aaaaaaaaaaaa/node_modules/openclaw'
+        self.package = self.runtime / 'dist/extensions/build-fixture'
+        self.package.mkdir(parents=True)
+        (self.runtime / 'package.json').write_text(json.dumps({'name': 'openclaw', 'version': '2026.9.8'}))
+        self.full = {'bundledDist': True, 'openclawVersion': '2026.9.8',
+                     'workerEntries': ['./src/worker.ts'], 'staticAssets': [{'source': './assets/data', 'output': 'assets/data'}]}
+        self.set_package(self.full)
+
+    def tearDown(self): self.temporary.cleanup()
+
+    def set_package(self, build):
+        path = self.package / 'package.json'
+        path.write_text(json.dumps({'name': '@openclaw/build-fixture', 'version': '2026.9.8', 'openclaw': {'build': build}}))
+        self.record = {'pluginId': 'build-fixture', 'origin': 'bundled', 'rootDir': str(self.package),
+                       'source': str(self.package / 'index.js'), 'manifestPath': str(self.package / 'openclaw.plugin.json'),
+                       'packageName': '@openclaw/build-fixture', 'packageVersion': '2026.9.8', 'enabled': True,
+                       'contributions': {'tools': ['saved']}, 'packageBuild': copy.deepcopy(build),
+                       'packageJson': {'path': 'package.json', 'hash': recovery.digest(path),
+                                       'fileSignature': CopiedCodexAdmissionsTests.signature(path)}}
+
+    def compare(self, old_build=None, new_build=None, mutation=None, *, runtime=True, version='2026.9.8'):
+        old, new = copy.deepcopy(self.record), copy.deepcopy(self.record)
+        old['packageBuild'] = copy.deepcopy({'bundledDist': True} if old_build is None else old_build)
+        new['packageBuild'] = copy.deepcopy(self.full if new_build is None else new_build)
+        before = CopiedCodexAdmissionsTests.index(old, 1); after = CopiedCodexAdmissionsTests.index(new, 2)
+        before['hostContractVersion'] = after['hostContractVersion'] = version
+        if mutation: mutation(after)
+        with pair('CREATE TABLE config_machine_state(state_key TEXT,value_json TEXT,updated_at_ms INTEGER);') as (left, right):
+            for db, value in ((left, before), (right, after)):
+                db.execute('insert into config_machine_state values(?,?,?)',
+                           ('plugins.installedIndex', json.dumps({'revision': value['generatedAtMs'], 'index': value}), value['generatedAtMs']))
+            recovery.retained_plugin_index(left, right, None, self.root / 'unused', version, version,
+                                           catalog_runtime_root=self.runtime if runtime is True else runtime or None)
+
+    def test_exact_full_and_cached_forms_in_both_directions_preserve_restart(self):
+        before = {str(path): (recovery.digest(path), path.stat().st_mtime_ns) for path in self.root.rglob('*') if path.is_file()}
+        self.compare(); self.compare(self.full, {'bundledDist': True}); self.compare(self.full, self.full)
+        self.compare({'bundledDist': True}, {'bundledDist': True})
+        self.assertEqual(before, {str(path): (recovery.digest(path), path.stat().st_mtime_ns) for path in self.root.rglob('*') if path.is_file()})
+
+    def test_absent_and_false_bundled_dist_are_exact_boolean_projections(self):
+        for value in (None, False):
+            full = copy.deepcopy(self.full)
+            if value is None: del full['bundledDist']
+            else: full['bundledDist'] = value
+            self.set_package(full)
+            projected = {} if value is None else {'bundledDist': value}
+            self.compare(projected, full); self.compare(full, projected)
+
+    def test_missing_wrong_runtime_or_other_engine_cannot_qualify(self):
+        for runtime in (False, self.root, self.root / 'openclaw-2026.9.8-bbbbbbbbbbbb/node_modules/openclaw'):
+            with self.subTest(runtime=runtime), self.assertRaises((RuntimeError, FileNotFoundError)):
+                self.compare(runtime=runtime)
+        with self.assertRaises(RuntimeError): self.compare(version='2026.9.6')
+        (self.runtime / 'package.json').write_text('{"name":"openclaw","version":"2026.9.6"}')
+        with self.assertRaises(RuntimeError): self.compare()
+
+    def test_partial_unknown_forged_and_changed_order_metadata_is_rejected(self):
+        values = [{}, {'bundledDist': False}, {'bundledDist': 1}, {'bundledDist': True, 'extra': 1},
+                  {**self.full, 'openclawVersion': '2026.9.9'},
+                  {**self.full, 'workerEntries': ['./src/other.ts']},
+                  {**self.full, 'staticAssets': [{'source': './assets/other', 'output': 'assets/data'}]},
+                  {**self.full, 'workerEntries': ['./src/worker.ts', './src/other.ts']}]
+        for value in values:
+            with self.subTest(value=value), self.assertRaises(RuntimeError): self.compare(new_build=value)
+        self.set_package({**self.full, 'unknownBuildAuthority': True})
+        with self.assertRaises(RuntimeError): self.compare(new_build={**self.full, 'unknownBuildAuthority': True})
+
+    def test_package_identity_hash_signature_path_and_bytes_remain_strict(self):
+        for mutation in (lambda v: v['plugins'][0]['packageJson'].update(hash='c' * 64),
+                         lambda v: v['plugins'][0]['packageJson'].update(path='../package.json'),
+                         lambda v: v['plugins'][0]['packageJson']['fileSignature'].update(mtimeMs=1),
+                         lambda v: v['plugins'][0].update(rootDir=str(self.root)),
+                         lambda v: v['plugins'][0].update(packageName='forged')):
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError): self.compare(mutation=mutation)
+        (self.package / 'package.json').write_text('{}')
+        with self.assertRaises(RuntimeError): self.compare()
+
+    def test_worker_asset_order_and_unrecognized_physical_metadata_are_rejected(self):
+        full = {**self.full, 'workerEntries': ['./src/one.ts', './src/two.ts'],
+                'staticAssets': [{'source': './one', 'output': 'one'}, {'source': './two', 'output': 'two'}]}
+        self.set_package(full)
+        for changed in ({**full, 'workerEntries': list(reversed(full['workerEntries']))},
+                        {**full, 'staticAssets': list(reversed(full['staticAssets']))}):
+            with self.assertRaises(RuntimeError): self.compare(new_build=changed)
+        for changed in ({**full, 'workerEntries': ['../../outside']},
+                        {**full, 'workerEntries': ['./one'] * 65},
+                        {**full, 'staticAssets': [{'source': './one', 'output': '/outside'}]},
+                        {**full, 'bundledDist': 1}):
+            self.set_package(changed)
+            with self.assertRaises(RuntimeError): self.compare(new_build=changed)
+
+    def test_policy_membership_capability_and_diagnostics_remain_strict(self):
+        self.record['contributions']['execution'] = {'allowed': True}
+        for mutation in (lambda v: v.update(policyHash='c' * 64),
+                         lambda v: v['plugins'].append(copy.deepcopy(v['plugins'][0])),
+                         lambda v: v['plugins'][0]['contributions']['tools'].append('forged'),
+                         lambda v: v['plugins'][0].update(enabled=False),
+                         lambda v: v['plugins'][0].update(enabled=1),
+                         lambda v: v['plugins'][0]['contributions']['execution'].update(allowed=1),
+                         lambda v: v['diagnostics'].append({'message': 'new', 'level': 'warn'})):
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError): self.compare(mutation=mutation)
+
+    def test_unadmitted_or_app_package_cannot_use_build_projection(self):
+        for mutation in (lambda v: v['plugins'][0].update(origin='config'),
+                         lambda v: v['plugins'][0].update(pluginId='edition3-worker')):
+            with self.assertRaises(RuntimeError): self.compare(mutation=mutation)
+
+    @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'Physical ownership proof requires isolated Linux root')
+    def test_truthful_chown_and_symlink_runtime_are_rejected(self):
+        path = self.package / 'package.json'; info = path.stat()
+        os.chown(path, 1, info.st_gid)
+        self.record['packageJson']['fileSignature'] = CopiedCodexAdmissionsTests.signature(path)
+        with self.assertRaisesRegex(RuntimeError, 'not protected'): self.compare()
+        os.chown(path, info.st_uid, info.st_gid)
+        alias = self.root / 'runtime-alias'; alias.symlink_to(self.runtime, target_is_directory=True)
+        with self.assertRaises(RuntimeError): self.compare(runtime=alias)
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,3 +1,10 @@
+## [2.2.4] — 2026-10-05
+
+### Fixed
+
+- Verify unchanged OpenClaw 9.8 plugin build metadata across cached and rebuilt catalogs using the actual package bytes, while preserving strict saved-work, account and permission checks.
+- Bind catalog verification to the selected managed runtime and retained Codex package instead of inferring trusted package paths.
+
 ## [2.2.3] — 2026-10-04
 
 ### Improved

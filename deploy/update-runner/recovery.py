@@ -1925,7 +1925,128 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
     return True
 
 
-def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, engine_version=None, startup_window=None):
+def retained_package_build(old, new, catalog_runtime_root, workspace_roots):
+    """Qualify only official 9.8 full-build versus cached-reader metadata.
+
+    The producer clones package.json openclaw.build; its persisted reader keeps
+    only bundledDist. Both exact forms require the unchanged physical package.
+    This does not project arbitrary fields or change activation/capabilities.
+    """
+    require(catalog_runtime_root is not None, 'Catalog build projection lacks verified runtime authority.')
+    runtime = pathlib.Path(catalog_runtime_root)
+    require(runtime.is_absolute() and runtime.resolve(strict=True) == runtime
+            and runtime.name == 'openclaw' and runtime.parent.name == 'node_modules'
+            and re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name),
+            'Catalog build runtime is outside the reviewed managed engine.')
+
+    def physical_identity(path):
+        info = path.lstat()
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    runtime_files = [runtime / 'package.json']
+    runtime_paths = (runtime.parent.parent, runtime.parent, runtime, runtime_files[0])
+    for path in runtime_paths:
+        require(path.resolve(strict=True) == path and (path.is_dir() or path.is_file()),
+                'Catalog build runtime was redirected.')
+        if os.name == 'posix':
+            info = path.lstat()
+            require(info.st_uid == 0 and not info.st_mode & 0o022, 'Catalog build runtime is not protected.')
+    runtime_identity = {path: physical_identity(path) for path in runtime_paths}
+    runtime_hash = digest(runtime_files[0])
+    runtime_package = bounded_json(runtime_files[0], 1024 * 1024)
+    require(isinstance(runtime_package, dict) and runtime_package.get('name') == 'openclaw'
+            and runtime_package.get('version') == '2026.9.8', 'Catalog build runtime package identity changed.')
+    # JSON types remain authority: Python equality alone aliases true with 1.
+    unchanged = lambda record: json.dumps({key: value for key, value in record.items() if key != 'packageBuild'},
+                                         sort_keys=True, separators=(',', ':'), allow_nan=False)
+    require(unchanged(old) == unchanged(new),
+            'Catalog build projection changed another plugin field.')
+    package = old.get('packageJson')
+    require(isinstance(package, dict) and set(package) == {'path', 'hash', 'fileSignature'}
+            and package['path'] == 'package.json', 'Catalog build package identity changed shape.')
+    root = pathlib.Path(old.get('rootDir', ''))
+    plugin_id = old.get('pluginId')
+    if old.get('origin') == 'bundled':
+        require(isinstance(plugin_id, str) and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,127}', plugin_id)
+                and root == runtime / 'dist/extensions' / plugin_id,
+                'Catalog build bundled package is outside the verified runtime.')
+        physical = [root, root]
+        current = True
+        if os.name == 'posix':
+            for path in (runtime / 'dist', runtime / 'dist/extensions', root, root / 'package.json'):
+                info = path.lstat()
+                require(path.resolve(strict=True) == path and info.st_uid == 0 and not info.st_mode & 0o022,
+                        'Catalog build bundled package is not protected.')
+    else:
+        require(plugin_id == 'codex' and workspace_roots is not None and 'sourceAdmissions' in old,
+                'Catalog build projection is outside retained bundled or admitted Codex packages.')
+        snapshot, live, logical, selected = map(pathlib.Path, workspace_roots)
+        projects = logical / selected / 'openclaw-runtime/state/npm/projects'
+        require(root.is_absolute() and root.is_relative_to(projects)
+                and len(root.relative_to(projects).parts) == 4
+                and root.relative_to(projects).parts[1:] == ('node_modules', '@openclaw', 'codex'),
+                'Catalog build Codex package is outside its retained namespace.')
+        # retained_catalog_files already proved the complete admissions and
+        # qualified copied ctime. Re-attest both actual package bytes and owners.
+        physical = [value / root.relative_to(logical) for value in (snapshot, live)]
+        current = False
+    observations, directory_identity, documents = {}, {}, []
+    for directory in physical:
+        path = directory / 'package.json'
+        require(directory.resolve(strict=True) == directory, 'Catalog build package root was redirected.')
+        directory_identity[directory] = physical_identity(directory)
+        observations[path] = physical_identity(path)
+        document = json.loads(catalog_file(path, package['hash'], package['fileSignature'], current=current))
+        require(isinstance(document, dict) and document.get('name') == old.get('packageName')
+                and document.get('version') == old.get('packageVersion')
+                and isinstance(document.get('openclaw'), dict) and isinstance(document['openclaw'].get('build'), dict),
+                'Catalog build package differs from its recorded identity.')
+        documents.append(document)
+    require(documents[0] == documents[1] and observations[physical[0] / 'package.json'][3:5]
+            == observations[physical[1] / 'package.json'][3:5]
+            and directory_identity[physical[0]][3:5] == directory_identity[physical[1]][3:5],
+            'Catalog build package content or ownership changed across roles.')
+    full = documents[0]['openclaw']['build']
+    require(set(full) <= {'bundledDist', 'openclawVersion', 'staticAssets', 'workerEntries'}
+            and ('bundledDist' not in full or type(full['bundledDist']) is bool)
+            and ('openclawVersion' not in full or full['openclawVersion'] == '2026.9.8'),
+            'Catalog build metadata is outside the reviewed 9.8 fields.')
+
+    def relative(value):
+        return (isinstance(value, str) and 0 < len(value) <= 512 and value not in {'.', './'}
+                and '\\' not in value and ':' not in value and '\0' not in value
+                and not pathlib.PurePosixPath(value).is_absolute() and '..' not in pathlib.PurePosixPath(value).parts)
+
+    if 'workerEntries' in full:
+        require(isinstance(full['workerEntries'], list) and 0 < len(full['workerEntries']) <= 64
+                and all(relative(value) and value.startswith('./') for value in full['workerEntries']),
+                'Catalog build worker metadata changed shape.')
+    if 'staticAssets' in full:
+        require(isinstance(full['staticAssets'], list) and 0 < len(full['staticAssets']) <= 64
+                and all(isinstance(value, dict) and set(value) == {'source', 'output'}
+                        and relative(value['source']) and value['source'].startswith('./') and relative(value['output'])
+                        for value in full['staticAssets']), 'Catalog build asset metadata changed shape.')
+    require(len(json.dumps(full)) <= 64 * 1024, 'Catalog build metadata exceeded its bound.')
+    projection = {key: value for key, value in full.items() if key == 'bundledDist'}
+    require(all(isinstance(record.get('packageBuild'), dict)
+                and ('bundledDist' not in record['packageBuild'] or type(record['packageBuild']['bundledDist']) is bool)
+                for record in (old, new)), 'Catalog build cached projection changed its boolean authority.')
+    require(full != projection and ((old.get('packageBuild') == full and new.get('packageBuild') == projection)
+            or (old.get('packageBuild') == projection and new.get('packageBuild') == full)),
+            'Catalog build metadata is neither the exact package nor its official cached projection.')
+    require(all(physical_identity(path) == identity and path.resolve(strict=True) == path
+                and digest(path) == package['hash'] for path, identity in observations.items())
+            and all(physical_identity(path) == identity for path, identity in runtime_identity.items()),
+            'Catalog build physical authority changed during attestation.')
+    require(all(physical_identity(path) == identity and path.resolve(strict=True) == path
+                for path, identity in directory_identity.items()) and digest(runtime_files[0]) == runtime_hash,
+            'Catalog build directory or runtime content changed during attestation.')
+    new['packageBuild'] = old['packageBuild']
+
+
+def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, engine_version=None, startup_window=None,
+                           catalog_runtime_root=None):
     """Normalize only file-proved generated catalog differences, in memory.
 
     Nova plugin paths/JSON formatting follow the two verified candidate
@@ -1938,7 +2059,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, 
                    'edition3-accounts': 'account-plugin', 'edition3-workspace': 'module-plugin'}
     seen = set()
     for old, new in zip(before['plugins'], after['plugins']):
-        if old == new and not (engine_version == '2026.9.8' and old.get('pluginId') == 'codex'
+        build_changed = json.dumps(old.get('packageBuild'), sort_keys=True) != json.dumps(new.get('packageBuild'), sort_keys=True)
+        if old == new and not build_changed and not (engine_version == '2026.9.8' and old.get('pluginId') == 'codex'
                               and workspace_roots is not None):
             continue
         plugin_id = old.get('pluginId')
@@ -2030,6 +2152,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, 
             for root in physical:
                 catalog_file(root / 'dist/index.js', source_hash)
             new['packageJson']['fileSignature'] = old['packageJson']['fileSignature']
+        if build_changed and engine_version == '2026.9.8':
+            retained_package_build(old, new, catalog_runtime_root, workspace_roots)
         # Unknown changed records are deliberately left for exact comparison.
 
 
@@ -2080,7 +2204,8 @@ def retained_neutral_channel_policy(row, after_path, workspace_roots, configurat
 
 
 def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6',
-                          *, app_releases=None, workspace_roots=None, configuration=None, startup_window=None):
+                          *, app_releases=None, workspace_roots=None, configuration=None, startup_window=None,
+                          catalog_runtime_root=None):
     """Qualify pinned migration or same-engine catalog effective content."""
     require((from_version, to_version) in NATIVE_MIGRATION_PAIRS | {('2026.9.6', '2026.9.6'), ('2026.9.8', '2026.9.8')},
             'Native machine-state regeneration is outside the reviewed engines.')
@@ -2152,7 +2277,8 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
     if from_version == to_version:
         require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
-        retained_catalog_files(indexes, app_releases, workspace_roots, engine_version=to_version, startup_window=startup_window)
+        retained_catalog_files(indexes, app_releases, workspace_roots, engine_version=to_version, startup_window=startup_window,
+                               catalog_runtime_root=catalog_runtime_root)
         effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
         require(effective(old_index) == effective(new_index), 'Retained native plugin policy or effective catalog changed.')
         return
@@ -2625,7 +2751,7 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
 
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
                        log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
-                       logical_workspace_root=None):
+                       logical_workspace_root=None, catalog_runtime_root=None):
     to_version = to_version or from_version
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) in NATIVE_MIGRATION_PAIRS, 'Native migration is outside the reviewed pair.')
@@ -2687,7 +2813,8 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                         retained_plugin_index(before, after, node, live / relative, from_version, to_version,
                                               app_releases=app_releases,
                                               workspace_roots=(snapshot, live, logical_workspace_root or live, selected),
-                                              configuration=configuration, startup_window=log_retention_window)
+                                              configuration=configuration, startup_window=log_retention_window,
+                                              catalog_runtime_root=catalog_runtime_root)
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif to_version == '2026.9.8' and table == 'session_nodes':

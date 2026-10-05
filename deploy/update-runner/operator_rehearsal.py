@@ -585,7 +585,8 @@ class Rehearsal(Driver):
                 return
             with verification_scratch(self.recovery_root):
                 saved_state(self.recovery / 'workspace', self.data, restored=True)
-                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine)
+                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine,
+                                   catalog_runtime_root=self.prior_agent)
                 self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
                 for index, path in enumerate(self.config_files):
                     target = self.recovery / ('protected-' + str(index))
@@ -599,7 +600,7 @@ class Rehearsal(Driver):
                 prepare_independent(self.recovery / 'workspace', self.restore, self.data, self.require_stopped)
                 saved_state(self.recovery / 'workspace', self.restore, restored=True)
                 native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine,
-                                   logical_workspace_root=self.data)
+                                   logical_workspace_root=self.data, catalog_runtime_root=self.prior_agent)
                 self.trial_root = root_identity(self.restore)
                 require(shutil.disk_usage(self.recovery_root).free >= RESERVE + 2 * ALLOWANCE + self.startup_growth,
                         'Reserve and explicit startup growth must fit before any workspace swap.')

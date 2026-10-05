@@ -96,6 +96,7 @@ class RehearsalTests(unittest.TestCase):
         instance.workspace_key_credential = self.root/'credential'
         instance.node = self.root/'node'
         instance.prior = instance.target = self.root/'prior'
+        instance.prior_agent = self.root/'verified-prior-agent'
         instance.current = self.root/'current'
         instance.config_files = []; instance.config_hashes = {}
         instance.runtime_node_hash = 'b'*64
@@ -133,7 +134,12 @@ class RehearsalTests(unittest.TestCase):
         self.fake('sync_dir', lambda path: events.append('fsync:'+path.name))
         self.fake('allocated_metadata', lambda path: 8192)
         self.fake('saved_state', lambda *args, **kwargs: events.append('saved-verified'))
-        self.fake('native_saved_state', lambda *args, **kwargs: events.append('native-verified'))
+        self.native_calls = []
+        def native_saved(*args, **kwargs):
+            self.assertEqual(kwargs['catalog_runtime_root'], instance.prior_agent)
+            self.native_calls.append(kwargs)
+            events.append('native-verified')
+        self.fake('native_saved_state', native_saved)
         self.fake('read_workspace_key', lambda *args: self.key)
         self.fake('verification_scratch', lambda path: contextlib.nullcontext())
         self.admission_free = 10**12
@@ -171,6 +177,8 @@ class RehearsalTests(unittest.TestCase):
         instance = self.fixture()
         original = operator.root_identity(instance.data)
         instance.run_rehearsal()
+        self.assertEqual(len(self.native_calls), 2)
+        self.assertEqual(self.native_calls[1]['logical_workspace_root'], instance.data)
         self.assertEqual(operator.root_identity(instance.data), original)
         self.assertEqual((instance.data/'owner-record').read_bytes(), b'original saved data')
         self.assertTrue((instance.recovery/'workspace/owner-record').exists())

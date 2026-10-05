@@ -1366,6 +1366,7 @@ class Driver:
         native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
                            self.from_engine, self.active_engine, self.target_agent_node if self.runtime is not None else None,
                            app_releases=((getattr(self, 'adoption_source_prior', self.prior), self.prior_manifest), (selected, manifest)),
+                           catalog_runtime_root=self.target_agent if self.runtime is not None and target else self.prior_agent,
                            log_retention_window=self.log_retention_window(), log_retention_reports=log_reports,
                            session_binding_key=self.session_binding_key,
                            session_binding_node=self.node if self.session_binding_key is not None else None)
@@ -1585,7 +1586,8 @@ class Driver:
             if getattr(self, 'adopting_prior', False):
                 # Adoption earns its rollback proof from this stopped selected
                 # tree. Never publish the older generation as current recovery.
-                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine, self.from_engine)
+                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine, self.from_engine,
+                                   catalog_runtime_root=self.prior_agent)
                 write_json(self.recovery / 'prior-acceptance.json', {'health': self.before['health'], 'agentVersion': self.from_engine,
                            'snapshotManifestSha256': digest(self.recovery / 'snapshot-manifest.json'), 'independentRestoreBytes': independent})
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')

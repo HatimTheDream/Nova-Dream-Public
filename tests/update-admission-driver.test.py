@@ -306,7 +306,9 @@ class AdmissionDriverTests(unittest.TestCase):
                 'entries':{name:{'enabled':True,'config':{'bundlePath':path}} for name,path in paths.items()}}}))
         instance.before={'epoch':'11111111-1111-4111-8111-111111111111'}
         instance.from_engine=instance.active_engine='2026.9.6';instance.log_retention_window=lambda:None
+        instance.prior_agent=self.root/'verified-prior-agent'
         def check_config(before,after,*args,**kwargs):
+            self.assertEqual(kwargs['catalog_runtime_root'],instance.prior_agent)
             recovery.native_runtime_configuration(before,after,pathlib.Path('.'),'2026.9.6','2026.9.6',
                                                    app_releases=kwargs['app_releases'])
         with patch.object(driver,'native_saved_state',side_effect=check_config):
