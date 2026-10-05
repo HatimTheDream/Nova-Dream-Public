@@ -77,6 +77,10 @@ export function readEvidenceFile(ref, { baseDirectory = process.cwd(), maximum =
   reference.parse(ref);
   return stableRead(resolve(baseDirectory, ref.path), maximum, ref.sha256);
 }
+/** Shared bounded input reader for local release commands. */
+export function readReleaseInputFile(path) {
+  return stableRead(resolve(path), RELEASE_PLAN_LIMITS.inputBytes);
+}
 function stableRead(path, maximum, expectedHash) {
   need(Number.isSafeInteger(maximum) && maximum >= 0 && maximum <= RELEASE_PLAN_LIMITS.bundleBytes, 'invalid-read-limit');
   for (let part = path; ; part = dirname(part)) {

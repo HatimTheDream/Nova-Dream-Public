@@ -1,6 +1,6 @@
 # Release planning and coordination tools
 
-Stage 1 implements read-only evidence planning and a Linux host observer. Stage 2
+Stage 3 adds receipt-backed local preparation, described below. Stage 1 implements read-only evidence planning and a Linux host observer. Stage 2
 adds a durable local coordinator around one normal controller installation
 request. Only that installation dispatch and observation are integrated. CI,
 packaging, signing, feed publication, full rehearsal and retention continue to
@@ -349,3 +349,53 @@ release path remain future engineering. Prefer eliminating failed candidates
 and repeated manual coordination before optimizing minor scan costs. Keep the
 existing quality, signature, capacity, compatibility and recovery gates until a
 tested implementation qualifies a replacement.
+
+## Receipt-backed preparation
+
+Run `npm run release:prepare -- PREPARATION_JSON`, or use
+`node scripts/release-prepare.mjs PREPARATION_JSON` for clean JSON stdout.
+This local read-only command removes manual log-filename reconstruction and
+reference hashing from the preparation handoff. It uses the existing bounded
+reader and planner rather than another installer or recovery engine.
+
+The strict `releasePreparationInputSchema` in `scripts/release-prepare.mjs`
+defines a format-1 input with a frozen `operation`, original `timeline`, optional
+`remainingEstimates`, and these producer references:
+
+| Field | Input and binding |
+| --- | --- |
+| `ci.private`, `ci.public` | Raw hash-bound CI receipts; each matching quality job records its exact adjacent `logFile` and `logSha256` |
+| `package.review`, `package.bundlePath` | Raw package review and the operator bundle; its digest comes from the review |
+| `dependencies.metadata`, `dependencies.archivePath` | Raw dependency metadata and archive; the complete metadata must match the reviewed pair inside the bundle |
+| `assets.receipt`, `assets.directory` | Optional authenticated download receipt and explicit local directory; only its recorded safe filenames are read, with exact hashes and sizes |
+| `staging` | Optional raw protected-staging receipt, bound to the exact bundle/dependencies, download proof and recorded destination |
+
+Receipt references use the existing `{ "path": "...", "sha256": "..." }`
+contract. Relative paths resolve from the input file. CI logs resolve adjacent
+to their producing receipt. The first slice accepts the established `/var/lib/nova-update/staging/<bundle-hash>`
+destination; a custom staging root remains unsupported and blocks preparation.
+This command does not scan directories or open remote paths found in receipts. The inherited archive reader caps each file at 128 MiB, so a larger otherwise
+valid dependency archive blocks this slice rather than bypassing the reader.
+Missing, ambiguous, changed, oversized or redirected inputs produce preparation blockers. Retain raw host bytes and their
+hashes: formatted display JSON cannot substitute for the producer's receipt.
+
+Output contains a planner-compatible `plannerInput`, its evaluated `plan`,
+verified immutable references, producer identities and concrete `blockers`.
+A `prepared` result means local CI/package/dependency/download/staging evidence
+matches. Omitting downloads or staging permits an intermediate report, but
+keeps preparation blocked. Exit codes are `0` for prepared, `2` for blocked,
+and `1` for invalid input. Rerunning reads the same evidence without initializing
+or changing a journal, staging files, signing, publishing or dispatching.
+
+`installationAuthorized`, `effectsDispatched` and `automaticReplayPermitted`
+remain false. The generated planner input contains only immutable CI/package
+phases; the original timeline remains intact. This does not manufacture fresh
+capacity, a rehearsal, a publication receipt, installation or UI acceptance.
+Origin authenticity and current protected host state still require the
+maintained delivery checks. Keep real input packets and output outside source
+control; they may contain private operational paths.
+
+Preparation automation is one implemented slice. A complete release command and
+a qualified frontend delivery path with a roughly 30-second final interruption
+remain future work. Measure preparation, interruption and acceptance separately;
+a target duration does not permit removing recovery or startup checks.

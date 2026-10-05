@@ -1,3 +1,10 @@
+## [2.2.5] — 2026-10-05
+
+### Improved
+
+- Add a read-only release preparation command that carries actual CI log filenames, raw receipt hashes and reviewed package/dependency identities into the existing planner, with concrete blockers for missing or mismatched inputs.
+- Check authenticated downloaded assets and the recorded protected staging destination before the preparation handoff; preserve the original timeline and all installation, recovery and live-acceptance requirements.
+
 ## [2.2.4] — 2026-10-05
 
 ### Fixed
