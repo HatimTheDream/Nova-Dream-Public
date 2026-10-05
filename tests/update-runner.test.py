@@ -1130,6 +1130,9 @@ class RunnerTests(unittest.TestCase):
         instance = self.instance()
         instance.target = self.root / 'target'
         instance.prior_manifest = {'artifacts': []}
+        # validate() supplies the selected immutable runtime authority to the
+        # real driver; this lifecycle fixture supplies the same explicit field.
+        instance.prior_agent = self.root / 'verified-prior-agent'
         instance.recovery, instance.data = self.root / 'recovery', self.root / 'live'
         fixture_native(instance.recovery / 'workspace')
         fixture_native(instance.data)
@@ -1140,8 +1143,10 @@ class RunnerTests(unittest.TestCase):
         current = instance.data / native / original.name
         current.parent.mkdir(parents=True)
         current.write_bytes(original.read_bytes() + b'{"new":true}\n')
-        with patch.object(driver, 'candidate', return_value=instance.prior_manifest):
+        with patch.object(driver, 'candidate', return_value=instance.prior_manifest), \
+                patch.object(driver, 'native_saved_state', wraps=driver.native_saved_state) as verify_native:
             instance.retained_native()
+        self.assertEqual(verify_native.call_args.kwargs['catalog_runtime_root'], instance.prior_agent)
         current.write_bytes(b'{"saved":false}\n')
         with patch.object(driver, 'candidate', return_value=instance.prior_manifest), self.assertRaises(RuntimeError):
             instance.retained_native()
