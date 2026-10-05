@@ -178,7 +178,7 @@ class AdmissionDriverTests(unittest.TestCase):
                 self.assertIsNone(instance.session_binding_key)
                 self.assertEqual(list(self.root.iterdir()), [])
 
-    def adoption_fixture(self):
+    def adoption_fixture(self, managed=False):
         releases=self.root/'releases'; releases.mkdir()
         original,rollback,target=[releases/name for name in ('original','rollback','target')]
         artifacts={'dist/client/index.html':b'fixture index','dist/service/apps/service/main.js':b'fixture main'}
@@ -196,18 +196,79 @@ class AdmissionDriverTests(unittest.TestCase):
         source=original/'node_modules';source.mkdir();(source/'library.js').write_bytes(b'original dependency')
         source.chmod(0o775);(source/'library.js').chmod(0o664)
         source_receipt=app_dependencies.inspect_retained_dependencies(source)
-        deps=self.root/'dependencies'
+        anchor=self.root/'dependencies'/'node_modules' if managed else self.root/'dependencies'
+        deps=anchor.parent/'managed-updates'/('a'*64)/'node_modules' if managed else anchor
+        if managed:
+            anchor.mkdir(parents=True)
+            deps.parent.mkdir(parents=True)
         receipt=app_dependencies.stage_retained_dependencies(source,deps,source_receipt)['retained']
+        if managed:
+            source.rename(self.root/'legacy-adoption-source')
+            source.symlink_to(deps,target_is_directory=True)
+            source_receipt=app_dependencies.inspect_retained_dependencies(deps)
         (rollback/'node_modules').symlink_to(deps,target_is_directory=True)
         target.mkdir()
         instance=driver.Driver(self.root/'request.json')
         instance.releases=releases;instance.prior=original;instance.rollback_prior=rollback
         instance.adoption_source_prior=original;instance.dependencies=deps;instance.target=target
+        instance.configured_dependencies=anchor;instance.dependency_root=anchor.parent
         instance.prior_id=hashlib.sha256((original/'package.json').read_bytes()+(original/'dist/candidate.json').read_bytes()).hexdigest()
         instance.prior_manifest=manifest;instance.release={'compatibility':{'fromNovaVersion':'2.0.2'},'novaVersion':'2.0.4'}
         instance.pair={'adoptPrior':{'sourceDependencies':source_receipt,'dependencies':receipt}}
         instance.adopting_prior=True
         return instance
+
+    def test_adoption_accepts_exact_managed_selector_without_changing_configuration_or_paths(self):
+        instance=self.adoption_fixture(managed=True)
+        pointer=instance.prior/'node_modules'
+        selected=pointer.resolve(strict=True)
+        original_link=os.readlink(pointer)
+        configured=instance.configured_dependencies
+        before={p:recovery.digest(p) for p in instance.prior.rglob('*') if p.is_file()}
+        instance.resolve_prior_dependencies()
+        self.assertEqual(instance.dependencies,selected)
+        instance.verify_prior_adoption()
+        self.assertEqual(instance.configured_dependencies,configured)
+        self.assertEqual(instance.prior,instance.adoption_source_prior)
+        self.assertEqual(os.readlink(pointer),original_link)
+        self.assertEqual((instance.rollback_prior/'node_modules').resolve(strict=True),selected)
+        self.assertEqual(before,{p:recovery.digest(p) for p in instance.prior.rglob('*') if p.is_file()})
+
+    def test_managed_adoption_rechecks_selector_owner_scope_and_exact_selected_identity(self):
+        instance=self.adoption_fixture(managed=True)
+        pointer=instance.prior/'node_modules'
+        selected=instance.dependencies
+        outside=self.root/'outside'/'node_modules';outside.mkdir(parents=True)
+        alternate=instance.dependency_root/'managed-updates'/('b'*64)/'node_modules'
+        alternate.parent.mkdir(parents=True)
+        receipt=app_dependencies.inspect_retained_dependencies(selected)
+        app_dependencies.stage_retained_dependencies(selected,alternate,receipt)
+        self.assertEqual(app_dependencies.inspect_retained_dependencies(alternate),receipt)
+        for kind,target in [('outside',outside),('misbound',alternate)]:
+            pointer.unlink();pointer.symlink_to(target,target_is_directory=True)
+            with self.subTest(kind=kind),self.assertRaisesRegex(RuntimeError,'escaped|selector changed'):
+                instance.verify_prior_adoption()
+        pointer.unlink();pointer.mkdir()
+        with self.assertRaisesRegex(RuntimeError,'selector changed'):
+            instance.verify_prior_adoption()
+        pointer.rmdir()
+        pointer.symlink_to(selected,target_is_directory=True)
+        os.chown(pointer,65534,65534,follow_symlinks=False)
+        with self.assertRaisesRegex(RuntimeError,'not root-owned'):
+            instance.verify_prior_adoption()
+        os.chown(pointer,0,0,follow_symlinks=False)
+        selected.chmod(0o775)
+        with self.assertRaises(RuntimeError):instance.verify_prior_adoption()
+
+    def test_managed_adoption_rejects_changed_or_shared_selected_dependency_bytes(self):
+        instance=self.adoption_fixture(managed=True)
+        dependency=instance.dependencies/'library.js'
+        original=dependency.read_bytes();dependency.write_bytes(b'changed selected dependency')
+        with self.assertRaises(RuntimeError):instance.verify_prior_adoption()
+        dependency.write_bytes(original)
+        shared=instance.dependencies.parent/'shared-library.js';os.link(dependency,shared)
+        with self.assertRaisesRegex(RuntimeError,'share mutable file inodes'):
+            instance.verify_prior_adoption()
 
     def test_adoption_accepts_independent_rollback_without_changing_running_paths(self):
         instance=self.adoption_fixture()

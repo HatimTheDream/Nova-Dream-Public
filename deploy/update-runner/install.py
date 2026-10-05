@@ -562,8 +562,17 @@ class Driver:
         original = self.adoption_source_prior
         require(self.rollback_prior != original and self.rollback_prior.parent == self.releases,
                 'Prior adoption must preserve a separate exact rollback release.')
+        selected_dependencies = self.selected_prior_dependencies(original)
+        require(selected_dependencies == self.dependencies,
+                'The original prior dependency selector changed after admission.')
+        source_dependencies = original / 'node_modules'
+        if source_dependencies.is_symlink():
+            # Recheck the original release's exact selector on every adoption
+            # verification. A different protected closure is still a different
+            # rollback authority, even when its file bytes happen to match.
+            source_dependencies = selected_dependencies
         app_dependencies.verify_retained_dependencies(self.dependencies, review['dependencies'])
-        require(app_dependencies.inspect_retained_dependencies(original / 'node_modules') == review['sourceDependencies'],
+        require(app_dependencies.inspect_retained_dependencies(source_dependencies) == review['sourceDependencies'],
                 'The original prior dependency bytes or metadata changed.')
         candidate(original, self.prior_id, self.release['compatibility']['fromNovaVersion'])
         candidate(self.rollback_prior, self.prior_id, self.release['compatibility']['fromNovaVersion'])
@@ -577,13 +586,16 @@ class Driver:
 
     def resolve_prior_dependencies(self):
         """Each release owns its selector; the configured dependency root is stable."""
+        self.dependencies = self.selected_prior_dependencies(self.prior)
+
+    def selected_prior_dependencies(self, prior):
+        """Resolve only a root-owned configured or managed release selector."""
         protected(self.configured_dependencies, True)
         protected(self.dependency_root, True)
-        pointer = self.prior / 'node_modules'
+        pointer = prior / 'node_modules'
         if not pointer.is_symlink():
             # Only explicit signed adoption may accept the legacy real tree.
-            self.dependencies = self.configured_dependencies
-            return
+            return self.configured_dependencies
         require(pointer.lstat().st_uid == 0, 'The installed dependency selector is not root-owned.')
         selected = pointer.resolve(strict=True)
         managed = (selected.name == 'node_modules'
@@ -591,7 +603,7 @@ class Driver:
                    and re.fullmatch('[a-f0-9]{64}', selected.parent.name))
         require(selected == self.configured_dependencies or managed, 'Installed dependencies escaped the reviewed dependency root.')
         protected(selected, True)
-        self.dependencies = selected
+        return selected
 
     def validate_application_dependencies(self):
         description = self.pair.get('applicationDependencies')

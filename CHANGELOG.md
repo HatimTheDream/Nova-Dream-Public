@@ -1,3 +1,18 @@
+## [2.2.3] — 2026-10-04
+
+### Improved
+
+- Center the bottom navigation buttons with equal gaps when they fit, while keeping full-size buttons reachable by scrolling on smaller screens.
+- Hold a bottom navigation button to lift and drag it into a new position, with smoothly shifting neighbors and no outlined placeholder. Quick swipes still scroll; Settings stays fixed at the end.
+- Keep navigation labels out of the way during dragging, and preserve saved order, keyboard movement, cancellation and release-click protection.
+- Retain the successful Linux CI application build with its source and toolchain receipt, avoiding a second build during hosted preparation.
+
+### Fixed
+
+- Recognize the unchanged neutral policy timestamp refreshed by repeated official OpenClaw 9.8 startup, while preserving strict saved-content, account and permission checks.
+- Verify Codex catalog captures across independent copying and restart using exact file contents, ownership, private paths and startup timing.
+- Preserve the exact selected managed dependency closure when adopting a verified prior application for rollback.
+
 ## [2.2.2] — 2026-10-04
 
 ### Fixed

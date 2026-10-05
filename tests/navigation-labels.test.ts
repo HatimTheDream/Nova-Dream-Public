@@ -28,7 +28,7 @@ const { NavigationLabels } = await import('../apps/client/src/NavigationLabels')
 hooks.deregister();
 
 function host() {
-  let cursor = 0, dirty = true, tree: any;
+  let cursor = 0, dirty = true, suspended = false, tree: any;
   const cells: any[] = [], effects: (() => void)[] = [];
   const listeners = new Map<string, Set<(event?: any) => void>>();
   class Button {
@@ -58,7 +58,7 @@ function host() {
   const label = () => tree.props.children[1];
   const flush = () => {
     while (dirty) {
-      dirty = false; cursor = 0; tree = NavigationLabels({ children: createElement('nav') });
+      dirty = false; cursor = 0; tree = NavigationLabels({ children: createElement('nav'), suspended });
       if (label()) label().props.ref.current = {
         getBoundingClientRect: () => ({ left: label().props.style.left - 50, right: label().props.style.left + 50, top: label().props.style.top - 30, bottom: label().props.style.top }),
       };
@@ -68,6 +68,7 @@ function host() {
   flush();
   return {
     button, doc, label,
+    suspend(value: boolean) { suspended = value; dirty = true; flush(); },
     focus() { doc.activeElement = button; tree.props.children[0].props.onFocusCapture({ target: button }); flush(); },
     hover() { tree.props.children[0].props.onPointerOver({ target: button, pointerType: 'mouse' }); flush(); },
     emit(name: string, event?: any) { for (const callback of [...(listeners.get(name) ?? [])]) callback(event); flush(); },
@@ -109,5 +110,15 @@ test('Escape dismisses the keyboard label and later scrolls do not resurrect it'
     assert.equal(h.label(), null);
     h.emit('scroll'); assert.equal(h.label(), null);
     assert.equal(h.listeners, 0);
+  } finally { h.close(); }
+});
+
+test('pickup dismisses navigation labels until reordering finishes', () => {
+  const h = host();
+  try {
+    h.focus(); assert.ok(h.label());
+    h.suspend(true); assert.equal(h.label(), null);
+    h.hover(); h.focus(); assert.equal(h.label(), null);
+    h.suspend(false); h.hover(); assert.ok(h.label());
   } finally { h.close(); }
 });

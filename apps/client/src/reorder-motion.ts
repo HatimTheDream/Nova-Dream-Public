@@ -6,8 +6,8 @@ export const sameOrder = (first: readonly string[], second: readonly string[]) =
 export const containsPoint = (box: ReorderBox, point: ReorderPoint) => point.x >= box.left && point.x <= box.left + box.width && point.y >= box.top && point.y <= box.top + box.height;
 
 /** Surface and navigation touch holds yield to native scrolling before pickup. */
-export function reorderGesture(distance: number, surface: boolean, touch: boolean, motion: boolean, touchHold = false): 'wait' | 'start' | 'cancel' {
-  if (surface || touch && (!motion || touchHold)) return distance > 8 ? 'cancel' : 'wait';
+export function reorderGesture(distance: number, surface: boolean, touch: boolean, motion: boolean, touchHold = false, hold = false): 'wait' | 'start' | 'cancel' {
+  if (hold || surface || touch && (!motion || touchHold)) return distance > 8 ? 'cancel' : 'wait';
   return distance >= 6 ? 'start' : 'wait';
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { ModuleId } from '../../../packages/domain/contracts';
 import { Settings, type Icon } from './icons';
 import { NavigationLabels } from './NavigationLabels';
+import type { useReorder } from './useReorder';
 
 type Destination = { id: ModuleId; label: string; icon: Icon };
 type Props = {
@@ -10,6 +11,7 @@ type Props = {
   open: (route: ModuleId | 'settings') => boolean;
   returnToWideNavigation: () => void;
   updateAvailable?: boolean;
+  reorder?: ReturnType<typeof useReorder<ModuleId>>;
 };
 type Drag = { pointer: number; x: number; y: number; left: number; moved: boolean };
 const buttonsIn = (strip: HTMLElement) => Array.from(strip.querySelectorAll<HTMLButtonElement>('button[data-navigation-label]'));
@@ -24,14 +26,16 @@ function reveal(strip: HTMLElement, button: HTMLElement | null, behavior: Scroll
 }
 
 /** Saved order stays intact; swiping only changes which destinations are visible. */
-export function BottomNavigation({ items, route, open, returnToWideNavigation, updateAvailable = false }: Props) {
-  const strip = useRef<HTMLDivElement>(null);
+export function BottomNavigation({ items, route, open, returnToWideNavigation, updateAvailable = false, reorder }: Props) {
+  const localStrip = useRef<HTMLDivElement>(null);
+  const strip = reorder?.containerRef ?? localStrip;
   const drag = useRef<Drag | null>(null);
   const suppressClick = useRef(false);
   const returnFocus = useRef(returnToWideNavigation);
   returnFocus.current = returnToWideNavigation;
   const [progress, setProgress] = useState({ size: 100, position: 0 });
   const order = items.map(item => item.id).join(',');
+  const destinations = reorder ? reorder.order.map(id => items.find(item => item.id === id)!).filter(Boolean) : items;
 
   const measure = () => {
     const node = strip.current;
@@ -48,7 +52,7 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
     if (!node || !current) return;
     node.classList.remove('dragging');
     if (current.moved) suppressClick.current = true;
-    if (node.hasPointerCapture(current.pointer)) node.releasePointerCapture(current.pointer);
+    if (current.moved && node.hasPointerCapture(current.pointer)) node.releasePointerCapture(current.pointer);
   };
   useEffect(() => {
     const node = strip.current;
@@ -92,18 +96,20 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
     }
   };
 
-  return <NavigationLabels><nav className="bottom-navigation" aria-label="Main navigation" aria-description="Swipe or drag to see more sections. Use arrow keys to move between buttons.">
-    <div className="bottom-navigation-strip" ref={strip} onScroll={measure}
+  return <NavigationLabels suspended={Boolean(reorder?.dragging)}><nav className="bottom-navigation" data-reorder-host aria-label="Main navigation" aria-description="Swipe or drag to see more sections. Hold a button to move it. Use arrow keys to move between buttons, or Alt and Left or Right to change their order.">
+    <div className="bottom-navigation-strip" data-reorder-scroll ref={strip} onScroll={measure}
       onPointerDown={event => {
         suppressClick.current = false;
         if (event.pointerType !== 'mouse' || event.button !== 0 || !event.isPrimary) return;
         drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, moved: false };
       }}
       onPointerMove={event => {
+        if (reorder?.dragging) { stopDrag(); return; }
         const current = drag.current;
         if (!current || current.pointer !== event.pointerId) return;
         const dx = event.clientX - current.x, dy = event.clientY - current.y;
         if (!current.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+          reorder?.cancel();
           current.moved = true;
           event.currentTarget.setPointerCapture(event.pointerId);
           event.currentTarget.classList.add('dragging');
@@ -115,23 +121,29 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
       onPointerLeave={() => { if (drag.current && !drag.current.moved) stopDrag(); }}
       onClickCapture={event => {
         // A synthesized keyboard/assistive click is still valid after a drag.
-        if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); }
+        if ((suppressClick.current || reorder?.suppressClick.current) && event.detail !== 0) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); }
       }}
       onFocusCapture={event => { if (!drag.current) reveal(event.currentTarget, event.target.closest<HTMLButtonElement>('button'), motion()); }}
+      onContextMenu={event => { if (reorder?.dragging || reorder?.suppressClick.current) event.preventDefault(); }}
       onKeyDown={event => {
-        if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.defaultPrevented || event.ctrlKey || event.metaKey) return;
         const buttons = buttonsIn(event.currentTarget), target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null;
         const index = target ? buttons.indexOf(target) : -1;
         if (index < 0) return;
         const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
         const delta = event.key === 'ArrowRight' ? (rtl ? -1 : 1) : event.key === 'ArrowLeft' ? (rtl ? 1 : -1) : 0;
+        if (event.altKey) {
+          const id = target?.dataset.reorderItem as ModuleId | undefined;
+          if (delta && id && reorder) { event.preventDefault(); reorder.move(id, reorder.order.indexOf(id) + delta); }
+          return;
+        }
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : delta ? Math.max(0, Math.min(buttons.length - 1, index + delta)) : null;
         if (next === null) return;
         event.preventDefault();
         buttons[next].focus({ preventScroll: true });
         reveal(event.currentTarget, buttons[next], motion());
       }}>
-      {items.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`bottom-navigation-item${route === item.id ? ' active' : ''}`} aria-label={item.label} data-navigation-label={item.label} aria-current={route === item.id ? 'page' : undefined} onClick={() => open(item.id)}><Icon size={20}/></button>; })}
+      {destinations.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`bottom-navigation-item${route === item.id ? ' active' : ''}`} aria-label={item.label} aria-description="Hold to move. Alt and Left or Right also changes position." data-navigation-label={item.label} data-reorder-group="bottom-navigation" data-reorder-item={item.id} aria-current={route === item.id ? 'page' : undefined} {...reorder?.bind(item.id)} onClick={() => open(item.id)}><Icon size={20}/></button>; })}
       <button type="button" className={`bottom-navigation-item${route === 'settings' ? ' active' : ''}`} aria-label="Settings" data-navigation-label={updateAvailable ? 'Settings · update available' : 'Settings'} aria-current={route === 'settings' ? 'page' : undefined} aria-description={updateAvailable ? 'Software update available' : undefined} onClick={() => open('settings')}><span className="bottom-navigation-settings-icon"><Settings size={20}/>{updateAvailable && <span className="settings-update-dot" aria-hidden="true"/>}</span></button>
     </div>
     <span className="bottom-navigation-progress" aria-hidden="true" hidden={progress.size >= 100}><span style={{ width: `${progress.size}%`, insetInlineStart: `${progress.position}%` }}/></span>

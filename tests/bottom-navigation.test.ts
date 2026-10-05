@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { ModuleId } from '../packages/domain/contracts';
+import { moveItem } from '../packages/domain/contracts';
 
 const key = Symbol.for('nova.test.bottom-navigation');
 const react = pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
@@ -26,14 +27,17 @@ const nodes = (node: any): any[] => node == null || typeof node !== 'object' ? [
 const icon = () => null;
 const order: ModuleId[] = ['inbox', 'home', 'tasks', 'assistant', 'calendar', 'contacts', 'agents', 'content', 'profile'];
 
-function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, direction = 'ltr', reducedMotion = false, server = false) {
+function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, direction = 'ltr', reducedMotion = false, server = false, reorderable = false) {
   let width = initialWidth, allow = true, wideFocus = 0, dirty = true, cursor = 0, tree: any;
   const cells: any[] = [], effects: (() => void)[] = [], observed = new Set<() => void>();
   const listeners = new Map<string, Set<() => void>>();
   const opened: (ModuleId | 'settings')[] = [], scrolls: { left: number; behavior: string }[] = [];
+  const moves: ModuleId[][] = [], holds: ModuleId[] = [];
+  let cancelled = 0;
   const doc = { activeElement: null as ButtonFixture | null };
   class ButtonFixture {
     constructor(readonly label: string, public index: number, public props: any) {}
+    get dataset() { return { reorderItem: this.props['data-reorder-item'] }; }
     closest() { return this; }
     getBoundingClientRect() {
       const left = direction === 'rtl' ? 14 + strip.clientWidth - this.index * 52 - 44 - strip.scrollLeft : 14 + this.index * 52 - strip.scrollLeft;
@@ -51,7 +55,7 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
     getBoundingClientRect() { return { left: 14, right: 14 + this.clientWidth }; },
     scrollBy(options: { left: number; behavior: string }) { scrolls.push(options); this.scrollLeft += options.left; },
     querySelector() { return [...buttons.values()].find(button => button.props['aria-current'] === 'page') ?? null; },
-    querySelectorAll() { return [...buttons.values()]; },
+    querySelectorAll() { return [...buttons.values()].sort((first, second) => first.index - second.index); },
     contains(element: ButtonFixture | null) { return !!element && buttons.get(element.label) === element; },
     hasPointerCapture: (pointer: number) => captures.has(pointer),
     setPointerCapture: (pointer: number) => captures.add(pointer),
@@ -59,9 +63,18 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
     classList: { add: (name: string) => classes.add(name), remove: (name: string) => classes.delete(name), contains: (name: string) => classes.has(name) },
   };
   const props = { items: order.map(id => ({ id, label: id, icon })), route, updateAvailable: true,
+    reorder: undefined as Parameters<typeof BottomNavigation>[0]['reorder'],
     open: (next: ModuleId | 'settings') => { opened.push(next); if (allow) { props.route = next; dirty = true; } return allow; },
     returnToWideNavigation: () => { wideFocus++; doc.activeElement = null; },
   };
+  const reorder: NonNullable<typeof props.reorder> = {
+    order: [...order], dragging: null, announcement: '', containerRef: { current: null }, suppressClick: { current: false },
+    bind: id => ({ onPointerDown: () => { holds.push(id); } }),
+    bindSurface: () => ({ onPointerDown: () => {}, onContextMenu: () => {} }),
+    move: (id, to) => { reorder.order = moveItem(reorder.order, reorder.order.indexOf(id), to); moves.push([...reorder.order]); dirty = true; },
+    cancel: () => { cancelled++; reorder.dragging = null; dirty = true; },
+  };
+  if (reorderable) props.reorder = reorder;
   const values: Record<PropertyKey, unknown> = {
     [key]: {
       state(initial: any) { const index = cursor++; const cell = cells[index] ??= { value: typeof initial === 'function' ? initial() : initial }; return [cell.value, (next: any) => { const value = typeof next === 'function' ? next(cell.value) : next; if (!Object.is(value, cell.value)) { cell.value = value; dirty = true; } }]; },
@@ -99,12 +112,15 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
   };
   flush();
   return {
-    props, opened, scrolls, strip, captures, classes, doc, buttons,
+    props, opened, scrolls, strip, captures, classes, doc, buttons, reorder, moves, holds,
+    get cancelled() { return cancelled; },
     get tree() { return tree; }, get wideFocus() { return wideFocus; }, get subscriptions() { return observed.size + [...listeners.values()].reduce((count, set) => count + set.size, 0); },
     setAllowed(value: boolean) { allow = value; },
     click(label: string, detail = 1) { let stopped = false; stripTree().props.onClickCapture({ detail, preventDefault() {}, stopPropagation() { stopped = true; } }); if (!stopped) buttons.get(label)!.props.onClick(); flush(); return !stopped; },
     pointer,
-    key(label: string, key: string) { let prevented = false; stripTree().props.onKeyDown({ key, target: buttons.get(label), currentTarget: strip, preventDefault() { prevented = true; } }); flush(); return prevented; },
+    key(label: string, key: string, altKey = false) { let prevented = false; stripTree().props.onKeyDown({ key, altKey, target: buttons.get(label), currentTarget: strip, preventDefault() { prevented = true; } }); flush(); return prevented; },
+    hold(label: string) { buttons.get(label)!.props.onPointerDown(); },
+    pickedUp(id: ModuleId) { reorder.dragging = id; dirty = true; flush(); },
     focus(label: string) { buttons.get(label)!.focus(); flush(); },
     route(next: ModuleId | 'settings') { props.route = next; dirty = true; flush(); },
     rerender() { props.items = [...props.items]; dirty = true; flush(); },
@@ -137,6 +153,55 @@ test('a rejected navigation preserves the selected route until the existing draf
     h.setAllowed(true); h.click('calendar');
     assert.equal(h.buttons.get('calendar')!.props['aria-current'], 'page');
     assert.deepEqual(h.opened, ['calendar', 'calendar']);
+  } finally { h.close(); }
+});
+
+test('dock buttons hold through the shared reorder controller; Settings stays outside its saved order', () => {
+  const h = host('home', 390, 'ltr', false, false, true);
+  try {
+    h.hold('home');
+    assert.deepEqual(h.holds, ['home']);
+    assert.equal(h.buttons.get('home')!.props['data-reorder-group'], 'bottom-navigation');
+    assert.equal(h.buttons.get('Settings')!.props['data-reorder-item'], undefined);
+    assert.equal(h.buttons.get('Settings')!.props.onPointerDown, undefined);
+    assert.equal(h.key('home', 'ArrowRight', true), true);
+    assert.deepEqual(h.moves, [['inbox', 'tasks', 'home', 'assistant', 'calendar', 'contacts', 'agents', 'content', 'profile']]);
+    assert.deepEqual(h.strip.querySelectorAll().map(button => button.label), [...h.moves[0], 'Settings']);
+    assert.equal(h.key('Settings', 'ArrowLeft', true), false);
+    assert.equal(h.moves.length, 1);
+    assert.deepEqual(h.opened, []);
+  } finally { h.close(); }
+});
+
+test('RTL keyboard reordering follows the visual arrow without moving Settings', () => {
+  const h = host('home', 390, 'rtl', false, false, true);
+  try {
+    assert.equal(h.key('home', 'ArrowLeft', true), true);
+    assert.equal(h.moves[0].indexOf('home'), 2);
+    assert.equal(h.key('home', 'ArrowRight', true), true);
+    assert.deepEqual(h.moves[1], order);
+    assert.equal(h.strip.querySelectorAll().at(-1)!.label, 'Settings');
+  } finally { h.close(); }
+});
+
+test('a swipe cancels pending pickup while an active reorder keeps its capture and does not scroll or navigate', () => {
+  const h = host('home', 390, 'ltr', false, false, true);
+  try {
+    h.pointer('pointerdown', 250); h.pointer('pointermove', 150);
+    assert.equal(h.cancelled, 1);
+    assert.equal(h.strip.scrollLeft, 100);
+    h.pointer('pointercancel', 150);
+    h.pointer('pointerdown', 150);
+    h.pickedUp('home'); h.captures.add(1);
+    const left = h.strip.scrollLeft;
+    assert.equal(h.pointer('pointermove', 250), false);
+    assert.equal(h.strip.scrollLeft, left);
+    assert.equal(h.captures.has(1), true, 'Discarding a pending scroll must not release reorder capture');
+    h.pointer('pointerup', 250);
+    h.reorder.suppressClick.current = true;
+    assert.equal(h.click('home'), false, 'Release cannot navigate after moving a tile');
+    assert.equal(h.click('home', 0), true, 'Keyboard activation remains available after a move');
+    assert.deepEqual(h.opened, ['home']);
   } finally { h.close(); }
 });
 

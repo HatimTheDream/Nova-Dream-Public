@@ -1,5 +1,6 @@
 """Offline, synthetic saved-content qualification for the exact 9.6→9.8 pair."""
 import contextlib
+import copy
 from collections import Counter
 import hashlib
 import json
@@ -9,6 +10,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -441,11 +443,11 @@ class NeutralChannelPolicyTests(unittest.TestCase):
                                   'hashes': [recovery.digest(root / self.relative) for root in (self.snapshot, self.live)]},
                 'startup_window': (100, 110)}
 
-    def verify(self, before, after, **options):
+    def verify(self, before, after, *, versions=('2026.9.6', '2026.9.8'), **options):
         context = self.context | options
         recovery.retained_plugin_index(before, after, None,
             self.live / self.selected / 'openclaw-runtime/state/state/openclaw.sqlite',
-            '2026.9.6', '2026.9.8', **context)
+            *versions, **context)
 
     def insert(self, db, value=None, timestamp=105000):
         db.execute('insert into config_machine_state values(?,?,?)',
@@ -489,6 +491,99 @@ class NeutralChannelPolicyTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError): self.verify(before, after)
                 after.execute('delete from config_machine_state')
                 with self.assertRaises(RuntimeError): self.verify(before, after)
+
+    def test_same98_existing_neutral_timestamp_is_qualified_without_mutation(self):
+        with pair(self.SQL) as (before, after):
+            for db in (before, after): db.execute("insert into config_machine_state values('retained','saved',7)")
+            self.insert(before, timestamp=85000)
+            self.insert(after, timestamp=105000)
+            original = [list(db.execute('select * from config_machine_state')) for db in (before, after)]
+            self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+            self.assertEqual([list(db.execute('select * from config_machine_state')) for db in (before, after)], original)
+            after.execute("update config_machine_state set value_json='changed' where state_key='retained'")
+            with self.assertRaisesRegex(RuntimeError, 'machine configuration changed'):
+                self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+
+    def test_same98_refresh_requires_existing_exact_neutral_content_and_monotonic_time(self):
+        values = [self.NEUTRAL, '{"roles":{"saved":"permission"},"identityScopes":null}',
+                  '{"roles":null,"identityScopes":["operator.admin"]}',
+                  '{"roles":null,"identityScopes":null,"configuredOwnerPolicy":{"id":"saved"}}',
+                  '{ "roles":null,"identityScopes":null}',
+                  '{"roles":null,"identityScopes":null,"roles":null}']
+        for old_value, new_value in ((old, new) for old in values for new in values
+                                     if old != self.NEUTRAL or new != self.NEUTRAL):
+            with self.subTest(old=old_value, new=new_value), pair(self.SQL) as (before, after):
+                self.insert(before, old_value, 85000); self.insert(after, new_value, 105000)
+                with self.assertRaises(RuntimeError): self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+        for old_time, new_time in ((-1, 105000), (9007199254740992, 105000), (106000, 105000),
+                                   (85000, 99999), (85000, 110001)):
+            with self.subTest(old=old_time, new=new_time), pair(self.SQL) as (before, after):
+                self.insert(before, timestamp=old_time); self.insert(after, timestamp=new_time)
+                with self.assertRaises(RuntimeError): self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+        for invalid in (True, 85000.0, '85000'):
+            with self.subTest(old_type=type(invalid)), pair(self.SQL) as (before, after):
+                self.insert(before, timestamp=85000); self.insert(after, timestamp=105000)
+                original_rows = recovery.rows
+                def invalid_previous(connection, table):
+                    return Counter({('operator.channelPolicy', self.NEUTRAL, invalid): 1}) if connection is before else original_rows(connection, table)
+                with patch.object(recovery, 'rows', invalid_previous), self.assertRaises(RuntimeError):
+                    self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+
+    def test_same98_refresh_requires_closed_selected_configuration_authority(self):
+        with pair(self.SQL) as (before, after):
+            self.insert(before, timestamp=85000); self.insert(after, timestamp=105000)
+            for name in ('startup_window', 'configuration', 'workspace_roots'):
+                with self.subTest(missing=name), self.assertRaises(RuntimeError):
+                    self.verify(before, after, versions=('2026.9.8', '2026.9.8'), **{name: None})
+            for window in ((float('nan'), 110), (100, float('inf')), (110, 100), (106, 110), (100, 104)):
+                with self.subTest(window=window), self.assertRaises(RuntimeError):
+                    self.verify(before, after, versions=('2026.9.8', '2026.9.8'), startup_window=window)
+            for versions in (('2026.9.6', '2026.9.8'), ('2026.9.6', '2026.9.6'), ('2026.9.2', '2026.9.6')):
+                with self.subTest(versions=versions), self.assertRaises(RuntimeError): self.verify(before, after, versions=versions)
+            changed = self.context['configuration'] | {'hashes': ['0' * 64, self.context['configuration']['hashes'][1]]}
+            with self.assertRaises(RuntimeError):
+                self.verify(before, after, versions=('2026.9.8', '2026.9.8'), configuration=changed)
+            with self.assertRaises(RuntimeError):
+                recovery.retained_plugin_index(before, after, None, self.live / 'archived/openclaw.sqlite',
+                    '2026.9.8', '2026.9.8', **self.context)
+            for root in (self.snapshot, self.live):
+                (root / self.relative).write_text('{"gateway":{"roles":{}},"commands":{"ownerAllowFrom":[]}}', encoding='utf-8')
+            self.context = self.authority()
+            with self.assertRaises(RuntimeError): self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+        for absent in ('before', 'after'):
+            with self.subTest(absent=absent), pair(self.SQL) as (before, after):
+                self.insert(after if absent == 'before' else before)
+                with self.assertRaises(RuntimeError): self.verify(before, after, versions=('2026.9.8', '2026.9.8'))
+
+    def test_same98_saved_state_binds_refresh_authority_and_retains_identity_permissions(self):
+        base = pathlib.Path(self.temporary.name).resolve() / 'saved-state'
+        snapshot = base / 'snapshot'; snapshot.mkdir(parents=True)
+        (snapshot / 'edition3.identity').write_bytes(b'private.novadream.edition3.preview\n')
+        with contextlib.closing(sqlite3.connect(snapshot / 'workspace.sqlite')) as db:
+            db.executescript("pragma user_version=55;create table meta(key text,value text);insert into meta values('epoch','11111111-1111-4111-8111-111111111111');")
+        native = snapshot / 'openclaw-runtime'; native.mkdir()
+        (native / 'edition3-runtime.identity').write_bytes(b'edition3-owned-gateway\n')
+        (native / 'openclaw.json').write_text('{"gateway":{"auth":{}},"commands":{"ownerAllowFrom":[]}}', encoding='utf-8')
+        relative = pathlib.Path('openclaw-runtime/state/state/openclaw.sqlite')
+        (snapshot / relative).parent.mkdir(parents=True)
+        with contextlib.closing(sqlite3.connect(snapshot / relative)) as db:
+            db.executescript('pragma user_version=19;' + self.SQL + recovery.PROFILE_IDENTITIES_98_SQL)
+            self.insert(db, timestamp=85000)
+            db.execute("insert into user_profile_identities values('channel','saved-subject','saved-profile',null,1,'saved-authorization','{\"saved\":true}')")
+            db.commit()
+        original_hash = recovery.digest(snapshot / relative)
+        live = base / 'live'; shutil.copytree(snapshot, live)
+        with contextlib.closing(sqlite3.connect(live / relative)) as db:
+            db.execute("update config_machine_state set updated_at_ms=105000 where state_key='operator.channelPolicy'"); db.commit()
+        # Exercise the maintained same-engine entry point, not only its projector.
+        recovery.native_saved_state(snapshot, live, from_version='2026.9.8', log_retention_window=(100, 110))
+        self.assertEqual(recovery.digest(snapshot / relative), original_hash)
+        with self.assertRaisesRegex(RuntimeError, 'startup authority'):
+            recovery.native_saved_state(snapshot, live, from_version='2026.9.8')
+        with contextlib.closing(sqlite3.connect(live / relative)) as db:
+            db.execute("update user_profile_identities set authorization_id='changed-authorization'"); db.commit()
+        with self.assertRaisesRegex(RuntimeError, 'permissions changed'):
+            recovery.native_saved_state(snapshot, live, from_version='2026.9.8', log_retention_window=(100, 110))
 
     def test_missing_startup_configuration_or_workspace_authority_is_rejected(self):
         with pair(self.SQL) as (before, after):
@@ -540,6 +635,212 @@ class NeutralChannelPolicyTests(unittest.TestCase):
                 self.verify(before, after, workspace_roots=(self.snapshot, self.live, self.snapshot, self.selected))
             (self.snapshot / self.relative).write_text('{}', encoding='utf-8')
             with self.assertRaises(RuntimeError): self.verify(before, after)
+
+
+class CopiedCodexAdmissionsTests(unittest.TestCase):
+    """Real disposable copy/restart roles, not a blanket catalog projection."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-codex-admission-')
+        self.root = pathlib.Path(self.temporary.name).resolve()
+        self.live, self.snapshot, self.trial, self.original = [self.root / value for value in ('live', 'snapshot', 'trial', 'original')]
+        self.selected = pathlib.Path('selected')
+        self.relative = self.selected / 'openclaw-runtime/state/npm/projects/openclaw-codex-test/node_modules/@openclaw/codex'
+        self.package = self.live / self.relative
+        self.source_relative = self.relative.parent.parent / '@openai/codex-linux-x64'
+        self.source = self.live / self.source_relative
+        (self.package / 'dist').mkdir(parents=True)
+        (self.source / 'bin').mkdir(parents=True)
+        for relative, value in [('openclaw.plugin.json', '{"id":"codex"}'),
+                                ('package.json', '{"name":"@openclaw/codex","version":"2026.9.8"}'),
+                                ('dist/index.js', 'export const retained=true;'),
+                                ('dist/doctor-contract-api.js', 'export const doctor=true;')]:
+            path = self.package / relative; path.write_text(value)
+            os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        for relative, value in [('package.json', '{"name":"native-package"}'), ('bin/tool', 'exact native bytes')]:
+            path = self.source / relative; path.write_text(value)
+            os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        for folder in (self.source, self.source / 'bin'):
+            os.utime(folder, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        self.capture_relative = self.selected / 'openclaw-runtime/state/tmp/plugin-captures'
+        self.old_capture = self.capture_relative / '11111111-1111-4111-8111-111111111111/native/admission-Old123'
+        old_admission = self.capture(self.old_capture)
+        old_record = {'pluginId': 'codex', 'rootDir': str(self.package), 'source': str(self.package / 'dist/index.js'),
+            'manifestPath': str(self.package / 'openclaw.plugin.json'), 'manifestHash': recovery.digest(self.package / 'openclaw.plugin.json'),
+            'manifestFile': self.signature(self.package / 'openclaw.plugin.json'), 'packageVersion': '2026.9.8',
+            'doctorContractHash': recovery.digest(self.package / 'dist/doctor-contract-api.js'),
+            'doctorContractFile': self.signature(self.package / 'dist/doctor-contract-api.js'),
+            'packageJson': {'path': 'package.json', 'hash': recovery.digest(self.package / 'package.json'),
+                            'fileSignature': self.signature(self.package / 'package.json')},
+            'sourceAdmissions': old_admission, 'contributions': {'tools': ['retained']}, 'enabled': True}
+        self.old = self.index(old_record, 1)
+        shutil.copytree(self.live, self.snapshot)
+        shutil.copytree(self.live, self.trial)
+        # The maintained pre-start call composes original/snapshot/trial proof.
+        self.prestart = (self.snapshot, self.trial, self.live, self.selected)
+        recovery.retained_catalog_files([copy.deepcopy(self.old), copy.deepcopy(self.old)], workspace_roots=self.prestart,
+                                        engine_version='2026.9.8')
+        self.live.rename(self.original); self.trial.rename(self.live)
+        self.window = (time.time() - 1, time.time() + 5)
+        self.new_capture = self.capture_relative / '22222222-2222-4222-8222-222222222222/native/admission-New123'
+        new_record = copy.deepcopy(old_record); new_record['sourceAdmissions'] = self.capture(self.new_capture)
+        self.new = self.index(new_record, 2)
+        self.roots = (self.snapshot, self.live, self.live, self.selected)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    @staticmethod
+    def signature(path):
+        info = path.stat()
+        return {'size': info.st_size, 'mtimeMs': info.st_mtime_ns / 10 ** 6, 'ctimeMs': info.st_ctime_ns / 10 ** 6}
+
+    @staticmethod
+    def identity(path):
+        info = path.lstat()
+        return ':'.join(map(str, (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)))
+
+    @staticmethod
+    def index(record, revision):
+        return {'version': 1, 'warning': '', 'hostContractVersion': '2026.9.8', 'compatRegistryVersion': 'a' * 64,
+                'migrationVersion': 1, 'policyHash': 'b' * 64, 'generatedAtMs': revision,
+                'installRecords': {}, 'plugins': [record], 'diagnostics': []}
+
+    def capture(self, relative):
+        captured = self.live / relative
+        (captured / 'content/bin').mkdir(parents=True)
+        for guard in (self.live / self.capture_relative, captured.parent.parent, captured.parent, captured, captured / 'content', captured / 'content/bin'):
+            guard.chmod(0o700)
+        shutil.copyfile(self.source / 'package.json', captured / 'content/package.json')
+        os.link(self.source / 'bin/tool', captured / 'content/bin/tool')
+        directory_stamp = int(time.time() * 10 ** 9)
+        for folder in (captured / 'content', captured / 'content/bin'):
+            os.utime(folder, ns=(directory_stamp, directory_stamp))
+        members = {}
+        for name in ('', 'bin', 'bin/tool', 'package.json'):
+            source, current = self.source / name, captured / 'content' / name
+            value = {'source': str(source), 'sourceIdentity': self.identity(source),
+                     'capturedIdentity': self.identity(current), 'boundaryChecked': name == 'package.json'}
+            if source.is_file(): value.update(sizeBytes=source.stat().st_size, contentHash=recovery.digest(source))
+            members[name] = value
+        artifact = {field: members['bin/tool'][field] for field in ('sourceIdentity', 'capturedIdentity', 'contentHash', 'sizeBytes')}
+        artifact.update(namespace=str(captured), capturedPath=str(captured / 'content/bin/tool'))
+        return {str(self.package) + '\0': {'signature': 'c' * 64, 'sourceDigest': 'd' * 64,
+            'nativeArtifacts': {str(self.source / 'bin/tool'): artifact},
+            'nativeNamespaces': {str(captured): {'sourceDirectory': str(self.source), 'capturedRoot': str(captured),
+                                               'managed': True, 'members': members}}}}
+
+    def compare(self, mutation=None, *, roots=None, window=None):
+        before, after = copy.deepcopy(self.old), copy.deepcopy(self.new)
+        if mutation: mutation(after)
+        with pair('CREATE TABLE config_machine_state(state_key TEXT,value_json TEXT,updated_at_ms INTEGER);') as (old, new):
+            for db, value in ((old, before), (new, after)):
+                db.execute('insert into config_machine_state values(?,?,?)',
+                           ('plugins.installedIndex', json.dumps({'revision': value['generatedAtMs'], 'index': value}), value['generatedAtMs']))
+            recovery.retained_plugin_index(old, new, None, self.live / 'unused', '2026.9.8', '2026.9.8',
+                workspace_roots=roots or self.roots, startup_window=self.window if window is None else window)
+
+    def admission(self, value): return next(iter(value['plugins'][0]['sourceAdmissions'].values()))
+    def namespace(self, value): return next(iter(self.admission(value)['nativeNamespaces'].values()))
+
+    def test_real_copy_cached_ctime_and_fresh_capture_are_byte_bound_without_mutation(self):
+        before = {str(path): (recovery.digest(path), self.identity(path)) for path in self.root.rglob('*') if path.is_file()}
+        self.compare()
+        self.assertEqual(before, {str(path): (recovery.digest(path), self.identity(path)) for path in self.root.rglob('*') if path.is_file()})
+        self.assertEqual(self.old['plugins'][0]['manifestFile'], self.new['plugins'][0]['manifestFile'])
+        self.assertNotEqual(self.identity(self.original / self.relative / 'openclaw.plugin.json'),
+                            self.identity(self.package / 'openclaw.plugin.json'))
+
+    def test_native_authority_membership_identity_and_paths_remain_strict(self):
+        cases = [lambda v: self.admission(v).update(signature='e' * 64),
+                 lambda v: self.admission(v).update(sourceDigest='e' * 64),
+                 lambda v: self.admission(v).update(unknown=True),
+                 lambda v: self.namespace(v).update(managed=False),
+                 lambda v: self.namespace(v).update(sourceDirectory=str(self.root)),
+                 lambda v: self.namespace(v)['members'].pop('package.json'),
+                 lambda v: self.namespace(v)['members']['bin/tool'].update(contentHash='e' * 64),
+                 lambda v: self.namespace(v)['members']['bin/tool'].update(sizeBytes=1),
+                 lambda v: self.namespace(v)['members']['bin/tool'].update(source=str(self.root / 'outside')),
+                 lambda v: self.namespace(v)['members']['bin/tool'].update(sourceIdentity='1:1:33216:18:1:1'),
+                 lambda v: self.namespace(v)['members']['bin/tool'].update(capturedIdentity='1:1:33216:18:1:1'),
+                 lambda v: self.namespace(v)['members']['package.json'].update(boundaryChecked=False),
+                 lambda v: self.namespace(v)['members'].update({'../outside': copy.deepcopy(self.namespace(v)['members']['bin/tool'])}),
+                 lambda v: next(iter(self.admission(v)['nativeArtifacts'].values())).update(capturedPath=str(self.root / 'outside')),
+                 lambda v: self.admission(v)['nativeArtifacts'].clear(),
+                 lambda v: v['plugins'][0]['contributions']['tools'].append('unexpected'),
+                 lambda v: v['plugins'][0]['manifestFile'].update(ctimeMs=1),
+                 lambda v: v['plugins'][0]['packageJson']['fileSignature'].update(mtimeMs=1)]
+        for number, mutation in enumerate(cases):
+            with self.subTest(case=number), self.assertRaises((RuntimeError, FileNotFoundError)): self.compare(mutation)
+
+    def test_capture_window_and_cached_ctime_without_proof_are_rejected(self):
+        for window in ((), (0, 1), (float('nan'), time.time()), (time.time(), 1)):
+            with self.subTest(window=window), self.assertRaises(RuntimeError): self.compare(window=window)
+        with self.assertRaises(RuntimeError): self.compare(lambda v: v['plugins'][0].pop('sourceAdmissions'))
+        old, new = copy.deepcopy(self.old), copy.deepcopy(self.new)
+        old['plugins'][0].pop('sourceAdmissions'); new['plugins'][0].pop('sourceAdmissions')
+        with self.assertRaises(RuntimeError):
+            recovery.retained_catalog_files([old, new], workspace_roots=self.roots, engine_version='2026.9.8')
+
+    def test_missing_extra_and_changed_physical_native_bytes_are_rejected(self):
+        captured = self.live / self.new_capture / 'content'
+        extra = captured / 'extra'; extra.write_text('unexpected')
+        with self.assertRaises(RuntimeError): self.compare()
+        extra.unlink()
+        tool = self.source / 'bin/tool'; before = tool.stat(); tool.write_text('mutat native bytes')
+        os.utime(tool, ns=(before.st_atime_ns, before.st_mtime_ns))
+        # Supply truthful refreshed identities; the unchanged expected hash still rejects bytes.
+        def truthful(value):
+            for relative, item in self.namespace(value)['members'].items():
+                item.update(sourceIdentity=self.identity(self.source / relative), capturedIdentity=self.identity(captured / relative))
+            member = self.namespace(value)['members']['bin/tool']
+            member.update(sourceIdentity=self.identity(tool), capturedIdentity=self.identity(captured / 'bin/tool'))
+            artifact = next(iter(self.admission(value)['nativeArtifacts'].values()))
+            artifact.update(sourceIdentity=member['sourceIdentity'], capturedIdentity=member['capturedIdentity'])
+        with self.assertRaisesRegex(RuntimeError, 'bytes changed'): self.compare(truthful)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX symlink redirection guard')
+    def test_symlinked_capture_member_is_rejected(self):
+        captured = self.live / self.new_capture / 'content/package.json'
+        captured.unlink(); captured.symlink_to(self.source / 'package.json')
+        with self.assertRaises(RuntimeError): self.compare()
+
+    def reused_capture(self):
+        admission = copy.deepcopy(self.admission(self.new))
+        previous = str(self.live / self.old_capture)
+        value = next(iter(admission['nativeNamespaces'].values()))
+        value['capturedRoot'] = previous
+        for relative, member in value['members'].items():
+            member['sourceIdentity'] = self.identity(self.source / relative)
+            member['capturedIdentity'] = self.identity(self.live / self.old_capture / 'content' / relative)
+        admission['nativeNamespaces'] = {previous: value}
+        artifact = next(iter(admission['nativeArtifacts'].values()))
+        artifact.update(namespace=previous, capturedPath=str(self.live / self.old_capture / 'content/bin/tool'),
+                        sourceIdentity=value['members']['bin/tool']['sourceIdentity'],
+                        capturedIdentity=value['members']['bin/tool']['capturedIdentity'])
+        return admission
+
+    def test_reused_namespace_copy_ctime_is_proved_but_refreshed_mtime_needs_closed_window(self):
+        def truthful(value): value['plugins'][0]['sourceAdmissions'] = {str(self.package) + '\0': self.reused_capture()}
+        self.compare(truthful)  # Same namespace and copied identity, with exact retained mtimes.
+        for relative in ('', 'package.json'):
+            path = self.live / self.old_capture / 'content' / relative
+            before = path.stat()
+            os.utime(path, ns=(before.st_atime_ns, 1_600_000_000_000_000_000))
+            with self.subTest(member=relative), self.assertRaisesRegex(RuntimeError, 'created during retained startup'):
+                self.compare(truthful)
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'Direct ownership proof requires isolated Linux root')
+    def test_truthful_current_chown_cannot_change_source_or_capture_ownership(self):
+        tool = self.source / 'bin/tool'
+        os.chown(tool, 1, tool.stat().st_gid)
+        def truthful(value):
+            member = self.namespace(value)['members']['bin/tool']
+            member.update(sourceIdentity=self.identity(tool),
+                          capturedIdentity=self.identity(self.live / self.new_capture / 'content/bin/tool'))
+            artifact = next(iter(self.admission(value)['nativeArtifacts'].values()))
+            artifact.update(sourceIdentity=member['sourceIdentity'], capturedIdentity=member['capturedIdentity'])
+        with self.assertRaisesRegex(RuntimeError, 'ownership changed across roles'): self.compare(truthful)
 
 
 if __name__ == '__main__': unittest.main()

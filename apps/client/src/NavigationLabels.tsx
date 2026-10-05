@@ -4,9 +4,10 @@ import { createPortal } from 'react-dom';
 type Label = { text: string; left: number; top: number };
 
 /** One label for a navigation surface, outside its scrolling/clipping container. */
-export function NavigationLabels({ children, placement = 'top' }: {
+export function NavigationLabels({ children, placement = 'top', suspended = false }: {
   children: ReactElement<HTMLAttributes<HTMLElement>>;
   placement?: 'right' | 'top';
+  suspended?: boolean;
 }) {
   const [label, setLabel] = useState<Label | null>(null);
   const anchor = useRef<HTMLButtonElement | null>(null);
@@ -39,6 +40,7 @@ export function NavigationLabels({ children, placement = 'top' }: {
     if (dx || dy) setLabel({ ...label, left: label.left + dx, top: label.top + dy });
   }, [label]);
   useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => { if (suspended) hide(); }, [suspended]);
   useEffect(() => {
     if (!label) return;
     const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') hide(); };
@@ -58,10 +60,10 @@ export function NavigationLabels({ children, placement = 'top' }: {
     };
   }, [label]);
   return <>{cloneElement(children, {
-    onPointerOver: event => { children.props.onPointerOver?.(event); if (event.pointerType !== 'touch') show(buttonAt(event.target)); },
+    onPointerOver: event => { children.props.onPointerOver?.(event); if (!suspended && event.pointerType !== 'touch') show(buttonAt(event.target)); },
     onPointerOut: event => { children.props.onPointerOut?.(event); leave(event.relatedTarget); },
     onPointerDownCapture: event => { children.props.onPointerDownCapture?.(event); hide(); },
-    onFocusCapture: event => { children.props.onFocusCapture?.(event); show(buttonAt(event.target)); },
+    onFocusCapture: event => { children.props.onFocusCapture?.(event); if (!suspended) show(buttonAt(event.target)); },
     onBlurCapture: event => { children.props.onBlurCapture?.(event); leave(event.relatedTarget); },
     onClickCapture: event => { children.props.onClickCapture?.(event); hide(); },
     onContextMenuCapture: event => { children.props.onContextMenuCapture?.(event); hide(); },

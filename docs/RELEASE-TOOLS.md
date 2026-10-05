@@ -87,6 +87,25 @@ prove that the installer consumed those exact old observation hashes. Distinguis
 `operationComplete` from `evidenceComplete`: historical display never grants new
 admission or makes an old observation fresh.
 
+## Canonical CI application archive
+
+After the Linux quality and recovery checks pass, the quality workflow packages
+that existing build with `scripts/update-app-archive.py` and retains the archive,
+archive metadata and `ci-source.json` for seven days. It does not run another
+build or quality gate. `scripts/retain-ci-candidate.py` requires the exact CI
+commit, unchanged tracked source and qualified Linux Node toolchain. The receipt
+binds the candidate, package lock, archive, source, run attempt and packaging
+helpers. Only candidate-listed application files and reviewed host entrypoints
+enter the archive; local workspaces, keys, operational records and dependencies
+are excluded by the maintained archive contract.
+
+Download the artifact from the exact authenticated repository/workflow/run and
+verify that run's source and successful checks independently. Recheck the receipt,
+archive hash, member contract and candidate after download. A receipt stored next
+to an archive is not independent proof of its origin, and a CI archive is not
+recovery qualification, a signed offer or permission to bypass installation
+gates. Each repository retains its own separately built evidence.
+
 ## Draft, freeze and resume
 
 A draft uses `stage: "draft"` and null target candidates, source commits, bundle
@@ -254,6 +273,12 @@ reconcile an uncertain job or already completed purchase before another effect.
 Refresh mutable prerequisites before maintenance. An early feasibility check
 does not replace fresh closed/admission checks or new-candidate acceptance.
 
+Inspect retained SQLite databases only in a private, verified scratch copy of
+the complete database/WAL/SHM family. An in-place `mode=ro` connection can change
+SHM bookkeeping; a database-only `immutable=1` read can omit WAL content. Preserve
+the original hashes, diagnose any mutation and keep failed evidence intact.
+Never silently repin a manifest or weaken a recovery check to repair a diagnostic.
+
 For runtime, dependency, startup, schema, updater or recovery changes, qualify the complete
 retained-state verifier after actual settled startup on supported isolated copies
 before source freeze. Include relevant first start, restart and existing-state
@@ -264,10 +289,37 @@ narrow official contracts with refusal tests. Keep private fixture data outside
 source and published CI artifacts. The fresh post-freeze rehearsal, independent
 recovery verification and live acceptance remain separate gates.
 
+Before a temporary recovery adapter runs, record and independently review its
+call contracts against the maintained sequence: method/source reference, phase,
+arguments and downstream attributes, input receipt, output and mutation boundary.
+Preserve full pre-start native/configuration equality and full settled post-start
+derivation. Generated session bindings can be stale before restart; derivation
+against the store is required after startup regenerates them, with the protected
+key, verified Node/app identities and closed startup window. Keep both checks.
+
+Pass the complete exact-host read-only plan through execution's preflight before
+any rename, start, switch or hold release. Metadata probes and synthetic tests
+alone do not certify it. Preserve the plan's code, review and log; bind a separate
+execution intent to their hashes and recheck mutable roles, configuration and
+selected dependency closure before dispatch. Changed relevant inputs invalidate
+the plan. Diagnose retained SQLite only through maintained complete-family scratch
+copies with source identities checked before and after.
+
+Use an explicit finite timeout, `Restart=no` and one exclusive intent/unit for
+long recovery workers. The current one-shot route uses `TimeoutStartSec=3600`;
+verify the effective timeout, which systemd may display as `1h`. Observe uncertain
+dispatches rather than replaying them. Qualify and package exact frozen Git-blob
+bytes; record newline normalization separately and never substitute changed bytes
+under a historical hash. A held app's verified restoration takes priority over
+new delivery work. These are operator requirements; automatic enforcement is
+separate work until implemented and tested.
+
 The reviewed first neutral-policy publication for the 2026.9.6-to-2026.9.8
 transition does not qualify refresh of an already-existing policy timestamp.
-The existing-policy 2026.9.8-to-2026.9.8 case remains strict and needs qualification
-before a future affected delivery. This documentation does not implement that fix.
+The pending 2.2.3 candidate implements focused-tested existing-policy timestamp
+and physically attested catalog-copy checks. Complete actual copy/restart
+qualification, canonical CI, fresh automatic rehearsal and live acceptance before
+claiming delivery; partial/manual evidence and documentation alone do not do so.
 
 Keep one operation record linking immutable source/helper/artifact and receipt
 hashes, candidate lineage, actual external job/key, phases and original ETA

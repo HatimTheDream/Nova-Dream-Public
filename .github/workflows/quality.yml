@@ -58,6 +58,16 @@ jobs:
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/operator-rehearsal.test.py -v
+      - name: Retain the canonical hosted build
+        run: python3 -B scripts/retain-ci-candidate.py
+      - name: Upload the verified application archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nova-hosted-${{ github.sha }}
+          path: ${{ runner.temp }}/nova-hosted-candidate/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

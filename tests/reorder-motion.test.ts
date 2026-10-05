@@ -24,6 +24,27 @@ test('Module icons allow immediate mouse dragging while touch movement scrolls b
   assert.equal(reorderGesture(100, false, true, true, true), 'cancel');
 });
 
+test('A bottom dock hold lets a mouse or touch swipe scroll before picking up a tile', () => {
+  for (const touch of [false, true]) {
+    assert.equal(reorderGesture(0, false, touch, true, true, true), 'wait');
+    assert.equal(reorderGesture(7, false, touch, true, true, true), 'wait');
+    assert.equal(reorderGesture(9, false, touch, true, true, true), 'cancel');
+    assert.equal(reorderGesture(100, false, touch, true, true, true), 'cancel');
+  }
+});
+
+test('Horizontal dock slots follow visual direction and scrolled viewport positions', () => {
+  const slots = [
+    { id: 'home', left: 160, top: 400, width: 44, height: 44 },
+    { id: 'assistant', left: 108, top: 400, width: 44, height: 44 },
+    { id: 'tasks', left: 56, top: 400, width: 44, height: 44 },
+  ];
+  assert.equal(reorderTarget({ x: 130, y: 422 }, slots), 'assistant', 'RTL order uses measured slots');
+  assert.equal(reorderTarget({ x: 55, y: 422 }, slots), 'tasks');
+  assert.equal(reorderTarget({ x: 200, y: 300 }, slots), null, 'Content above the dock is not a landing slot');
+  assert.equal(reorderTarget({ x: 182, y: 422 }, slots.map(slot => ({ ...slot, left: slot.left + 52 }))), 'assistant');
+});
+
 test('Module icons target measured narrow rail slots and ignore distant content', () => {
   const slots = [
     { id: 'home', left: 9, top: 40, width: 44, height: 47 },

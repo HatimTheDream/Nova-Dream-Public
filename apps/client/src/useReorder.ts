@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactM
 import { moveItem } from '../../../packages/domain/contracts';
 import { containsPoint, reorderCommit, reorderGesture, reorderScrollDelta, reorderTarget, sameOrder, type ReorderBox } from './reorder-motion';
 
-type Visual = { node: HTMLElement; ghost: HTMLElement; left: number; top: number; animation?: Animation };
+type Visual = { node: HTMLElement; ghost: HTMLElement; left: number; top: number; x: number; y: number; animation?: Animation };
 type Drag<T extends string> = { id: T; x: number; y: number; point: { x: number; y: number }; pointer: number; target: HTMLElement; capture: HTMLElement; touch: boolean; surface: boolean; active: boolean; initial: T[]; order: T[]; timer?: ReturnType<typeof setTimeout>; frame?: number; lastFrame?: number; visual?: Visual; entered?: ReorderBox };
 const interactiveSurface = 'button,a,input,textarea,select,option,label,summary,.widget-options,[contenteditable]:not([contenteditable="false"]),[tabindex],[data-reorder-no-drag],[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],[role="combobox"],[role="slider"],[role="spinbutton"],[role="textbox"],[role="option"],[role="listbox"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="treeitem"]';
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -12,9 +12,11 @@ const box = (element: HTMLElement): ReorderBox => {
 };
 
 /** Opt-in motion adds a move handle and a surface hold; Alt+arrows stay equivalent. */
-export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void, group: string, options: { motion?: boolean; touchHold?: boolean } = {}) {
+export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void, group: string, options: { motion?: boolean; touchHold?: boolean; hold?: boolean; axis?: 'vertical' | 'horizontal' } = {}) {
   const motion = Boolean(options.motion);
   const touchHold = Boolean(options.touchHold);
+  const hold = Boolean(options.hold);
+  const horizontal = options.axis === 'horizontal';
   const [preview, setPreview] = useState<T[] | null>(null);
   const [dragging, setDragging] = useState<T | null>(null);
   const [announcement, announce] = useState('');
@@ -45,7 +47,10 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
   const stopAnimations = () => { for (const animation of animations.current.values()) animation.cancel(); animations.current.clear(); };
   const clearClickGuard = () => { if (clickGuard.current) clearTimeout(clickGuard.current.timer); clickGuard.current = null; suppressClick.current = false; };
   const followPointer = (drag: Drag<T>) => {
-    if (drag.visual) drag.visual.ghost.style.transform = `translate3d(${drag.point.x - drag.x}px,${drag.point.y - drag.y}px,0)`;
+    if (drag.visual) {
+      drag.visual.x = drag.point.x - drag.x; drag.visual.y = drag.point.y - drag.y;
+      drag.visual.ghost.style.transform = `translate3d(${drag.visual.x}px,${drag.visual.y}px,0)`;
+    }
   };
   const previewAtPointer = (drag: Drag<T>) => {
     if (!motion || !containerRef.current) return;
@@ -65,7 +70,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     const drag = state.current; if (!drag) return;
     clearTimeout(drag.timer); if (drag.frame !== undefined) cancelAnimationFrame(drag.frame);
     captureBefore();
-    if (drag.visual) ending.current = drag.visual;
+    if (drag.visual) { drag.visual.ghost.classList.add('reorder-settling'); ending.current = drag.visual; }
     state.current = null; setPreview(null); setDragging(null);
     if (containerRef.current) delete containerRef.current.dataset.reorderActive;
     if (drag.active) {
@@ -98,7 +103,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       if (!host) { finish(false); return; }
       host.append(ghost);
       node.dataset.reorderPlaceholder = 'true';
-      drag.visual = { node, ghost, left: rect.left, top: rect.top };
+      drag.visual = { node, ghost, left: rect.left, top: rect.top, x: 0, y: 0 };
       if (containerRef.current) containerRef.current.dataset.reorderActive = 'true';
       const selection = window.getSelection();
       if (selection?.anchorNode && node.contains(selection.anchorNode)) selection.removeAllRanges();
@@ -113,7 +118,15 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
         if (state.current !== drag || !drag.active) return;
         const rect = drag.capture.getBoundingClientRect(), elapsed = drag.lastFrame === undefined ? 16 : time - drag.lastFrame;
         drag.lastFrame = time;
-        if (drag.point.x >= rect.left && drag.point.x <= rect.right) {
+        if (horizontal && drag.point.y >= rect.top && drag.point.y <= rect.bottom) {
+          const left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right), oldLeft = drag.capture.scrollLeft;
+          drag.capture.scrollLeft += reorderScrollDelta(drag.point.x, left, right, elapsed);
+          const delta = drag.capture.scrollLeft - oldLeft;
+          if (delta) {
+            if (drag.entered) drag.entered = { ...drag.entered, left: drag.entered.left - delta };
+            previewAtPointer(drag);
+          }
+        } else if (!horizontal && drag.point.x >= rect.left && drag.point.x <= rect.right) {
           const top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom), oldTop = drag.capture.scrollTop;
           drag.capture.scrollTop += reorderScrollDelta(drag.point.y, top, bottom, elapsed);
           const delta = drag.capture.scrollTop - oldTop;
@@ -157,9 +170,8 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       const target = next.get(visual.node.dataset.reorderItem!);
       if (!target || reducedMotion()) clearVisual(visual);
       else {
-        const start = box(visual.ghost);
         visual.animation = visual.ghost.animate([
-          { transform: `translate3d(${start.left - visual.left}px,${start.top - visual.top}px,0)` },
+          { transform: `translate3d(${visual.x}px,${visual.y}px,0)` },
           { transform: `translate3d(${target.left - visual.left}px,${target.top - visual.top}px,0)` },
         ], { duration: 180, easing: 'cubic-bezier(.2,.75,.25,1)', fill: 'forwards' });
         void visual.animation.finished.then(() => { if (ending.current === visual) clearVisual(visual); }, () => {});
@@ -182,7 +194,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       drag.point = { x: event.clientX, y: event.clientY };
       const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
       if (!drag.active) {
-        const action = reorderGesture(distance, drag.surface, drag.touch, motion, touchHold);
+        const action = reorderGesture(distance, drag.surface, drag.touch, motion, touchHold, hold);
         if (action === 'cancel') { finish(false); return; }
         if (action === 'start') start(drag);
       }
@@ -231,7 +243,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       const touch = event.pointerType === 'touch';
       const drag: Drag<T> = { id, x: event.clientX, y: event.clientY, point: { x: event.clientX, y: event.clientY }, pointer: event.pointerId, target: event.currentTarget, capture: event.currentTarget.closest<HTMLElement>('[data-reorder-scroll]') ?? event.currentTarget, touch, surface, active: false, initial: [...latest.current.items], order: [...latest.current.items] };
       state.current = drag;
-      if (surface || drag.touch || motion) drag.timer = setTimeout(() => { if (state.current === drag) start(drag); }, 350);
+      if (surface || drag.touch || motion || hold) drag.timer = setTimeout(() => { if (state.current === drag) start(drag); }, 350);
     },
   });
   const bindSurface = (id: T) => ({
@@ -248,5 +260,5 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     catch { announce('Move could not be saved.'); }
   };
   const order = motion && state.current && !sameOrder(state.current.initial, items) ? items : preview ?? items;
-  return { order, dragging, announcement, bind, bindSurface, move, suppressClick, containerRef };
+  return { order, dragging, announcement, bind, bindSurface, move, cancel: () => finish(false), suppressClick, containerRef };
 }

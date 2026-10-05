@@ -1726,7 +1726,206 @@ def catalog_file(path, expected_hash, signature=None, *, current=False):
     return content
 
 
-def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
+def retained_codex_admissions(old, new, workspace_roots, package_root, startup_window):
+    """Prove the exact 9.8 managed native receipt through physical copy roles.
+
+    Official registry comparison excludes these process receipts. We qualify
+    each changed identity/namespace only after hashing its complete retained
+    source and capture closure; semantic fields never leave exact comparison.
+    The unchanged pre-start call additionally attests the canonical original.
+    """
+    snapshot, live, logical, selected = map(pathlib.Path, workspace_roots)
+    modules = package_root.parent.parent
+    capture_root = logical / selected / 'openclaw-runtime/state/tmp/plugin-captures'
+    values = [record.get('sourceAdmissions') for record in (old, new)]
+    key = str(package_root) + '\0'
+    require(all(isinstance(value, dict) and set(value) == {key} for value in values),
+            'Copied Codex admission keys changed.')
+    receipts = [value[key] for value in values]
+    require(all(isinstance(value, dict) and set(value) == {'signature', 'sourceDigest', 'nativeArtifacts', 'nativeNamespaces'}
+                and all(isinstance(value[name], str) and re.fullmatch('[a-f0-9]{64}', value[name])
+                        for name in ('signature', 'sourceDigest')) for value in receipts)
+            and all(receipts[0][name] == receipts[1][name] for name in ('signature', 'sourceDigest')),
+            'Copied Codex admission content authority changed.')
+    hashes, observed, owners, total = {}, {}, {}, [0]
+
+    def identity(value):
+        require(isinstance(value, str) and len(value) <= 256 and re.fullmatch(r'[0-9]+(:[0-9]+){5}', value),
+                'Copied Codex identity format changed.')
+        result = tuple(map(int, value.split(':')))
+        require(all(0 <= part < 2 ** (64 if os.name == 'posix' else 128) for part in result[:2])
+                and all(0 <= part < 2 ** 63 for part in result[2:]), 'Copied Codex identity exceeded its bound.')
+        return result
+
+    def stat_identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def observed_identity(info):
+        return stat_identity(info) + (info.st_uid, info.st_gid)
+
+    def member_path(value):
+        require(isinstance(value, str) and len(value) <= 4096 and '\\' not in value
+                and '\0' not in value, 'Copied Codex member path changed.')
+        path = pathlib.PurePosixPath(value)
+        require(not path.is_absolute() and '..' not in path.parts
+                and (value == '' or path.as_posix() == value), 'Copied Codex member escaped its namespace.')
+        return path
+
+    def namespace(value):
+        require(isinstance(value, str) and len(value) <= 4096 and '\0' not in value,
+                'Copied Codex capture namespace changed.')
+        path = pathlib.Path(value)
+        require(path.is_absolute() and path.is_relative_to(capture_root), 'Copied Codex capture left its selected runtime.')
+        parts = path.relative_to(capture_root).parts
+        require(len(parts) == 3 and parts[1] == 'native' and re.fullmatch(r'admission-[A-Za-z0-9]{6}', parts[2]),
+                'Copied Codex capture namespace is not an official native admission.')
+        try:
+            canonical = str(uuid.UUID(parts[0])) == parts[0]
+        except ValueError:
+            canonical = False
+        require(canonical, 'Copied Codex capture process identity changed.')
+        return path
+
+    def attest(root, named, recorded, content_hash=None, size=None, *, current, ownership_key):
+        path = root / named.relative_to(logical)
+        require(path.resolve(strict=True) == path, 'Copied Codex admission file was redirected.')
+        info = path.lstat(); actual = stat_identity(info); expected = identity(recorded)
+        owner = (info.st_uid, info.st_gid)
+        require(owners.setdefault(ownership_key, owner) == owner, 'Copied Codex admission ownership changed across roles.')
+        is_file = stat.S_ISREG(expected[2])
+        require(is_file or stat.S_ISDIR(expected[2]), 'Copied Codex admission contains a special file.')
+        # Copying preserves file mode/size/mtime; directory allocation is local.
+        stable = (2, 3, 4) if is_file else (2, 4)
+        require(all(actual[position] == expected[position] for position in stable)
+                and (not current or actual == expected), 'Copied Codex admission physical identity differs.')
+        if is_file:
+            require(type(size) is int and 0 <= size <= 512 * 1024 ** 2 and size == info.st_size
+                    and isinstance(content_hash, str) and re.fullmatch('[a-f0-9]{64}', content_hash),
+                    'Copied Codex admission file content identity changed.')
+            if actual not in hashes:
+                total[0] += size
+                require(total[0] <= 4 * 1024 ** 3, 'Copied Codex admission content exceeded its bound.')
+                hashes[actual] = digest(path)
+            require(hashes[actual] == content_hash, 'Copied Codex admission bytes changed.')
+        else:
+            require(content_hash is None and size is None, 'Copied Codex admission directory gained file content.')
+        require(observed_identity(path.lstat()) == actual + owner and path.resolve(strict=True) == path,
+                'Copied Codex admission changed during attestation.')
+        observed[path] = actual + owner
+
+    by_source = []
+    for position, receipt in enumerate(receipts):
+        namespaces = receipt['nativeNamespaces']; artifacts = receipt['nativeArtifacts']
+        require(isinstance(namespaces, dict) and 0 < len(namespaces) <= 16
+                and isinstance(artifacts, dict) and 0 < len(artifacts) <= 256,
+                'Copied Codex native admission closure changed shape.')
+        mapped = {}
+        for name, value in namespaces.items():
+            captured = namespace(name)
+            require(isinstance(value, dict) and set(value) == {'sourceDirectory', 'capturedRoot', 'managed', 'members'}
+                    and value['capturedRoot'] == name and value['managed'] is True,
+                    'Copied Codex native namespace authority changed.')
+            require(isinstance(value['sourceDirectory'], str) and len(value['sourceDirectory']) <= 4096
+                    and '\0' not in value['sourceDirectory'], 'Copied Codex native source path changed shape.')
+            source = pathlib.Path(value['sourceDirectory'])
+            require(source.is_absolute() and source.is_relative_to(modules)
+                    and len(source.relative_to(modules).parts) == 2 and source not in mapped,
+                    'Copied Codex native source left its managed package.')
+            members = value['members']
+            require(isinstance(members, dict) and '' in members and 0 < len(members) <= 2048,
+                    'Copied Codex native member closure exceeded its bound.')
+            roles = [(snapshot if position == 0 else live, position == 1 and logical == live)]
+            if logical != live:
+                roles.append((logical, True))  # The maintained pre-start original.
+            for root, current in roles:
+                physical_source = root / source.relative_to(logical)
+                physical_capture = root / captured.relative_to(logical) / 'content'
+                for folder in (physical_source, physical_capture):
+                    require(folder.resolve(strict=True) == folder and folder.is_dir(), 'Copied Codex namespace was redirected.')
+                    entries = list(folder.rglob('*'))
+                    require(len(entries) < 2048 and {file.relative_to(folder).as_posix() for file in entries} | {''} == set(members),
+                            'Copied Codex physical member closure changed.')
+                owner = (root / selected / 'openclaw-runtime').lstat()
+                for guard in (root / capture_root.relative_to(logical), physical_capture.parent.parent.parent,
+                              physical_capture.parent.parent, physical_capture.parent):
+                    info = guard.lstat()
+                    require(guard.resolve(strict=True) == guard and stat.S_ISDIR(info.st_mode)
+                            and (os.name != 'posix' or (stat.S_IMODE(info.st_mode) == 0o700
+                                 and (info.st_uid, info.st_gid) == (owner.st_uid, owner.st_gid))),
+                            'Copied Codex native capture ancestry is not private.')
+                    observed[guard] = observed_identity(info)
+                for relative, member in members.items():
+                    part = member_path(relative)
+                    require(isinstance(member, dict) and set(member) in (
+                                {'source', 'sourceIdentity', 'capturedIdentity', 'boundaryChecked'},
+                                {'source', 'sourceIdentity', 'capturedIdentity', 'boundaryChecked', 'contentHash', 'sizeBytes'})
+                            and type(member['boundaryChecked']) is bool and member['source'] == str(source / part),
+                            'Copied Codex native member authority changed.')
+                    for named, field in ((source / part, 'sourceIdentity'), (captured / 'content' / part, 'capturedIdentity')):
+                        attest(root, named, member[field], member.get('contentHash'), member.get('sizeBytes'),
+                               current=current, ownership_key=member['source'])
+            mapped[source] = (name, value)
+        for source_name, artifact in artifacts.items():
+            require(isinstance(artifact, dict) and set(artifact) == {'sourceIdentity', 'contentHash', 'sizeBytes', 'namespace', 'capturedPath', 'capturedIdentity'}
+                    and artifact['namespace'] in namespaces, 'Copied Codex native artifact authority changed.')
+            value = namespaces[artifact['namespace']]; source = pathlib.Path(source_name)
+            directory = pathlib.Path(value['sourceDirectory'])
+            require(source.is_relative_to(directory), 'Copied Codex native artifact escaped its source.')
+            relative = source.relative_to(directory).as_posix(); member = value['members'].get(relative)
+            require(isinstance(member, dict) and artifact['capturedPath'] == str(pathlib.Path(artifact['namespace']) / 'content' / relative)
+                    and all(artifact[field] == member.get(field) for field in ('sourceIdentity', 'capturedIdentity', 'contentHash', 'sizeBytes')),
+                    'Copied Codex native artifact differs from its proven member.')
+        by_source.append(mapped)
+    require(set(by_source[0]) == set(by_source[1])
+            and set(receipts[0]['nativeArtifacts']) == set(receipts[1]['nativeArtifacts']),
+            'Copied Codex native source or artifact membership changed.')
+    projected = json.loads(json.dumps(receipts[1]))
+    projected_namespaces = {}
+    for source in by_source[0]:
+        old_name, previous = by_source[0][source]; new_name, current = by_source[1][source]
+        require(set(previous['members']) == set(current['members']), 'Copied Codex native member membership changed.')
+        changed = old_name != new_name
+        refreshed_capture_time = any(identity(previous['members'][relative]['capturedIdentity'])[4]
+                                     != identity(current['members'][relative]['capturedIdentity'])[4]
+                                     for relative in previous['members']
+                                     if stat.S_ISDIR(identity(current['members'][relative]['capturedIdentity'])[2])
+                                     or current['members'][relative]['boundaryChecked'])
+        if changed or refreshed_capture_time:
+            require(logical == live and isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
+                    and all(type(value) in (int, float) and math.isfinite(value) for value in startup_window)
+                    and 0 <= startup_window[0] <= startup_window[1], 'Copied Codex capture lacks a closed startup window.')
+        target = projected['nativeNamespaces'][new_name]
+        for relative, previous_member in previous['members'].items():
+            member = current['members'][relative]
+            require(set(previous_member) == set(member)
+                    and all(previous_member[field] == member[field] for field in member if field not in {'sourceIdentity', 'capturedIdentity'}),
+                    'Copied Codex native member content or boundary policy changed.')
+            for field in ('sourceIdentity', 'capturedIdentity'):
+                a, b = identity(previous_member[field]), identity(member[field])
+                positions = (2, 3, 4) if stat.S_ISREG(a[2]) and (field == 'sourceIdentity' or not member['boundaryChecked']) else (2,)
+                require(all(a[p] == b[p] for p in positions), 'Copied Codex native mode, size or retained mtime changed.')
+                if field == 'capturedIdentity' and (changed or a[4] != b[4]) and (stat.S_ISDIR(b[2]) or member['boundaryChecked']):
+                    require(startup_window[0] * 10 ** 9 <= b[4] <= startup_window[1] * 10 ** 9
+                            and startup_window[0] * 10 ** 9 <= b[5] <= startup_window[1] * 10 ** 9,
+                            'Copied Codex capture was not created during retained startup.')
+                target['members'][relative][field] = previous_member[field]
+        target['capturedRoot'] = old_name
+        projected_namespaces[old_name] = target
+    projected['nativeNamespaces'] = projected_namespaces
+    for source, previous in receipts[0]['nativeArtifacts'].items():
+        artifact = projected['nativeArtifacts'][source]
+        require(previous['contentHash'] == artifact['contentHash'] and previous['sizeBytes'] == artifact['sizeBytes'],
+                'Copied Codex native artifact content changed.')
+        for field in ('sourceIdentity', 'capturedIdentity', 'namespace', 'capturedPath'):
+            artifact[field] = previous[field]
+    require(projected == receipts[0], 'Copied Codex admission changed beyond physically proven cache fields.')
+    require(all(observed_identity(path.lstat()) == value and path.resolve(strict=True) == path for path, value in observed.items()),
+            'Copied Codex admission closure changed during verification.')
+    new['sourceAdmissions'] = {key: projected}
+    return True
+
+
+def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, engine_version=None, startup_window=None):
     """Normalize only file-proved generated catalog differences, in memory.
 
     Nova plugin paths/JSON formatting follow the two verified candidate
@@ -1739,7 +1938,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
                    'edition3-accounts': 'account-plugin', 'edition3-workspace': 'module-plugin'}
     seen = set()
     for old, new in zip(before['plugins'], after['plugins']):
-        if old == new:
+        if old == new and not (engine_version == '2026.9.8' and old.get('pluginId') == 'codex'
+                              and workspace_roots is not None):
             continue
         plugin_id = old.get('pluginId')
         require(isinstance(plugin_id, str) and plugin_id == new.get('pluginId') and plugin_id not in seen,
@@ -1795,6 +1995,9 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
                     and old.get('manifestPath') == new.get('manifestPath') == str(package_root / 'openclaw.plugin.json'),
                     'Copied Codex catalog package is outside its retained workspace.')
             physical = [root / package_root.relative_to(logical) for root in (snapshot, live)]
+            admissions_proven = engine_version == '2026.9.8' and 'sourceAdmissions' in old
+            if admissions_proven:
+                retained_codex_admissions(old, new, workspace_roots, package_root, startup_window)
             files = [('openclaw.plugin.json', 'manifestHash', 'manifestFile'),
                      ('dist/doctor-contract-api.js', 'doctorContractHash', 'doctorContractFile')]
             for relative_file, hash_name, signature_name in files:
@@ -1802,7 +2005,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
                 signatures = [record.get(signature_name) for record in (old, new)]
                 require(all(isinstance(value, dict) for value in signatures), 'Copied Codex signature is absent.')
                 for position in range(2):
-                    catalog_file(physical[position] / relative_file, old.get(hash_name), signatures[position], current=position == 1)
+                    catalog_file(physical[position] / relative_file, old.get(hash_name), signatures[position],
+                                 current=position == 1 and not (admissions_proven and signatures[0] == signatures[1]))
                 require({key: value for key, value in signatures[0].items() if key != 'ctimeMs'}
                         == {key: value for key, value in signatures[1].items() if key != 'ctimeMs'},
                         'Copied Codex catalog metadata changed beyond ctime.')
@@ -1813,7 +2017,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
                         and package['path'] == 'package.json' and isinstance(package['fileSignature'], dict),
                         'Copied Codex package identity changed shape.')
                 parsed = json.loads(catalog_file(physical[position] / 'package.json', package['hash'],
-                                                 package['fileSignature'], current=position == 1))
+                                                 package['fileSignature'], current=position == 1 and not (
+                                                     admissions_proven and packages[0]['fileSignature'] == package['fileSignature'])))
                 require(parsed.get('name') == '@openclaw/codex'
                         and parsed.get('version') == (old, new)[position].get('packageVersion'),
                         'Copied Codex package identity differs from its file.')
@@ -1829,10 +2034,10 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None):
 
 
 def retained_neutral_channel_policy(row, after_path, workspace_roots, configuration, startup_window):
-    """Bind the official 9.8 first publication to retained neutral authority.
+    """Bind an official 9.8 neutral publication to retained startup authority.
 
-    This qualifies creation of the exact default, never an existing policy
-    change, owner grant or arbitrary permission-sensitive machine record.
+    Callers separately qualify the first publication or an unchanged neutral
+    policy timestamp refresh; policy content and owner grants stay exact.
     """
     require(workspace_roots is not None and len(workspace_roots) == 4
             and isinstance(configuration, dict) and startup_window is not None,
@@ -1889,6 +2094,16 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
     if (from_version, to_version) == ('2026.9.6', '2026.9.8') and policy not in old and policy in new:
         retained_neutral_channel_policy(new[policy], after_path, workspace_roots, configuration, startup_window)
         del new[policy]
+    elif (from_version, to_version) == ('2026.9.8', '2026.9.8') and policy in old and policy in new and old[policy] != new[policy]:
+        previous = old[policy]
+        require(previous[1] == new[policy][1] == '{"roles":null,"identityScopes":null}'
+                and type(previous[2]) is int and 0 <= previous[2] <= 9007199254740991,
+                'Existing channel policy differs from the retained neutral default.')
+        retained_neutral_channel_policy(new[policy], after_path, workspace_roots, configuration, startup_window)
+        require(new[policy][2] >= previous[2], 'Neutral channel policy timestamp moved backwards.')
+        # Official 9.8 republishes unchanged policy with Date.now(). Qualify
+        # only that timestamp; every other machine and permission row stays exact.
+        new[policy] = previous
     key = 'plugins.installedIndex'
     audit = 'config.lastTouchedAt'
     if audit in old and audit in new and old[audit] != new[audit]:
@@ -1937,7 +2152,7 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
     if from_version == to_version:
         require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
-        retained_catalog_files(indexes, app_releases, workspace_roots)
+        retained_catalog_files(indexes, app_releases, workspace_roots, engine_version=to_version, startup_window=startup_window)
         effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
         require(effective(old_index) == effective(new_index), 'Retained native plugin policy or effective catalog changed.')
         return
@@ -2471,7 +2686,8 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                     if to_version in {'2026.9.6', '2026.9.8'}:
                         retained_plugin_index(before, after, node, live / relative, from_version, to_version,
                                               app_releases=app_releases,
-                                              workspace_roots=(snapshot, live, logical_workspace_root or live, selected))
+                                              workspace_roots=(snapshot, live, logical_workspace_root or live, selected),
+                                              configuration=configuration, startup_window=log_retention_window)
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif to_version == '2026.9.8' and table == 'session_nodes':
