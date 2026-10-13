@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Update image processing to sharp 0.35.5 and patched bundled libraries, resolving GHSA-wq5f-xc86-pv6w.
 - Verify configured OpenClaw 9.8 Codex homes before an optional native agent database is created, while preserving dormant stores and full saved-content checks.
 - Recognize the exact retired OpenClaw 9.8 capture token inside private directories when its file permissions differ, while retaining strict content, ownership and saved-work checks.
 
