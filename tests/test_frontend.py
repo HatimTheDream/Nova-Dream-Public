@@ -762,8 +762,11 @@ class CryptoTests(unittest.TestCase):
                      'Actual root-protected path checks require Linux root.')
 class ProtectedFilesystemTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='nova-frontend-fixture-', dir='/opt')
-        self.root = pathlib.Path(self.temporary.name)
+        parent = os.environ.get('QA_PROTECTED_PARENT')
+        if not parent:
+            self.skipTest('QA_PROTECTED_PARENT must be set for root-protected fixtures.')
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-frontend-fixture-', dir=parent)
+        self.root = pathlib.Path(self.temporary.name).resolve()
         self.root.chmod(0o755)
 
     def tearDown(self):
@@ -850,6 +853,9 @@ class ProtectedFilesystemTests(unittest.TestCase):
 
         path = self.root / 'frontend.sock'
         server = socketserver.UnixStreamServer(str(path), Handler)
+        # Bounded accept: if control() rejects the fixture before connecting,
+        # handle_request must not block forever and hang the runner.
+        server.socket.settimeout(10)
         path.chmod(0o600)
         thread = threading.Thread(target=server.handle_request)
         thread.start()
@@ -862,8 +868,9 @@ class ProtectedFilesystemTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 frontend.FileIO().control({'controlSocket': str(path)}, 'observe', {'operationId': operation_id})
         finally:
-            thread.join(timeout=5)
             server.server_close()
+            thread.join(timeout=15)
+            self.assertFalse(thread.is_alive(), 'control transport thread did not exit; test would hang CI')
 
 
 if __name__ == '__main__':
