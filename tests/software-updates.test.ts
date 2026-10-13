@@ -5,7 +5,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {request as httpRequest} from 'node:http';
-import {SoftwareUpdates,type UpdateWorkspace} from '../apps/service/software-updates.js';
+import {SoftwareUpdates,updateHeartbeatBlockers,type UpdateWorkspace} from '../apps/service/software-updates.js';
 import type {UpdateHostView} from '../apps/service/update-host-client.js';
 import {startServer} from '../apps/service/http.js';
 import type {AssistantTransport} from '../apps/service/gateway.js';
@@ -25,6 +25,38 @@ test('update maintenance handshake proves native idle before acknowledging its h
  const updates=new SoftwareUpdates(f.workspace,f.host),reading=updates.refresh();await new Promise(resolve=>setImmediate(resolve));
  assert.equal(entered,true);assert.equal(f.workspace.heldFor(),id);assert.equal(f.seen.length,1);assert.equal(f.seen[0].value.heldFor,null);
  assert.equal(f.seen[0].value.nativeSuspended,false);release();await reading;assert.equal(f.seen[1].value.heldFor,id);assert.equal(f.seen[1].value.nativeSuspended,true);updates.close();
+});
+test('workspace switch drains the previous heartbeat then atomically fences frontend admission without native hold',async()=>{
+ const f=setup();let release!:()=>void;const waiting=new Promise<void>(resolve=>release=resolve);const original=f.host.call;let first=true;
+ f.host.call=async<T>(action:any,value:any):Promise<T>=>{if(first){first=false;await waiting;}return original<T>(action,value);};
+ const updates=new SoftwareUpdates(f.workspace,f.host),reading=updates.refresh(),switching=updates.prepareWorkspaceSwitch();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(f.seen.length,0);release();await reading;await switching;
+ assert.equal(f.seen.length,2);assert.equal(f.seen[1].value.blockers[0].code,'workspace_switch');assert.equal(f.seen[1].value.heldFor,null);
+ assert.equal(f.workspace.native!.snapshot(null).nativeSuspended,false);updates.close();
+});
+test('workspace switch refuses active interface lease, unknown admission and disconnected controller',async()=>{
+ for(const view of [{availability:'current',installation:{supported:false,reason:'Interface update'},holdFor:null},
+                   {availability:'current',holdFor:null}, {availability:'current',installation:{supported:true}}]) {
+  const f=setup(),original=f.host.call;let first=true;f.host.call=async<T>(action:any,value:any):Promise<T>=>{if(first){first=false;return original<T>(action,value);}return view as T;};const updates=new SoftwareUpdates(f.workspace,f.host);
+  await assert.rejects(updates.prepareWorkspaceSwitch(),/Finish the current/);assert.equal(f.workspace.heldFor(),null);updates.close();
+ }
+ const f=setup();f.disconnect();const updates=new SoftwareUpdates(f.workspace,f.host);await assert.rejects(updates.prepareWorkspaceSwitch(),/reconnect/);updates.close();
+ const lost=setup(),original=lost.host.call;let initial=true;lost.host.call=async<T>(action:any,value:any):Promise<T>=>{if(initial){initial=false;return original<T>(action,value);}throw Error('Lost root fence acknowledgement.');};
+ const uncertain=new SoftwareUpdates(lost.workspace,lost.host);await assert.rejects(uncertain.prepareWorkspaceSwitch(),/selected workspace was kept/);assert.equal(lost.workspace.heldFor(),null);uncertain.close();
+});
+test('released workspace reservation sends fresh context after any older in-flight heartbeat',async()=>{
+ const f=setup();let switching=true,release!:()=>void;f.workspace.blockers=()=>switching?[{code:'recovery',message:'Switching'}]:[];
+ const wait=new Promise<void>(resolve=>release=resolve),original=f.host.call;let first=true;
+ f.host.call=async<T>(action:any,value:any):Promise<T>=>{if(first){first=false;await wait;}return original<T>(action,value);};
+ const updates=new SoftwareUpdates(f.workspace,f.host),reading=updates.refresh();switching=false;const finished=updates.finishWorkspaceSwitch();
+ release();await reading;await finished;assert.equal(f.seen[0].value.blockers[0].code,'recovery');assert.deepEqual(f.seen.at(-1)!.value.blockers,[]);updates.close();
+});
+test('more than thirty busy kinds cannot truncate a reserved switch fence in an interleaved refresh',async()=>{
+ const f=setup(),busy=Array.from({length:35},(_,i)=>({code:'ordinary-'+i,message:'Ordinary saved work'}));
+ f.workspace.blockers=()=>updateHeartbeatBlockers([...busy,{code:'recovery',message:'Selected workspace transition'}]);
+ const updates=new SoftwareUpdates(f.workspace,f.host);await updates.prepareWorkspaceSwitch();
+ const reserved=f.seen.at(-1)!.value.blockers;assert.equal(reserved[0].code,'workspace_switch');assert.equal(reserved.length,30);
+ await updates.refresh();const interleaved=f.seen.at(-1)!.value.blockers;assert.equal(interleaved[0].code,'recovery');assert.equal(interleaved.length,30);updates.close();
 });
 test('busy native proof releases the temporary hold and reports uncertainty without cancelling work',async()=>{
  const f=setup(),id=randomUUID();f.workspace.native!.acquire=async()=>[{code:'native_unknown',message:'Native work is unknown.'}];

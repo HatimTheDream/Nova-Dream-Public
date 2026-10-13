@@ -1,3 +1,20 @@
+## [2.3.0] — 2026-10-05
+
+### Added
+
+- Add signed, compatible interface delivery with immutable assets for open windows, independent interface and service versions, and a root-controlled switch that preserves running workspace work.
+- Deliver compatible browser behavior, styling and assets independently of the running service, with durable interrupted-operation reconciliation and exact assets-only rollback. Shared-contract, service, dependency, schema and deployment changes retain the full update route.
+
+### Improved
+
+- Keep icon and frontend asset requests bound to each window's loaded interface while preserving application links, drafts and request identities. Interface delivery never forces a window to reload.
+- Show a nonblocking refresh notice when a compatible interface update is ready, while keeping the current window usable.
+
+### Fixed
+
+- Verify configured OpenClaw 9.8 Codex homes before an optional native agent database is created, while preserving dormant stores and full saved-content checks.
+- Recognize the exact retired OpenClaw 9.8 capture token inside private directories when its file permissions differ, while retaining strict content, ownership and saved-work checks.
+
 ## [2.2.5] — 2026-10-05
 
 ### Improved

@@ -78,7 +78,7 @@ for (const variant of variants) {
     id: '/', name: 'Nova Dream', short_name: 'Nova Dream', start_url: '/', scope: '/', display: 'standalone',
     background_color: '#f7f6f2', theme_color: '#f7f6f2',
     // Ordinary desktop/PWA icons carry the same transparent squircle as the app.
-    icons: [192, 512].map(size => ({ src: '/icons/nova-dream-' + variant.id + '-' + size + '-v5.png', sizes: size + 'x' + size, type: 'image/png', purpose: 'any' })),
+    icons: [192, 512].map(size => ({ src: './icons/nova-dream-' + variant.id + '-' + size + '-v5.png', sizes: size + 'x' + size, type: 'image/png', purpose: 'any' })),
   };
   await writeFile(new URL('nova-dream-' + variant.id + '.webmanifest', publicRoot), JSON.stringify(manifest, null, 2) + '\n');
   if (variant.id === 'red') {

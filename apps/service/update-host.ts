@@ -10,6 +10,7 @@ import { ManagedUpdateInstaller } from './update-installer.js';
 import { FileUpdateJournal, guardedUpdatePath, readUpdateJson, writeUpdateJson } from './update-storage.js';
 import { updateHeartbeatSchema } from './update-host-client.js';
 import {FileOperatorLeaseStore,OperatorMaintenance,operatorMaintenanceRequestHandler,operatorMaintenanceSocket} from './operator-maintenance.js';
+import {FileFrontendLeaseStore,FrontendLease,frontendLeaseRequestHandler,frontendControlSocket} from './frontend-lease.js';
 
 export const updateHostSocket = '/run/nova-update/control.sock';
 const absolute = z.string().min(1).max(4096).refine(value => isAbsolute(value) && resolve(value) === value, 'Use a canonical absolute path.');
@@ -138,22 +139,31 @@ export async function startUpdateHost(configurationPath: string, verifyCandidate
     trust: { url: config.feed.url, channel: config.feed.channel, artifactOrigins: config.feed.artifactOrigins, publicKey: readFileSync(config.feed.publicKeyFile, 'utf8') } });
   for (const path of [join(config.stateDirectory, 'jobs'), join(config.stateDirectory, 'staging')]) { mkdirSync(path, { recursive: true, mode: 0o700 }); guardedUpdatePath(path, true); }
   let supervisor:UpdateSupervisor;
+  const frontend = new FrontendLease(new FileFrontendLeaseStore(join(config.stateDirectory,'frontend-lease')),()=>{
+    const identity=current(),path=join(selectedPath,'dist/candidate.json');guardedUpdatePath(path,false);
+    const manifest=z.object({apiVersion:z.literal(1),schemaVersion:z.number().int().positive(),frontendCompatibility:z.object({format:z.literal(2),eligibility:z.literal('client-behavior'),serviceInputsSha256:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough()}).passthrough().parse(readUpdateJson(path,4*1024*1024));
+    return {candidateId:identity.candidateId,serviceInputsSha256:manifest.frontendCompatibility.serviceInputsSha256,apiVersion:manifest.apiVersion,schemaVersion:manifest.schemaVersion};
+  },()=>supervisor.assertFrontendAdmission());
   const operator = new OperatorMaintenance(new FileOperatorLeaseStore(join(config.stateDirectory,'operator-maintenance')),()=>current().candidateId,()=>supervisor.assertOperatorAdmission());
-  supervisor = new UpdateSupervisor(feed, new FileUpdateJournal(join(config.stateDirectory, 'jobs')), new ManagedUpdateInstaller(join(config.stateDirectory, 'staging'), configurationPath), () => current().candidateId,Date.now,operator);
+  supervisor = new UpdateSupervisor(feed, new FileUpdateJournal(join(config.stateDirectory, 'jobs')), new ManagedUpdateInstaller(join(config.stateDirectory, 'staging'), configurationPath), () => current().candidateId,Date.now,operator,frontend);
   await clearAbandonedSocket(updateHostSocket,gid);
   await clearAbandonedSocket(operatorMaintenanceSocket,0);
+  await clearAbandonedSocket(frontendControlSocket,0);
   const server = createServer(updateHostRequestHandler(supervisor)); server.requestTimeout = 15_000; server.headersTimeout = 5_000; server.maxConnections = 32;
   await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(updateHostSocket, () => { server.removeListener('error', reject); accept(); }); });
   chownSync(updateHostSocket, 0, gid); chmodSync(updateHostSocket, 0o660);
   const operatorServer=createServer(operatorMaintenanceRequestHandler(operator));operatorServer.requestTimeout=10_000;operatorServer.headersTimeout=5_000;operatorServer.maxConnections=4;
+  const frontendServer=createServer(frontendLeaseRequestHandler(frontend));frontendServer.requestTimeout=10_000;frontendServer.headersTimeout=5_000;frontendServer.maxConnections=4;
   const previousMask=process.umask(0o077);
   try {
     await new Promise<void>((accept,reject)=>{operatorServer.once('error',reject);operatorServer.listen(operatorMaintenanceSocket,()=>{operatorServer.removeListener('error',reject);accept();});});
     chownSync(operatorMaintenanceSocket,0,0);chmodSync(operatorMaintenanceSocket,0o600);
-  } catch(error) {operatorServer.close();await new Promise<void>(accept=>server.close(()=>accept()));throw error;}
+    await new Promise<void>((accept,reject)=>{frontendServer.once('error',reject);frontendServer.listen(frontendControlSocket,()=>{frontendServer.removeListener('error',reject);accept();});});
+    chownSync(frontendControlSocket,0,0);chmodSync(frontendControlSocket,0o600);
+  } catch(error) {frontendServer.close();operatorServer.close();await new Promise<void>(accept=>server.close(()=>accept()));throw error;}
   finally {process.umask(previousMask);}
   feed.start();
   const poll = setInterval(() => { try { supervisor.poll(); } catch { /* Keep the durable hold; a failed observation cannot authorize work. */ } }, 2000); poll.unref();
   supervisor.poll();
-  return { config, supervisor, async close() { clearInterval(poll); feed.stop(); supervisor.stop(); await Promise.all([new Promise<void>(accept => server.close(() => accept())),new Promise<void>(accept=>operatorServer.close(()=>accept()))]); } };
+  return { config, supervisor, async close() { clearInterval(poll); feed.stop(); supervisor.stop(); await Promise.all([new Promise<void>(accept => server.close(() => accept())),new Promise<void>(accept=>operatorServer.close(()=>accept())),new Promise<void>(accept=>frontendServer.close(()=>accept()))]); } };
 }

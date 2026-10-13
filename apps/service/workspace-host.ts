@@ -8,7 +8,7 @@ import { WorkspaceKeys } from './workspace-keys.js';
 
 export interface RecoveryHost {
   status(): { active: boolean; switching: boolean; error?: string };
-  switchTo(directory?: string, restart?: boolean): void;
+  switchTo(directory?: string, restart?: boolean, beforeSwitch?: () => Promise<boolean | void>): Promise<void>;
 }
 const selectionSchema = z.object({ format: z.literal(1), recoveryId: z.string().uuid() }).strict();
 /** Changes the selected copy only after its service has stopped. Both directories
@@ -45,16 +45,27 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
   let directory = readSelection(), port = options.port, error: string | undefined;
   let work: Promise<void> | undefined, closed = false;
   let service: Awaited<ReturnType<typeof startServer>>;
+  // Selection changes the saved workspace, not the root-verified application
+  // candidate. Preview services still reject frontend delivery in startServer.
   const launch = (path: string) => startServer({ ...options, directory: path, port, recoveryHost: control });
   const control: RecoveryHost = {
     status: () => ({ active: directory !== root, switching: !!work, ...(error ? { error } : {}) }),
-    switchTo(target, restart = false) {
+    async switchTo(target, restart = false, beforeSwitch) {
       if (closed || work) throw new Error('A workspace switch is already in progress.');
       const destination = target ? recoveryPath(relative(join(root, 'recovered-workspaces'), resolve(target))) : root;
-      if (destination === directory && !restart) return;
+      const unchanged = destination === directory && !restart;
       error = undefined;
+      let accepted!: () => void, refused!: (error: unknown) => void;
+      const admission = new Promise<void>((accept, reject) => { accepted = accept; refused = reject; });
       // Let the accepted response leave the old HTTP service before draining it.
-      work = new Promise<void>(ok => setTimeout(ok, 150)).then(async () => {
+      work = Promise.resolve().then(async () => {
+        try {
+          await service.prepareWorkspaceSwitch();
+          if (beforeSwitch && await beforeSwitch() === false) { accepted(); return; }
+          if (unchanged) { accepted(); return; }
+        } catch (failure) { refused(failure); return; }
+        accepted();
+        await new Promise<void>(ok => setTimeout(ok, 150));
         const previous = directory;
         await service.close();
         try {
@@ -71,10 +82,11 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
           error = 'The recovered workspace could not open. Your previous workspace was kept and reopened.';
           if (!closed) service = await launch(previous);
         }
-      }).finally(() => { work = undefined; });
+      }).finally(() => { work = undefined; if (!closed) void service.finishWorkspaceSwitch(); });
       // The status endpoint reports recoverable failures. A failed fallback is
       // surfaced by waitForSwitch/close instead of an unhandled rejection.
       void work.catch(() => { error = 'The workspace service could not restart. Both saved copies are kept.'; });
+      await admission;
     },
   };
   try { service = await launch(directory); }

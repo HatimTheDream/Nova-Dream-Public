@@ -902,7 +902,13 @@ def native_capture_owner_paths(root, selected, engine_version):
                 and stat.S_IMODE(directory_info.st_mode) == 0o700,
                 'Native capture lease directory is not private.')
         require(path.resolve(strict=True) == path and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
-                and (info.st_uid, info.st_gid) == owner and stat.S_IMODE(info.st_mode) == 0o600,
+                and (info.st_uid, info.st_gid) == owner,
+                'Native capture lease file is not an ordinary private owner.')
+        # The exact retired 9.8 token can be 0644 inside its private 0700 parents.
+        # Zero-byte markers and every other format retain the 0600 requirement.
+        require(stat.S_IMODE(info.st_mode) == 0o600
+                or (stat.S_IMODE(info.st_mode) == 0o644 and engine_version == '2026.9.8'
+                    and info.st_size == 4096 and digest(path) == CAPTURE_OWNER_RETIRED_SHA256),
                 'Native capture lease file is not an ordinary private owner.')
         require(not any(os.path.lexists(str(path) + suffix) for suffix in ('-wal', '-shm', '-journal')),
                 'Native capture lease has an unexpected sidecar.')
@@ -946,9 +952,53 @@ def static_sqlite_files(root, selected, active):
 def embedded_database_paths(root, selected, active, engine_version='2026.9.2'):
     native = selected / 'openclaw-runtime'
     candidates = {native / 'assignment-receipts' / 'receipts.sqlite'}
+    homes = set()
     for relative in active:
         if relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}:
-            candidates.update(relative.parent / 'codex-home' / name for name in (EMBEDDED_DATABASES if engine_version == '2026.9.2' else EMBEDDED_DATABASES_96) if name != 'receipts.sqlite')
+            homes.add(relative.parent / 'codex-home')
+    if engine_version == '2026.9.8':
+        # A configured 9.8 owner may have a Codex home before its first SDK
+        # session creates the optional native agent database. Configuration,
+        # rather than that database's presence, admits only canonical homes.
+        configuration = root / native / 'openclaw.json'
+        if configuration.exists() or configuration.is_symlink():
+            require(configuration.resolve(strict=True) == configuration, 'The selected native configuration was redirected.')
+            before = configuration.lstat()
+            value = bounded_json(configuration, 4 * 1024 * 1024)
+            identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            require(identity(before) == identity(configuration.lstat()), 'Native agent configuration changed during discovery.')
+            require(isinstance(value, dict) and isinstance(value.get('agents', {}), dict), 'Unexpected configured native agents.')
+            agents = value.get('agents', {})
+            if 'entries' in agents:
+                entries = agents['entries']
+                require(isinstance(entries, dict) and len(entries) <= 100, 'Unexpected configured native agent inventory.')
+            elif 'list' in agents:
+                listed = agents['list']
+                require(isinstance(listed, list) and len(listed) <= 100
+                        and all(isinstance(entry, dict) and isinstance(entry.get('id'), str) for entry in listed),
+                        'Unexpected configured native agent inventory.')
+                entries = {entry['id']: entry for entry in listed}
+                require(len(entries) == len(listed), 'Ambiguous configured native agents.')
+            else:
+                # The official roster adds main only when no explicit roster
+                # exists. An explicitly empty entries/list has no active owner.
+                entries = {'main': {}}
+            homes = set()
+            for agent, entry in entries.items():
+                require(re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', agent) and isinstance(entry, dict), 'Unexpected configured native agent.')
+                if 'agentDir' in entry:
+                    # Overrides need their own reviewed authority. Neither the
+                    # redirected target nor a dormant canonical home is active.
+                    continue
+                home = native / 'state' / 'agents' / agent / 'agent' / 'codex-home'
+                for relative in (home.parent.parent.parent, home.parent.parent, home.parent, home):
+                    path = root / relative
+                    if path.exists() or path.is_symlink():
+                        require(path.is_dir() and path.resolve(strict=True) == path, 'A configured native agent home was redirected.')
+                homes.add(home)
+    candidates.update(home / name for home in homes
+                      for name in (EMBEDDED_DATABASES if engine_version == '2026.9.2' else EMBEDDED_DATABASES_96)
+                      if name != 'receipts.sqlite')
     found = set()
     for relative in candidates:
         path = root / relative

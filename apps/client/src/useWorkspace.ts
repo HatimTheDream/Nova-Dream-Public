@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { canonical, type Command, type Entity, type Kind, type Snapshot } from '../../../packages/domain/contracts';
 import type { AccessContext } from '../../../packages/domain/phone';
-import { ApiError, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
+import { ApiError, clientHeaders, commit, fetchSnapshot, readLocal, request, saveLocal } from './api';
 import type { DownloadProgress } from './download-progress';
 import { startPolling } from './polling';
+import { clientIdentity } from './client-identity';
+import { startFrontendUpdatePolling } from './frontend-update';
 
 export function useWorkspace() {
   const [startupPhase, setStartupPhase] = useState<'connecting' | 'session' | 'workspace'>('connecting');
@@ -16,6 +18,7 @@ export function useWorkspace() {
   const [online, setOnline] = useState(false);
   const [error, setError] = useState('');
   const [updateRequired, setUpdateRequired] = useState(false);
+  const [frontendUpdate, setFrontendUpdate] = useState<string | null>(null);
   const refreshing = useRef(false);
   const failed = useRef(false);
   const refresh = useCallback(async () => {
@@ -46,7 +49,7 @@ export function useWorkspace() {
     let alive = true;
     const denied = () => { if (alive) denyPhone(); };
     window.addEventListener('e3:pair-required', denied);
-    const outdated = () => { if (alive) { setUpdateRequired(true); setOnline(false); } };
+    const outdated = () => { if (alive) { setUpdateRequired(true); setFrontendUpdate(null); setOnline(false); } };
     window.addEventListener('e3:update-required', outdated);
     void request<AccessContext>('access/context').then(async context => {
       if (!alive) return;
@@ -68,6 +71,10 @@ export function useWorkspace() {
     const stop = startPolling({ read: async () => { await refresh(); return !failed.current; }, interval: () => gated.current ? null : 10000, hiddenInterval: 30000, immediate: false });
     return () => { alive = false; stop(); window.removeEventListener('e3:pair-required', denied); window.removeEventListener('e3:update-required', outdated); };
   }, [refresh, denyPhone]);
+  useEffect(() => startFrontendUpdatePolling({
+    identity: { candidateId: clientHeaders()['X-Edition3-Candidate'], frontendId: clientIdentity.frontendId },
+    read: () => request('health'), changed: setFrontendUpdate, enabled: () => !gated.current,
+  }), []);
   const reconnect = async () => { try {
     setError(''); setDownload(undefined); setStartupPhase('connecting');
     const context = await request<AccessContext>('access/context'); setAccess(context);
@@ -75,7 +82,7 @@ export function useWorkspace() {
     setStartupPhase('session');
     await request('session', {}); setStartupPhase('workspace'); gated.current = false; await refresh();
   } catch (reason) { if (reason instanceof ApiError && reason.code === 'phone_pair_required') denyPhone(); else setError('The host is still unavailable. Your draft is kept.'); } };
-  return { snapshot, online, error, refresh, reconnect, access, updateRequired, startupPhase, download };
+  return { snapshot, online, error, refresh, reconnect, access, updateRequired, frontendUpdate, startupPhase, download };
 
 }
 

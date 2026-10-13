@@ -21,6 +21,7 @@ import { NavigationOptions } from './NavigationOptions';
 import { BottomNavigation } from './BottomNavigation';
 import { NavigationLabels } from './NavigationLabels';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
+import { refreshFrontend } from './frontend-update';
 import { Home } from './Home';
 const ProjectEditor = lazy(() => import('./ProjectEditor').then(module => ({ default: module.ProjectEditor })));
 const Assistant = lazy(() => import('./Assistant').then(module => ({ default: module.Assistant })));
@@ -60,6 +61,10 @@ const modules: Record<ModuleId, { label: string; icon: AppIcon; color: string }>
 function AppUpdate({ initial = false }: { initial?: boolean }) {
   const desktop = !!(window as Window & { novaDesktop?: unknown }).novaDesktop;
   return <div className={initial ? undefined : 'connection-banner app-update'} role="status"><span><strong>An app update is ready.</strong> {desktop ? 'Keep your writing, then close this desktop window and open Nova Dream again.' : 'Keep any unsaved writing before reloading. Saved work and retained drafts remain available.'}</span>{!desktop && <button onClick={() => location.reload()}>Reload app</button>}</div>;
+}
+
+function FrontendUpdate() {
+  return <div className="connection-banner app-update" role="status"><span><strong>An update is ready.</strong> Refresh when you’re ready. Keep any unsaved writing first; saved work and retained drafts remain available.</span><button onClick={() => refreshFrontend()}>Refresh</button></div>;
 }
 
 export function App() {
@@ -123,7 +128,7 @@ export function App() {
   }
   return <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>;
 }
-function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
+function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired, frontendUpdate }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
   const [route, setRoute] = useState<Route>('home');
   const assistant = useAssistant(snapshot, route === 'assistant');
   const [voice] = useState(() => new VoiceController(snapshot.deviceId));
@@ -184,7 +189,7 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
       if (event.key === 'Escape' && !navMenu) { event.preventDefault(); closeNavigation(); }
     }} data-reorder-host aria-label="Main navigation" hidden={!navigationVisible}><div className="rail-modules" ref={nav.containerRef} data-reorder-scroll>{nav.order.map(id => { const item = modules[id]; const Icon = item.icon; return <div key={id} className="nav-item-wrap" data-reorder-group="navigation" data-reorder-item={id}><button className={`nav-item ${item.color} ${route === id ? 'active' : ''} ${nav.dragging === id ? 'dragging' : ''}`} aria-label={item.label} aria-description="Hold or drag to move. Alt and Up or Down also changes position." aria-current={route === id ? 'page' : undefined} data-navigation-label={item.label} {...nav.bind(id)} onClick={() => { if (!nav.suppressClick.current) open(id); }} onContextMenu={event => { event.preventDefault(); if (!nav.dragging && !nav.suppressClick.current) { navMenuTrigger.current = event.currentTarget; setNavMenu(id); } }} onKeyDown={event => { if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); nav.move(id, nav.order.indexOf(id) + (event.key === 'ArrowUp' ? -1 : 1)); } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); navMenuTrigger.current = event.currentTarget; setNavMenu(id); } }}><span className="nav-icon"><Icon size="var(--app-module-glyph-size)"/></span></button></div>; })}</div><div className="rail-footer"><button className={`nav-item neutral ${route === 'settings' ? 'active' : ''}`} aria-label="Settings" aria-description={snapshot.softwareUpdate ? "Software update available" : undefined} data-navigation-label={snapshot.softwareUpdate ? "Settings · update available" : "Settings"} aria-current={route === 'settings' ? 'page' : undefined} onClick={() => { setConnectionOrigin(null); open('settings'); }}><span className="nav-icon"><Settings size="var(--app-module-glyph-size)"/>{snapshot.softwareUpdate && <span className="settings-update-dot" aria-hidden="true"/>}</span></button></div>{navMenu && <NavigationOptions key={navMenu} label={modules[navMenu].label} index={nav.order.indexOf(navMenu)} count={nav.order.length} move={index => nav.move(navMenu, index)} close={() => setNavMenu(null)} trigger={navMenuTrigger.current}/>}</nav></NavigationLabels>
     <div className="workspace" data-route={route}>
-      {access?.recoveryLocal && <div className="notice" role="status">Recovered workspace · Local editing is enabled. Accounts, Assistant and routines remain paused until their recovery is verified.</div>}{access?.recovery && <div className="notice" role="status">Recovered workspace · Review only. Changes, notifications and connected services are paused. Your original workspace is separate.</div>}{updateRequired && <AppUpdate/>}{!online && !updateRequired && <div className="connection-banner" role="status"><CloudOff size={18}/><span>{error}</span><button onClick={() => void reconnect()}>Reconnect</button></div>}
+      {access?.recoveryLocal && <div className="notice" role="status">Recovered workspace · Local editing is enabled. Accounts, Assistant and routines remain paused until their recovery is verified.</div>}{access?.recovery && <div className="notice" role="status">Recovered workspace · Review only. Changes, notifications and connected services are paused. Your original workspace is separate.</div>}{updateRequired ? <AppUpdate/> : frontendUpdate && <FrontendUpdate/>}{!online && !updateRequired && <div className="connection-banner" role="status"><CloudOff size={18}/><span>{error}</span><button onClick={() => void reconnect()}>Reconnect</button></div>}
       {layout.conflict && <Conflict name="Layout" message={layout.conflict.message} current={layout.conflict.current ? JSON.stringify(layout.conflict.current.value, null, 2) : undefined} reapply={layout.reapply} discard={layout.discard}/>}
       {layout.dirty && !layout.conflict && <div className="layout-status" role="status">{layout.status}<button className="text-button" onClick={() => void layout.flush()}>Retry</button></div>}
       {(taskActions.state.error || taskActions.state.notice || taskActions.state.queue.length > 0) && <div className="connection-banner task-feedback" role={taskActions.state.error ? 'alert' : 'status'}><span>{taskActions.state.error || (taskActions.busy ? 'Saving task changes…' : taskActions.state.queue.length ? 'Task changes are waiting for confirmation.' : taskActions.state.notice)}</span>{taskActions.state.queue.length > 0 && !taskActions.busy && <button onClick={() => void taskActions.retry()}>Retry task changes</button>}{!taskActions.state.queue.length && taskActions.state.undo.length > 0 && <button disabled={taskActions.busy} onClick={() => void taskActions.undo()}>Undo</button>}<button className="icon-button" disabled={taskActions.busy} aria-label="Dismiss task notice" onClick={taskActions.dismiss}><X size={16}/></button></div>}

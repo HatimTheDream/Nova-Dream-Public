@@ -21,6 +21,12 @@ const installInput = z.object({epoch:z.string().uuid(),candidateId:z.string().re
 const cancelInput = z.object({epoch:z.string().uuid(),jobId:z.string().uuid()}).strict();
 const checkInput = z.object({epoch:z.string().uuid()}).strict();
 
+/** Preserve structural exclusion before any caller bounds the busy-work list. */
+export function updateHeartbeatBlockers(blockers: UpdateHeartbeat['blockers']) {
+  const structural = (code: string) => ['workspace_switch', 'recovery'].includes(code);
+  return [...blockers.filter(item => structural(item.code)), ...blockers.filter(item => !structural(item.code))].slice(0, 30);
+}
+
 /** App-side status bridge. The durable job and installer live outside the app
  * and workspace so replacing either cannot lose the original update attempt. */
 export class SoftwareUpdates {
@@ -49,7 +55,7 @@ export class SoftwareUpdates {
   private schedule() { if (this.closed || !this.host) return; clearTimeout(this.timer); this.timer=setTimeout(()=>void this.refresh().finally(()=>this.schedule()),this.view?.holdFor || this.workspace.heldFor() || this.view?.job && !['completed','restored','failed','cancelled'].includes(this.view.job.state) ? 2000:30000); this.timer.unref(); }
   private heartbeat(blockers=this.workspace.blockers()):UpdateHeartbeat {
     const heldFor=this.workspace.heldFor();
-    return {candidateId:this.workspace.installed().candidateId,epoch:this.workspace.epoch(),heldFor,nativeSuspended:this.workspace.native?.snapshot(heldFor).nativeSuspended??false,blockers:blockers.slice(0,30)};
+    return {candidateId:this.workspace.installed().candidateId,epoch:this.workspace.epoch(),heldFor,nativeSuspended:this.workspace.native?.snapshot(heldFor).nativeSuspended??false,blockers:updateHeartbeatBlockers(blockers)};
   }
   private async release(jobId:string) {
     if(!this.workspace.native)return [];
@@ -94,6 +100,33 @@ export class SoftwareUpdates {
       }
     } catch { this.unavailable=true; /* A lost supervisor must never release an admitted maintenance hold. */ }
     finally { this.reading=undefined; }})(); return this.reading;
+  }
+  /** The host records this structural blocker in the same turn that observes
+   * its frontend lease. Drain older heartbeats first so they cannot erase it. */
+  async prepareWorkspaceSwitch() {
+    if (!this.host) return;
+    await this.refresh();
+    if (this.closed || this.unavailable) throw new Fault(409, 'recovery_update_busy', 'Wait for the update service to reconnect before switching workspaces.');
+    let view: UpdateHostView;
+    try {
+      view = await this.host.call<UpdateHostView>('heartbeat', this.heartbeat([
+        { code: 'workspace_switch', message: 'Waiting for the workspace switch to finish.' }, ...this.workspace.blockers(),
+      ]));
+    } catch {
+      this.unavailable = true;
+      throw new Fault(409, 'recovery_update_busy', 'The update service could not verify this workspace switch. Your selected workspace was kept.');
+    }
+    this.view = view;
+    if (view.holdFor !== null || this.workspace.heldFor() || view.installation?.supported !== true
+      || view.job && !['completed', 'restored', 'failed', 'cancelled'].includes(view.job.state)) {
+      throw new Fault(409, 'recovery_update_busy', 'Finish the current interface or service update before switching workspaces.');
+    }
+  }
+  async finishWorkspaceSwitch() {
+    // A timer may already be observing the still-reserved switch. Wait for it,
+    // then send a heartbeat captured after the reservation was released.
+    await this.refresh();
+    await this.refresh();
   }
   private guard(epoch:string) { if(epoch!==this.workspace.epoch())throw new Fault(409,'epoch_changed','Refresh Software Update after changing workspaces.'); if(!this.host)throw new Fault(409,'update_rejected','Updates are managed by this host’s administrator.'); }
   async check(value:unknown) { const input=checkInput.parse(value);this.guard(input.epoch); await this.host!.call('check'); await this.refresh(); return this.status(); }

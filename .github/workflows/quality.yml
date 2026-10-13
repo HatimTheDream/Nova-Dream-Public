@@ -33,6 +33,7 @@ jobs:
           python3 -B tests/update-startup-lifecycle.test.py -v
           python3 -B tests/update-log-retention-integration.test.py -v
           NODE_BINARY="$(command -v node)"
+          env "NODE_BINARY=$NODE_BINARY" python3 -B tests/test_frontend.py -v
           python3 -B tests/update-app-archive.test.py -v
           # Hosted runners may allow the runner user to write /opt. Keep the real
           # production ownership checks and put privileged fixtures under /root.
@@ -61,6 +62,8 @@ jobs:
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/operator-rehearsal.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/test_frontend.py ProtectedFilesystemTests -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" "NODE_BINARY=$NODE_BINARY" "$NODE_BINARY" node_modules/tsx/dist/cli.mjs --test tests/frontend-http.test.ts
       - name: Retain the canonical hosted build
         run: python3 -B scripts/retain-ci-candidate.py
       - name: Upload the verified application archive

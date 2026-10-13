@@ -18,6 +18,7 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy/update-runner'))
 import recovery
+import codex_log_retention as log_retention
 
 NODE_PATH = os.environ.get('NODE_BINARY') or shutil.which('node')
 NODE = pathlib.Path(NODE_PATH).resolve() if NODE_PATH else None
@@ -295,6 +296,177 @@ class Codex158Tests(unittest.TestCase):
             with self.assertRaises(RuntimeError): recovery.embedded_schema(db, 'state_5.sqlite', '2026.9.8')
 
 
+class ConfiguredCodexHomeTests(unittest.TestCase):
+    # Sanitized metadata shape from a real fresh 9.8 closed startup: both
+    # declared owners have five Codex families, but neither native agent DB.
+    # This synthetic fixture tests discovery and retention, not startup proof.
+    FAMILIES = ('goals_1.sqlite', 'logs_2.sqlite', 'memories_1.sqlite', 'queue_1.sqlite', 'state_5.sqlite')
+    CONFIGURATION = {'agents': {'entries': {
+        'main': {}, 'edition3-assignment': {'name': 'Synthetic assignment', 'skills': [], 'subagents': {}, 'tools': {}}}}}
+    START = log_retention.RETENTION_SECONDS + 1000
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nova-configured-home-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name).resolve()
+        self.snapshot, self.live = self.root / 'snapshot', self.root / 'live'
+        self.snapshot.mkdir()
+        (self.snapshot / 'edition3.identity').write_bytes(b'private.novadream.edition3.preview\n')
+        with contextlib.closing(sqlite3.connect(self.snapshot / 'workspace.sqlite')) as db, db:
+            db.executescript("pragma user_version=55;create table meta(key text,value text);insert into meta values('epoch','11111111-1111-4111-8111-111111111111');")
+        native = self.snapshot / 'openclaw-runtime'; native.mkdir()
+        (native / 'edition3-runtime.identity').write_bytes(b'edition3-owned-gateway\n')
+        (native / 'openclaw.json').write_text(json.dumps(self.CONFIGURATION), encoding='utf-8')
+        self.paths = {self.create_family(agent, name) for agent in ('main', 'edition3-assignment') for name in self.FAMILIES}
+        self.copy_live()
+
+    def create_family(self, agent, name):
+        relative = pathlib.Path('openclaw-runtime/state/agents') / agent / 'agent/codex-home' / name
+        path = self.snapshot / relative; path.parent.mkdir(parents=True, exist_ok=True)
+        version, tables = recovery.EMBEDDED_DATABASES_98[name]
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
+            db.execute('pragma user_version=' + str(version))
+            for table, columns in tables.items():
+                definitions = []
+                for column in columns.split():
+                    kind = 'BLOB'
+                    if table == 'logs':
+                        kind = 'INTEGER PRIMARY KEY' if column == 'id' else 'INTEGER' if column in {'ts', 'ts_nanos', 'line', 'estimated_bytes'} else 'TEXT'
+                    definitions.append('"' + column + '" ' + kind)
+                db.execute('create table "' + table + '" (' + ','.join(definitions) + ')')
+            if name == 'state_5.sqlite':
+                db.execute("insert into threads(id,title,first_user_message) values('saved','Retained title','Retained writing')")
+            if name == 'logs_2.sqlite':
+                db.execute("insert into logs(id,ts,feedback_log_body) values(1,?,'Retained log')", (self.START + 1,))
+        return relative
+
+    def copy_live(self):
+        if self.live.exists():
+            assert self.live.resolve(strict=True) == self.live and self.live.parent == self.root
+            shutil.rmtree(self.live)
+        shutil.copytree(self.snapshot, self.live)
+
+    def configure(self, value):
+        for root in (self.snapshot, self.live):
+            (root / 'openclaw-runtime/openclaw.json').write_text(json.dumps(value), encoding='utf-8')
+
+    def verify(self, **options):
+        recovery.native_saved_state(self.snapshot, self.live, from_version='2026.9.8', **options)
+
+    def test_fresh_configured_homes_without_optional_agent_databases_use_complete_retention(self):
+        selected, _, active = recovery.native_scope(self.snapshot, closed=True)
+        self.assertEqual(active, set())
+        self.assertEqual(recovery.embedded_database_paths(self.snapshot, selected, active, '2026.9.8'), self.paths)
+        hashes = {path: recovery.digest(self.snapshot / path) for path in self.paths}
+        for path in self.paths:
+            if path.name == 'logs_2.sqlite':
+                with contextlib.closing(sqlite3.connect(self.live / path)) as db, db:
+                    db.execute("insert into logs(id,ts,feedback_log_body) values(2,?,'Startup log')", (self.START + 2,))
+        self.verify(log_retention_window=(self.START, self.START + 10))
+        self.assertEqual(hashes, {path: recovery.digest(self.snapshot / path) for path in self.paths})
+
+    def test_default_main_and_explicit_main_have_the_same_canonical_scope(self):
+        for configuration in ({}, {'agents': {}}, {'agents': {'entries': {'main': {}}}}, {'agents': {'list': [{'id': 'main'}]}}):
+            with self.subTest(configuration=configuration):
+                self.configure(configuration)
+                found = recovery.embedded_database_paths(self.snapshot, pathlib.Path('.'), set(), '2026.9.8')
+                self.assertEqual(found, {path for path in self.paths if 'main' in path.parts})
+                self.verify()
+
+    def test_explicit_empty_nonmain_and_precedence_rosters_never_add_main(self):
+        configurations = [({'agents': {'entries': {}}}, set()),
+                          ({'agents': {'list': []}}, set()),
+                          ({'agents': {'entries': {}, 'list': [{'id': 'main'}]}}, set()),
+                          ({'agents': {'entries': {'edition3-assignment': {}}}}, {'edition3-assignment'}),
+                          ({'agents': {'list': [{'id': 'edition3-assignment'}]}}, {'edition3-assignment'})]
+        for configuration, owners in configurations:
+            with self.subTest(configuration=configuration):
+                self.configure(configuration)
+                found = recovery.embedded_database_paths(self.snapshot, pathlib.Path('.'), set(), '2026.9.8')
+                self.assertEqual(found, {path for path in self.paths if any(owner in path.parts for owner in owners)})
+                self.verify()
+
+    def test_unconfigured_nested_and_unknown_families_keep_exact_static_bytes(self):
+        inactive = [pathlib.Path('openclaw-runtime/state/agents/dormant/agent/codex-home/state_5.sqlite'),
+                    pathlib.Path('openclaw-runtime/state/agents/main/agent/codex-home/archive/state_5.sqlite'),
+                    pathlib.Path('openclaw-runtime/state/agents/main/agent/codex-home/unknown.sqlite')]
+        for path in inactive:
+            source = self.snapshot / path; source.parent.mkdir(parents=True, exist_ok=True); source.write_bytes(b'retained dormant bytes')
+        self.copy_live(); self.verify()
+        for path in inactive:
+            with self.subTest(path=path):
+                (self.live / path).write_bytes(b'changed dormant bytes')
+                with self.assertRaisesRegex(RuntimeError, 'inactive database'): self.verify()
+                (self.live / path).write_bytes(b'retained dormant bytes')
+
+    def test_agent_directory_override_never_admits_target_or_dormant_canonical_home(self):
+        target = pathlib.Path('redirected/codex-home/state_5.sqlite')
+        path = self.snapshot / target; path.parent.mkdir(parents=True); path.write_bytes(b'retained override')
+        self.copy_live()
+        self.configure({'agents': {'entries': {'main': {'agentDir': str(self.live / 'redirected')}, 'edition3-assignment': {}}}})
+        found = recovery.embedded_database_paths(self.snapshot, pathlib.Path('.'), set(), '2026.9.8')
+        self.assertEqual(found, {path for path in self.paths if 'edition3-assignment' in path.parts})
+        self.verify()
+        for relative in (target, next(path for path in self.paths if 'main' in path.parts)):
+            with self.subTest(path=relative):
+                original = (self.live / relative).read_bytes(); (self.live / relative).write_bytes(b'changed')
+                with self.assertRaisesRegex(RuntimeError, 'inactive database'): self.verify()
+                (self.live / relative).write_bytes(original)
+
+    def test_malformed_configuration_and_owner_ids_cannot_expand_scope(self):
+        for configuration in ([], {'agents': []}, {'agents': {'entries': []}},
+                              {'agents': {'entries': {'../outside': {}}}}, {'agents': {'entries': {'main': None}}},
+                              {'agents': {'entries': {'-main': {}}}}, {'agents': {'entries': {'a' * 65: {}}}},
+                              {'agents': {'list': [{'id': '../outside'}]}}, {'agents': {'list': [{}]}},
+                              {'agents': {'list': [{'id': 'main'}, {'id': 'main'}]}}):
+            with self.subTest(configuration=configuration):
+                self.configure(configuration)
+                with self.assertRaises(RuntimeError):
+                    recovery.embedded_database_paths(self.snapshot, pathlib.Path('.'), set(), '2026.9.8')
+
+    def test_family_set_changes_are_refused(self):
+        relative = next(path for path in self.paths if path.name == 'queue_1.sqlite')
+        (self.live / relative).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'embedded database set changed'): self.verify()
+        self.copy_live()
+        self.create_family('main', 'thread_history_1.sqlite'); self.copy_live()
+        (self.snapshot / 'openclaw-runtime/state/agents/main/agent/codex-home/thread_history_1.sqlite').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'embedded database set changed'): self.verify()
+
+    def test_newly_discovered_homes_reject_row_loss_and_schema_drift(self):
+        for agent in ('main', 'edition3-assignment'):
+            relative = pathlib.Path('openclaw-runtime/state/agents') / agent / 'agent/codex-home/state_5.sqlite'
+            for sql, message in (("delete from threads where id='saved'", 'Retained embedded'),
+                                 ('alter table threads add column unreviewed BLOB', 'unreviewed columns'),
+                                 ('create index unreviewed on threads(id)', 'schema definitions')):
+                with self.subTest(agent=agent, sql=sql):
+                    self.copy_live()
+                    with contextlib.closing(sqlite3.connect(self.live / relative)) as db, db: db.execute(sql)
+                    with self.assertRaisesRegex(RuntimeError, message): self.verify()
+
+    def test_newly_discovered_logs_keep_actual_window_and_recent_rows_strict(self):
+        relative = next(path for path in self.paths if path.name == 'logs_2.sqlite')
+        with self.assertRaisesRegex(RuntimeError, 'startup window'):
+            self.verify(log_retention_window=(self.START + 1, self.START))
+        with contextlib.closing(sqlite3.connect(self.live / relative)) as db, db: db.execute('delete from logs')
+        with self.assertRaisesRegex(RuntimeError, 'Retained embedded'): self.verify()
+        with self.assertRaisesRegex(RuntimeError, 'exact startup age'):
+            self.verify(log_retention_window=(self.START, self.START + 10))
+
+    @unittest.skipUnless(os.name == 'posix', 'Canonical symlink checks require a supported symlink fixture.')
+    def test_redirected_configuration_homes_databases_and_sidecars_are_refused(self):
+        relative = next(path for path in self.paths if path.name == 'state_5.sqlite')
+        for target in (pathlib.Path('openclaw-runtime/openclaw.json'), relative.parent.parent,
+                       relative.parent, relative, pathlib.Path(str(relative) + '-wal')):
+            with self.subTest(path=target):
+                self.copy_live(); path = self.live / target
+                if path.exists(): path.rename(path.with_name(path.name + '.original'))
+                original = path.with_name(path.name + '.original')
+                if not original.exists(): original.write_bytes(b'sidecar fixture')
+                path.symlink_to(original, target_is_directory=original.is_dir())
+                with self.assertRaises(RuntimeError): self.verify()
+
+
 class ProcessLeaseTests(unittest.TestCase):
     # Qualified official empty retirement token; no private workspace/owner data.
     TOKEN_HEADER = bytes.fromhex('53514c69746520666f726d61742033001000010100402020000000010000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001002e95cc')
@@ -381,13 +553,38 @@ class ProcessLeaseTests(unittest.TestCase):
         self.assertNotEqual(self.static(before, '2026.9.2'), self.static(after, '2026.9.2'))
 
     @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_exact_retired_token_modes_preserve_sources_and_static_stores(self):
+        for mode in (0o600, 0o644):
+            root, path = self.fixture(); path.chmod(mode)
+            retained = path.parent / 'retained.sqlite'; retained.write_bytes(b'saved writing')
+            before = recovery.sqlite_source_identity(path)
+            with self.subTest(mode=oct(mode)):
+                self.assertEqual(recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8'), {self.LEASE})
+                self.assertEqual(set(self.static(root, '2026.9.8')), {retained.relative_to(root)})
+                self.assertEqual(recovery.sqlite_source_identity(path), before)
+                self.assertEqual(list(self.scratch.iterdir()), [])
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
+    def test_readable_retired_token_requires_exact_bytes_size_and_version(self):
+        altered = bytearray(self.TOKEN); altered[-1] = 1
+        for kind, data, version in (('empty', b'', '2026.9.8'),
+                                    ('wrong-size', self.TOKEN[:-1], '2026.9.8'),
+                                    ('wrong-bytes', bytes(altered), '2026.9.8'),
+                                    ('legacy-version', self.TOKEN, '2026.9.6')):
+            root, path = self.fixture(data); path.chmod(0o644)
+            with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                recovery.native_capture_owner_paths(root, self.SELECTED, version)
+
+    @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')
     def test_links_permissions_owners_and_sidecars_are_rejected(self):
-        for kind in ('symlink', 'hardlink', 'file-mode', 'directory-mode', 'root-mode', 'sidecar', 'owner'):
-            root, path = self.fixture()
+        kinds = ('symlink', 'hardlink', 'group-writable', 'other-writable', 'directory-mode', 'root-mode', 'sidecar', 'owner')
+        for mode, kind in ((mode, kind) for mode in (0o600, 0o644) for kind in kinds):
+            root, path = self.fixture(); path.chmod(mode)
             if kind == 'symlink':
                 outside = root / 'outside'; outside.write_bytes(self.TOKEN); path.unlink(); path.symlink_to(outside)
             elif kind == 'hardlink': os.link(path, root / 'alias')
-            elif kind == 'file-mode': path.chmod(0o644)
+            elif kind == 'group-writable': path.chmod(0o664)
+            elif kind == 'other-writable': path.chmod(0o666)
             elif kind == 'directory-mode': path.parent.chmod(0o755)
             elif kind == 'root-mode': path.parent.parent.chmod(0o755)
             elif kind == 'sidecar': pathlib.Path(str(path) + '-journal').write_bytes(b'')
@@ -400,10 +597,10 @@ class ProcessLeaseTests(unittest.TestCase):
                         value = {name: getattr(info, name) for name in fields}; value['st_uid'] += 1
                         return SimpleNamespace(**value)
                     return info
-                with patch.object(pathlib.Path, 'lstat', changed_owner), self.assertRaises(RuntimeError):
+                with self.subTest(mode=oct(mode), kind=kind), patch.object(pathlib.Path, 'lstat', changed_owner), self.assertRaises(RuntimeError):
                     recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
             else:
-                with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                with self.subTest(mode=oct(mode), kind=kind), self.assertRaises(RuntimeError):
                     recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
 
     @unittest.skipUnless(os.name == 'posix', 'Native host classification requires POSIX ownership/modes')

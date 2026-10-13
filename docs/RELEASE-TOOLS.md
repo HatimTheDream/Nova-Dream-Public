@@ -399,3 +399,7 @@ Preparation automation is one implemented slice. A complete release command and
 a qualified frontend delivery path with a roughly 30-second final interruption
 remain future work. Measure preparation, interruption and acceptance separately;
 a target duration does not permit removing recovery or startup checks.
+
+## Compatible interface delivery
+
+The new signed interface route and its precise eligibility, root worker, interrupted-operation reconciliation and assets-only rollback are described in [FRONTEND-DELIVERY.md](FRONTEND-DELIVERY.md). It separates browser assets from the service identity and preserves open windows without an automatic reload. Bootstrap uses full delivery; a narrower route becomes qualified only after its actual checks and acceptance pass. The roughly30second final switch remains a measured target.

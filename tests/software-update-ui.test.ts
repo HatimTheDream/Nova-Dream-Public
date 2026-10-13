@@ -43,6 +43,15 @@ test('failed refresh cannot claim current status or a connected agent version', 
   assert.doesNotMatch(render(status({ installed: { ...status().installed, agent: { id: 'openclaw', name: 'OpenClaw', state: 'disconnected', version: 'old-reported-version' } } })), /old-reported-version/);
 });
 
+test('the loaded interface and independently installed backend keep truthful versions', () => {
+  const html = render(status({ availability: 'current', release: undefined }), { interfaceIdentity: { version: '2.3.0', build: '1.0.287', frontendId: 'a'.repeat(64) } });
+  const versions = elements(html, 'div').filter(element => /Nova Dream (interface|service)/.test(element.text));
+  assert.ok(versions.some(element => element.text.includes('Nova Dream interface2.3.0')));
+  assert.ok(versions.some(element => element.text.includes('Nova Dream service1.12.11')));
+  assert.match(html, /Up to date/);
+  assert.equal(elements(html, 'button').some(button => /Reload|Refresh|Update Nova Dream/.test(button.text)), false);
+});
+
 test('work blockers offer an idle update and active jobs prevent another installation', () => {
   const waiting = render(status({ blocker: { code: 'active_work', message: 'Assistant work is active.' } }));
   assert.ok(elements(waiting, 'button').find(b => b.text === 'Update Nova Dream when idle' && !('disabled' in b.attributes)));

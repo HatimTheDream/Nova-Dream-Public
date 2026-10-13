@@ -64,27 +64,27 @@ test('Approved sources and opaque platform exports stay intact while launcher ex
 });
 
 test('Both selectable manifests retain one installed-app identity and point to complete launcher exports', async () => {
-  const manifests = provenance.sources.map(source => json<Manifest>(publicRoot + appIconAssets(source.id).manifest.slice(1)));
+  const manifests = provenance.sources.map(source => json<Manifest>(publicRoot + appIconAssets(source.id).manifest.replace(/^\.?\//, '')));
   const identity = ({ id, name, short_name, start_url, scope, display }: Manifest) => ({ id, name, short_name, start_url, scope, display });
   assert.deepEqual(identity(manifests[0]), { id: '/', name: 'Nova Dream', short_name: 'Nova Dream', start_url: '/', scope: '/', display: 'standalone' });
   assert.deepEqual(identity(manifests[1]), identity(manifests[0]));
   for (const source of provenance.sources) {
-    const assets = appIconAssets(source.id), manifest = json<Manifest>(publicRoot + assets.manifest.slice(1));
-    assert.deepEqual(manifest.icons.map(icon => icon.src).sort(), [assets.launcher, assets.launcherLarge].sort());
+    const assets = appIconAssets(source.id), manifest = json<Manifest>(publicRoot + assets.manifest.replace(/^\.?\//, ''));
+    assert.deepEqual(manifest.icons.map(icon => icon.src.replace(/^\.\//, '/')).sort(), [assets.launcher, assets.launcherLarge].sort());
     for (const icon of manifest.icons) {
       assert.equal(icon.purpose, 'any', 'Alternative platform crops require their own reviewed exports');
       assert.equal(icon.type, 'image/png');
-      const { width, height, hasAlpha } = await sharp(read(publicRoot + icon.src.slice(1))).metadata();
+      const { width, height, hasAlpha } = await sharp(read(publicRoot + icon.src.replace(/^\.?\//, ''))).metadata();
       assert.equal(icon.sizes, `${width}x${height}`);
       assert.equal(hasAlpha, true);
     }
     for (const [url, size] of [[assets.brand, 192], [assets.touch, 180]] as const) {
-      const metadata = await sharp(read(publicRoot + url.slice(1))).metadata();
+      const metadata = await sharp(read(publicRoot + url.replace(/^\.?\//, ''))).metadata();
       assert.deepEqual([metadata.width, metadata.height], [size, size]);
     }
   }
-  assert.deepEqual(json<Manifest>(publicRoot + 'nova-dream.webmanifest'), json<Manifest>(publicRoot + appIconAssets('red').manifest.slice(1)));
-  assert.deepEqual(read(publicRoot + 'apple-touch-icon.png'), read(publicRoot + appIconAssets('red').touch.slice(1)));
+  assert.deepEqual(json<Manifest>(publicRoot + 'nova-dream.webmanifest'), json<Manifest>(publicRoot + appIconAssets('red').manifest.replace(/^\.?\//, '')));
+  assert.deepEqual(read(publicRoot + 'apple-touch-icon.png'), read(publicRoot + appIconAssets('red').touch.replace(/^\.?\//, '')));
 });
 
 test('Desktop defaults use the approved Red source and a complete six-resolution Windows icon', async () => {
@@ -131,7 +131,7 @@ test('The icon generator reproduces committed platform files in an isolated dire
   mkdirSync(join(fixture, 'apps/desktop'), { recursive: true });
   execFileSync(process.execPath, [join(fixture, 'scripts/web-icons.mjs')], { cwd: fixture, stdio: 'pipe' });
   const outputs = [...provenance.files.map(file => publicRoot + file.file),
-    ...provenance.sources.map(source => publicRoot + appIconAssets(source.id).manifest.slice(1)),
+    ...provenance.sources.map(source => publicRoot + appIconAssets(source.id).manifest.replace(/^\.?\//, '')),
     publicRoot + 'nova-dream.webmanifest', publicRoot + 'icons/provenance.json',
     desktop.output, desktop.windowsIcon.file, 'apps/desktop/lynx-mark.provenance.json'];
   for (const path of outputs) assert.deepEqual(readFileSync(join(fixture, path)), read(path), path + ' changed on regeneration');

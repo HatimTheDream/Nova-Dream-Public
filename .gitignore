@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 .launcher/
 .data/
@@ -23,3 +23,7 @@ coverage/
 
 # Local desktop packages and pinned runtime archives.
 .packages/
+
+# Python bytecode is generated locally and is not a release source input.
+__pycache__/
+*.pyc

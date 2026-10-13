@@ -8,6 +8,7 @@ import { GitHubConnection } from './github.js';
 import { WorkRepositories } from './work-repositories.js';
 import { githubName } from '../../packages/domain/work-repositories.js';
 import type { RecoveryHost } from './workspace-host.js';
+import { FrontendDelivery, frontendHtml, type FrontendDeliveryOptions, type FrontendIdentity } from './frontend-delivery.js';
 import { UploadTransfers } from './upload-transfers.js';
 import { AssistantObservations } from './assistant-observations.js';
 import { WorkspaceBackups } from './workspace-backups.js';
@@ -62,7 +63,7 @@ import { connectionSchema, assistantRequestSchema } from '../../packages/domain/
 import { z } from 'zod';
 import { ManagedRuntime } from './runtime.js';
 import { agentServiceInfo } from '../../packages/domain/agent-service.js';
-import { SoftwareUpdates } from './software-updates.js';
+import { SoftwareUpdates, updateHeartbeatBlockers } from './software-updates.js';
 import { UpdateHostClient, type UpdateHostView } from './update-host-client.js';
 import { updateMaintenanceBlockers } from './update-maintenance.js';
 import { NativeUpdateLease } from './update-native-idle.js';
@@ -114,9 +115,11 @@ const staleClientCleanup = new Set([
 ]);
 const updateSettlingRoutes = new Set([...staleClientCleanup, '/api/software-update/cancel', '/api/software-update/install', '/api/session', '/api/assistant/dictation/caption', '/api/assistant/dictation/audio', '/workspace/observation', '/workspace/research-progress']);
 
-export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; updateSocket?: string; updateHostClient?: Pick<UpdateHostClient,'call'>; gateway?: AssistantTransport; providers?: Providers; weatherFetch?: typeof fetch; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
+export async function startServer(options: { directory: string; port: number; privateWeb?: PrivateWebOptions; recoveryPreview?: boolean; recoveryHost?: RecoveryHost; nativeBackup?: NativeBackup; emailImageLoader?: EmailImageLoader; keyProtector?: KeyProtector; phonePort?: number; phoneTransport?: PhoneTransport; clientDirectory?: string; frontendDelivery?: FrontendDeliveryOptions; development?: boolean; developmentOrigin?: string; version?: string; buildVersion?: string; schemaVersion?: number; candidateId?: string; updateSocket?: string; updateHostClient?: Pick<UpdateHostClient,'call'>; gateway?: AssistantTransport; providers?: Providers; weatherFetch?: typeof fetch; skillManagementFactory?: () => SkillManagementTransport; accessControlFactory?: () => AccessTransport; responseControlFactory?: () => AccessTransport; approvalReviewFactory?: () => AccessTransport; questionReviewFactory?: () => AccessTransport }) {
   if (options.privateWeb) validatePrivateWeb(options.privateWeb);
   if (options.candidateId !== undefined && !/^[a-f0-9]{64}$/.test(options.candidateId)) throw new Error('Use a verified candidate identity.');
+  const frontend = options.frontendDelivery && !options.recoveryPreview ? new FrontendDelivery(options.frontendDelivery) : undefined;
+  const processIdentity = randomUUID();
   if (options.developmentOrigin && (!options.development || !/^http:\/\/127\.0\.0\.1:[0-9]{4,5}$/.test(options.developmentOrigin) || Number(new URL(options.developmentOrigin).port) < 1024 || Number(new URL(options.developmentOrigin).port) > 65535)) throw new Error('Use an explicit loopback development origin.');
   const keys = new WorkspaceKeys(options.directory, options.keyProtector);
   const protectedKey = await keys.readProtected();
@@ -205,7 +208,7 @@ export async function startServer(options: { directory: string; port: number; pr
     const labels:Record<string,string>={assistant:'Waiting for the current Assistant work.',teams:'Waiting for the team to finish.',voice:'Finish the current voice chat before updating.',dictation:'Finish dictation before updating.', 'sign-in':'Finish account sign-in before updating.',backups:'Waiting for backup or recovery to finish.',recovery:'Finish workspace recovery before updating.',requests:'Waiting for the current change to finish.','automatic-queue':'Pause automatic queue processing before updating.','automatic-research':'Pause scheduled research before updating.','agent-routines':'Pause Assistant routines before updating.','automatic-contacts':'Pause automatic contact sync before updating.','contact-write':'Waiting for contact changes to finish.'};
     const blockers=updateMaintenanceBlockers(store,extra).map(item=>({code:item.kind,message:labels[item.kind]??'Waiting for current work and saved changes to settle.'}));
     if(gateway.status().state!=='ready')blockers.push({code:'native_unknown',message:'Waiting for Assistant to reconnect.'});
-    return blockers.slice(0,30);
+    return updateHeartbeatBlockers(blockers);
   };
   const softwareUpdates=new SoftwareUpdates({
     epoch:()=>store.epoch,
@@ -290,7 +293,7 @@ export async function startServer(options: { directory: string; port: number; pr
       }
       if (url.pathname.startsWith('/api/')) {
         if (!['GET', 'POST'].includes(request.method ?? '')) throw new Fault(405, 'method', 'This method is not available.');
-        if (url.pathname === '/api/health' && request.method === 'GET') return json(200, { application: 'nova-dream-edition-3', apiVersion: 1, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, status: 'ready' });
+        if (url.pathname === '/api/health' && request.method === 'GET') {const selected=frontend?.selected();return json(200, { application: 'nova-dream-edition-3', apiVersion: 1, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, status: 'ready', ...(frontend?{processIdentity,serviceInputsSha256:options.frontendDelivery!.serviceInputsSha256,frontend:{...selected!.identity,...(selected!.error?{blocked:true}:{})}}:{}) });}
         if (request.method === 'POST' && request.headers['x-edition3-client'] !== '1') throw new Fault(403, 'client_required', 'Use the Nova Dream client for this operation.');
         // The native transport is independently signed and versioned. Host,
         // proxy, origin and recovery guards above still apply; device proof
@@ -367,16 +370,20 @@ export async function startServer(options: { directory: string; port: number; pr
           if (!options.recoveryHost) throw new Fault(409, 'recovery_host_required', 'Open this recovered workspace through the normal launcher first.');
           const input = recoveryResumeSchema.parse(await commandBody(request, 2048));
           if (input.epoch !== store.epoch) throw new Fault(409, 'epoch_changed', 'Refresh the recovery review.');
-          const result = await backups.whileIdle(async () => {
-            if (options.recoveryHost!.status().switching) throw new Fault(409, 'recovery_switching', 'Wait for the workspace switch to finish.');
-            await withRetainedNative(store, { status: 'not-configured', notes: [] });
-            await keys.protect(key => store.matchesKey(key));
-            if (closing || options.recoveryHost!.status().switching) throw new Fault(409, 'recovery_switching', 'Wait for the workspace switch to finish.');
-            reauthorize.get(request)?.();
-            return recovery.resume(device, input);
+          let result: ReturnType<WorkspaceRecovery['resume']> | undefined;
+          await options.recoveryHost.switchTo(store.directory, true, async () => {
+            // This callback owns the host's switch reservation. Competing
+            // transitions were refused before native/key verification began.
+            result = await backups.whileIdle(async () => {
+              await withRetainedNative(store, { status: 'not-configured', notes: [] });
+              await keys.protect(key => store.matchesKey(key));
+              if (closing) throw new Fault(409, 'recovery_switching', 'Wait for the workspace switch to finish.');
+              reauthorize.get(request)?.();
+              return recovery.resume(device, input);
+            });
+            return result.fresh;
           });
-          if (result.fresh) options.recoveryHost.switchTo(store.directory, true);
-          return json(202, result.value);
+          return json(202, result!.value);
         }
         if (!remote && url.pathname === '/api/storage/imports' && request.method === 'GET') return json(200, { reviews: backups.imports(device) });
         if (!remote && url.pathname === '/api/storage/imports/review' && request.method === 'POST') return json(200, backups.reviewImport(device, await commandBody(request, importMaxBytes + 1024)));
@@ -393,8 +400,10 @@ export async function startServer(options: { directory: string; port: number; pr
           const input = assistantRequestSchema.extend({ recoveryId: z.string().uuid().optional() }).strict().parse(await commandBody(request, 2048));
           if (!returning && !input.recoveryId) throw new Fault(400, 'recovery_missing', 'Choose the verified recovery copy.');
           const directory = returning ? undefined : backups.recoveredDirectory(device, input.recoveryId!);
-          store.admit(device, input, { ...input, type: returning ? 'recovery.return' : 'recovery.activate' }, () => ({ accepted: true }));
-          options.recoveryHost.switchTo(directory);
+          await options.recoveryHost.switchTo(directory, false, async () => {
+            reauthorize.get(request)?.();
+            return store.admit(device, input, { ...input, type: returning ? 'recovery.return' : 'recovery.activate' }, () => ({ accepted: true })).fresh;
+          });
           return json(202, { accepted: true, epoch: store.epoch });
         }
         if (!remote && url.pathname === '/api/storage/backups/create' && request.method === 'POST') return json(202, backups.create(device, await commandBody(request, 4096)));
@@ -757,19 +766,38 @@ export async function startServer(options: { directory: string; port: number; pr
         throw new Fault(404, 'not_found', 'This operation is unavailable.');
       }
       if (request.method !== 'GET' || !options.clientDirectory) throw new Fault(404, 'not_found', 'Open the Nova Dream client.');
+      const namespace = /^\/__(frontend|bundled)\/([a-f0-9]{64})\/(.*)$/.exec(url.pathname);
+      if(url.pathname.startsWith('/__frontend/')||url.pathname.startsWith('/__bundled/')) {
+        if(!namespace)throw new Fault(404,'not_found','This interface asset is unavailable.');
+        if(namespace[1]==='frontend') {
+          if(!frontend)throw new Fault(404,'not_found','This interface asset is unavailable.');
+          const asset=decodeURIComponent(namespace[3]||'index.html');
+          if(asset==='index.html'||extname(asset)==='.html')throw new Fault(404,'not_found','Open the workspace address.');
+          let bytes:Buffer;try{bytes=frontend.read(namespace[2],asset);}catch{throw new Fault(404,'not_found','This interface asset is unavailable.');}
+          const type=mime[extname(namespace[3]||'index.html')];if(!type)throw new Fault(404,'not_found','This interface asset is unavailable.');
+          // Overlay HTML is served only by the ordinary app route, so an old
+          // namespace cannot be used to create a stale application document.
+          response.writeHead(200,{'Content-Type':type,'Cache-Control':'private, max-age=31536000, immutable'});response.end(bytes);return;
+        }
+        if(namespace[2]!==options.candidateId)throw new Fault(404,'not_found','This bundled interface is unavailable.');
+      }
       const root = resolve(options.clientDirectory);
-      const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+      const path = resolve(root, namespace ? decodeURIComponent(namespace[3]||'index.html') : `.${decodeURIComponent(url.pathname)}`);
       if (path !== root && !path.startsWith(root + sep)) throw new Fault(403, 'path_rejected', 'This path is not available.');
       let file = path;
       try { if (!(await stat(file)).isFile()) file = resolve(root, 'index.html'); } catch { if (extname(path)) throw new Fault(404, 'not_found', 'This file is unavailable.'); file = resolve(root, 'index.html'); }
       const contentType = mime[extname(file)];
       if (!contentType) throw new Fault(404, 'not_found', 'This file is unavailable.');
-      const bytes = await readFile(file);
+      let bytes:Buffer = await readFile(file);
       // The frozen HTML is a template: inject the serving candidate after its
       // hash is known, avoiding a circular build hash or a separate identity fetch.
-      const content = file === resolve(root, 'index.html') && options.candidateId
-        ? bytes.toString('utf8').replace('<head>', `<head><meta name="e3-candidate" content="${options.candidateId}">`)
-        : bytes;
+      let content:Buffer|string=bytes;
+      if(file===resolve(root,'index.html')&&options.candidateId) {
+        let identity:FrontendIdentity={id:options.candidateId,version:options.version??'0.0.0',buildVersion:options.buildVersion??'0.0.0',source:'bundled'};
+        const selected=!namespace?frontend?.selected():undefined;
+        if(selected?.manifest){identity=selected.identity;try{bytes=frontend!.read(identity.id,'index.html');}catch{throw new Fault(503,'frontend_unavailable','The selected interface needs host review. Saved work is kept.');}}
+        content=frontendHtml(bytes,options.candidateId,identity,`/__${identity.source==='frontend'?'frontend':'bundled'}/${identity.id}/`);
+      }
       response.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-cache' }); response.end(content);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
@@ -825,5 +853,5 @@ export async function startServer(options: { directory: string; port: number; pr
     })();
     return closePromise;
   };
-  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, moduleActions, phoneHost, phoneAccess, store, assistant, observations, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, close };
+  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, moduleActions, phoneHost, phoneAccess, store, assistant, observations, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, prepareWorkspaceSwitch: () => softwareUpdates.prepareWorkspaceSwitch(), refreshWorkspaceUpdates: () => softwareUpdates.refresh(), finishWorkspaceSwitch: () => softwareUpdates.finishWorkspaceSwitch(), close };
 }

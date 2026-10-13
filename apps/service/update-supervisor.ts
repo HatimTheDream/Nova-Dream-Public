@@ -4,6 +4,7 @@ import type { SoftwareUpdateJob } from '../../packages/domain/software-update.js
 import type { UpdateFeed, VerifiedUpdateRelease } from './update-feed.js';
 import type { UpdateHeartbeat, UpdateHostView } from './update-host-client.js';
 import type {OperatorMaintenance} from './operator-maintenance.js';
+import type {FrontendLease} from './frontend-lease.js';
 
 export class UpdateAdmissionError extends Error {}
 const terminal=new Set(['completed','restored','failed','cancelled']);
@@ -32,23 +33,25 @@ export class UpdateSupervisor {
   private job?:Job;
   private working?:Promise<void>;
   private stopped=false;
-  constructor(private readonly feed:Pick<UpdateFeed,'status'|'check'|'verifiedRelease'>,private readonly journal:UpdateJournal,private readonly installer:Installer,private readonly current:()=>string,private readonly now=Date.now,private readonly operator?:OperatorMaintenance) {this.job=journal.current();if(operator?.active)this.assertOperatorAdmission();}
-  assertOperatorAdmission(){if(this.working||this.job&&(!terminal.has(this.job.state)||this.job.hold))throw new UpdateAdmissionError('An existing installation must settle before operator maintenance.');}
+  constructor(private readonly feed:Pick<UpdateFeed,'status'|'check'|'verifiedRelease'>,private readonly journal:UpdateJournal,private readonly installer:Installer,private readonly current:()=>string,private readonly now=Date.now,private readonly operator?:OperatorMaintenance,private readonly frontend?:FrontendLease) {this.job=journal.current();if(operator?.active)this.assertOperatorAdmission();if(frontend?.active)this.assertFrontendAdmission();}
+  assertOperatorAdmission(){if(this.frontend?.active||this.working||this.job&&(!terminal.has(this.job.state)||this.job.hold))throw new UpdateAdmissionError('An existing installation must settle before operator maintenance.');}
+  assertFrontendAdmission(){if(this.operator?.active||this.working||this.job&&(!terminal.has(this.job.state)||this.job.hold))throw new UpdateAdmissionError('An existing installation or maintenance operation must settle before a frontend switch.');}
   private freshHeartbeat(){const age=this.heartbeat?this.now()-this.heartbeat.at:-1;return age>=0&&age<10000;}
   view():UpdateHostView {
     const status=this.feed.status();
     const blockers=this.heartbeat?.blockers ?? [{code:'workspace_unknown',message:'Waiting for the workspace to reconnect.'}];
     const fresh=this.freshHeartbeat();
     const blocker=!fresh?{code:'workspace_unknown',message:'Waiting for the workspace to reconnect.'}:blockers[0];
-    return {...status,installation:this.operator?.active?{supported:false,reason:'The host is undergoing operator maintenance.'}:this.job?.hold&&this.job.state==='failed'?{supported:false,reason:'The previous update needs host review before another installation.'}:{supported:true},...(this.job?{job:this.publicJob(this.job)}:{}),...(blocker?{blocker}:{}),holdFor:this.operator?.active?this.operator.holdFor:this.job?.hold?this.job.id:null};
+    return {...status,installation:this.frontend?.active?{supported:false,reason:'An interface update is being verified.'}:this.operator?.active?{supported:false,reason:'The host is undergoing operator maintenance.'}:this.job?.hold&&this.job.state==='failed'?{supported:false,reason:'The previous update needs host review before another installation.'}:{supported:true},...(this.job?{job:this.publicJob(this.job)}:{}),...(blocker?{blocker}:{}),holdFor:this.operator?.active?this.operator.holdFor:this.job?.hold?this.job.id:null};
   }
   private publicJob(job:Job):SoftwareUpdateJob {
     const {id,candidateId,releaseId,state,requestedAt,updatedAt,message,download}=job;
     return {id,candidateId,...(releaseId?{releaseId}:{}),state,requestedAt,updatedAt,...(message?{message}:{}),...(download?{download}:{})};
   }
-  beat(input:UpdateHeartbeat) { if(input.candidateId!==this.current())throw new Error('The workspace version changed. Reconnect before updating.'); this.heartbeat={...input,at:this.now()};this.operator?.observe(input);if(this.job?.hold&&!this.job.started&&input.heldFor===null&&input.blockers.length)this.change({hold:false,state:'waiting',message:input.blockers[0].message});this.kick();return this.view(); }
+  beat(input:UpdateHeartbeat) { if(input.candidateId!==this.current())throw new Error('The workspace version changed. Reconnect before updating.'); this.heartbeat={...input,at:this.now()};this.operator?.observe(input);this.frontend?.observeHeartbeat(input);if(this.job?.hold&&!this.job.started&&input.heldFor===null&&input.blockers.length)this.change({hold:false,state:'waiting',message:input.blockers[0].message});this.kick();return this.view(); }
   async check() {await this.feed.check(true);return this.view();}
   async request(value:unknown) {
+    if(this.frontend?.active)throw new UpdateAdmissionError('Finish the current interface update before installing a service update.');
     if(this.operator?.active)throw new UpdateAdmissionError('Finish operator maintenance before installing an update.');
     const input=install.parse(value),prior=this.journal.find(input.idempotencyKey);
     if(prior) {
@@ -82,7 +85,7 @@ export class UpdateSupervisor {
     return !!beat&&this.freshHeartbeat()&&this.current()===job.fromCandidateId&&beat.candidateId===job.fromCandidateId&&beat.epoch===job.epoch&&beat.blockers.length===0;
   }
   private kick() {
-    if(this.working||this.stopped||this.operator?.active||!this.job||terminal.has(this.job.state)&&!(this.job.started&&this.job.hold))return;
+    if(this.working||this.stopped||this.operator?.active||this.frontend?.active||!this.job||terminal.has(this.job.state)&&!(this.job.started&&this.job.hold))return;
     const id=this.job.id;
     this.working=this.advance().catch(()=>{if(this.job?.id===id&&(!terminal.has(this.job.state)||this.job.started&&this.job.hold))this.change({state:'failed',message:this.job.started?'The update needs review. Saved recovery data was retained.':'Could not prepare this update. Nothing was installed.',hold:this.job.started});}).finally(()=>{this.working=undefined;});
   }

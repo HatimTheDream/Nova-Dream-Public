@@ -3,6 +3,7 @@ import type { UpdateInstallRequest, UpdateStatus } from '../../../packages/domai
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { pollReader } from './polling';
 import { RefreshReader } from './refresh-reader';
+import { clientIdentity, type ClientIdentity } from './client-identity';
 
 type JobState = NonNullable<UpdateStatus['job']>['state'];
 const stages: Record<JobState, string> = {
@@ -36,9 +37,10 @@ export function confirmedUpdateReceipt(intent: UpdateInstallRequest, response: U
 type ViewProps = {
   status?: UpdateStatus; online: boolean; failed: boolean; restricted?: string; busy?: 'check' | 'install' | 'cancel'; pending: boolean; error?: string; receipt?: string;
   check: () => void; install: () => void; cancel: () => void; retry: () => void;
+  interfaceIdentity?: ClientIdentity;
 };
 
-export function SoftwareUpdateView({ status, online, failed, restricted, busy, pending, error, receipt, check, install, cancel, retry }: ViewProps) {
+export function SoftwareUpdateView({ status, online, failed, restricted, busy, pending, error, receipt, check, install, cancel, retry, interfaceIdentity = clientIdentity }: ViewProps) {
   const stale = !online || failed, job = status?.job, running = activeJob(status);
   const canInstall = !!status?.release && status.availability === 'available' && status.installation.supported && !restricted && !stale && !busy && !running && !pending;
   const agent = status?.installed.agent;
@@ -55,7 +57,8 @@ export function SoftwareUpdateView({ status, online, failed, restricted, busy, p
   const unpreparedAgent = agentUpdate?.state === 'available' && agentUpdate.version !== release?.agentVersion;
   return <div className="software-update-body">
     <dl className="settings-versions software-update-versions" aria-label="Installed versions">
-      <div><dt>Nova Dream</dt><dd>{status ? `${stale ? 'Last known: ' : ''}${status.installed.novaVersion}` : online ? 'Checking…' : 'Unavailable'}{novaChanges && <> → {release.novaVersion}</>}</dd></div>
+      <div><dt>Nova Dream interface</dt><dd>{interfaceIdentity.version}</dd></div>
+      <div><dt>Nova Dream service</dt><dd>{status ? `${stale ? 'Last known: ' : ''}${status.installed.novaVersion}` : online ? 'Checking…' : 'Unavailable'}{novaChanges && <> → {release.novaVersion}</>}</dd></div>
       <div><dt>{agent?.name ?? 'Agent service'}</dt><dd>{agentVersion}{agentChanges ? <> → {release.agentVersion}</> : agentUpdate?.state === 'available' ? <> → {agentUpdate.version}</> : null}</dd></div>
     </dl>
     <section className="software-update-release" aria-label="Update availability">
