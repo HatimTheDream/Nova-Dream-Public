@@ -107,12 +107,12 @@ except Exception:
 `;
 }
 
-export function runInstallTransport(target, program) {
+export function runInstallTransport(target, program, { captureDiagnostics = false } = {}) {
   const args = ['-F', target.sshConfig.path, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ConnectionAttempts=1',
     '-T', target.hostAlias, 'sudo -n /usr/bin/python3 -B -'];
   return new Promise(resolve => {
-    let child, settled = false, total = 0, stdout = '', oversized = false;
-    const done = result => { if (settled) return; settled = true; clearTimeout(timer); resolve(result); };
+    let child, settled = false, total = 0, stdout = '', stderr = '', oversized = false;
+    const done = result => { if (settled) return; settled = true; clearTimeout(timer); resolve(captureDiagnostics ? { ...result, stdout, stderr, diagnosticsTruncated: oversized } : result); };
     const timer = setTimeout(() => { child?.kill(); done({ uncertain: true, reasonCode: 'transport-timeout' }); }, 120000);
     try { child = spawn('ssh', args, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch { done({ uncertain: true, reasonCode: 'transport-unavailable' }); return; }
@@ -121,6 +121,7 @@ export function runInstallTransport(target, program) {
       total += chunk.length;
       if (total > 131072) { oversized = true; child.kill(); }
       else if (stream === child.stdout) stdout += chunk.toString('utf8');
+      else if (captureDiagnostics) stderr += chunk.toString('utf8');
     });
     child.on('close', code => done(oversized ? { uncertain: true, reasonCode: 'transport-response-too-large' }
       : code !== 0 && !stdout.trim() ? { uncertain: true, reasonCode: 'transport-response-uncertain' } : { stdout, exitCode: code }));

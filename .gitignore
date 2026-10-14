@@ -30,3 +30,9 @@ __pycache__/
 
 # GitHub CLI creates this device identifier during credential-free probes.
 /.local/state/gh/device-id
+
+# Private release publication arbitration state. Never commit or publish.
+/frontend-publication-ledger/
+/full-publication-ledger/
+# Disposable local release test data. Curated support modules remain tracked.
+/support/fixtures/

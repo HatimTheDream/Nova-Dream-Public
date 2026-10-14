@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { planRelease, readEvidenceFile, releaseOperationIdentity, releasePlanInputSchema, sha256 } from './release-plan.mjs';
+import { deliveryJournalMethods } from './release-delivery-journal.mjs';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), uuid = z.uuid();
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
@@ -210,6 +211,10 @@ export class ReleaseJournal {
     return this.transaction(() => {
       const existing = this.intent(operationId); if (existing) return { newlyReserved: false, intent: existing };
       const current = this.load(operationId), report = planRelease(current.input, { nowMs, previousReport: current.report });
+      if (this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deliveries'").get()) {
+        requireThat(this.db.prepare('SELECT state FROM deliveries WHERE id=?').get(operationId)?.state !== 'reconciled-failed', 'delivery-operation-reconciled');
+        requireThat(!this.db.prepare("SELECT id FROM deliveries WHERE target_identity=? AND state NOT IN ('completed','reconciled-failed') AND id<>?").get(current.adapter.scopeIdentity, operationId), 'target-delivery-already-active');
+      }
       requireThat(!report.operationComplete, 'operation-already-completed');
       requireThat(['private-ci', 'public-ci', 'package', 'capacity', 'recovery', 'publication'].every(id => report.phases.find(p => p.id === id)?.state === 'passed'), 'install-prerequisites-unverified');
       requireThat(report.eta.dueReviews.length === 0 && report.eta.suspendNewAttemptsFor.length === 0, 'install-overrun-review-required');
@@ -244,6 +249,7 @@ export class ReleaseJournal {
   }
 }
 
+Object.assign(ReleaseJournal.prototype, deliveryJournalMethods);
 async function adapters() { return import('./release-adapters.mjs'); }
 export async function initializeRelease(directory, raw, { baseDirectory = process.cwd(), nowMs = Date.now() } = {}) {
   const descriptor = normalizeCoordinatorDescriptor(raw, baseDirectory), fixed = await adapters();

@@ -66,6 +66,24 @@ jobs:
           sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/protected-config-files.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/test_frontend.py ProtectedFilesystemTests -v
           sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" "NODE_BINARY=$NODE_BINARY" "$NODE_BINARY" node_modules/tsx/dist/cli.mjs --test tests/frontend-http.test.ts
+          # Resumable release producers: portable fixtures; no external effects.
+          python3 -B tests/release-delivery-ci.test.py -v
+          python3 -B tests/release-delivery-artifacts.test.py -v
+          python3 -B tests/release-github-transport.test.py -v
+          python3 -B tests/release-delivery-frontend.test.py -v
+          python3 -B tests/release-frontend-stage.test.py -v
+          python3 -B tests/release-frontend-plan.test.py -v
+          python3 -B tests/release-frontend-executor.test.py -v
+          python3 -B tests/release-assistant-transport.test.py -v
+          python3 -B tests/release-assistant-runtime-stream.test.py -v
+          python3 -B tests/release-installed-identity.test.py -v
+          python3 -B tests/test_dependency_local_worker.py -v
+          python3 -B tests/test_dependency_metadata_policy.py -v
+          python3 -B tests/release-delivery-full-publication.test.py -v
+          python3 -B tests/release-delivery-full-prestage.test.py -v
+          python3 -B tests/release-runtime-publication.test.py -v
+          python3 -B tests/test_runtime_qualification.py -v
+          python3 -B tests/release-full-runtime-capacity.test.py -v
       - name: Retain the canonical hosted build
         run: python3 -B scripts/retain-ci-candidate.py
       - name: Upload the verified application archive

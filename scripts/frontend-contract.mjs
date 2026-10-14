@@ -59,13 +59,17 @@ export function assertFrontendSourceClean(workspace, { gitBinary = process.env.G
   return { sourceRevision };
 }
 
+export function validateFrontendValidityPeriod(createdAt, expiresAt) {
+  const created = Date.parse(createdAt), expires = Date.parse(expiresAt);
+  need(typeof createdAt === 'string' && typeof expiresAt === 'string' && Number.isFinite(created) && Number.isFinite(expires) && new Date(created).toISOString() === createdAt && new Date(expires).toISOString() === expiresAt && expires > created && expires - created <= 31 * 86400000, 'Invalid frontend validity period.');
+  return { created, expires };
+}
 /** Expiry is an admission rule; serving an already admitted immutable UI does not expire it. */
 export function validateFrontendManifest(value, { now = Date.now(), admission = true } = {}) {
   keys(value, ['format', 'kind', 'channel', 'sequence', 'createdAt', 'expiresAt', 'frontendId', 'frontendVersion', 'frontendBuildVersion', 'sourceRevision', 'base', 'artifact', 'files']);
   need(value.format === 1 && value.kind === 'frontend' && value.channel === 'frontend-stable' && Number.isSafeInteger(value.sequence) && value.sequence > 0, 'Unsupported frontend channel or sequence.');
   need(semanticVersion(value.frontendVersion) && semanticVersion(value.frontendBuildVersion) && /^[a-f0-9]{40}$/.test(value.sourceRevision ?? ''), 'Invalid frontend source/version identity.');
-  const created = Date.parse(value.createdAt), expires = Date.parse(value.expiresAt);
-  need(typeof value.createdAt === 'string' && typeof value.expiresAt === 'string' && Number.isFinite(created) && Number.isFinite(expires) && new Date(created).toISOString() === value.createdAt && new Date(expires).toISOString() === value.expiresAt && expires > created && expires - created <= 31 * 86400000, 'Invalid frontend validity period.');
+  const { created, expires } = validateFrontendValidityPeriod(value.createdAt, value.expiresAt);
   if (admission) need(created <= now + 300000 && expires > now, 'The frontend admission is not current.');
   keys(value.base, ['candidateId', 'serviceInputsSha256', 'apiVersion', 'schemaVersion']);
   need(hash(value.base.candidateId) && hash(value.base.serviceInputsSha256) && value.base.apiVersion === 1 && Number.isSafeInteger(value.base.schemaVersion) && value.base.schemaVersion > 0, 'Invalid frontend service compatibility binding.');

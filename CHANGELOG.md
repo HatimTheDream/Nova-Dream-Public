@@ -1,3 +1,14 @@
+## [2.4.0] — 2026-10-14
+
+### Added
+
+- Add a resumable operator release command connecting exact private/public sources, canonical CI artifacts, package signing, recovery, publication, installation and saved-Assistant acceptance for qualified frontend and unchanged-runtime backend releases.
+- Preserve original operation keys and deadlines across interruptions; report unsupported runtime/migration and browser acceptance capabilities explicitly before claiming completion.
+
+### Improved
+
+- Record concise app-to-updater failure reasons in private service logs while preserving request identities, deadlines and existing retry behavior.
+
 ## [2.3.5] — 2026-10-14
 
 ### Improved
