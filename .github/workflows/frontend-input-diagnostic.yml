@@ -1,0 +1,127 @@
+name: Frontend input diagnostic (not release qualification)
+on:
+  push:
+    branches: [codex/frontend-input-diagnostic-20261014]
+permissions:
+  contents: read
+concurrency:
+  group: frontend-input-diagnostic-20261014
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOVA_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/frontend-input-diagnostic
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 9e30e7fe5e7b36b792d634fa063d414dcfd245a7
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Create external metadata-only collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$NOVA_DIAGNOSTIC_OUTPUT"
+          cat > "$RUNNER_TEMP/capture-frontend-input.mjs" <<'CAPTURE'
+          import { createHash } from 'node:crypto';
+          import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, writeFileSync, appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { dirname, join, resolve } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          
+          const expected = '9e30e7fe5e7b36b792d634fa063d414dcfd245a7';
+          const root = realpathSync(process.cwd()), out = realpathSync(process.env.NOVA_DIAGNOSTIC_OUTPUT);
+          if (out === root || out.startsWith(root + '/')) throw Error('Diagnostic output must remain outside application source.');
+          const stage = process.argv[2];
+          if (!/^[a-z0-9-]{1,60}$/.test(stage ?? '')) throw Error('Invalid diagnostic stage.');
+          const git = args => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20000, maxBuffer: 4 * 1024 ** 2 });
+          if (git(['rev-parse', 'HEAD']).trim() !== expected) throw Error('Exact original application source required.');
+          git(['diff', '--quiet', '--exit-code', 'HEAD', '--', '.']);
+          const listed = [...new Set(git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean))].sort();
+          const tracked = new Set(git(['ls-files', '-z', '--cached']).split('\0').filter(Boolean));
+          if (listed.length > 10000) throw Error('Diagnostic input count exceeds bound.');
+          const core = new Set(['api.ts', 'client-identity.ts', 'upload-body.ts', 'conditional-reads.ts'].map(p => 'apps/client/src/' + p));
+          const excluded = p => /^(?:docs|tests)\//.test(p) || ['README.md', 'CHANGELOG.md', 'updates/stable.json'].includes(p)
+            || !core.has(p) && (p === 'apps/client/index.html' || /^apps\/client\/src\/.+\.(?:ts|tsx|js|jsx|mjs)$/.test(p)
+            || /^apps\/client\//.test(p) && /\.(?:css|png|jpg|jpeg|gif|webp|avif|ico|woff|woff2|ttf|otf)$/.test(p));
+          function regular(relative) {
+            if (relative.startsWith('/') || relative.includes('\\') || relative.split('/').some(p => !p || p === '.' || p === '..')) throw Error('Invalid listed path.');
+            const path = resolve(root, relative);
+            for (let p = path; ; p = dirname(p)) {
+              if (lstatSync(p).isSymbolicLink()) throw Error('Symlink in diagnostic input.');
+              if (dirname(p) === p) break;
+            }
+            if (realpathSync(path) !== path) throw Error('Input path changed.');
+            const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+            try {
+              const before = fstatSync(fd);
+              if (!before.isFile() || before.nlink !== 1 || before.size > 32 * 1024 ** 2) throw Error('Unbounded or nonindependent input.');
+              const digest = createHash('sha256'), buffer = Buffer.alloc(1024 ** 2); let bytes = 0, n;
+              while ((n = readSync(fd, buffer, 0, buffer.length, null)) !== 0) { bytes += n; if (bytes > before.size) throw Error('Input grew.'); digest.update(buffer.subarray(0, n)); }
+              const after = fstatSync(fd), current = lstatSync(path);
+              if (bytes !== before.size || current.isSymbolicLink() || !['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(k => before[k] === after[k] && after[k] === current[k])) throw Error('Input changed while read.');
+              return { path: relative, bytes, sha256: digest.digest('hex'), tracked: tracked.has(relative), compatibilityBound: !excluded(relative) };
+            } finally { closeSync(fd); }
+          }
+          const files = listed.map(regular), boundUntracked = files.filter(f => !f.tracked && f.compatibilityBound);
+          let capsule = null, retainedCapsule = null;
+          if (existsSync(join(root, 'dist/candidate.json'))) {
+            const { computeFrontendCompatibility } = await import(pathToFileURL(join(root, 'scripts/frontend-contract.mjs')));
+            capsule = computeFrontendCompatibility(root);
+            retainedCapsule = JSON.parse(readFileSync(join(root, 'dist/candidate.json'), 'utf8')).frontendCompatibility;
+          }
+          const result = { format: 1, kind: 'diagnostic-only-input-inventory', deliveryQualification: false, stage,
+            sourceCommit: expected, observedAt: new Date().toISOString(), trackedSourceUnchanged: true,
+            files, boundTrackedCount: files.filter(f => f.tracked && f.compatibilityBound).length,
+            boundUntracked, capsule, retainedCapsule };
+          const raw = JSON.stringify(result, null, 2) + '\n';
+          if (Buffer.byteLength(raw) > 2 * 1024 ** 2) throw Error('Inventory exceeds bound.');
+          writeFileSync(join(out, stage + '.json'), raw, { flag: 'wx', mode: 0o600 });
+          console.log(JSON.stringify({ stage, sourceCommit: expected, boundTrackedCount: result.boundTrackedCount,
+            untracked: files.filter(f => !f.tracked).map(({ path, bytes, sha256, compatibilityBound }) => ({ path, bytes, sha256, compatibilityBound })), capsule, deliveryQualification: false }));
+          if (stage === 'after-first-build' && process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `needs_tests=${boundUntracked.length === 0}\n`);
+          CAPTURE
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-checkout
+      - name: Original dependency installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" before-npm-ci
+          timeout --signal=TERM --kill-after=10s 5m npm ci
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-npm-ci
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" before-vercel-npm-ci
+          timeout --signal=TERM --kill-after=10s 5m npm ci --prefix deploy/vercel
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-vercel-npm-ci
+      - name: Original build without full quality or recovery
+        id: first_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" before-first-build
+          timeout --signal=TERM --kill-after=10s 5m npm run build
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-first-build
+      - name: Conditional original test run and second build
+        if: steps.first_build.outputs.needs_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" before-tests
+          timeout --signal=TERM --kill-after=10s 12m npm test
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-tests
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" before-second-build
+          timeout --signal=TERM --kill-after=10s 5m npm run build
+          node "$RUNNER_TEMP/capture-frontend-input.mjs" after-second-build
+      - name: Upload diagnostic inventories (never delivery receipts)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-input-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/frontend-input-diagnostic/*.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
