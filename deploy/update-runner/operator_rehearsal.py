@@ -22,7 +22,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 import app_dependencies
-from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, protected_selector, read_json
+from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, protected_configuration_files, protected_selector, read_json
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
@@ -301,11 +301,7 @@ class Rehearsal(Driver):
         self.dependencies = (self.prior / 'node_modules').resolve(strict=True)
         require(app_dependencies.inspect_retained_dependencies(self.dependencies) == review['sourceDependencies'], 'Actual prior dependencies changed.')
         self.dependency_identity = inventory(self.dependencies)[0]
-        self.config_files = [pathlib.Path(p) for p in self.settings['protectedFiles']]
-        require(1 <= len(self.config_files) <= 16 and len(set(self.config_files)) == len(self.config_files), 'Invalid protected configuration set.')
-        for path in self.config_files:
-            protected(path)
-            require(not path.is_relative_to(self.data) and not path.is_relative_to(self.releases), 'Protected configuration must remain outside replacements.')
+        self.config_files = protected_configuration_files(self.settings['protectedFiles'], self.data, self.releases)
         self.config_hashes = {str(path): digest(path) for path in self.config_files}
         self.workspace_key_credential = pathlib.Path(self.settings['workspaceKeyCredential'])
         protected(self.workspace_key_credential, private=True)

@@ -63,6 +63,7 @@ jobs:
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/operator-rehearsal.test.py -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/protected-config-files.test.py -v
           sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/test_frontend.py ProtectedFilesystemTests -v
           sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" "NODE_BINARY=$NODE_BINARY" "$NODE_BINARY" node_modules/tsx/dist/cli.mjs --test tests/frontend-http.test.ts
       - name: Retain the canonical hosted build

@@ -61,6 +61,7 @@ RUNTIME_MAXIMUM = 512 * 1024 ** 2
 RUNTIME_EXPANDED_MAXIMUM = 2 * 1024 ** 3
 SERVICE_ACTION_TIMEOUT_SECONDS = 120
 STARTUP_EXEC_TIMEOUT_SECONDS = 30
+MAX_PROTECTED_CONFIGURATION_FILES = 32
 MANAGED_COMPANION_98 = {
     'runtimeArchiveSha256': '7af79b978af50b9a72997cd7869a0a2a928aff7b3ea5b16f2102f92b78875d3f',
     'measurementSourceCommit': '5de260fbd7489dae71ac13e23c882f181352d0f1',
@@ -223,6 +224,19 @@ def protected(path, directory=False, private=False):
     info = path.lstat()
     require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode), 'Unexpected update path type.')
     require(not private or not stat.S_IMODE(info.st_mode) & 0o077, 'Private update evidence is not private.')
+
+
+def protected_configuration_files(values, workspace, releases):
+    """Retain every configured authority file, including frontend bootstrap files."""
+    require(isinstance(values, list) and 1 <= len(values) <= MAX_PROTECTED_CONFIGURATION_FILES,
+            'Invalid protected configuration set.')
+    files = [pathlib.Path(value) for value in values]
+    require(len(set(files)) == len(files), 'Invalid protected configuration set.')
+    for path in files:
+        protected(path)
+        require(not path.is_relative_to(workspace) and not path.is_relative_to(releases),
+                'Protected configuration must remain outside replacements.')
+    return files
 
 
 def read_json(path, maximum=1024 * 1024):
@@ -475,11 +489,7 @@ class Driver:
         require(self.archive.stat().st_size == self.pair['archiveBytes'] <= MAXIMUM and digest(self.archive) == self.pair['archiveSha256'], 'Reviewed application archive changed.')
         self.validate_runtime()
         self.validate_application_dependencies()
-        self.config_files = [pathlib.Path(value) for value in self.settings['protectedFiles']]
-        require(1 <= len(self.config_files) <= 16 and len(set(self.config_files)) == len(self.config_files), 'Invalid protected host configuration set.')
-        for path in self.config_files:
-            protected(path)
-            require(not path.is_relative_to(self.data) and not path.is_relative_to(self.releases), 'Host protection files must remain outside replacements.')
+        self.config_files = protected_configuration_files(self.settings['protectedFiles'], self.data, self.releases)
         self.config_hashes = {str(path): digest(path) for path in self.config_files}
         self.workspace_key_credential = None
         if 'workspaceKeyCredential' in self.settings:

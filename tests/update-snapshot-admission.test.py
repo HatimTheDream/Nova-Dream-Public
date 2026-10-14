@@ -114,6 +114,44 @@ class SnapshotAdmissionTests(unittest.TestCase):
         inventories = [path for kind, path in self.events if kind == 'inventory']
         self.assertEqual(inventories, [self.instance.data, self.instance.baseline/'workspace', self.instance.data])
 
+    def test_twenty_protected_files_are_budgeted_and_twentieth_hash_change_is_refused(self):
+        files = []
+        originals = {}
+        for number in range(20):
+            path = self.root / ('protected-%02d.conf' % number)
+            content = ('distinct configuration %02d\n' % number).encode()
+            if number == 19:
+                content += b'x' * (8193 - len(content))
+            path.write_bytes(content)
+            files.append(path)
+            originals[str(path)] = content
+        self.instance.config_files = files
+        self.instance.config_hashes = {name: hashlib.sha256(content).hexdigest() for name, content in originals.items()}
+        self.instance.prior_agent = self.root/'runtime'; self.instance.prior_agent.mkdir()
+        self.instance.dependencies = self.root/'dependencies'; self.instance.dependencies.mkdir()
+        self.instance.node = self.root/'node'; self.instance.node.write_bytes(b'inert node fixture')
+        self.instance.prior_agent_node = self.root/'agent-node'; self.instance.prior_agent_node.write_bytes(b'inert agent node fixture')
+        self.instance.runtime = None
+        self.instance.agent_identity = self.inventory(self.instance.prior_agent)[0]
+        self.instance.dependency_identity = self.inventory(self.instance.dependencies)[0]
+        self.instance.runtime_node_hash = driver.digest(self.instance.node)
+        self.instance.agent_node_hash = driver.digest(self.instance.prior_agent_node)
+        self.stack.enter_context(patch.object(driver, 'inventory', self.inventory))
+        self.instance.verify_configuration()
+        self.instance.snapshot_recovery()
+        receipt = json.loads((self.instance.output/'closed-capacity.json').read_text())
+        # Snapshot admission budgets these future copies; execute() owns copying
+        # the protected files. This test claims accounting and hash coverage only.
+        self.assertEqual(receipt['protectedCopyBytes'], 19 * 4096 + 3 * 4096)
+        self.assertEqual({str(path): path.read_bytes() for path in files}, originals)
+        self.instance.verify_configuration()
+        changed = files[-1]
+        changed.write_bytes(b'changed twentieth configuration\n')
+        with self.assertRaisesRegex(RuntimeError, 'Protected host configuration changed'):
+            self.instance.verify_configuration()
+        self.assertEqual({str(path): path.read_bytes() for path in files[:-1]},
+                         {name: value for name, value in originals.items() if name != str(changed)})
+
     def test_companion_estimate_refuses_before_snapshot_creation(self):
         self.instance.managed_companion_capacity = driver.managed_companion_capacity(
             {'archiveSha256': driver.MANAGED_COMPANION_98['runtimeArchiveSha256']}, '2026.9.8')

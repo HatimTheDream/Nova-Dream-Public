@@ -1,3 +1,9 @@
+## [2.3.1] — 2026-10-14
+
+### Fixed
+
+- Keep every protected host configuration file covered during rehearsal and installation after frontend delivery is enabled. Both paths now share the same bounded validation for up to 32 files, preserving ownership, uniqueness and recovery checks.
+
 ## [2.3.0] — 2026-10-05
 
 ### Added
