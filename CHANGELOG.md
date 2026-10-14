@@ -1,3 +1,9 @@
+## [2.3.4] — 2026-10-14
+
+### Fixed
+
+- Keep generated GitHub CLI device identifiers outside release compatibility inputs, while retaining checks for unknown neighboring files. Includes the prepared Later action.
+
 ## [2.3.3] — 2026-10-14
 
 ### Fixed

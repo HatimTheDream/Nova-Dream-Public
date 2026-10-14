@@ -27,3 +27,6 @@ coverage/
 # Python bytecode is generated locally and is not a release source input.
 __pycache__/
 *.pyc
+
+# GitHub CLI creates this device identifier during credential-free probes.
+/.local/state/gh/device-id

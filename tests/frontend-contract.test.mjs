@@ -25,6 +25,22 @@ export function exampleFrontendManifest() {
   return { format: 1, kind: 'frontend', channel: 'frontend-stable', sequence: 1, createdAt: '2026-10-05T16:00:00.000Z', expiresAt: '2026-10-12T16:00:00.000Z', frontendId: frontendIdentity(files), frontendVersion: '2.3.0', frontendBuildVersion: '1.0.287', sourceRevision: 'a'.repeat(40), base: { candidateId: 'b'.repeat(64), serviceInputsSha256: 'c'.repeat(64), apiVersion: 1, schemaVersion: 55 }, artifact: { url: 'https://example.invalid/frontend.tgz', bytes: 250, sha256: 'd'.repeat(64) }, files };
 }
 
+test('generated GitHub CLI device state stays outside compatibility while unknown adjacent inputs remain bound', () => {
+  const pattern = '/.local/state/gh/device-id';
+  assert(readFileSync(new URL('../.gitignore', import.meta.url), 'utf8').split(/\r?\n/).includes(pattern));
+  const f = compatibilityFixture();
+  try {
+    f.write('.gitignore', 'dist/\n' + pattern + '\n');
+    const before = computeFrontendCompatibility(f.root);
+    for (const id of ['first-generated-device-id', 'different-generated-device-id']) {
+      f.write('.local/state/gh/device-id', id);
+      assert.equal(computeFrontendCompatibility(f.root).serviceInputsSha256, before.serviceInputsSha256);
+    }
+    f.write('.local/state/gh/unknown-build-input', 'unknown');
+    assert.notEqual(computeFrontendCompatibility(f.root).serviceInputsSha256, before.serviceInputsSha256);
+  } finally { f.close(); }
+});
+
 test('format 2 admits browser behavior, presentation and version bumps while binding nonclient inputs', () => {
   const f = compatibilityFixture();
   try {
