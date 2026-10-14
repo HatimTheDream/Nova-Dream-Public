@@ -146,7 +146,10 @@ test('main registry connects full Assistant to original identity and retains its
     return { uncertain: true, stdout: 'synthetic lost session response', stderr: '' };
   } });
   assert.deepEqual(deliveryPhaseIntegrationGaps('assistant', f.target, prior), []);
-  assert.ok(registry.adapter('installation', f.descriptor, prior));
+  // This fixture observes an already completed original install. A new install
+  // still requires the separate full host admission configuration.
+  assert.equal(registry.adapter('installation', f.descriptor, prior), null);
+  assert.ok(deliveryPhaseIntegrationGaps('installation', f.target, prior).includes('full-protected-host-target-not-configured'));
   const adapter = registry.adapter('assistant', f.descriptor, prior), input = await adapter.input({ descriptor: f.descriptor, prior });
   const intent = f.context.journal.reserveDeliveryPhase(f.descriptor.operation.id, 'assistant', input, now + 2).intent;
   const context = { ...f.context, prior, input, intent, beforeNewEffect: async () => {} };

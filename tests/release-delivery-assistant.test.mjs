@@ -117,7 +117,8 @@ test('fixed registry and host wire resume an actual SQLite Assistant chain with 
   adapter=registry.adapter('assistant',f.context.descriptor,f.context.prior);result=await adapter.observe(f.context);assert.equal(result.state,'completed',JSON.stringify(result));await adapter.verify(result,f.context);
   assert.equal(f.counts.create,1);assert.equal(f.counts.draft,1);assert.equal(f.counts.submit,1);assert.equal(result.output.browserUiVerified,false);assert.equal(result.output.savedReplyAccepted,true);assert.ok(modes.includes('observe'));
   assert.deepEqual(deliveryPhaseIntegrationGaps('assistant',{browserCapability:'available'},f.context.prior),['assistant-host-target-not-configured']);
-  assert.deepEqual(deliveryPhaseIntegrationGaps('assistant',target,{route:{route:'full'}}),['assistant-full-installation-identity-producer-required']);
+  assert.deepEqual(deliveryPhaseIntegrationGaps('assistant',target,{route:{route:'full'}}),[]);
+  assert.ok(registry.adapter('assistant',f.context.descriptor,{route:{route:'full'}}));
   assert.throws(()=>deliveryTargetSchema.parse({...target,assistantHost:{...target.assistantHost,manualReceipt:{path:'x',sha256:sha256('x')}}}));
 });
 
