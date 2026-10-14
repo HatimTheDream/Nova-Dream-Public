@@ -1,10 +1,37 @@
 """Offline boundary tests. Fake GitHub effects; actual maintained ledger/readback flow."""
 from pathlib import Path as P
-import ast,hashlib,importlib.util,json,unittest,uuid
+import ast,hashlib,importlib.util,json,tempfile,unittest,uuid
 from unittest.mock import patch
 ROOT=P(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('delivery_frontend',ROOT/'scripts/release-delivery-frontend.py')
 M=importlib.util.module_from_spec(spec);spec.loader.exec_module(M)
+
+# Function identities captured from the independently reviewed predecessor,
+# whose source SHA256 is be5735ab393d4154fb68b426fcb1d06c0ebf56ab657d9cb13c7c1188cc9dcd4d.
+# Only semantic hashes are retained here; CI needs no private operator files.
+MAINTAINED_AST_SHA256 = {
+    'need': 'd385de03a13cb4ad1b5a827269ce036584de229941242a22856aa4f11da951c0',
+    'sha': '330a6dfefaf46e635ebfa5eef791cc46d454332b2996f40c438895de524a6e7d',
+    'enc': '0e52bad9f92867e406c0112e09ec2a6b9f545888d3b51d57c7aad73a9c552a0d',
+    'raw': '14850c31fadef872b24d0b2bdb6409c81162da77a9ca07d437a975990c7d682b',
+    'save': '8bdc7dfa51f828a479ac74351e3bc0bfbfcb6f4e5a6d0595b5aa8d94c400c869',
+    'check_asset': 'a0b15fa9bcc733db0dde9a5f821387da42e7cc15bfaf2cdc2f0d594433e09bf9',
+    'download_verified': '0b411466f88c96b8bf8d7b3b5b9f5612fd5b4fcab73fa824c4a81d966c982146',
+    'publish': '5947fcd9fe1b72720611f8e2ef6598ae843e23320ce678aeb40ed95e61e659a4',
+    'NoRedirect': 'bdfff71db143f62630a6809c98eba136d1bd910dc0cf51061043773bf707a72e',
+}
+
+def semantic_sha256(node):
+    # Explicit fields avoid ast.dump's version-dependent empty-field display.
+    def normalize(value):
+        if isinstance(value, ast.AST):
+            return {'node': type(value).__name__,
+                    'fields': {name: normalize(item) for name, item in ast.iter_fields(value)}}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+    encoded = json.dumps(normalize(node), sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 class FakeClient:
     def __init__(self,request,content):self.request=request;self.content=content;self.assets=[];self.uploads=0;self.lose=False;self.wrong=False
@@ -21,7 +48,9 @@ class FakeClient:
 
 class Tests(unittest.TestCase):
     def fixture(self):
-        folder=ROOT/'support/fixtures'/('frontend-publication-'+str(uuid.uuid4()));folder.mkdir(parents=True)
+        temporary=tempfile.TemporaryDirectory(prefix='nova-frontend-publication-')
+        self.addCleanup(temporary.cleanup)
+        folder=P(temporary.name).resolve()
         content=b'bounded synthetic frontend archive';key=str(uuid.uuid4());role='archive'
         asset={'role':role,'name':'nova-2.3.1-frontend.tgz','path':str(folder/'archive'),'sha256':M.sha(content),'bytes':len(content)}
         P(asset['path']).write_bytes(content)
@@ -75,9 +104,15 @@ class Tests(unittest.TestCase):
         with patch.object(M.G,'api',api):
             with self.assertRaisesRegex(RuntimeError,'source-release-changed'):client.releases()
     def test_maintained_primitives_unchanged(self):
-        original=ROOT.parent/'frontend-path/frontend-operator-acceptance.py'
-        def definitions(path):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(path.read_text()).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
-        prior=definitions(original);current=definitions(ROOT/'scripts/release-frontend-publication-primitives.py')
-        for name in ('need','sha','enc','raw','save','check_asset','download_verified','publish','NoRedirect'):self.assertEqual(current[name],prior[name],name)
+        source=ROOT/'scripts/release-frontend-publication-primitives.py'
+        current={n.name:n for n in ast.parse(source.read_bytes()).body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
+        for name, expected in MAINTAINED_AST_SHA256.items():
+            self.assertEqual(semantic_sha256(current[name]),expected,name)
+    def test_semantic_identity_keeps_guards_and_ignores_formatting(self):
+        original=ast.parse('def need(value):\n if not value: raise RuntimeError("refused")\n').body[0]
+        formatted=ast.parse('# formatting only\ndef need(value):\n    if not value:\n        raise RuntimeError("refused")\n').body[0]
+        weakened=ast.parse('def need(value):\n if value: raise RuntimeError("refused")\n').body[0]
+        self.assertEqual(semantic_sha256(original),semantic_sha256(formatted))
+        self.assertNotEqual(semantic_sha256(original),semantic_sha256(weakened))
 
 if __name__=='__main__':unittest.main()

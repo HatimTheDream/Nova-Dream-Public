@@ -34,8 +34,8 @@ class CapacityTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory(prefix='nova-runtime-capacity-');self.addCleanup(self.temp.cleanup)
   self.root=pathlib.Path(self.temp.name).resolve();self.workspace=self.root/'workspace';self.volume=self.root/'recovery'
-  self.home=self.root/'home';self.runtime_root=self.root/'runtimes'
-  for p in (self.workspace,self.volume,self.home,self.home/'.npm',self.runtime_root,self.workspace/'openclaw-runtime',self.workspace/'openclaw-runtime/tmp',self.workspace/'openclaw-runtime/state/npm/projects'):
+  self.home=self.root/'home';self.runtime_root=self.root/'runtimes';self.transfer=self.root/'transfer'
+  for p in (self.workspace,self.volume,self.home,self.home/'.npm',self.runtime_root,self.transfer,self.workspace/'openclaw-runtime',self.workspace/'openclaw-runtime/tmp',self.workspace/'openclaw-runtime/state/npm/projects'):
    p.mkdir(parents=True,exist_ok=True)
   self.runtime={'format':1,'fromVersion':'2026.9.6','toVersion':'2026.9.8','archiveBytes':393000000,
    'archiveSha256':maintained['MANAGED_COMPANION_98']['runtimeArchiveSha256'],'expandedBytes':800000000,'fileCount':40000,
@@ -51,7 +51,10 @@ class CapacityTests(unittest.TestCase):
   return pathlib.Path(name)
 
  def projection(self,runtime='default'):
-  with patch.dict(sys.modules,{'pwd':self.pwd,'sqlite3':types.SimpleNamespace(connect=lambda *a,**k:self.fail('No SQLite opens permitted'))}):
+  # Map the production transfer root into this test's owned filesystem. Keep
+  # the maintained filesystem validator real, including its split-device case.
+  def fixture_path(value):return self.transfer if value=='/var/tmp' else pathlib.Path(value)
+  with patch.object(C,'P',fixture_path),patch.dict(sys.modules,{'pwd':self.pwd,'sqlite3':types.SimpleNamespace(connect=lambda *a,**k:self.fail('No SQLite opens permitted'))}):
    return C.runtime_allocation(self.runtime if runtime=='default' else runtime,self.facts,self.live,self.workspace,self.volume,4096,self.installer)
 
  def exact_migration(self,paths):
@@ -88,6 +91,7 @@ class CapacityTests(unittest.TestCase):
   self.assertEqual(value['runtimeExpansionBytes'],self.runtime['expandedBytes']+self.runtime['fileCount']*4096)
   self.assertEqual(value['runtimeReuseCreditBytes'],0)
   self.assertIn(str(self.home/'.npm'),value['capacityRoots'])
+  self.assertIn(str(self.transfer),value['capacityRoots'])
   self.assertIn(str(self.workspace/'openclaw-runtime/state/npm/projects'),value['capacityRoots'])
   self.assertEqual(value['temporaryRoots'],[str(self.workspace/'openclaw-runtime/tmp')])
 
@@ -107,7 +111,7 @@ class CapacityTests(unittest.TestCase):
   original=self.facts['hostPaths']['runtimeDirectory'];self.facts['hostPaths']['runtimeDirectory']=str(self.root/'missing-runtime')
   with self.assertRaises((RuntimeError,FileNotFoundError)):self.projection()
   self.facts['hostPaths']['runtimeDirectory']=original
-  paths=(self.home,self.home/'.npm',self.runtime_root,self.workspace/'openclaw-runtime/tmp',self.workspace/'openclaw-runtime/state/npm/projects')
+  paths=(self.home,self.home/'.npm',self.runtime_root,self.transfer,self.workspace/'openclaw-runtime/tmp',self.workspace/'openclaw-runtime/state/npm/projects')
   native_stat=pathlib.Path.stat
   for split in paths:
    def changed(path,*args,**kwargs):

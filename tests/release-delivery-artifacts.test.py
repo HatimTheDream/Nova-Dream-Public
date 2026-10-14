@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import tempfile
 import types
 import unittest
 import uuid
@@ -16,7 +17,9 @@ D = importlib.util.module_from_spec(definition); definition.loader.exec_module(D
 
 class ArtifactProducerTests(unittest.TestCase):
     def fixture(self):
-        key = str(uuid.uuid4()); root = ROOT / 'support/fixtures' / ('delivery-artifacts-' + key)
+        temporary = tempfile.TemporaryDirectory(prefix='nova-delivery-artifacts-')
+        self.addCleanup(temporary.cleanup)
+        key = str(uuid.uuid4()); root = pathlib.Path(temporary.name).resolve() / ('delivery-artifacts-' + key)
         executable = ROOT / 'scripts/release-delivery-artifacts.py'
         tool = {'path': str(executable), 'sha256': D.C.sha(executable.read_bytes())}
         request = {'format': 1, 'operationId': str(uuid.uuid4()), 'key': key, 'inputSha256': 'a' * 64, 'version': '2.3.1', 'buildVersion': '1.0.288',
