@@ -14,7 +14,13 @@ const json=(value:unknown)=>new Response(JSON.stringify(value),{headers:{'Conten
 const repository={id:1,fullName:'sample/project',description:'Fixture',private:true,defaultBranch:'main',canPush:true,archived:false};
 const api:typeof fetch=async()=>json({id:1,login:'sample',name:'Sample'});
 async function fixture(t:any,run:HostCommand=hostCommand){
-  const directory=await mkdtemp(join(tmpdir(),'nova-work-')),store=new Store(directory),github=new GitHubConnection(store,run,api),work=new WorkRepositories(store,github,run);
+  // A real gh availability probe creates device state in the current checkout
+  // when the credential-free host environment has no HOME. Keep Git real while
+  // isolating this unrelated CLI from repository workflow fixtures.
+  const githubRun:HostCommand=async(executable,args,options)=>{
+    assert.equal(executable,'gh');assert.deepEqual(args,['--version']);return Buffer.from('gh fixture');
+  };
+  const directory=await mkdtemp(join(tmpdir(),'nova-work-')),store=new Store(directory),github=new GitHubConnection(store,githubRun,api),work=new WorkRepositories(store,github,run);
   t.after(async()=>{await work.close();await github.close();store.close();await rm(directory,{recursive:true,force:true});});
   store.internalWrite('work:github:credential',{token:'fixture-private-token',identity:{id:1,login:'sample',name:'Sample',email:'sample@example.invalid'},generation:'one',epoch:store.epoch});
   const id=randomUUID(),folder=join(work.root,id),conversationId=randomUUID();await mkdir(folder,{recursive:true});
