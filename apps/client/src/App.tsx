@@ -21,7 +21,7 @@ import { NavigationOptions } from './NavigationOptions';
 import { BottomNavigation } from './BottomNavigation';
 import { NavigationLabels } from './NavigationLabels';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
-import { refreshFrontend } from './frontend-update';
+import { dismissFrontendNoticeFromKeyboard, refreshFrontend } from './frontend-update';
 import { Home } from './Home';
 const ProjectEditor = lazy(() => import('./ProjectEditor').then(module => ({ default: module.ProjectEditor })));
 const Assistant = lazy(() => import('./Assistant').then(module => ({ default: module.Assistant })));
@@ -64,7 +64,7 @@ function AppUpdate({ initial = false }: { initial?: boolean }) {
 }
 
 function FrontendUpdate({ onLater }: { onLater: () => void }) {
-  return <div className="connection-banner app-update" role="status"><span><strong>An update is ready.</strong> Refresh when you’re ready. Keep any unsaved writing first; saved work and retained drafts remain available.</span><button onClick={onLater}>Later</button><button onClick={() => refreshFrontend()}>Refresh</button></div>;
+  return <div className="connection-banner app-update" role="status" onKeyDown={event => dismissFrontendNoticeFromKeyboard(event, onLater)}><span><strong>An update is ready.</strong> Refresh when you’re ready. Keep any unsaved writing first; saved work and retained drafts remain available.</span><button onClick={onLater} aria-keyshortcuts="Escape">Later</button><button onClick={() => refreshFrontend()}>Refresh</button></div>;
 }
 
 export function App() {

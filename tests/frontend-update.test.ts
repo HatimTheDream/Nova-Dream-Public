@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { availableFrontend, refreshFrontend, startFrontendUpdatePolling } from '../apps/client/src/frontend-update';
+import { availableFrontend, dismissFrontendNoticeFromKeyboard, refreshFrontend, startFrontendUpdatePolling } from '../apps/client/src/frontend-update';
 import { registerAssistantDraftNavigation } from '../apps/client/src/assistant-draft-navigation';
 
 const candidateId = 'a'.repeat(64), originalId = 'b'.repeat(64), updateId = 'c'.repeat(64);
@@ -8,6 +8,18 @@ const loaded = { candidateId, frontendId: originalId };
 const health = (id = updateId) => ({ application: 'nova-dream-edition-3', status: 'ready', candidateId,
   frontend: { id, version: '2.3.1', buildVersion: '1.0.288', source: 'frontend' } });
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('Escape in the notice dismisses its offer without refreshing or consuming other keys', () => {
+  let dismissed = 0, prevented = 0, stopped = 0;
+  const event = (key: string, defaultPrevented = false) => ({ key, defaultPrevented,
+    preventDefault: () => prevented++, stopPropagation: () => stopped++ });
+  for (const key of ['Enter', 'Tab', ' ', 'ArrowLeft'])
+    assert.equal(dismissFrontendNoticeFromKeyboard(event(key), () => dismissed++), false);
+  assert.equal(dismissFrontendNoticeFromKeyboard(event('Escape', true), () => dismissed++), false);
+  assert.deepEqual([dismissed, prevented, stopped], [0, 0, 0]);
+  assert.equal(dismissFrontendNoticeFromKeyboard(event('Escape'), () => dismissed++), true);
+  assert.deepEqual([dismissed, prevented, stopped], [1, 1, 1]);
+});
 
 function clock() {
   let now = 0, next = 0, visible = true;

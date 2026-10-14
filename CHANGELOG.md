@@ -1,3 +1,9 @@
+## [2.3.5] — 2026-10-14
+
+### Improved
+
+- Press Escape while focused on the interface-update notice to choose Later without refreshing. Other keyboard shortcuts and saved-writing protections remain unchanged.
+
 ## [2.3.4] — 2026-10-14
 
 ### Fixed

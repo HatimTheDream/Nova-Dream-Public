@@ -46,3 +46,14 @@ export function refreshFrontend(reload: () => void = () => location.reload()): b
   reload();
   return true;
 }
+
+/** The banner owns this key handler; Escape elsewhere keeps its normal action. */
+export function dismissFrontendNoticeFromKeyboard(event: {
+  key: string; defaultPrevented: boolean; preventDefault: () => void; stopPropagation: () => void;
+}, dismiss: () => void): boolean {
+  if (event.key !== 'Escape' || event.defaultPrevented) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  dismiss();
+  return true;
+}
