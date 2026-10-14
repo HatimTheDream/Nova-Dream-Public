@@ -1,3 +1,9 @@
+## [2.3.2] — 2026-10-14
+
+### Improved
+
+- Choose Later to dismiss a ready interface update in the current window. A different interface update shows the notice again, while Refresh and saved writing protections remain available.
+
 ## [2.3.1] — 2026-10-14
 
 ### Fixed

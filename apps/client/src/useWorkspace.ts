@@ -19,6 +19,10 @@ export function useWorkspace() {
   const [error, setError] = useState('');
   const [updateRequired, setUpdateRequired] = useState(false);
   const [frontendUpdate, setFrontendUpdate] = useState<string | null>(null);
+  const [dismissedFrontend, setDismissedFrontend] = useState<string | null>(null);
+  const dismissFrontendUpdate = useCallback(() => {
+    if (frontendUpdate) setDismissedFrontend(frontendUpdate);
+  }, [frontendUpdate]);
   const refreshing = useRef(false);
   const failed = useRef(false);
   const refresh = useCallback(async () => {
@@ -82,7 +86,8 @@ export function useWorkspace() {
     setStartupPhase('session');
     await request('session', {}); setStartupPhase('workspace'); gated.current = false; await refresh();
   } catch (reason) { if (reason instanceof ApiError && reason.code === 'phone_pair_required') denyPhone(); else setError('The host is still unavailable. Your draft is kept.'); } };
-  return { snapshot, online, error, refresh, reconnect, access, updateRequired, frontendUpdate, startupPhase, download };
+  return { snapshot, online, error, refresh, reconnect, access, updateRequired,
+    frontendUpdate: frontendUpdate === dismissedFrontend ? null : frontendUpdate, dismissFrontendUpdate, startupPhase, download };
 
 }
 

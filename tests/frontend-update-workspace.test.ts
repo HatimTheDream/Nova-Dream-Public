@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
-test('compatible frontend promotion keeps the workspace online and saving; a backend change still requires reload', async t => {
+test('Later dismisses only the offered interface in this window while saving and backend reload fences remain intact', async t => {
   const candidate = 'a'.repeat(64), frontend = 'b'.repeat(64), nextFrontend = 'c'.repeat(64);
   const key = Symbol.for('nova.test.frontend-workspace-hooks');
   const fixture = { index: 0, values: [] as any[], effects: [] as (() => (() => void) | void)[] };
@@ -27,9 +27,9 @@ test('compatible frontend promotion keeps the workspace online and saving; a bac
         export const useEffect = effect => { fixture.effects.push(effect); };
         export const useCallback = value => value;
         export const useState = initial => {
-          const index = fixture.index++;
-          if (!(index in fixture.values)) fixture.values[index] = typeof initial === 'function' ? initial() : initial;
-          return [fixture.values[index], value => { fixture.values[index] = typeof value === 'function' ? value(fixture.values[index]) : value; }];
+          const index = fixture.index++, values = fixture.values;
+          if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
+          return [values[index], value => { values[index] = typeof value === 'function' ? value(values[index]) : value; }];
         };
         export const useRef = value => useState(() => ({ current: value }))[0];
       ` };
@@ -41,13 +41,14 @@ test('compatible frontend promotion keeps the workspace online and saving; a bac
     cleanups.forEach(cleanup => cleanup()); hooks.deregister();
     for (const [name, previous] of properties) { if (previous) Object.defineProperty(globalThis, name, previous); else Reflect.deleteProperty(globalThis, name); }
   });
-  let backend = candidate, selected = frontend;
+  let backend = candidate, selected = frontend, commandAttempts = 0;
   const commands: RequestInit[] = [];
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
     if (url === '/api/access/context') return Response.json({ surface: 'desktop', workspaceEpoch: 'workspace' });
     if (url === '/api/session') return Response.json({ deviceId: 'device', apiVersion: 1 });
     if (url === '/api/health') return Response.json({ application: 'nova-dream-edition-3', status: 'ready', candidateId: backend, frontend: { id: selected, source: 'frontend' } });
     assert.equal((options.headers as Record<string, string>)['X-Edition3-Candidate'], candidate);
+    if (url === '/api/commands') commandAttempts++;
     if (backend !== candidate) return Response.json({ code: 'client_update', message: 'Reload this window.' }, { status: 409 });
     if (url === '/api/snapshot') return Response.json({ epoch: 'workspace', cursor: 1, deviceId: 'device' });
     assert.equal(url, '/api/commands'); commands.push(options); return Response.json({ accepted: true });
@@ -65,11 +66,42 @@ test('compatible frontend promotion keeps the workspace online and saving; a bac
   assert.equal(updated.frontendUpdate, nextFrontend); assert.equal(updated.online, true); assert.equal(updated.updateRequired, false);
   assert.equal(commands.length, 0, 'observing an update dispatches no user command');
   const retained = storage.get('retained-proposal');
+  updated.dismissFrontendUpdate();
+  assert.equal(render().frontendUpdate, null);
+  window.dispatchEvent(new Event('focus')); await settle();
+  assert.equal(render().frontendUpdate, null, 'the same offer stays dismissed after another health poll');
+  assert.equal(render().online, true); assert.equal(render().updateRequired, false);
+  assert.equal(storage.get('retained-proposal'), retained);
+  assert.equal(commandAttempts, 0, 'Later never dispatches or replays user work');
+
+  selected = 'e'.repeat(64); window.dispatchEvent(new Event('focus')); await settle();
+  assert.equal(render().frontendUpdate, selected, 'a different offered interface is shown');
+  updated.dismissFrontendUpdate();
+  assert.equal(render().frontendUpdate, selected, 'a previous offer callback cannot dismiss a newer offer');
+  render().dismissFrontendUpdate();
+  assert.equal(render().frontendUpdate, null);
+  const firstWindow = fixture.values;
+  fixture.values = []; render();
+  for (const effect of fixture.effects) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
+  await settle(); window.dispatchEvent(new Event('focus')); await settle();
+  assert.equal(render().frontendUpdate, selected, 'another mounted window has its own dismissal state');
+  fixture.values = firstWindow;
+  assert.equal(render().frontendUpdate, null);
+  selected = frontend; window.dispatchEvent(new Event('focus')); await settle();
+  selected = 'e'.repeat(64); window.dispatchEvent(new Event('focus')); await settle();
+  assert.equal(render().frontendUpdate, null, 'returning to the same dismissed offer does not reset Later');
+  assert.equal(commandAttempts, 0);
   assert.deepEqual(await request('commands', JSON.parse(retained!)), { accepted: true });
   assert.equal(commands.length, 1); assert.equal(commands[0].body, retained);
   assert.equal(storage.get('retained-proposal'), retained);
   backend = 'd'.repeat(64); window.dispatchEvent(new Event('focus')); await settle();
   const stale = render();
   assert.equal(stale.frontendUpdate, null); assert.equal(stale.online, false); assert.equal(stale.updateRequired, true);
+  stale.dismissFrontendUpdate();
+  assert.equal(render().updateRequired, true, 'Later cannot dismiss a backend update requirement');
+  await assert.rejects(request('commands', JSON.parse(retained!)), /Reload this window/);
+  await settle();
+  assert.equal(commandAttempts, 2, 'the explicit stale request is refused once and never replayed');
+  assert.equal(commands.length, 1);
   assert.equal(storage.get('retained-proposal'), retained);
 });
