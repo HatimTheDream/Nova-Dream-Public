@@ -11,8 +11,6 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      NOVA_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/frontend-input-diagnostic
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export NOVA_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/frontend-input-diagnostic"
+          printf 'NOVA_DIAGNOSTIC_OUTPUT=%s\n' "$NOVA_DIAGNOSTIC_OUTPUT" >> "$GITHUB_ENV"
           mkdir -m 700 "$NOVA_DIAGNOSTIC_OUTPUT"
           cat > "$RUNNER_TEMP/capture-frontend-input.mjs" <<'CAPTURE'
           import { createHash } from 'node:crypto';
