@@ -1,3 +1,9 @@
+## [2.3.3] — 2026-10-14
+
+### Fixed
+
+- Isolate repository workflow tests from the installed GitHub CLI so generated device state cannot contaminate interface compatibility checks. Includes the Later action prepared in 2.3.2.
+
 ## [2.3.2] — 2026-10-14
 
 ### Improved
