@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import { Children, createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Home } from '../apps/client/src/Home';
 import { HomeSpace } from '../apps/client/src/HomeSpace';
 import { HomeWidgetContent } from '../apps/client/src/HomeWidgets';
 import { homeTaskState } from '../apps/client/src/home-task-state';
 import { defaultLayout, emptyDraft, type Draft, type Entity, type Layout, type Snapshot, type Task, type WidgetId } from '../packages/domain/contracts';
 import { createHomeWidget, resolveWidgetType, type HomeWidget } from '../packages/domain/home-widgets';
+
+const styles = registerHooks({ load(url, context, next) {
+  return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context);
+} });
+const { Home } = await import('../apps/client/src/Home');
+styles.deregister();
 
 const now = Date.parse('2026-09-18T07:30:00Z');
 const layout: Layout = { ...defaultLayout, timezone: 'America/Los_Angeles' };
@@ -32,24 +38,43 @@ const section = (rendered: string, title: string) => {
   return match[0];
 };
 
-test('Home opens Today with briefing and activity while saved widgets stay in My space', context => {
+test('Home opens Library with Ideas and Feed while saved widgets remain reachable', context => {
   context.mock.method(Date, 'now', () => now);
   const note = { ...createHomeWidget('note'), title: 'My private note', settings: { text: 'Saved note content' } };
   const props = homeProps([], { widgets: [note] });
   const saved = structuredClone(props.snapshot);
-  const today = renderToStaticMarkup(createElement(Home, props));
-  assert.match(today, /id="home-tab-today" role="tab" aria-selected="true" aria-controls="home-panel-today"/);
-  assert.match(today, /id="home-tab-space" role="tab" aria-selected="false" aria-controls="home-panel-space"/);
-  assert.match(today, /id="home-panel-space" role="tabpanel" aria-labelledby="home-tab-space" hidden=""><\/div>/);
-  assert.match(today, /aria-label="Daily briefing"/);
-  assert.match(today, /aria-label="Coming up"/);
-  assert.match(today, /Nova activity/);
-  assert.match(today, /Add task/);
-  assert.doesNotMatch(today, /My private note|Saved note content|data-reorder-item=/);
+  const home = renderToStaticMarkup(createElement(Home, props));
+  assert.match(home, /id="home-tab-library" role="tab" aria-selected="true" aria-controls="home-panel-library"/);
+  for (const id of ['ideas', 'feed']) {
+    assert.match(home, new RegExp(`id="home-tab-${id}" role="tab" aria-selected="false" aria-controls="home-panel-${id}"`));
+    assert.match(home, new RegExp(`id="home-panel-${id}" role="tabpanel" aria-labelledby="home-tab-${id}" hidden=""><\\/div>`));
+  }
+  assert.ok(home.indexOf('home-tab-library') < home.indexOf('home-tab-ideas') && home.indexOf('home-tab-ideas') < home.indexOf('home-tab-feed'));
+  assert.match(home, /aria-label="Library"/);
+  assert.match(home, />Widgets<\/button>/);
+  assert.doesNotMatch(home, /home-tab-today|home-tab-space|My private note|Saved note content|data-reorder-item=/);
   const space = renderToStaticMarkup(createElement(HomeSpace, props));
   assert.match(section(space, 'My private note'), /Saved note content/);
   assert.doesNotMatch(space, /aria-label="Daily briefing"|home-activity-title/);
   assert.deepEqual(props.snapshot, saved, 'changing the Home presentation does not rewrite saved widgets');
+});
+
+test('Home restores approved views and falls back safely from retired views without rewriting saved work', () => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const props = homeProps([], { widgets: [{ ...createHomeWidget('note'), title: 'Kept note', settings: { text: 'Kept writing' } }] }, true);
+  const original = structuredClone({ snapshot: props.snapshot, draft: props.draft });
+  const writes: string[] = [];
+  try {
+    for (const kept of ['library', 'ideas', 'feed', 'today', 'space', 'unknown']) {
+      Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => key === 'e3:home-view:fixture' ? JSON.stringify(kept) : null, setItem: (key: string) => { writes.push(key); } } });
+      const rendered = renderToStaticMarkup(createElement(Home, props));
+      const selected = ['library', 'ideas', 'feed'].includes(kept) ? kept : 'library';
+      assert.match(rendered, new RegExp(`id="home-tab-${selected}" role="tab" aria-selected="true"`));
+      assert.equal((rendered.match(/role="tab" aria-selected="true"/g) ?? []).length, 1);
+      assert.deepEqual({ snapshot: props.snapshot, draft: props.draft }, original);
+    }
+    assert.deepEqual(writes, []);
+  } finally { if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);else Reflect.deleteProperty(globalThis, 'localStorage'); }
 });
 
 test('Home attention includes overdue deadlines without a plan and keeps every applicable reason once', () => {
