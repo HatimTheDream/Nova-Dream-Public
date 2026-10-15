@@ -187,7 +187,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const companions = new Companions(store);
   const companionDownloads = new CompanionDownloads(process.env.E3_COMPANION_DOWNLOADS);
   const hostBrowser = new HostBrowser(store, gateway, gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'browser-control') : undefined, enabled => { if(!runtime) throw new Fault(409,'browser_runtime','Use the managed Assistant for host browsing.'); return runtime.configureBrowser(enabled); });
-  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions,hostBrowser});
+  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions,hostBrowser,homeLibrary,homeFeed,agentActivity,hubMeetings,agentHub,agentRoutines,contentWorkspace});
   const moduleToken = randomBytes(32).toString('hex');
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
   const backups = new WorkspaceBackups(store, options.version ?? 'development', options.nativeBackup ?? (runtime ? new ManagedNativeBackup(runtime) : undefined), () => assistant.captureSavedHistories());
@@ -522,6 +522,8 @@ export async function startServer(options: { directory: string; port: number; pr
           const bytes = observations.image(observationMatch[1], observationMatch[2]);
           response.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'no-store', 'Content-Length': bytes.length }); return response.end(bytes);
         }
+        if (url.pathname === '/api/assistant/app-action-ready' && request.method === 'POST') return json(200,moduleActions.appActionReady(device,await commandBody(request)));
+        if (url.pathname === '/api/assistant/app-action' && request.method === 'POST') return json(200,moduleActions.acknowledgeAppAction(device,await commandBody(request)));
         if (url.pathname === '/api/assistant/module-actions' && request.method === 'POST') { const input=z.union([z.object({conversationId:z.uuid()}).strict(),z.object({assignmentId:z.uuid()}).strict()]).parse(await commandBody(request));return json(200,'assignmentId' in input?moduleActions.listAssignment(input.assignmentId):moduleActions.list(input.conversationId)); }
         if (url.pathname === '/api/assistant/module-action' && request.method === 'POST') return json(200,await moduleActions.decide(device,await commandBody(request)));
         if (url.pathname === '/api/contacts/read' && request.method === 'POST') return json(200, await contactDirectory.read(device, await commandBody(request)));

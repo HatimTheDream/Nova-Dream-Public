@@ -1,3 +1,16 @@
+## [2.7.0] — 2026-10-15
+
+### Added
+
+- Let Assistant discover and operate saved Chat/Work conversations, shared settings, device appearance, app navigation, Home Library/Feed, Content workflows and agent Headquarters, meetings and schedules through the app's existing services.
+- Add exact reviewed bulk archive, restore and Move to Deleted actions. Keep drafts and original work; permanent removal remains a separate reviewed action for an already-deleted settled chat. The current chat can join a bulk action after its reply finishes.
+- Expose real saved action and original job status, so interrupted requests can be checked without duplicating edits, agent runs or permanent removals. Keep scoped agents inside their existing capabilities and account/security grants in their dedicated controls.
+
+### Fixed
+
+- Enable Send and Enter immediately after typing, including while an ordinary draft save is running. Save the exact current draft before dispatch, keep a synchronous duplicate-send lock, and preserve conflicts and uncertain original requests.
+- Coordinate device appearance and navigation requests across windows, preserve unsaved-writing guards, and report actual window confirmation rather than claiming a queued request was applied.
+
 ## [2.6.0] — 2026-10-15
 
 ### Added

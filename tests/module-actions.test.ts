@@ -41,6 +41,34 @@ test('module catalog exposes all supported modules and schemas without drafts or
  for(const kind of catalog.recordKinds){const schema:any=await f.service.invoke(f.input('catalog',{kind},false));assert.equal(schema.schema.type,'object');}
  await assert.rejects(f.invoke(f.save('draft',{text:'Must not write'})));
 });
+
+test('app window requests stay unconfirmed until the original device acknowledges and never cross devices',async t=>{
+ const f=fixture(t),a=await f.invoke(f.input('app.open',{module:'settings',settingsTab:'general'}));
+ assert.equal(a.state,'unknown');assert.equal((a.result as any).state,'requested');
+ const receipt={requestId:randomUUID(),epoch:f.store.epoch,actionId:a.id,state:'opened',message:'Opened Settings.'};
+ assert.equal(f.service.appActionReady(f.device,{epoch:f.store.epoch,actionId:a.id}).ready,true);
+ f.conversation.permissionMode='read-only';assert.equal(f.service.appActionReady(f.device,{epoch:f.store.epoch,actionId:a.id}).ready,false);f.conversation.permissionMode='workspace';
+ f.operation.cancelRequested=true;assert.equal(f.service.appActionReady(f.device,{epoch:f.store.epoch,actionId:a.id}).ready,false);f.operation.cancelRequested=false;
+ assert.throws(()=>f.service.acknowledgeAppAction(randomUUID(),receipt),/another app window/);
+ assert.throws(()=>f.service.acknowledgeAppAction(f.device,{...receipt,state:'saved'}),/does not match/);
+ const applied=f.service.acknowledgeAppAction(f.device,receipt);assert.equal(applied.state,'applied');
+ assert.deepEqual(f.service.acknowledgeAppAction(f.device,receipt),JSON.parse(JSON.stringify(applied)));
+ const uncertain=await f.invoke(f.input('app.appearance',{messageTextSize:'large'}));assert.equal(uncertain.state,'unknown');
+ assert.equal((await f.decide(uncertain,'check')).state,'unknown');
+ assert.equal(f.service.acknowledgeAppAction(f.device,{...receipt,requestId:randomUUID(),actionId:uncertain.id,state:'blocked',message:'Storage unavailable.'}).state,'failed');
+});
+
+test('shared settings preserve unrelated values and reconcile a lost save without another edit',async t=>{
+ const f=fixture(t),initial=f.store.readEntity('layout','layout')!;f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'layout',entityId:'layout',expectedRevision:initial.revision,payload:{...initial.value,appIcon:'cream'}});
+ const before=f.store.readEntity('layout','layout')!,mutate=f.store.mutate.bind(f.store);let writes=0,lose=true;
+ f.store.mutate=(device,command)=>{const saved=mutate(device,command);writes++;if(lose){lose=false;throw Error('Lost settings response');}return saved;};
+ const a=await f.invoke(f.input('settings.save',{expectedRevision:before.revision,changes:{theme:'dark'}}));assert.equal(a.state,'unknown');
+ const changed=f.store.readEntity('layout','layout')!;assert.equal(changed.value.theme,'dark');assert.equal(changed.value.appIcon,'cream');assert.deepEqual(changed.value.nav,before.value.nav);assert.deepEqual(changed.value.widgets,before.value.widgets);
+ const checked=await f.decide(a,'check');assert.equal(checked.state,'applied');assert.equal(f.store.readEntity('layout','layout')!.revision,changed.revision);
+ await assert.rejects(f.invoke(f.input('settings.save',{expectedRevision:changed.revision,changes:{permissionMode:'full'}})));
+ await assert.rejects(f.invoke(f.input('settings.save',{expectedRevision:changed.revision,changes:{}})));
+ assert.equal(writes,2,'the second call replays its original Store receipt without a second revision');
+});
 test('source tools bind exact captured files and suppress late readings after their originating run is cancelled',async t=>{
  const f=fixture(t),file=f.store.upload(f.device,randomUUID(),f.store.epoch,'source.pdf',sourcePdf().toString('base64'));
  const foreign=f.store.upload(f.device,randomUUID(),f.store.epoch,'unselected.pdf',sourcePdf().toString('base64'));

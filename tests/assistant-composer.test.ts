@@ -32,7 +32,7 @@ const { Assistant } = await import('../apps/client/src/Assistant');
 hooks.deregister();
 
 type FileState = 'ready' | 'preparing' | 'uploading' | 'failed';
-function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean; voicePhase?: 'idle' | 'connecting' | 'connected' | 'ended'; disconnected?: boolean } = {}) {
+function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean; voicePhase?: 'idle' | 'connecting' | 'connected' | 'ended'; disconnected?: boolean; dirty?: boolean; saving?: boolean; unconfirmedSave?: boolean } = {}) {
   const globals = [attachmentFixture, 'localStorage', 'matchMedia'] as const;
   const previous = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const pending = files === 'uploading' || files === 'failed' ? [{ id: 'file', name: 'Fixture.txt' }] : [];
@@ -47,7 +47,7 @@ function renderComposer(files: FileState, existing = false, active = false, text
     const props = {
       appIcon: 'red',
       snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
-      legacyJournal: { value: draft, revision: 1, dirty: false, saving: false, change() {}, flush: async () => {} },
+      legacyJournal: { value: draft, revision: 1, dirty: !!options.dirty, saving: !!options.saving, submitBlocked: !!options.unconfirmedSave, change() {}, flush: async () => {} },
       controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: options.disconnected ? 'disconnected' : 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
       voice: { subscribeLevels: () => () => {}, getLevelsSnapshot: () => ({input: 0, output: 0}), subscribe: () => () => {}, getSnapshot: () => ({ phase: options.voicePhase ?? 'idle', turns: [] }) },
       contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {},
@@ -162,4 +162,13 @@ test('text and file-only drafts offer Send, uploads do not flicker back to Voice
   }
   assert.equal(renderComposer('ready', true, true, '').button('Stop reply').disabled, false);
   assert.equal(renderComposer('ready', true, true, 'Follow up').button('Queue message').disabled, false);
+});
+
+test('Send remains available during ordinary typing saves and blocks an unconfirmed save', () => {
+  for (const state of [{dirty:true},{dirty:true,saving:true}]) {
+    const ready=renderComposer('ready',false,false,'Just finished typing',state);
+    assert.equal(ready.button('Send message').disabled,false);
+  }
+  const uncertain=renderComposer('ready',false,false,'Kept writing',{dirty:true,unconfirmedSave:true});
+  assert.equal(uncertain.button('Send message').disabled,true);
 });

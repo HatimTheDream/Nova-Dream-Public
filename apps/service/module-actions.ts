@@ -14,7 +14,7 @@ import { questCommandSchema } from '../../packages/domain/profile-progression.js
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { Store, Fault } from './store.js';
-import { canonical, layoutSchema, taskSchema, projectSchema, type Kind } from '../../packages/domain/contracts.js';
+import { canonical, layoutSchema, appIconSchema, taskSchema, projectSchema, type Kind } from '../../packages/domain/contracts.js';
 import { blankRecord, recordSchemas, type RecordKind } from '../../packages/domain/workspace-records.js';
 import { routineSchema } from '../../packages/domain/tasks.js';
 import { moduleInvocationSchema, moduleDecisionSchema, type ModuleAction, type ModuleInvocation } from '../../packages/domain/module-actions.js';
@@ -35,6 +35,9 @@ import { mailDeliveryPrepareSchema } from '../../packages/domain/mail-delivery.j
 import { mailTriagePrepareSchema } from '../../packages/domain/mail-triage.js';
 import { crmReadSchema, organizationSaveSchema, activitySaveSchema } from '../../packages/domain/crm.js';
 import { assignmentStartSchema } from '../../packages/domain/assignments.js';
+import { createConversationOperations } from './module-conversation-actions.js';
+import { createWorkspaceOperations, type WorkspaceModuleServices } from './module-workspace-actions.js';
+import { appOpenSchema, appAppearanceSchema, appActionReceiptSchema, appActionReadySchema } from '../../packages/domain/app-actions.js';
 const kinds=['layout','task','project','routine','contact','content','agent','assignment','profile'] as const;
 const schemas={layout:layoutSchema,task:taskSchema,project:projectSchema,routine:routineSchema,...recordSchemas};
 const object=z.record(z.string(),z.unknown());
@@ -44,8 +47,8 @@ const sha=(value:unknown)=>createHash('sha256').update(canonical(value)).digest(
 function uuid(value:unknown){const s=sha(value);return `${s.slice(0,8)}-${s.slice(8,12)}-4${s.slice(13,16)}-a${s.slice(17,20)}-${s.slice(20,32)}`;}
 const stamp=()=>new Date().toISOString();
 const strip=(schema:z.ZodObject<any>)=>z.object(Object.fromEntries(Object.entries(schema.shape).filter(([key])=>!['requestId','epoch','writerId'].includes(key))) as any).strict();
-type Operation={title:string;module:string;schema:z.ZodType;write?:boolean;external?:boolean;read?:(device:string,input:any,owner:{operationId:string;assignmentId?:string;conversationId:string})=>unknown|Promise<unknown>;run?:(action:ModuleAction)=>unknown|Promise<unknown>;prepare?:(action:ModuleAction)=>unknown|Promise<unknown>;confirm?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;cancel?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;check?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>};
-export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService;companions?:Companions;hostBrowser?:HostBrowser};
+export type Operation={title:string;module:string;schema:z.ZodType;write?:boolean;external?:boolean;review?:boolean;ownerOnly?:boolean;capture?:(input:Record<string,any>,owner:{operationId:string;assignmentId?:string;conversationId:string;deviceId:string})=>Record<string,any>;preview?:(input:Record<string,any>)=>unknown;resultState?:(result:any)=>ModuleAction['state'];read?:(device:string,input:any,owner:{operationId:string;assignmentId?:string;conversationId:string})=>unknown|Promise<unknown>;run?:(action:ModuleAction)=>unknown|Promise<unknown>;prepare?:(action:ModuleAction)=>unknown|Promise<unknown>;confirm?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;cancel?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>;check?:(action:ModuleAction,requestId:string)=>unknown|Promise<unknown>};
+export type ModuleServices={store:Store;assistant:AssistantService;gateway:AssistantTransport;accounts:Accounts;calendar:CalendarService;calendarWrites:CalendarWriteService;crm:ContactCrm;mail:MailService;mailDelivery:MailDeliveryService;mailTriage:MailTriageService;assignments:AssignmentService;companions?:Companions;hostBrowser?:HostBrowser} & WorkspaceModuleServices;
 /** Model arguments never select an authority, device, epoch, conversation, or request receipt. */
 export class ModuleActions {
  private operations:Record<string,Operation>;
@@ -57,6 +60,16 @@ export class ModuleActions {
   this.reader=new SourceReader(store);
   const envelope=(a:ModuleAction)=>({...a.input,epoch:a.epoch,requestId:a.id});
   this.operations={
+   ...createConversationOperations(s),
+   ...createWorkspaceOperations(s),
+   'settings.read':{title:'Read shared app settings and their current revision',module:'Settings',ownerOnly:true,schema:z.object({}).strict(),read:()=>({settings:store.readEntity('layout','layout'),deviceAppearance:'Use app.appearance for this device’s fonts and text sizes. Use app.open to reach account, Assistant, usage, devices or data controls.'})},
+   'settings.save':{title:'Change shared theme, icon, timezone, navigation or Home settings',module:'Settings',ownerOnly:true,write:true,schema:z.object({expectedRevision:z.number().int().positive(),changes:z.object({...layoutSchema.shape,appIcon:appIconSchema}).partial().strict().refine(value=>Object.keys(value).length>0,'Choose at least one setting.')}).strict(),
+    capture:input=>{const current=store.readEntity('layout','layout');if(!current||current.revision!==input.expectedRevision)throw new Fault(409,'revision_conflict','Read the current settings before changing them.');return {...input,value:layoutSchema.parse({...current.value,...input.changes})};},
+    preview:input=>input.changes,
+    run:a=>store.mutate(a.deviceId,{requestId:a.id,epoch:a.epoch,kind:'layout',entityId:'layout',expectedRevision:a.input.expectedRevision as number,payload:a.input.value})},
+   'app.state':{title:'Read app controls and shared appearance',module:'App & Settings',ownerOnly:true,schema:z.object({}).strict(),read:(_d,_i,owner)=>({layout:store.readEntity('layout','layout'),recentWindowActions:this.list(owner.conversationId).filter(a=>a.operation==='app.open'||a.operation==='app.appearance').slice(0,10),instructions:'Use app.open for any module or Settings category. Use records.save kind layout for shared theme, app icon, timezone, navigation order and Home widgets. app.appearance changes font and text size on the requesting device. A window request is not complete until its saved result says opened or saved. Credentials, pairing, access grants, native approvals and recovery remain in their dedicated Settings controls.'})},
+   'app.open':{title:'Open an app module or Settings category',module:'App & Settings',ownerOnly:true,write:true,schema:appOpenSchema,run:a=>({state:'requested',destination:a.input,message:'Requested navigation in the visible app window on this device. Check actions.read for opened or blocked; preserve unsaved writing.'}),check:a=>this.get(a.id).result,resultState:r=>r?.state==='opened'?'applied':r?.state==='blocked'?'failed':'unknown'},
+   'app.appearance':{title:'Change fonts or text size on this device',module:'App & Settings',ownerOnly:true,write:true,schema:appAppearanceSchema,run:a=>({state:'requested',preferences:a.input,message:'Requested device appearance. Check actions.read for saved or blocked before claiming completion.'}),check:a=>this.get(a.id).result,resultState:r=>r?.state==='saved'?'applied':r?.state==='blocked'?'failed':'unknown'},
    ...(s.hostBrowser ? {
     'browser.state': {title:'Inspect the workspace host browser',module:'Browser',schema:z.object({}).strict(),read:()=>s.hostBrowser!.state()},
     'browser.observe': {title:'Read a host browser page and its screenshot',module:'Browser',schema:z.object({targetId:z.string().min(1).max(200)}).strict(),read:(device:string,input:{targetId:string})=>s.hostBrowser!.observe(device,input.targetId)},
@@ -169,6 +182,7 @@ export class ModuleActions {
  }
  private current(input:ModuleInvocation){
   if(this.closed||input.epoch!==this.s.store.epoch)throw new Fault(409,'workspace_changed','Reconnect to this workspace before using its tools.');
+  if(this.operations[input.operation]?.ownerOnly && (/^agent:edition3(?:-native)?-assignment:e3-assignment-/.test(input.nativeKey)||this.s.store.internalRead('team:conversation:'+this.s.assistant.conversations().find(c=>c.nativeId===input.nativeId&&c.nativeKey===input.nativeKey)?.id)))throw new Fault(403,'owner_action','This app action belongs to the owner Assistant, not a scoped agent.');
   if(/^agent:edition3(?:-native)?-assignment:e3-assignment-/.test(input.nativeKey)) {
    if(input.operation.startsWith('goal.'))throw new Fault(403,'goal_owner','Only the originating Assistant can report its goal.');
    if(input.operation.startsWith('team.'))throw new Fault(403,'team_handoff_owner','Team reports and complete handoffs belong to the original team stage.');
@@ -196,8 +210,8 @@ export class ModuleActions {
    if(owner.assignmentId && typeof input.input.kind==='string') this.current({...input, operation:'records.read',input:{kind:input.input.kind},write:false});
    if(owner.assignmentId && typeof input.input.operation==='string' && !input.input.operation.startsWith('records.')) this.current({...input,operation:input.input.operation,input:{},write:!!this.def(input.input.operation).write});
    if(typeof input.input.kind==='string'&&Object.hasOwn(schemas,input.input.kind))return {kind:input.input.kind,schema:z.toJSONSchema(schemas[input.input.kind as keyof typeof schemas],{unrepresentable:'any'}),note:'records.save merges changes into the current record. Read first; supply its exact revision. Arrays replace the whole array; preserve items you did not mean to change.'};
-   if(typeof input.input.operation==='string'){const op=this.def(input.input.operation);return {operation:input.input.operation,title:op.title,write:!!op.write,review:!!op.external,schema:z.toJSONSchema(op.schema,{unrepresentable:'any'})};}
-   return {operations:Object.entries(this.operations).filter(([operation,o])=>!owner.assignmentId || operation.startsWith('records.') || this.s.assignments.canReviewModule(owner.assignmentId,operation,{},!!o.write)).map(([operation,o])=>({operation,module:o.module,title:o.title,write:!!o.write,review:!!o.external})),recordKinds:owner.assignmentId?kinds.filter(kind=>this.s.assignments.canReviewModule(owner.assignmentId,'records.read',{kind},false)):kinds,instructions:'Use catalog with input.operation for a command schema, or input.kind for record fields. Read exact IDs and revisions first. Do not alter unsent drafts. Never invent successful effects. Guarded writes and provider changes require the owner’s review card. Account credentials, permission grants, permanent deletion, and device pairing are managed in Settings.'};
+   if(typeof input.input.operation==='string'){const op=this.def(input.input.operation);if(op.ownerOnly&&(owner.assignmentId||this.s.store.internalRead('team:conversation:'+owner.conversationId)))throw new Fault(403,'owner_action','This action belongs to the owner Assistant.');return {operation:input.input.operation,title:op.title,write:!!op.write,review:!!op.external||!!op.review,schema:z.toJSONSchema(op.schema,{unrepresentable:'any'})};}
+   return {operations:Object.entries(this.operations).filter(([operation,o])=>(!o.ownerOnly||!owner.assignmentId&&!this.s.store.internalRead('team:conversation:'+owner.conversationId))&&(!owner.assignmentId || operation.startsWith('records.') || this.s.assignments.canReviewModule(owner.assignmentId,operation,{},!!o.write))).map(([operation,o])=>({operation,module:o.module,title:o.title,write:!!o.write,review:!!o.external||!!o.review})),recordKinds:owner.assignmentId?kinds.filter(kind=>this.s.assignments.canReviewModule(owner.assignmentId,'records.read',{kind},false)):kinds,instructions:'Use catalog with input.operation for a command schema, or input.kind for record fields. Discover app actions here before saying you cannot interact with Nova. Read exact IDs and revisions first. Do not alter unsent drafts. Never invent successful effects. Delete chats means move them to Deleted unless the owner explicitly requests permanent removal. Bulk conversation changes freeze their targets for review; apply after this reply finishes to include this chat. Guarded writes, reviewed operations and provider changes use the owner’s review card. Account credentials, permission grants, security approvals, device pairing and workspace recovery use their dedicated Settings controls; never grant yourself access.'};
   }
   const def=this.def(input.operation);if(!!def.write!==input.write)throw new Fault(400,'wrong_tool','Use nova_read for reads and nova_write for changes.');
   if(!input.write&&input.operation==='actions.read'){const value=def.schema.parse(input.input) as {id?:string};return (owner.assignmentId?this.listAssignment(owner.assignmentId):this.list(owner.conversationId)).filter(a=>!value.id||a.id===value.id);}
@@ -217,10 +231,11 @@ export class ModuleActions {
    const defaults=kind==='task'?{title:'',notes:'',status:'open',planned:'',due:'',timezone:zone}:kind==='project'?{name:'',purpose:'',attachments:[]}:kind==='routine'?{}:kind==='layout'?{}:blankRecord(kind as RecordKind,zone);
    before=current?.value;value={...value,id:entityId,changes:schemas[kind].parse({...defaults,...current?.value,...value.changes})};
   }
+  if(def.capture)value=def.capture(value,owner);
   const title=input.operation==='records.save'?`${value.expectedRevision?'Update':'Create'} ${value.kind}: ${String(value.changes.name??value.changes.title??(value.kind==='layout'?'Home & appearance':'Profile')).slice(0,150)}`:def.title;
-  const a=this.save({id:actionId,epoch:input.epoch,conversationId:owner.conversationId,...(owner.assignmentId?{assignmentId:owner.assignmentId}:{}),operationId:owner.operationId,deviceId:owner.deviceId,operation:input.operation,input:value,inputHash,title,revision:0,createdAt:stamp(),updatedAt:stamp(),state:def.prepare?'preparing':'pending',phase:def.prepare?'prepare':undefined,external:!!def.external,before,preview:input.operation==='records.save'?value.changes:value} as ModuleAction);
+  const a=this.save({id:actionId,epoch:input.epoch,conversationId:owner.conversationId,...(owner.assignmentId?{assignmentId:owner.assignmentId}:{}),operationId:owner.operationId,deviceId:owner.deviceId,operation:input.operation,input:value,inputHash,title,revision:0,createdAt:stamp(),updatedAt:stamp(),state:def.prepare?'preparing':'pending',phase:def.prepare?'prepare':undefined,external:!!def.external,before,preview:def.preview?def.preview(value):input.operation==='records.save'?value.changes:value} as ModuleAction);
   if(def.prepare)return this.tracked(a.id,()=>this.prepare(a));
-  if(input.operation!=='goal.update'&&input.operation!=='team.review.submit'&&(owner.guarded||input.permissionMode==='guarded'||def.external))return a;
+  if(input.operation!=='goal.update'&&input.operation!=='team.review.submit'&&(owner.guarded||input.permissionMode==='guarded'||def.external||def.review))return a;
   return this.apply(a,()=>{this.current(input);});
  }
  private async prepare(a:ModuleAction){
@@ -239,7 +254,7 @@ export class ModuleActions {
  }
 
  listAssignment(attemptId:string){this.s.assignments.summary(attemptId);return this.all().filter(a=>a.epoch===this.s.store.epoch&&a.assignmentId===attemptId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
- list(conversationId:string){if(!this.s.assistant.conversations().some(c=>c.id===conversationId&&!c.deleted))return [];return this.all().filter(a=>a.epoch===this.s.store.epoch&&a.conversationId===conversationId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
+ list(conversationId:string){const c=this.s.assistant.conversations().find(c=>c.id===conversationId);if(!c)return [];return this.all().filter(a=>a.epoch===this.s.store.epoch&&a.conversationId===conversationId&&(!c.deleted||['conversations.bulk','conversations.organize'].includes(a.operation))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
  private result(a:ModuleAction,result:any){
   let state:ModuleAction['state']='applied';const status=result?.state??result?.status;
   if(a.operation==='browser.act')state=status==='completed'?'applied':status==='failed'?'failed':'unknown';
@@ -250,7 +265,8 @@ export class ModuleActions {
    else if(status==='partial')state='partial';
    else if(!['saved','accepted','confirmed','observed','completed'].includes(status))state='failed';
   }
-  return this.save({...a,state,result,error:state==='applied'||state==='cancelled'?undefined:result?.detail??result?.resultMessage??'This change is not fully confirmed. Check its original status.'});
+  if(this.def(a.operation).resultState)state=this.def(a.operation).resultState!(result);
+  return this.save({...a,state,result,error:state==='applied'||state==='cancelled'?undefined:result?.detail??result?.resultMessage??result?.message??'This change is not fully confirmed. Check its original status.'});
  }
  private apply(action:ModuleAction,authorize:()=>void){
   this.s.store.assertUpdateAdmission();
@@ -259,22 +275,25 @@ export class ModuleActions {
    try{const op=this.def(a.operation),result=op.confirm?await op.confirm(a,uuid([a.id,'apply'])):await op.run!(a);return this.result(a,result);}catch(error){return this.failure(a,error);}
   });
  }
- private reviewAccess(a:ModuleAction){
+ private reviewAccess(a:ModuleAction,receiptOnly=false){
   if(this.closed||a.epoch!==this.s.store.epoch)throw new Fault(409,'workspace_changed','Review this action after reconnecting.');
   if(a.assignmentId) return {permissionMode:this.s.assignments.canReviewModule(a.assignmentId,a.operation,a.input,true)?'guarded':'read-only',pendingSettings:undefined};
   const c=this.s.assistant.conversations().find(c=>c.id===a.conversationId);
+  // A completed bulk move may hide its own origin. Only its saved apply-phase
+  // receipt may be reconciled there; no new edits, prepare, cancel or apply.
+  if(receiptOnly&&(c?.deleted||c?.archived)&&['conversations.bulk','conversations.organize'].includes(a.operation)&&a.state==='unknown'&&a.phase==='apply'&&this.def(a.operation).check)return c;
   if(!c||c.deleted||c.archived)throw new Fault(409,'conversation_unavailable','Restore the original chat before changing its saved actions.');
   if(!this.teamMayUse(c.id,a.operation,a.input,true))throw new Fault(403,'team_agent_access','This team member no longer has permission for the proposed action.');
   return c;
  }
  async decide(device:string,raw:unknown){
   const input=moduleDecisionSchema.parse(raw);if(input.epoch!==this.s.store.epoch)throw new Fault(409,'workspace_changed','Review this action after reconnecting.');
-  const a=this.get(input.actionId);this.reviewAccess(a);
+  const a=this.get(input.actionId);this.reviewAccess(a,input.decision==='check');
   const authorize=()=>{const c=this.reviewAccess(a);if(c.pendingSettings||(c.permissionMode??'read-only')==='read-only')throw new Fault(403,'workspace_read_only','Change this chat’s Access setting before applying edits.');};
   if(input.decision==='check'){
    if(a.state!=='unknown')return this.flights.get(a.id)??a;
    return this.tracked(a.id,async()=>{
-    this.reviewAccess(a);const current=this.get(a.id),def=this.def(a.operation);if(current.state!=='unknown')return current;
+    this.reviewAccess(a,true);const current=this.get(a.id),def=this.def(a.operation);if(current.state!=='unknown')return current;
     try{
      if(current.phase==='prepare')return this.prepare(current);
      if(current.phase==='cancel')return this.cancel(current);
@@ -302,6 +321,22 @@ export class ModuleActions {
    if(def.cancel&&a.review)return this.result(a,await def.cancel(a,uuid([a.id,'cancel'])));
    return this.save({...a,state:'cancelled',error:undefined});
   }catch(error){return this.failure(a,error);}
+ }
+ acknowledgeAppAction(device:string,raw:unknown){
+  const input=appActionReceiptSchema.parse(raw),a=this.get(input.actionId);
+  if(input.epoch!==this.s.store.epoch||a.deviceId!==device||!['app.open','app.appearance'].includes(a.operation))throw new Fault(403,'app_action_owner','This request belongs to another app window or workspace.');
+  if(input.state!=='blocked'&&input.state!==(a.operation==='app.open'?'opened':'saved'))throw new Fault(400,'app_action_result','The app result does not match its request.');
+  const replay=this.s.store.replayAdmission<ModuleAction>(device,input,{type:'app-action-result',...input});if(replay)return replay;
+  if(this.flights.has(a.id))throw new Fault(409,'app_action_settling','The original app action is settling. Its window result is retained for reconciliation.');
+  this.reviewAccess(a);
+  if(a.state!=='unknown'||(a.result as {state?:string})?.state!=='requested')return a;
+  return this.s.store.admit(device,input,{type:'app-action-result',...input},()=>this.result(a,{state:input.state,message:input.message})).value;
+ }
+ appActionReady(device:string,raw:unknown){
+  const input=appActionReadySchema.parse(raw),a=this.get(input.actionId);
+  if(input.epoch!==this.s.store.epoch||a.deviceId!==device||!['app.open','app.appearance'].includes(a.operation))throw new Fault(403,'app_action_owner','This request belongs to another app window or workspace.');
+  const c=this.reviewAccess(a),operation=this.s.assistant.operations().find(o=>o.id===a.operationId);
+  return {ready:a.state==='unknown'&&(a.result as {state?:string})?.state==='requested'&&!c.pendingSettings&&c.permissionMode!=='read-only'&&!!operation&&!operation.cancelRequested&&!['failed','cancelled'].includes(operation.state)&&Date.now()-Date.parse(a.createdAt)<=120000};
  }
  async close(){this.closed=true;await this.reader.close();await Promise.allSettled([...this.flights.values()]);}
 }

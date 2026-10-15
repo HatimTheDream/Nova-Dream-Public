@@ -110,7 +110,7 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
   const [storageError, setStorageError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [networkError, setNetworkError] = useState(false);
-  const inFlight = useRef<object | null>(null);
+  const inFlight = useRef<{ settled: Promise<void>; resolve: () => void } | null>(null);
   const ownerScope = `${key}:${kind}:${snapshot.epoch}`;
   const owner = useRef({ mounted: true, scope: ownerScope, generation: 0 });
   if (owner.current.scope !== ownerScope) {
@@ -153,7 +153,9 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     // full local draft. A pending receipt always wins, including after reload.
     const command = local.pending ?? { kind, entityId: id, requestId: crypto.randomUUID(), epoch: local.epoch, expectedRevision: local.revision, payload: payloadOverride === undefined ? local.value : payloadOverride };
     if (!persist({ ...local, pending: command })) return;
-    const attempt = {}; inFlight.current = attempt; setSaving(true);
+    let settle!: () => void;
+    const attempt = { settled: new Promise<void>(resolve => { settle = resolve; }), resolve: () => settle() };
+    inFlight.current = attempt; setSaving(true);
     try {
       const result = await commit<T>(command);
       // Home or a newly mounted editor may have appended to this durable
@@ -173,8 +175,33 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     } finally {
       if (inFlight.current === attempt) inFlight.current = null;
       if (stillOwns()) setSaving(false);
+      attempt.resolve();
     }
   }, [id, kind, persist, refresh, ownerScope]);
+  const flushForSubmit = useCallback(async () => {
+    const scope = owner.current.scope, generation = owner.current.generation;
+    const captured = canonical(ref.current.value);
+    const current = () => {
+      if (!owner.current.mounted || owner.current.scope !== ownerScope || owner.current.scope !== scope || owner.current.generation !== generation) throw Error('The draft changed location. Reopen it before sending.');
+      const local = ref.current;
+      if (local.epoch !== snapshot.epoch || local.revision < removal.current) throw Error('The saved draft changed. Review it before sending.');
+      if (local.conflict) throw Error(local.conflict.message);
+      if (canonical(local.value) !== captured) throw Error('Your draft changed while it was saving. Press Send again when ready.');
+      return local;
+    };
+    let local = current();
+    // Join a save already in progress, but do not replay an uncertain receipt
+    // as a side effect of Send. Retry Save reconciles that original request.
+    const savingNow = inFlight.current;
+    if (local.pending && !savingNow) throw Error('Your draft save is unconfirmed. Retry save before sending.');
+    if (savingNow) await savingNow.settled;
+    local = current();
+    if (local.pending) throw Error('Your draft save is unconfirmed. Retry save before sending.');
+    if (local.dirty) await flush();
+    local = current();
+    if (local.pending || local.dirty) throw Error('Your draft could not be saved yet. Your writing is kept; retry save before sending.');
+    return { value: JSON.parse(captured) as T, revision: local.revision, epoch: local.epoch };
+  }, [flush, ownerScope, snapshot.epoch]);
   useEffect(() => { if (!autoSave) return; const timer = setTimeout(() => { void flush(); }, 600); return () => clearTimeout(timer); }, [journal.value, flush, autoSave]);
   useEffect(() => { if (!autoSave) return; const timer = setInterval(() => { void flush(); }, 4000); return () => clearInterval(timer); }, [flush, autoSave]);
   // Another tab sharing the cookie is another editor, never a silent overwrite.
@@ -203,5 +230,5 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     return persist({ value: host?.value ?? initial, revision: host?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false });
   };
   const status = storageError ? 'Kept in this window · browser storage is full' : journal.conflict ? 'Review needed · your changes are kept' : saving ? 'Saving to host…' : journal.dirty ? networkError ? 'On this device · waiting for host' : autoSave ? 'On this device · saving soon' : 'Edits kept on this device · save when ready' : journal.revision ? 'Saved on host' : 'Ready for a draft';
-  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, storageError, networkError };
+  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, flushForSubmit, submitBlocked: !!journal.conflict || !!journal.pending && !saving, storageError, networkError };
 }
