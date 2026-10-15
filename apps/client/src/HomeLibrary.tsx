@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
-import { homeIcons, homeQuote, homeReferenceKey, homeCollectionValueSchema, homeItemValueSchema, type HomeAssistantHandoff, type HomeCollection, type HomeCollectionValue, type HomeIdeaPreferences, type HomeItem, type HomeItemValue, type HomeLibraryCommand, type HomeLibraryState, type HomeReference, type HomeResource, type HomeSourceCapture } from '../../../packages/domain/home-library';
+import type { HomeAssistantHandoff, HomeCollection, HomeCollectionValue, HomeIdeaPreferences, HomeItem, HomeItemValue, HomeLibraryCommand, HomeLibraryState, HomeReference, HomeResource, HomeSourceCapture } from '../../../packages/domain/home-library';
+import { homeIcons, homeQuote, homeReferenceKey, isHomeCollectionDraft, isHomeItemDraft } from '../../../packages/domain/home-library-view';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { ArrowLeft, FileText, Folder, MoreHorizontal, Pin, Plus, Search, X } from './icons';
 import { Dialog, Empty } from './ui';
@@ -61,7 +62,7 @@ export function HomeLibrary({ snapshot, controller, openWidgets, ...actions }: H
  const detailSequence = useRef(0);
  const writerKey = `e3:home-library-writer:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`;
  type Writers = { key: string; collection?: LibraryWriter<HomeCollectionValue>; item?: LibraryWriter<HomeItemValue> };
- const readWriters = (): Writers => ({ key: writerKey, collection: readLibraryWriter<HomeCollectionValue>(writerKey + ':collection', value => typeof value.title === 'string' && value.title.length <= 100 && homeCollectionValueSchema.safeParse({ ...value, title: 'Untitled' }).success), item: readLibraryWriter<HomeItemValue>(writerKey + ':item', value => typeof value.title === 'string' && value.title.length <= 150 && (value.kind !== 'link' || typeof value.url === 'string' && value.url.length <= 2048) && homeItemValueSchema.safeParse({ ...value, title: 'Untitled', ...(value.kind === 'link' ? { url: 'https://example.test' } : {}) }).success) });
+ const readWriters = (): Writers => ({ key: writerKey, collection: readLibraryWriter<HomeCollectionValue>(writerKey + ':collection', isHomeCollectionDraft), item: readLibraryWriter<HomeItemValue>(writerKey + ':item', isHomeItemDraft) });
  const [writers, setWriters] = useState<Writers>(readWriters);
  const collectionEditor = writers.key === writerKey ? writers.collection : undefined, itemEditor = writers.key === writerKey ? writers.item : undefined;
  const setCollectionEditor = (collection: Writers['collection']) => setWriters(current => ({ ...(current.key === writerKey ? current : readWriters()), collection }));

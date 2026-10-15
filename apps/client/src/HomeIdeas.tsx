@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
-import { homeIdeaScope, homeQuote, homeReferenceKey, type HomeIdeaPreferences, type HomeReference } from '../../../packages/domain/home-library';
+import type { HomeIdeaPreferences, HomeReference } from '../../../packages/domain/home-library';
+import { homeClockTime, homeIdeaScope, homeQuote, homeReferenceKey } from '../../../packages/domain/home-library-view';
 import { activeProjects } from '../../../packages/domain/project-organization';
-import { clockTime } from '../../../packages/domain/tasks';
 import { Dialog, Empty } from './ui';
 import { Check, MoreHorizontal, Pin, Sparkles } from './icons';
 import { acknowledgeHomeCapture, captureHomeContext, type HomeLibraryController, type HomeSourceActions } from './HomeLibrary';
@@ -29,7 +29,7 @@ export function HomeIdeas({ snapshot, controller, onAssistantHandoff }: HomeSour
  const currentSources = controller.state?.resources.filter(r => r.availability === 'current' && r.reference.kind !== 'task' && r.reference.kind !== 'project') ?? [];
  const start = async () => {
   if (!idea || !onAssistantHandoff || !outputs.length) return;
-  if (idea.needsTasks && (!project || !tasks.length || !from || !to || !clockTime.safeParse(from).success || !clockTime.safeParse(to).success || from >= to)) { setError('Choose a Project, at least one open Task and valid planning hours.');return; }
+  if (idea.needsTasks && (!project || !tasks.length || !from || !to || !homeClockTime(from) || !homeClockTime(to) || from >= to)) { setError('Choose a Project, at least one open Task and valid planning hours.');return; }
   if (idea.needsSources && !sources.length) { setError('Choose at least one current Library source.');return; }
   let scope: ReturnType<typeof homeIdeaScope>;
   try { scope = homeIdeaScope(snapshot, project, tasks, idea.mode); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Review the current scope.');return; }

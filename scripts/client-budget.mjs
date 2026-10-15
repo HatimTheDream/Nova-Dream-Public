@@ -155,7 +155,12 @@ import assert from 'node:assert/strict';
 // 1.13 adds deferred Software Update with retained requests and observed stages.
 // Measured total658,061 (+3,304 / 0.50% over1.12.11), startup148,923 (+58).
 // Its own chunk is3,101 gzip bytes; bound total at660KB and retain startup/chunk limits.
-export const clientLimits = { startup: 180000, total: 660000, deferredChunk: 80000 };
+// 2.6 adds Library/Ideas/Feed, compact Headquarters and the20-choice creator.
+// Measured total685,358 (+26,252 /3.98% over accepted2.5), startup176,474,
+// largest deferred79,719. Existing Zod/Markdown/icon assets are byte-identical;
+// growth is approved UI/artwork, with no new heavy dependency or duplicate art.
+// Bound this capability tranche at690KB; startup/chunk ceilings remain fixed.
+export const clientLimits = { startup: 180000, total: 690000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);
