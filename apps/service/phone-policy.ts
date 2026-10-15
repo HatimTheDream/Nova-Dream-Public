@@ -27,6 +27,8 @@ GET /api/agent-skills/proposal-events
 GET /api/agent-skills/proposals
 GET /api/agent-skills/reviews
 GET /api/agents/hub
+GET /api/agents/activity
+POST /api/agents/activity
 POST /api/agents/hub/layout
 GET /api/agents/meetings
 POST /api/agents/meetings
@@ -41,6 +43,11 @@ GET /api/assistant/voice/catalog
 GET /api/assistant/read-aloud/catalog
 POST /api/assistant/read-aloud/speak
 GET /api/home/weather
+GET /api/home/library
+POST /api/home/library
+POST /api/home/context
+GET /api/home/feed
+POST /api/home/feed/open
 GET /api/home/weather/locations
 GET /api/calendar/state
 GET /api/snapshot

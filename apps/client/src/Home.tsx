@@ -1,70 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AssistantOperation, Conversation } from '../../../packages/domain/assistant';
+import type { HomeFeedTarget } from '../../../packages/domain/home-feed';
 import { HomeSpace, type HomeSpaceProps } from './HomeSpace';
+import { HomeLibrary, useHomeLibrary, type HomeSourceActions } from './HomeLibrary';
+import { HomeIdeas } from './HomeIdeas';
+import { HomeFeed } from './HomeFeed';
 import { BriefingCard } from './BriefingCard';
 import { HomeAppointmentWidget } from './HomeAppointmentWidget';
-import { Folder, ArrowRight, Plus, MessageSquare } from './icons';
+import { ArrowLeft } from './icons';
+import { readLocal, saveLocal } from './api';
+import './home-library.css';
 
-type Props = HomeSpaceProps & {
-  openDraft?: (id: string) => void;
-  openConversation?: (conversation: Conversation) => void;
-  operations?: AssistantOperation[];
-  conversations?: Conversation[];
-  activityRead?: 'loading' | 'ready' | 'error';
+type View = 'library' | 'ideas' | 'feed';
+type Props = HomeSpaceProps & HomeSourceActions & {
+ openDraft?: (id: string) => void; openConversation?: (conversation: Conversation) => void;
+ operations?: AssistantOperation[]; conversations?: Conversation[]; activityRead?: 'loading' | 'ready' | 'error';
+ openFeedTarget?: (target: HomeFeedTarget) => void;
 };
-
 export function Home(props: Props) {
-  const { snapshot, layout, newTask, open, editTask, complete, openDraft, openConversation, operations = [], conversations = [], activityRead = 'loading' } = props;
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60000); return () => window.clearInterval(timer); }, []);
-  const [view, setView] = useState<'today' | 'space'>('today');
-  const [spaceOpened, setSpaceOpened] = useState(false);
-  const selectView = (next: 'today' | 'space') => { if (next === 'space') setSpaceOpened(true); setView(next); };
-  const activity = operations.filter(op => op.epoch === snapshot.epoch && ['prepared', 'dispatching', 'accepted', 'running', 'unknown'].includes(op.state)
-    && conversations.some(c => c.id === op.conversationId && !c.deleted)).slice(0, 3);
-  const labels = { prepared: 'Preparing', dispatching: 'Starting', accepted: 'Accepted', running: 'Working', unknown: 'Status needs checking' };
-  return <main className="home-page home-quiet page-scroll" aria-label="Home" data-reorder-scroll>
-    <div className="home-view-bar">
-      <div className="home-view-tabs" role="tablist" aria-label="Home views" onKeyDown={event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        const next = event.key === 'Home' ? 'today' : event.key === 'End' ? 'space' : view === 'today' ? 'space' : 'today';
-        selectView(next); document.getElementById(`home-tab-${next}`)?.focus();
-      }}>
-        {(['today', 'space'] as const).map(id => <button key={id} id={`home-tab-${id}`} role="tab" aria-selected={view === id} aria-controls={`home-panel-${id}`} tabIndex={view === id ? 0 : -1} onClick={() => selectView(id)}>{id === 'today' ? 'Today' : 'My space'}</button>)}
-      </div>
-      <button className="home-capture" onClick={() => newTask()}><Plus size={18}/>Add task</button>
-    </div>
-    <div id="home-panel-today" role="tabpanel" aria-labelledby="home-tab-today" hidden={view !== 'today'}>
-      <BriefingCard key={`${snapshot.epoch}:${snapshot.deviceId}`} snapshot={snapshot} timezone={layout.timezone} appIcon={layout.appIcon} editTask={editTask} complete={complete} openAssistant={() => open('assistant')} openDraft={openDraft} openTasks={() => open('tasks')}>
-        <section className="home-agenda" aria-label="Coming up">
-          <HomeAppointmentWidget epoch={snapshot.epoch} deviceId={snapshot.deviceId} timezone={layout.timezone} now={now} size="compact" openCalendar={() => open('calendar')}/>
-        </section>
-      </BriefingCard>
-      <section className="home-activity quiet-section" aria-labelledby="home-activity-title">
-        <h2 id="home-activity-title">Nova activity</h2>
-        {activityRead !== 'ready' && <p className="metadata" role="status">{activityRead === 'loading' ? 'Checking Assistant activity…' : 'Activity could not be refreshed. Open Assistant to check.'}</p>}
-        {activity.map(op => {
-          const conversation = conversations.find(c => c.id === op.conversationId)!;
-          return <div className="quiet-work-row" key={op.id}>
-            <span className="quiet-row-icon" aria-hidden="true"><MessageSquare size={22}/></span>
-            <div className="quiet-row-copy"><strong>{conversation.title || 'Assistant conversation'}</strong><p>{op.cancelRequested ? 'Stop requested · awaiting confirmation' : labels[op.state as keyof typeof labels]}{activityRead !== 'ready' ? ' · Last known state' : ''}</p></div>
-            <button onClick={() => openConversation ? openConversation(conversation) : open('assistant')}>Open activity</button>
-          </div>;
-        })}
-        {!activity.length && <div className="quiet-work-row"><div className="quiet-row-copy"><p>{activityRead === 'ready' ? 'No active replies in the loaded Assistant activity.' : 'Your saved conversations remain in Assistant.'}</p></div><button onClick={() => open('assistant')}>Open Assistant</button></div>}
-      </section>
-      <section className="home-space-entry" aria-labelledby="home-space-title">
-        <h2 id="home-space-title">My space</h2>
-        <button className="home-space-link" onClick={() => { selectView('space'); document.getElementById('home-tab-space')?.focus(); }}>
-          <span className="quiet-row-icon" aria-hidden="true"><Folder size={23}/></span>
-          <span className="home-space-copy"><strong>My space</strong><small>Notes, links, and saved things.</small></span>
-          <span className="home-space-open" aria-hidden="true"><ArrowRight size={20}/></span>
-        </button>
-      </section>
-    </div>
-    <div id="home-panel-space" role="tabpanel" aria-labelledby="home-tab-space" hidden={view !== 'space'}>
-      {spaceOpened && <HomeSpace {...props}/>}
-    </div>
-  </main>;
+ const key = `e3:home-view:${props.snapshot.deviceId}`, kept = readLocal<string>(key);
+ const [view, setView] = useState<View>(() => ['library', 'ideas', 'feed'].includes(kept ?? '') ? kept as View : 'library'), [widgets, setWidgets] = useState(false), [now, setNow] = useState(Date.now());
+ const controller = useHomeLibrary(props.snapshot), tabs = useRef(new Map<View, HTMLButtonElement>());
+ useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60000);return () => clearInterval(timer); }, []);
+ const select = (next: View) => { setView(next);setWidgets(false);saveLocal(key, next); };
+ return <main className="home-page home-quiet home-approved page-scroll" aria-label="Home" data-reorder-scroll>
+  <nav className="home-view-tabs" role="tablist" aria-label="Home Views" onKeyDown={e => { const ids: View[] = ['library', 'ideas', 'feed'], index = ids.indexOf(view), next = e.key === 'Home' ? ids[0] : e.key === 'End' ? ids[2] : e.key === 'ArrowRight' ? ids[(index + 1) % 3] : e.key === 'ArrowLeft' ? ids[(index + 2) % 3] : null;if (next) { e.preventDefault();select(next);tabs.current.get(next)?.focus(); } }}>{(['library', 'ideas', 'feed'] as const).map(id => <button key={id} type="button" id={`home-tab-${id}`} role="tab" aria-selected={view === id} aria-controls={`home-panel-${id}`} tabIndex={view === id ? 0 : -1} ref={node => { if (node) tabs.current.set(id, node);else tabs.current.delete(id); }} onClick={() => select(id)}>{id[0].toUpperCase() + id.slice(1)}</button>)}</nav>
+  <div id="home-panel-library" role="tabpanel" aria-labelledby="home-tab-library" hidden={view !== 'library'}>{widgets ? <><button className="text-button" onClick={() => setWidgets(false)}><ArrowLeft size={16}/>Library</button><section className="home-kept-overview"><h1>Today And Widgets</h1><BriefingCard snapshot={props.snapshot} timezone={props.layout.timezone} appIcon={props.layout.appIcon} editTask={props.editTask} complete={props.complete} openAssistant={() => props.open('assistant')} openDraft={props.openDraft} openTasks={() => props.open('tasks')}><HomeAppointmentWidget epoch={props.snapshot.epoch} deviceId={props.snapshot.deviceId} timezone={props.layout.timezone} now={now} size="compact" openCalendar={() => props.open('calendar')}/></BriefingCard></section><HomeSpace {...props}/></> : <HomeLibrary snapshot={props.snapshot} controller={controller} openWidgets={() => setWidgets(true)} onAssistantHandoff={props.onAssistantHandoff} openResource={props.openResource}/>}</div>
+  <div id="home-panel-ideas" role="tabpanel" aria-labelledby="home-tab-ideas" hidden={view !== 'ideas'}>{view === 'ideas' && <HomeIdeas snapshot={props.snapshot} controller={controller} onAssistantHandoff={props.onAssistantHandoff}/>}</div>
+  <div id="home-panel-feed" role="tabpanel" aria-labelledby="home-tab-feed" hidden={view !== 'feed'}>{view === 'feed' && <HomeFeed snapshot={props.snapshot} onAssistantHandoff={props.onAssistantHandoff} openFeedTarget={props.openFeedTarget}/>}</div>
+ </main>;
 }

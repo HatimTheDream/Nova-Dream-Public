@@ -1,3 +1,4 @@
+import { extraMarkings, extraClothing, extraFeatures, extraEyewear } from './mascot-art-extended';
 import { defaultMascotAppearance, normalizeMascotAppearance, type MascotAppearance } from '../../../../../packages/domain/mascot-appearance';
 export type MascotExpression = 'idle' | 'listening' | 'speaking';
 /** Approved Nova artwork. All interpolated appearance values pass the domain validator. */
@@ -14,6 +15,7 @@ function ears(a: MascotAppearance, inner: string) {
     <g fill="${inner}">${reflect('<path d="M47 105 C34 93 33 69 43 45 C64 59 78 76 75 93Z"/>')}</g>`;
 }
 function markings(a: MascotAppearance) {
+  const extended = extraMarkings(a); if (extended !== undefined) return extended;
   const color = a.markings;
   if (a.pattern === 'solid') return '';
   if (a.pattern === 'rosettes') return `<g fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
@@ -50,6 +52,7 @@ function markings(a: MascotAppearance) {
 }
 
 function clothing(a: MascotAppearance, id: string) {
+  const extended = extraClothing(a,id); if (extended !== undefined) return extended;
   const c = a.clothing, high = mix(c, '#ffffff', 0.10), low = mix(c, '#000000', 0.2);
   const accent = a.accent;
   const base = `<path d="M0 400V359L120 328Q150 316 172 321H228Q251 317 280 328L400 359V400Z" fill="${c}"/>`;
@@ -102,6 +105,7 @@ function clothing(a: MascotAppearance, id: string) {
 }
 
 function features(a: MascotAppearance, pose: MascotExpression, id: string, muzzle: string) {
+  const extended = extraFeatures(a,pose,id,muzzle); if (extended !== undefined) return extended;
   const bright = a.face === 'bright', calm = a.face === 'calm', focused = a.face === 'focused';
   const curious = a.face === 'curious', cheerful = a.face === 'cheerful';
   const gentle = a.face === 'gentle', confident = a.face === 'confident';
@@ -152,6 +156,7 @@ function features(a: MascotAppearance, pose: MascotExpression, id: string, muzzl
 }
 
 function eyewear(a: MascotAppearance) {
+  const extended = extraEyewear(a); if (extended !== undefined) return extended;
   if (a.glasses === 'none') return '';
   const sides = '<path d="M65 175L47 165 M335 175L353 165 M171 174Q200 155 229 174"/>';
   if (a.glasses === 'round') return `<g fill="none" stroke="${a.glassesColor}" stroke-width="7" stroke-linecap="round"><circle cx="120" cy="188" r="51"/><circle cx="280" cy="188" r="51"/>${sides}</g>`;

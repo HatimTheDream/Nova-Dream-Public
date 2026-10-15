@@ -73,7 +73,7 @@ test('original mascot saves keep their exact shape and acquire the original fram
   const editable = editableMascotAppearance(source);
   editable.glassesColor = '#998877';
   const saved = createMascotAppearance(editable);
-  assert.equal(saved.catalogRevision, 'nova-mascot-2');
+  assert.equal(saved.catalogRevision, MASCOT_CATALOG);
   assert.equal(saved.appearance.glassesColor, '#998877');
   assert.equal(resolved.appearance.glassesColor, '#25272b');
   assert.equal(JSON.stringify(source), before);

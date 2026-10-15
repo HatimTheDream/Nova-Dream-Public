@@ -102,3 +102,73 @@
 .profile-workspace dialog > .dialog-inner > .section-heading h2 { font-size: 20px; }
 .profile-workspace dialog > .dialog-inner > .section-heading .icon-button { flex: none; }
 .profile-workspace > .record-tabs { flex-wrap: wrap; overflow: visible; }
+
+/* Identity and earned progress stay compact; quests use the remaining width. */
+.profile-workspace { container: profile-workspace / inline-size; max-width: 1440px; gap: 18px; }
+.profile-workspace .profile-hero { grid-template-columns: 120px minmax(0, 1fr) minmax(230px, .7fr); gap: 20px; padding: 20px; }
+.profile-workspace .profile-portrait > * { max-width: 120px; max-height: 120px; }
+.profile-workspace .profile-identity { text-align: start; }
+.profile-workspace .profile-identity h2 { font-size: 28px; margin-block: 6px; }
+.profile-workspace .profile-position { font-size: 13px; margin-bottom: 8px; }
+.profile-workspace .profile-about { max-height: 72px; margin-block: 8px; font-size: 13px; }
+.profile-workspace .profile-experience { grid-column: auto; padding-inline-start: 20px; padding-top: 0; border-top: 0; border-inline-start: 1px solid var(--line); }
+.profile-workspace .profile-level { float: none; }
+.profile-workspace .profile-level strong { font-size: 36px; }
+.profile-workspace .profile-xp { margin: 6px 0; font-size: 13px; }
+.profile-workspace .profile-xp strong { font-size: 20px; }
+.profile-workspace .profile-experience > .metadata { margin-block: 6px; font-size: 11px; }
+.profile-workspace .profile-experience summary { min-height: 32px; padding-block: 7px; font-size: 12px; }
+.profile-workspace .profile-stats { padding-inline: 4px; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+.profile-workspace .profile-stats strong { font-size: 22px; }
+.profile-workspace .profile-stats span { font-size: 12px; }
+.profile-workspace .profile-week { grid-column: auto; gap: 6px; }
+.profile-workspace > .record-tabs { gap: 6px; margin: 0; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.profile-quests-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.profile-workspace .profile-quest-list { border-radius: 12px; }
+.profile-workspace .period-quest { padding: 14px; gap: 10px; grid-template-columns: 32px minmax(0, 1fr); }
+.profile-workspace .period-quest .quest-emblem { width: 32px; height: 32px; border-radius: 10px; }
+.profile-workspace .period-quest h3 { font-size: 14px; }
+.profile-workspace .period-quest p { font-size: 12px; }
+.profile-workspace .period-quest-progress { grid-column: 2; grid-template-columns: minmax(60px, 1fr) auto; gap: 10px; }
+.profile-workspace .period-quest > details { grid-column: 2; }
+.profile-workspace .period-quest summary { min-height: 34px; padding-block: 8px; font-size: 12px; }
+.profile-workspace .profile-periodic > .metadata { font-size: 11px; line-height: 1.6; }
+.profile-workspace .section-heading { margin-bottom: 12px; gap: 10px; }
+.profile-workspace .section-heading h2 { font-size: 18px; }
+.profile-workspace .section-heading p { margin: 5px 0 0; font-size: 12px; }
+.profile-workspace .profile-personal-grid { gap: 12px; }
+.profile-workspace .personal-quest { padding: 16px; }
+.profile-workspace .personal-quest h3 { font-size: 16px; }
+.profile-workspace .quest-description { font-size: 13px; }
+.profile-workspace .quest-step-list { margin-block: 12px; }
+.profile-workspace .quest-step-list li { gap: 8px; margin-bottom: 8px; }
+.profile-workspace .quest-step-link { padding: 8px 10px; gap: 4px; }
+.profile-workspace .profile-milestones { margin-top: 16px; gap: 12px; }
+.profile-workspace .profile-milestone { padding: 18px; gap: 10px; }
+.profile-workspace .profile-history { padding: 18px; }
+@container profile-workspace (min-width: 1050px) {
+ .profile-quests-layout { grid-template-columns: minmax(300px, .65fr) minmax(0, 1.35fr); gap: 24px; }
+ .profile-personal { border-inline-start: 1px solid var(--line); padding-inline-start: 24px; }
+}
+@container profile-workspace (max-width: 850px) {
+ .profile-workspace .profile-hero { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; }
+ .profile-workspace .profile-portrait > * { max-width: 96px; max-height: 96px; }
+ .profile-workspace .profile-experience { grid-column: 1 / -1; padding: 14px 0 0; border-inline-start: 0; border-top: 1px solid var(--line); }
+ .profile-workspace .profile-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+ .profile-workspace .profile-week { grid-column: 1 / -1; justify-content: flex-start; }
+ .profile-workspace .profile-personal-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container profile-workspace (max-width: 480px) {
+ .profile-workspace .profile-hero { grid-template-columns: 72px minmax(0, 1fr); padding: 14px; gap: 12px; }
+ .profile-workspace .profile-portrait > * { max-width: 72px; max-height: 72px; }
+ .profile-workspace .profile-identity h2 { font-size: 22px; }
+ .profile-workspace .profile-identity > button { font-size: 12px; padding-inline: 9px; }
+ .profile-workspace .profile-stats { gap: 12px 10px; }
+ .profile-workspace .profile-stats strong { font-size: 20px; }
+ .profile-workspace .profile-stats span { font-size: 11px; }
+ .profile-workspace .section-heading { flex-direction: column; align-items: flex-start; }
+ .profile-workspace .personal-quest .section-heading { flex-direction: row; }
+ .profile-workspace .period-quest-progress { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+ .profile-workspace .profile-milestones { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: coarse) { .profile-workspace .profile-experience summary, .profile-workspace .period-quest summary { min-height: 44px; } }

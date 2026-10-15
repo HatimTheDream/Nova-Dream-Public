@@ -34,7 +34,7 @@
   :root .app-shell > .topbar .navigation-toggle { display:none; }
   :root .app-shell > .workspace { grid-area:2 / 1; min-width:0; min-height:0; }
   :root .app-shell > .bottom-navigation {
-    grid-area:3 / 1; display:block; min-width:0; position:relative;
+    grid-area:3 / 1; display:grid; grid-template-columns:minmax(0,1fr) 44px; column-gap:25px; min-width:0; position:relative;
     height:calc(76px + env(safe-area-inset-bottom));
     padding:0 max(14px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(14px,env(safe-area-inset-left));
     border-top:var(--surface-border); background:var(--surface);
@@ -45,6 +45,8 @@
     touch-action:pan-x; overscroll-behavior-x:contain; user-select:none;
   }
   .bottom-navigation-strip::-webkit-scrollbar { display:none; }
+  .bottom-navigation-fixed { position:relative; display:flex; align-items:flex-start; padding-top:13px; width:44px; }
+  .bottom-navigation-fixed::before { content:""; position:absolute; inset-inline-start:-13px; top:19px; width:1px; height:32px; background:var(--line); pointer-events:none; }
   :root .bottom-navigation button.bottom-navigation-item {
     --app-tile-size:44px; margin:0; scroll-snap-align:start;
   }
@@ -65,13 +67,14 @@
   .bottom-navigation-strip.dragging > button { cursor:grabbing; }
   .bottom-navigation-progress {
     display:block; position:absolute; bottom:calc(8px + env(safe-area-inset-bottom));
-    left:50%; translate:-50% 0; width:58px; height:3px; border-radius:4px;
+    inset-inline-start:calc((100% - 69px) / 2); translate:-50% 0; width:58px; height:3px; border-radius:4px;
     background:var(--line); pointer-events:none;
   }
   .bottom-navigation-progress[hidden] { display:none; }
   .bottom-navigation-progress > span {
     position:absolute; top:0; height:100%; border-radius:inherit; background:var(--muted);
   }
+  .bottom-navigation:dir(rtl) .bottom-navigation-progress { translate:50% 0; }
   :root .app-shell > .topbar .topbar-actions { gap:var(--space-2); }
 }
 

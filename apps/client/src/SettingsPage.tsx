@@ -61,9 +61,9 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
   }, [current.id]);
   return <main className="page-scroll settings-page" aria-label="Settings">
     {returnTo && <div className="settings-return"><button onClick={returnTo.open}><ArrowLeft size={16}/>Back to {returnTo.label}</button></div>}
+    <header className="settings-titlebar"><h1 className="settings-heading">Settings</h1></header>
     <div className="settings-layout">
     <div className="settings-navigation">
-      <h1 className="settings-heading">Settings <span aria-hidden="true">·</span> {current.label}</h1>
       <div ref={tablist} className="settings-tabs" role="tablist" aria-label="Settings categories" aria-orientation={orientation}>
         {tabs.map((tab, index) => <button type="button" key={tab.id} id={`settings-tab-${tab.id}`} className="settings-category-button" role="tab" aria-label={tab.label} aria-selected={current.id === tab.id} aria-controls={`settings-panel-${tab.id}`} tabIndex={current.id === tab.id ? 0 : -1} ref={node => { if (node) buttons.current.set(tab.id, node); else buttons.current.delete(tab.id); }} onClick={() => select(tab.id)} onKeyDown={event => {
           const forward = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
@@ -71,10 +71,11 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
           const next = event.key === forward ? (index + 1) % tabs.length : event.key === backward ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
           if (next === undefined) return;
           event.preventDefault(); select(tabs[next].id); buttons.current.get(tabs[next].id)?.focus();
-        }}><tab.icon size={22} decorative/></button>)}
+        }}><tab.icon size={18} decorative/><span>{tab.label}</span></button>)}
       </div>
     </div>
     <div className="settings-content">
+    <h2 className="settings-section-title">{current.label}</h2>
     <SettingsPanel id="general" active={current.id === 'general'}>{general}<SoftwareUpdateSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} epoch={snapshot.epoch} active={current.id === 'general'} online={online} restricted={phone ? 'Use the owner’s signed-in web session to manage host updates.' : recoveryPaused ? 'Updates are paused while this copy is in recovery.' : undefined}/><AboutSettings identity={`${snapshot.epoch}:${snapshot.deviceId}`} active={current.id === 'general'} online={online}/></SettingsPanel>
     {!phone && <SettingsPanel id="accounts" active={current.id === 'accounts'}><section className="card settings-card settings-accounts">
       <h2>Connected accounts</h2>

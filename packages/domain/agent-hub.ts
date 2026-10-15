@@ -3,6 +3,7 @@ import type { AgentRoutine } from './agent-routines.js';
 import type { AgentDesign, Content } from './workspace-records.js';
 import type { Task } from './contracts.js';
 import type { HubLayout } from './hub-layout.js';
+import type { AgentActivityState } from './agent-activity.js';
 
 export type AssignmentActivity = Pick<AssignmentAttempt, 'id' | 'assignmentId' | 'assignmentRevision' | 'agentId' | 'agentRevision' | 'agentName' | 'title' | 'projectId' | 'createdAt' | 'updatedAt' | 'deadlineAt' | 'state' | 'message' | 'stopReason' | 'unresolvedReview' | 'routine'> & { result?: Pick<NonNullable<AssignmentAttempt['result']>, 'file' | 'disposition'> };
 export const activityOf = (attempt: AssignmentAttempt): AssignmentActivity => {
@@ -22,8 +23,8 @@ export type HubAgent = {
   appliedChanges: number;
   team?: { id: string; title: string; role: string; conversationId?: string };
 };
-export type HubMember = Pick<HubAgent, 'id' | 'revision' | 'name' | 'position' | 'appearance' | 'archived' | 'status' | 'reason'>;
-export type HubState = { observedAt: number; runtimeReady: boolean; runtimeReason: string; agents: HubAgent[]; roster: HubMember[]; layout: HubLayout; total: number; nextCursor: string | null; activeAgentId: string | null };
+export type HubMember = Pick<HubAgent, 'id' | 'revision' | 'name' | 'position' | 'appearance' | 'archived' | 'status' | 'reason' | 'team'> & { work?: { assignmentId: string; attemptId?: string; meetingId?: string; title: string; kind: 'active' | 'review' | 'result' } };
+export type HubState = { observedAt: number; runtimeReady: boolean; runtimeReason: string; agents: HubAgent[]; roster: HubMember[]; layout: HubLayout; total: number; nextCursor: string | null; activeAgentId: string | null; activity?: AgentActivityState };
 export function hubStatus(active: AssignmentActivity | undefined, ready: boolean, latest?: AssignmentActivity, pendingChanges = 0, approvalWaiting = false): { status: HubStatus; reason: string } {
   if (active) {
     if (approvalWaiting && ready) return { status: 'waiting-owner', reason: 'An action needs your approval. Open the assignment to review it.' };

@@ -27,6 +27,8 @@ function reveal(strip: HTMLElement, button: HTMLElement | null, behavior: Scroll
 
 /** Saved order stays intact; swiping only changes which destinations are visible. */
 export function BottomNavigation({ items, route, open, returnToWideNavigation, updateAvailable = false, reorder }: Props) {
+  const dock = useRef<HTMLElement>(null);
+  const dockHadFocus = useRef(false);
   const localStrip = useRef<HTMLDivElement>(null);
   const strip = reorder?.containerRef ?? localStrip;
   const drag = useRef<Drag | null>(null);
@@ -60,7 +62,10 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
     const resize = () => {
       if (!window.matchMedia('(max-width: 800px)').matches) {
         stopDrag();
-        if (node.contains(document.activeElement)) returnFocus.current();
+        // CSS can hide the dock and move focus to body before ResizeObserver
+        // runs. Transfer that focus, but never take it from another control.
+        if (dock.current?.contains(document.activeElement) || dockHadFocus.current && (!document.activeElement || document.activeElement === document.body)) returnFocus.current();
+        dockHadFocus.current = false;
         return;
       }
       const focused = node.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
@@ -74,10 +79,11 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
       measure();
     } else resize();
     const observer = new ResizeObserver(resize);
+    const blur = () => { dockHadFocus.current = false; stopDrag(); };
     observer.observe(node);
     window.addEventListener('resize', resize);
-    window.addEventListener('blur', stopDrag);
-    return () => { observer.disconnect(); window.removeEventListener('resize', resize); window.removeEventListener('blur', stopDrag); stopDrag(); };
+    window.addEventListener('blur', blur);
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize); window.removeEventListener('blur', blur); stopDrag(); };
   }, [route, order]);
 
   const finishDrag = (event: PointerEvent<HTMLDivElement>) => {
@@ -96,7 +102,25 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
     }
   };
 
-  return <NavigationLabels suspended={Boolean(reorder?.dragging)}><nav className="bottom-navigation" data-reorder-host aria-label="Main navigation" aria-description="Swipe or drag to see more sections. Hold a button to move it. Use arrow keys to move between buttons, or Alt and Left or Right to change their order.">
+  return <NavigationLabels suspended={Boolean(reorder?.dragging)}><nav ref={dock} className="bottom-navigation" data-reorder-host aria-label="Main navigation" aria-description="Swipe or drag to see more sections. Settings stays fixed beside the modules. Hold a module button to move it. Use arrow keys to move between buttons, or Alt and Left or Right to change module order." onFocusCapture={() => { dockHadFocus.current = true; }} onBlurCapture={event => {
+    if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget) || !event.relatedTarget && window.matchMedia('(max-width: 800px)').matches) dockHadFocus.current = false;
+  }} onKeyDown={event => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey) return;
+    const buttons = buttonsIn(event.currentTarget), target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null;
+    const index = target ? buttons.indexOf(target) : -1;
+    if (index < 0) return;
+    const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
+    const delta = event.key === 'ArrowRight' ? (rtl ? -1 : 1) : event.key === 'ArrowLeft' ? (rtl ? 1 : -1) : 0;
+    if (event.altKey) {
+      const id = target?.dataset.reorderItem as ModuleId | undefined;
+      if (delta) { event.preventDefault(); if (id && reorder) reorder.move(id, reorder.order.indexOf(id) + delta); }
+      return;
+    }
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : delta ? Math.max(0, Math.min(buttons.length - 1, index + delta)) : null;
+    if (next === null) return;
+    event.preventDefault(); buttons[next].focus({ preventScroll: true });
+    if (strip.current?.contains(buttons[next])) reveal(strip.current, buttons[next], motion());
+  }}>
     <div className="bottom-navigation-strip" data-reorder-scroll ref={strip} onScroll={measure}
       onPointerDown={event => {
         suppressClick.current = false;
@@ -124,26 +148,10 @@ export function BottomNavigation({ items, route, open, returnToWideNavigation, u
         if ((suppressClick.current || reorder?.suppressClick.current) && event.detail !== 0) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); }
       }}
       onFocusCapture={event => { if (!drag.current) reveal(event.currentTarget, event.target.closest<HTMLButtonElement>('button'), motion()); }}
-      onContextMenu={event => { if (reorder?.dragging || reorder?.suppressClick.current) event.preventDefault(); }}
-      onKeyDown={event => {
-        if (event.defaultPrevented || event.ctrlKey || event.metaKey) return;
-        const buttons = buttonsIn(event.currentTarget), target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null;
-        const index = target ? buttons.indexOf(target) : -1;
-        if (index < 0) return;
-        const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
-        const delta = event.key === 'ArrowRight' ? (rtl ? -1 : 1) : event.key === 'ArrowLeft' ? (rtl ? 1 : -1) : 0;
-        if (event.altKey) {
-          const id = target?.dataset.reorderItem as ModuleId | undefined;
-          if (delta && id && reorder) { event.preventDefault(); reorder.move(id, reorder.order.indexOf(id) + delta); }
-          return;
-        }
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : delta ? Math.max(0, Math.min(buttons.length - 1, index + delta)) : null;
-        if (next === null) return;
-        event.preventDefault();
-        buttons[next].focus({ preventScroll: true });
-        reveal(event.currentTarget, buttons[next], motion());
-      }}>
+      onContextMenu={event => { if (reorder?.dragging || reorder?.suppressClick.current) event.preventDefault(); }}>
       {destinations.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`bottom-navigation-item${route === item.id ? ' active' : ''}`} aria-label={item.label} aria-description="Hold to move. Alt and Left or Right also changes position." data-navigation-label={item.label} data-reorder-group="bottom-navigation" data-reorder-item={item.id} aria-current={route === item.id ? 'page' : undefined} {...reorder?.bind(item.id)} onClick={() => open(item.id)}><Icon size={20}/></button>; })}
+    </div>
+    <div className="bottom-navigation-fixed">
       <button type="button" className={`bottom-navigation-item${route === 'settings' ? ' active' : ''}`} aria-label="Settings" data-navigation-label={updateAvailable ? 'Settings · update available' : 'Settings'} aria-current={route === 'settings' ? 'page' : undefined} aria-description={updateAvailable ? 'Software update available' : undefined} onClick={() => open('settings')}><span className="bottom-navigation-settings-icon"><Settings size={20}/>{updateAvailable && <span className="settings-update-dot" aria-hidden="true"/>}</span></button>
     </div>
     <span className="bottom-navigation-progress" aria-hidden="true" hidden={progress.size >= 100}><span style={{ width: `${progress.size}%`, insetInlineStart: `${progress.position}%` }}/></span>

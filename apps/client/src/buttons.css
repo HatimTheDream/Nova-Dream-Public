@@ -2,7 +2,7 @@
    Content rows, calendar surfaces, checkboxes and drag handles keep their
    specialized geometry. Their nested action controls use this same system. */
 :root { --button-radius:var(--control-radius); --button-depth:2px; --button-transition:background .12s,border-color .12s,box-shadow .12s,translate .12s; }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button),
+:root button:not(.widget-handle,.task-open,.task-project-choice,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button),
 .home-page .home-link-list a {
   --button-depth:var(--button-compact-depth,2px);
   --button-edge:var(--line);
@@ -29,7 +29,7 @@
 /* A clickable record is still content. Keep saved/imported spelling and case,
    including model names, filenames and message excerpts, independent of its
    button geometry. Use preserve-case for content inside a mixed action label. */
-:root button:is(.saved-draft,.source-link,.message-match,.contact-row,.content-card-open,.voice-conversation,.home-routine-open,.home-timezone,.hub-team-row,.hub-work-link,.hub-room-title,.pixel-hub-actor,.quest-step-link),
+:root button:is(.task-project-choice,.saved-draft,.source-link,.message-match,.contact-row,.content-card-open,.voice-conversation,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-timezone,.hub-team-row,.hub-work-link,.hub-room-title,.pixel-hub-actor,.quest-step-link),
 :root :is(.title-matches,.contact-email-list,.contact-senders,.record-linked-list,.crm-timeline,.crm-organization-links,.repository-list,.hub-search-results,.home-weather-city-results) > button,
 :root :is(.home-attention-list,.task-family-list,.calendar-cancelled,.dc-calendar-kept-drafts,.inbox-action-history-row) button,
 :root :is(.crm-relations,.address-book-links) button.crm-text-button,
@@ -51,7 +51,7 @@
 :root button:is(.danger,.danger-text) { --button-fill:color-mix(in srgb,var(--danger) 7%,var(--surface)); --button-edge:color-mix(in srgb,var(--danger) 50%,var(--line)); color:var(--danger); }
 /* Reserve the same border space without drawing an accent around filled faces.
    Compact controls set their own depth token, independent of selection. */
-:root button:is(.primary,.bg-aegis-primary,.nav-item.active,[aria-pressed=true],[aria-selected=true],.danger,.danger-text,.dc-mail-delivery-confirm):not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button) {
+:root button:is(.primary,.bg-aegis-primary,.nav-item.active,[aria-pressed=true],[aria-selected=true],.danger,.danger-text,.dc-mail-delivery-confirm):not(.widget-handle,.task-open,.task-project-choice,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button) {
   --button-depth:var(--button-compact-depth,4px);
   --button-border:transparent;
   --button-border-hover:transparent;
@@ -62,19 +62,19 @@
 }
 /* Imported action utilities share the press motion without changing placement. */
 :root .dreamclaw-module button.bg-aegis-primary { --tw-translate-y:0px; }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):hover:not(:disabled),
+:root button:not(.widget-handle,.task-open,.task-project-choice,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):hover:not(:disabled),
 .home-page .home-link-list a:hover {
   background:color-mix(in srgb,var(--button-fill) 85%,var(--soft-gold));
   border-color:var(--button-border-hover);
   box-shadow:0 var(--button-shadow-depth,var(--button-depth)) 0 var(--button-edge);
 }
-:root button:not(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):active:not(:disabled),
+:root button:not(.widget-handle,.task-open,.task-project-choice,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button):active:not(:disabled),
 .home-page .home-link-list a:active {
   --button-shadow-depth:0px;
   translate:0 var(--button-depth);
   box-shadow:none;
 }
-:root button:disabled:not(:where(.widget-handle,.task-open,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button)) { --button-shadow-depth:min(2px,var(--button-depth)); translate:none; box-shadow:0 var(--button-shadow-depth) 0 var(--button-edge,var(--line)); }
+:root button:disabled:not(:where(.widget-handle,.task-open,.task-project-choice,.check-button,.record-list-item,.search-result,.calendar-event,.calendar-day,.calendar-day-number,.dc-inbox-contact-link,[data-inbox-thread],[data-inbox-row],.home-gallery-type,.dc-assistant-rail-scrim,.dc-inbox-rail-scrim,.saved-draft,.message-match,.contact-row,.hub-team-row,.content-card-open,.home-collection-open,.home-resource-open,.home-idea-row,.home-feed-open,.home-routine-open,.home-space-link,.hub-work-link,.quest-step-link,.dc-calendar-date,.dc-calendar-week-date,.dc-calendar-event-block,.dc-calendar-more,:where(.title-matches) > button)) { --button-shadow-depth:min(2px,var(--button-depth)); translate:none; box-shadow:0 var(--button-shadow-depth) 0 var(--button-edge,var(--line)); }
 :root button:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 .home-page .home-link-list a:focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
 :root button.icon-button { padding:0; min-width:var(--icon-button-size); gap:0; }

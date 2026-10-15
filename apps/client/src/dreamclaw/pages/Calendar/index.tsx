@@ -107,9 +107,22 @@ export default function CalendarPage() {
     <PageTransition className="dc-calendar-page relative h-full min-h-0 overflow-hidden" data-calendar-page>
       <div className="flex h-full min-h-0 flex-col bg-aegis-bg" lang="en" data-calendar-gregorian="true">
         <header className="dc-calendar-toolbar shrink-0 border-b border-aegis-border bg-aegis-surface-solid px-3 py-3 sm:px-5">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-1.5" aria-label="Calendar month navigation">
-              <button type="button" onClick={() => navigate(-1)} aria-label="Previous month"
+          <div className="dc-calendar-heading">
+            <div className="dc-calendar-title"><h1>Calendar</h1><p>{displayEvents.length} {displayEvents.length === 1 ? 'item' : 'items'} this month{syncing ? ' · Syncing calendars…' : ''}{lastSyncedAt && syncMode !== 'local-only' ? ` · Updated ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(lastSyncedAt))}` : ''}</p></div>
+            <div className="dc-calendar-actions flex items-center gap-2">
+              <button type="button" onClick={() => handleAddEvent()} aria-label={editor.draft ? 'Continue Event Draft' : 'New Event'}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-aegis-primary px-3 text-[12px] font-semibold text-aegis-btn-primary-text shadow-sm transition-colors hover:bg-aegis-primary-hover">
+                <Plus size={15} /><span>{editor.draft ? 'Continue Draft' : 'New Event'}</span>
+              </button>
+              <button type="button" onClick={() => void loadMonth(selectedDate, { force: true })} disabled={loading || syncing}
+                className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted hover:text-aegis-primary disabled:opacity-50" aria-label="Refresh This Month">
+                <RefreshCw size={15} className={loading || syncing ? 'animate-spin motion-reduce:animate-none' : ''} />
+              </button>
+            </div>
+          </div>
+          <div className="dc-calendar-controls">
+            <div className="dc-calendar-period-nav flex items-center gap-1.5" aria-label={`Calendar ${view} navigation`}>
+              <button type="button" onClick={() => navigate(-1)} aria-label={`Previous ${view}`}
                 className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted transition-colors hover:border-aegis-primary/35 hover:text-aegis-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-aegis-primary">
                 {isRtl ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
               </button>
@@ -117,39 +130,20 @@ export default function CalendarPage() {
                 className="h-9 rounded-xl border border-aegis-primary/25 bg-aegis-primary-surface px-3 text-[12px] font-semibold text-aegis-primary transition-colors hover:bg-aegis-primary/15">
                 Today
               </button>
-              <button type="button" onClick={() => navigate(1)} aria-label="Next month"
+              <button type="button" onClick={() => navigate(1)} aria-label={`Next ${view}`}
                 className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted transition-colors hover:border-aegis-primary/35 hover:text-aegis-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-aegis-primary">
                 {isRtl ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}
               </button>
+              <h2 dir="ltr">{viewTitle}</h2>
             </div>
-
-            <div className="min-w-[170px] flex-1" dir="ltr">
-              <h1 className="text-[20px] font-bold leading-tight text-aegis-text sm:text-[22px]">{viewTitle}</h1>
-              <p className="mt-0.5 text-[11px] text-aegis-text-dim">
-                {displayEvents.length} {displayEvents.length === 1 ? 'item' : 'items'} this month
-                {syncing ? ' · Syncing calendars…' : ''}
-                {lastSyncedAt && syncMode !== 'local-only' ? ` · Updated ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(lastSyncedAt))}` : ''}
-              </p>
-            </div>
-
-            <div className="dc-calendar-actions flex items-center gap-2">
-              <button type="button" onClick={() => handleAddEvent()} aria-label={editor.draft ? 'Continue event draft' : 'Add event'}
-                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-aegis-primary px-3 text-[12px] font-semibold text-aegis-btn-primary-text shadow-sm transition-colors hover:bg-aegis-primary-hover">
-                <Plus size={15} /> <span className="hidden sm:inline">{editor.draft ? "Continue event draft" : "Add event"}</span><span className="sm:hidden">{editor.draft ? 'Continue' : 'Add'}</span>
-              </button>
-              <button type="button" onClick={() => void loadMonth(selectedDate, { force: true })} disabled={loading || syncing}
-                className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted hover:text-aegis-primary disabled:opacity-50" aria-label="Refresh this month">
-                <RefreshCw size={15} className={loading || syncing ? 'animate-spin motion-reduce:animate-none' : ''} />
-              </button>
-              <div className="dc-calendar-view flex rounded-xl border border-aegis-border bg-aegis-elevated p-1" aria-label="Calendar view">
-                {(['month', 'week', 'day'] as const).map((item) => (
+              <div className="dc-calendar-view flex rounded-xl border border-aegis-border bg-aegis-elevated p-1" aria-label="Calendar View">
+                {(['day', 'week', 'month'] as const).map((item) => (
                   <button key={item} type="button" onClick={() => setView(item)} aria-pressed={view === item}
                     className={clsx('rounded-lg px-3 py-1.5 text-[11px] font-semibold capitalize transition-colors', view === item ? 'bg-aegis-primary text-aegis-btn-primary-text' : 'text-aegis-text-dim hover:text-aegis-text')}>
-                    {item}
+                    {item[0].toUpperCase() + item.slice(1)}
                   </button>
                 ))}
               </div>
-            </div>
           </div>
         </header>
 
@@ -166,8 +160,8 @@ export default function CalendarPage() {
           </div>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_240px] lg:overflow-hidden">
-          <main className="relative flex min-h-[500px] min-w-0 flex-col overflow-hidden lg:min-h-0">
+        <div className="dc-calendar-layout grid min-h-0 flex-1 grid-cols-1 overflow-y-auto overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_240px] lg:overflow-hidden">
+          <main className="dc-calendar-main relative flex min-h-[500px] min-w-0 flex-col overflow-hidden lg:min-h-0">
             {loading && events.length === 0 ? (
               <div className="grid flex-1 place-items-center"><LoadingRing label="Loading Calendar"/></div>
             ) : view === 'month' ? (
@@ -180,7 +174,7 @@ export default function CalendarPage() {
             {loading && events.length > 0 && <div className="pointer-events-none absolute right-3 top-3"><LoadingRing label="Refreshing Calendar"/></div>}
           </main>
 
-          <aside className="grid min-h-0 gap-3 border-t border-aegis-border bg-aegis-surface-solid p-3 sm:grid-cols-2 lg:block lg:overflow-y-auto lg:border-t-0 lg:p-4" style={{ borderInlineStart: '1px solid var(--aegis-border)' }}>
+          <aside className="dc-calendar-context grid min-h-0 gap-3 border-t border-aegis-border bg-aegis-surface-solid p-3 sm:grid-cols-2 lg:block lg:overflow-y-auto lg:border-t-0 lg:p-4" style={{ borderInlineStart: '1px solid var(--aegis-border)' }}>
             <section aria-labelledby="selected-day-heading">
               <div className="flex items-center justify-between gap-2">
                 <div>

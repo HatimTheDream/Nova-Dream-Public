@@ -76,3 +76,41 @@
 :root .calendar-module .dc-calendar-agenda-event {
   padding:8px 12px; background:var(--raised); border-inline-start:3px solid var(--line);
 }
+
+/* Calendar keeps time navigation separate from the app's create actions. */
+.calendar-module .dc-calendar-toolbar { padding: 18px 20px 12px; }
+.calendar-module .dc-calendar-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.calendar-module .dc-calendar-title { min-width: 0; }
+.calendar-module .dc-calendar-title h1 { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.2; }
+.calendar-module .dc-calendar-title p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.calendar-module .dc-calendar-controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.calendar-module .dc-calendar-period-nav { flex-wrap: wrap; min-width: 0; }
+.calendar-module .dc-calendar-period-nav h2 { margin: 0 0 0 8px; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.calendar-module .dc-calendar-view { display: flex; gap: 6px; padding: 0; border: 0; background: transparent; }
+:root .calendar-module .dc-calendar-view > button { flex: 0 0 auto; min-width: 64px; padding-inline: 12px; font-size: 12px; white-space: nowrap; overflow-wrap: normal; }
+.calendar-module .dc-calendar-context { padding: 16px; }
+:root .calendar-module .dc-calendar-month-event { font-size: 11px; }
+@container calendar-page (max-width: 900px) {
+ .calendar-module .dc-calendar-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+ .calendar-module .dc-calendar-main { min-height: 460px; }
+ .calendar-module .dc-calendar-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-inline-start: 0 !important; border-top: 1px solid var(--line); overflow: visible; gap: 12px; }
+ .calendar-module .dc-calendar-context > details { margin-top: 0; }
+ .calendar-module .dc-calendar-context > details:last-child { grid-column: 1 / -1; }
+}
+@container calendar-page (max-width: 540px) {
+ .calendar-module .dc-calendar-toolbar { padding: 14px 12px 10px; }
+ .calendar-module .dc-calendar-heading { margin-bottom: 12px; }
+ .calendar-module .dc-calendar-title h1 { font-size: 24px; }
+ .calendar-module .dc-calendar-actions { width: auto; flex-wrap: nowrap; gap: 6px; }
+ .calendar-module .dc-calendar-period-nav h2 { flex-basis: 100%; margin: 5px 0 0; font-size: 16px; }
+ .calendar-module .dc-calendar-view { display: flex; width: auto; margin-inline-start: auto; align-self: flex-start; }
+ .calendar-module .dc-calendar-view > button { padding-inline: 10px; }
+ .calendar-module .dc-calendar-context { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+ .calendar-module .dc-calendar-main { min-height: 400px; }
+}
+@container calendar-page (max-width: 360px) {
+ .calendar-module .dc-calendar-heading { flex-wrap: wrap; }
+ .calendar-module .dc-calendar-controls { gap: 8px; }
+ .calendar-module .dc-calendar-period-nav { flex: 1 1 100%; }
+ .calendar-module .dc-calendar-view { width: 100%; margin-inline-start: 0; }
+}

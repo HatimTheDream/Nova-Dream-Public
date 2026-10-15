@@ -28,3 +28,43 @@
 .content-card-stage > summary { width: fit-content; min-height: 44px; align-content: center; cursor: pointer; font-size: 12px; color: var(--muted); }
 .content-card-stage[open] > summary { margin-bottom: 4px; }
 .content-card-stage select { min-height: 44px; }
+
+/* Five real stages use the available width; only the board scrolls on small desktops. */
+.content-planning { container: content-planning / inline-size; }
+.content-planning .content-board { grid-template-columns: repeat(5, minmax(176px, 1fr)); gap: 12px; padding-bottom: 10px; }
+.content-planning .content-column > header { padding: 0 4px 8px; gap: 6px; }
+.content-planning .content-column h3 { font-size: 13px; }
+.content-planning .content-column h3 span { font-size: 11px; margin-inline-start: 5px; }
+.content-planning .content-column > header > button { min-width: 36px; width: 36px; }
+.content-planning .content-column-cards { padding: 10px 0; min-height: 94px; gap: 10px; }
+.content-planning .content-card { padding: 11px; border-radius: 12px; }
+.content-planning .content-card-open { gap: 6px; padding-bottom: 5px; }
+.content-planning .content-card-open strong { font-size: 14px; line-height: 1.45; }
+.content-planning .content-card-brief { -webkit-line-clamp: 2; font-size: 12px; }
+.content-planning .content-card-open small { font-size: 11px; }
+.content-planning .content-card-stage > summary { min-height: 34px; font-size: 11px; }
+.content-planning .content-empty { margin: 0; padding: 12px 6px; text-align: start; font-size: 12px; }
+.content-planning .content-moves { padding: 14px; margin: 12px 0; }
+.content-planning .content-calendar-toolbar { margin: 12px 0; gap: 12px; }
+.content-planning .content-calendar-toolbar h3 { min-width: 130px; font-size: 15px; }
+.content-planning .content-weekdays, .content-planning .content-calendar-days { grid-template-columns: repeat(7, minmax(125px, 1fr)); gap: 6px; }
+.content-planning .content-day { border-radius: 10px; padding: 7px; min-height: 116px; gap: 8px; }
+.content-planning .content-day > header { align-items: flex-start; font-size: 11px; }
+.content-planning .content-day > header > button { min-width: 32px; width: 32px; }
+.content-planning .content-unscheduled { padding: 14px; margin-top: 18px; border-radius: 12px; }
+@container content-planning (max-width: 620px) {
+ .content-planning .content-board { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+ .content-planning .content-column-cards { min-height: 0; padding-block: 8px 0; }
+ .content-planning .content-column[data-empty] .content-empty { padding-block: 4px; }
+ .content-planning .content-weekdays { display: none; }
+ .content-planning .content-calendar-days { grid-template-columns: minmax(0, 1fr); }
+ .content-planning .content-day.is-empty:not(.is-selected) { display: none; }
+ .content-planning .content-day > header { font-size: 13px; }
+ .content-planning .content-day { min-height: 86px; padding: 10px; }
+ .content-planning .content-calendar-toolbar { display: grid; }
+ .content-planning .content-calendar-toolbar > .button-row + .button-row { margin-top: 0; }
+}
+@media (pointer: coarse) {
+ .content-planning .content-column > header > button, .content-planning .content-day > header > button { min-width: 44px; width: 44px; }
+ .content-planning .content-card-stage > summary { min-height: 44px; }
+}

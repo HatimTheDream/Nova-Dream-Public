@@ -28,3 +28,42 @@
  .content-studio-tabs button { flex: 0 0 auto; padding-inline: 10px; }
  .content-writing-head small { font-size: 12px; }
 }
+
+/* Keep the writing surface and its saved planning context within one editor. */
+.content-studio { container: content-studio / inline-size; max-width: 1440px; margin: 12px auto; padding: 20px; }
+.content-studio .content-studio-header { align-items: center; }
+.content-studio .content-title-field input { padding: 9px 12px; }
+.content-studio .content-studio-tabs { margin: 14px 0; padding-bottom: 12px; gap: 6px; }
+.content-write-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.content-writing, .content-inspector { min-width: 0; }
+.content-studio .content-inspector label { font-size: 12px; margin-block: 10px; gap: 5px; }
+.content-studio .content-inspector input, .content-studio .content-inspector select, .content-studio .content-inspector textarea { font-size: 13px; }
+.content-studio .content-inspector .content-details { margin-top: 0; }
+.content-studio .content-inspector .content-details > summary { font-size: 13px; }
+.content-studio .content-inspector .record-field-grid { gap: 0 10px; }
+.content-studio .content-inspector .record-field-grid > label { min-width: 0; }
+.content-studio .content-delivery { margin-top: 18px; padding-top: 14px; gap: 8px; }
+.content-studio .content-formatting { gap: 5px; }
+.content-studio .content-formatting > button { font-size: 12px; padding-inline: 9px; }
+.content-studio .content-draft-field textarea { min-height: 400px; padding: 18px; line-height: 1.75; }
+:root .content-studio .content-writing-head .segmented > button { flex: 0 0 auto; min-width: 68px; padding-inline: 9px; white-space: nowrap; overflow-wrap: normal; }
+@container content-studio (min-width: 900px) {
+ .content-write-layout { grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; align-items: start; }
+ .content-inspector { padding-inline-start: 20px; border-inline-start: 1px solid var(--line); }
+ .content-studio .content-inspector .content-details { padding-top: 0; border-top: 0; }
+ .content-studio .content-inspector .content-details + .content-details { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 14px; }
+ .content-studio .content-draft-field textarea { min-height: 540px; }
+}
+@container content-studio (max-width: 600px) {
+ .content-studio .content-studio-identity { flex-basis: 100%; }
+ .content-studio .content-studio-actions { justify-content: flex-start; gap: 6px; }
+ .content-studio .content-studio-actions > button { font-size: 12px; padding-inline: 9px; }
+ .content-studio .content-writing-head { align-items: flex-start; }
+ .content-studio .content-writing-head small { flex-basis: 100%; }
+ .content-studio .content-draft-field textarea { padding: 14px; min-height: 320px; font-size: 15px; }
+ .content-studio .content-delivery .button-row > button { flex: 1 1 130px; }
+}
+@container content-studio (max-width: 430px) {
+ .content-studio .content-studio-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+ .content-studio .content-studio-tabs > button { min-width: 0; white-space: nowrap; }
+}

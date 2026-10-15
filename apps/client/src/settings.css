@@ -1,19 +1,15 @@
 .settings-page { container: nova-settings / inline-size; scroll-padding-block: 16px; }
-.settings-layout, .settings-return { max-width: 1040px; margin-inline: auto; }
+.settings-layout, .settings-return, .settings-titlebar { max-width: 1040px; margin-inline: auto; }
 .settings-return { margin-bottom: 16px; }
-.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); align-items: start; }
-.settings-navigation { min-width: 0; }
+.settings-layout { display: grid; grid-template-columns: 177px minmax(0, 1fr); gap: 35px; align-items: start; }
+.settings-navigation { min-width: 0; padding-inline-end: 20px; border-inline-end: 1px solid var(--line); }
 .settings-heading { margin: 0 0 var(--space-4); font-size: clamp(24px,3cqw,32px); line-height: 1.25; overflow-wrap: anywhere; }
 :root .settings-page button, :root .settings-page .button-link { min-height: var(--button-min-height); max-width: 100%; text-transform: none; }
-/* Category controls use the shared raised button family; names appear on
-   hover or keyboard focus, and remain available to assistive technology. */
-.settings-tabs { display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--control-gap); padding-block: var(--space-1); }
-:root .settings-page .settings-tabs [role="tab"] { position: relative; flex: 0 0 var(--icon-button-size); width: var(--icon-button-size); height: var(--icon-button-size); min-width: var(--icon-button-size); padding: 0; gap: 0; justify-content: center; }
+/* Visible category names use the same raised controls as the rest of Nova. */
+.settings-tabs { display: flex; flex-direction: column; gap: 7px; padding-block: var(--space-1); }
+:root .settings-page .settings-tabs [role="tab"] { position: relative; flex: none; width: 100%; min-width: 0; min-height: 44px; padding: 8px 11px; gap: 10px; justify-content: flex-start; }
 :root .settings-page .settings-tabs [role="tab"][aria-selected="true"] { --button-fill: var(--action); --button-edge: var(--action-edge); --button-border: var(--action-edge); --button-border-hover: var(--action-edge); color: var(--action-ink); background: var(--button-fill); }
-.settings-category-button::after { content: attr(aria-label); position: absolute; z-index: 5; top: calc(100% + 8px); left: 50%; translate: -50% 0; max-width: min(220px,80vw); padding: 6px 10px; border: var(--surface-border); border-radius: 8px; background: var(--text); color: var(--surface); font-size: var(--type-meta); line-height: 1.5; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; }
-.settings-category-button:is(:hover,:focus-visible)::after { opacity: 1; visibility: visible; }
-.settings-category-button:first-child::after { left: 0; translate: none; }
-.settings-category-button:last-child::after { left: auto; right: 0; translate: none; }
+.settings-section-title { margin: 0 0 18px; font-size: var(--text-heading-md); }
 .settings-content, .settings-panel { min-width: 0; }
 .settings-content { width: 100%; }
 .settings-panel[hidden] { display: none; }
@@ -106,6 +102,22 @@
 .usage-days > div { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; border-top: 1px solid var(--line); }
 .usage-days dd { margin: 0; }
 @container nova-settings (max-width: 320px) { .settings-tabs { gap: var(--space-1); } }
+@container nova-settings (max-width: 760px) {
+  .settings-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .settings-navigation { border-inline-end: 0; border-bottom: 1px solid var(--line); padding: 0 0 14px; }
+  .settings-tabs { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  :root .settings-page .settings-tabs [role="tab"] { flex: 1 1 105px; width: auto; justify-content: center; }
+}
+@container nova-settings (max-width: 400px) {
+  :root .settings-page .settings-tabs [role="tab"] { flex-basis: 82px; padding-inline: 8px; gap: 6px; }
+  .settings-tabs svg { display: none; }
+}
+@media (max-width: 360px) {
+  .settings-tabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+  :root .settings-page .settings-tabs [role="tab"] { width: 100%; }
+  .settings-category-button > .e3-icon { display: none !important; }
+  .settings-category-button > span:not(.e3-icon) { white-space: nowrap; overflow-wrap: normal; }
+}
 @media (max-width: 650px) {
   .settings-page .setting-row { gap: 10px; }
   .settings-page .setting-row > button { flex-shrink: 1; }

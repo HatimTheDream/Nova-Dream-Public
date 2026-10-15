@@ -1,3 +1,23 @@
+## [2.6.0] — 2026-10-15
+
+### Added
+
+- Organize Home into Library, Ideas and Feed. Keep notes, links and mixed-source collections, choose concrete planning or research Ideas, and discuss exact saved results with their original context in Assistant.
+- Add a compact animated Headquarters with private offices, shared rooms, a Boardroom discussion dock, work links and real saved conversation replies.
+- Give agents retained personalities and optional, bounded Proactive conversations grounded in their current work. Existing agents remain On Request; Sleep stops new automatic activity and preserves unfinished work and original routine occurrences.
+- Expand the appearance creator to 20 stable choices per category with numbered names, an organized color grid, independent color locks and a Saved/Editing comparison. Save Look changes appearance without saving unrelated record edits.
+
+### Improved
+
+- Refine Tasks, Calendar, Contacts, Content and Profile for their individual workflows with compact responsive layouts, shared controls and visible empty, loading and error states. Preserve the original Mail and Assistant interfaces.
+- Add labeled Settings categories, staged General settings and clear Save, Discard and unsaved-change handling. Keep mobile Settings fixed at the right of the module strip with a separate divider.
+- Preserve source IDs and revisions through Library captures, Feed destinations and Assistant handoffs. Planning Ideas retain a draft in the existing Chat or Work workflow for review before sending; automatic task scheduling is not enabled.
+
+### Fixed
+
+- Keep appearance-only saves, pending requests and retained drafts bound to their original scope, including delayed acknowledgements and reloads.
+- Prevent Headquarters portraits from overlapping in shared spaces, clear stale speech when disconnected, return participants home when gatherings end, and reopen the exact saved discussion.
+
 ## [2.5.1] — 2026-10-15
 
 ### Fixed

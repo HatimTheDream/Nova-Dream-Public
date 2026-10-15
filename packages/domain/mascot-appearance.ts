@@ -1,13 +1,21 @@
 import { resolveSquareLynxAppearance } from './square-lynx.js';
 
-export const MASCOT_CATALOG = 'nova-mascot-2' as const;
+export const MASCOT_CATALOG = 'nova-mascot-3' as const;
 const legacyMascotCatalog = 'nova-mascot-1';
 
-export const mascotOptions = Object.freeze({
+/** Frozen revision 1/2 IDs; opening an older recipe never upgrades its shape. */
+export const originalMascotOptions = Object.freeze({
   face: Object.freeze(['classic', 'bright', 'calm', 'focused', 'curious', 'cheerful', 'gentle', 'confident'] as const),
   pattern: Object.freeze(['signature', 'freckles', 'blaze', 'rosettes', 'mask', 'patches', 'bands', 'solid'] as const),
   outfit: Object.freeze(['suit', 'knit', 'shirt', 'hoodie', 'cardigan', 'vest', 'turtleneck', 'utility'] as const),
   glasses: Object.freeze(['none', 'round', 'square', 'browline'] as const),
+});
+
+export const mascotOptions = Object.freeze({
+  face: Object.freeze([...originalMascotOptions.face, 'alert', 'dreamy', 'playful', 'thoughtful', 'determined', 'warm', 'skeptical', 'bashful', 'delighted', 'serene', 'mischievous', 'adventurous'] as const),
+  pattern: Object.freeze([...originalMascotOptions.pattern, 'ticked', 'lynx-spots', 'chevrons', 'dappled', 'contour', 'cap', 'tearline', 'mosaic', 'sable', 'ripple', 'crown', 'pinstripe'] as const),
+  outfit: Object.freeze([...originalMascotOptions.outfit, 'polo', 'bomber', 'henley', 'denim', 'varsity', 'blazer', 'vneck', 'raincoat', 'scarf', 'tuxedo', 'track', 'overalls'] as const),
+  glasses: Object.freeze([...originalMascotOptions.glasses, 'aviator', 'cat-eye', 'oval', 'hexagon', 'octagon', 'club-round', 'wayfarer', 'rectangle', 'panto', 'navigator', 'rimless', 'half-rim', 'sport', 'shield', 'horn-rim', 'keyhole'] as const),
 });
 
 export type MascotAppearance = {
@@ -96,7 +104,7 @@ export function resolveMascotAppearance(source: unknown):
   const fields = dataFields(source);
   if (!fields) return { status: 'invalid', source };
   const catalog = fields.catalogRevision?.value as unknown;
-  if (fields.schemaVersion?.value !== 1 || (catalog !== MASCOT_CATALOG && catalog !== legacyMascotCatalog)) {
+  if (fields.schemaVersion?.value !== 1 || (catalog !== MASCOT_CATALOG && catalog !== 'nova-mascot-2' && catalog !== legacyMascotCatalog)) {
     return { status: 'unsupported', source };
   }
   if (!hasExactly(fields, envelopeKeys)) return { status: 'invalid', source };
@@ -105,10 +113,11 @@ export function resolveMascotAppearance(source: unknown):
   // Version 1 keeps its exact saved shape. The editable/rendered copy alone
   // receives the original frame ink; opening a record never migrates it.
   const savedColorKeys = catalog === legacyMascotCatalog ? legacyColorKeys : colorKeys;
+  const savedOptions = catalog === MASCOT_CATALOG ? mascotOptions : originalMascotOptions;
   if (!choices || !hasExactly(choices, [...choiceKeys, ...savedColorKeys])) return { status: 'invalid', source };
   for (const key of choiceKeys) {
     const value: unknown = choices[key].value;
-    if (typeof value !== 'string' || !(mascotOptions[key] as readonly string[]).includes(value)) {
+    if (typeof value !== 'string' || !(savedOptions[key] as readonly string[]).includes(value)) {
       return { status: 'invalid', source };
     }
   }

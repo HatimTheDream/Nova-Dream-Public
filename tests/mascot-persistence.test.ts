@@ -22,7 +22,7 @@ test('saved mascot recipes survive Store restart and old portraits change only a
   const restart = () => { store.close(); store = new Store(directory); };
   try {
     const newAppearance = createMascotAppearance({
-      ...defaultMascotAppearance, face: 'curious', pattern: 'rosettes', outfit: 'cardigan', glasses: 'browline',
+      ...defaultMascotAppearance, face: 'adventurous', pattern: 'pinstripe', outfit: 'overalls', glasses: 'keyhole',
       fur: '#aabbcc', markings: '#123456', eyes: '#fedcba', clothing: '#445566', accent: '#aaccff', glassesColor: '#3377aa',
     });
     const newAgent = { ...blankRecord('agent', 'UTC'), name: 'New mascot', position: 'Designer', appearance: newAppearance } as AgentDesign;

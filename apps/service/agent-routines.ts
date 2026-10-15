@@ -13,7 +13,7 @@ const graceMs = 60_000;
 export class AgentRoutines {
   private timer?: ReturnType<typeof setInterval>;
   private closed = false;
-  constructor(private store: Store, private assignments: AssignmentService, private now = Date.now) {}
+  constructor(private store: Store, private assignments: AssignmentService, private now = Date.now, private canStartAgent: (id: string) => boolean = () => true) {}
   private list() { return this.store.internalList<AgentRoutine>('agent-routines:item:'); }
   state(routineId?: string, before?: string): AgentRoutineState {
     const prefix = historyPrefix(routineId), cursor = before ? this.store.internalRead<{ suffix: string; routineId: string }>(`agent-routines:cursor:${before}`) : undefined;
@@ -46,8 +46,16 @@ export class AgentRoutines {
       }
       const at = this.now(), next = nextAgentRun(value, at);
       const preserve = current && !definitionChanged && current.value.enabled && value.enabled && !current.attention;
-      if (value.enabled && next === null && !preserve) throw new Fault(400, 'routine_schedule', 'This schedule has no future occurrence. Choose a future time.');
-      const saved: AgentRoutine = { id: input.id, revision: input.expectedRevision + 1, epoch: input.epoch, deviceId: device, updatedAt: at, value, agentId: plan?.value.agentId ?? current!.agentId, nextAt: value.enabled && !value.archived ? preserve ? current.nextAt : next : null, attention: null };
+      const deferred = !definitionChanged && current?.epoch === input.epoch ? current.deferred : undefined;
+      if (value.enabled && next === null && !preserve && !deferred) throw new Fault(400, 'routine_schedule', 'This schedule has no future occurrence. Choose a future time.');
+      if (definitionChanged && current?.deferred) {
+        const pending = current.deferred, suffix = `${(9999999999999 - pending.recordedAt).toString().padStart(13, '0')}:${pending.id}`;
+        const skipped: RoutineOccurrence = { id: pending.id, routineId: current.id, routineRevision: current.revision, scheduledAt: pending.scheduledAt, recordedAt: at, state: 'skipped', message: 'The routine definition changed before this sleeping-agent occurrence ran. No assignment was dispatched.' };
+        this.store.internalWrite(historyPrefix() + suffix, skipped); this.store.internalWrite(historyPrefix(current.id) + suffix, skipped);
+        this.store.internalWrite(`agent-routines:cursor:${pending.id}`, { suffix, routineId: current.id });
+        this.store.internalWrite('agent-routines:count', (this.store.internalRead<number>('agent-routines:count') ?? 0) + 1);
+      }
+      const saved: AgentRoutine = { id: input.id, revision: input.expectedRevision + 1, epoch: input.epoch, deviceId: device, updatedAt: at, value, agentId: plan?.value.agentId ?? current!.agentId, nextAt: value.enabled && !value.archived ? deferred?.scheduledAt ?? (preserve ? current.nextAt : next) : null, attention: null, ...(deferred ? { deferred } : {}) };
       this.store.internalWrite(routineKey(input.id), saved);
       this.store.internalWrite(`agent-routines:revision:${input.id}:${saved.revision.toString().padStart(8, '0')}`, saved);
       return saved;
@@ -64,19 +72,24 @@ export class AgentRoutines {
       if (routine.epoch !== this.store.epoch) { this.store.internalWrite(routineKey(routine.id), { ...routine, nextAt: null, attention: 'The workspace was recovered. Review and enable this schedule again.' }); continue; }
       const count = this.store.internalRead<number>('agent-routines:count') ?? 0;
       if (count >= 20000) { this.store.internalWrite(routineKey(routine.id), { ...routine, nextAt: null, attention: 'Routine history storage is full. Saved work is kept; scheduling is paused.' }); continue; }
-      const first = routine.nextAt!, latest = latestAgentRun(routine.value, at, first), overdue = at - first > graceMs;
+      const first = routine.deferred?.scheduledAt ?? routine.nextAt!, latest = latestAgentRun(routine.value, at, first), overdue = !routine.deferred && at - first > graceMs;
       const scheduledAt = overdue && routine.value.missed === 'latest' ? latest : first;
-      const nextAt = nextAgentRun(routine.value, at), id = randomUUID();
+      const nextAt = nextAgentRun(routine.value, at), id = routine.deferred?.id ?? randomUUID();
       const event: RoutineOccurrence = { id, routineId: routine.id, routineRevision: routine.revision, scheduledAt, recordedAt: at, state: 'started', message: 'Started the exact saved assignment for this occurrence.', ...(latest > first ? { throughAt: latest } : {}) };
       const record = (state: RoutineOccurrence['state'], message: string, attemptId?: string) => {
         const saved = { ...event, state, message, ...(attemptId ? { attemptId } : {}) }, suffix = `${(9999999999999 - at).toString().padStart(13, '0')}:${id}`;
         this.store.internalWrite(historyPrefix() + suffix, saved); this.store.internalWrite(historyPrefix(routine.id) + suffix, saved);
         this.store.internalWrite(`agent-routines:cursor:${id}`, { suffix, routineId: routine.id });
         this.store.internalWrite('agent-routines:count', count + 1);
-        this.store.internalWrite(routineKey(routine.id), { ...routine, nextAt: state === 'review' ? null : nextAt, attention: state === 'review' ? message : null });
+        const { deferred, ...settled } = routine;
+        this.store.internalWrite(routineKey(routine.id), { ...settled, nextAt: state === 'review' ? null : nextAt, attention: state === 'review' ? message : null });
       };
       if (overdue && routine.value.missed !== 'latest') {
         this.store.internalAtomic(() => record(routine.value.missed === 'review' ? 'review' : 'skipped', routine.value.missed === 'review' ? 'The host missed a scheduled run. Review and enable the routine to continue; missed work has not run.' : 'Skipped the elapsed schedule window under this routine’s missed-run policy.'));
+        continue;
+      }
+      if (!this.canStartAgent(routine.agentId)) {
+        if (!routine.deferred) this.store.internalWrite(routineKey(routine.id), { ...routine, deferred: { id, scheduledAt, recordedAt: at, message: 'Waiting for this agent to wake. The original occurrence has not run.' } });
         continue;
       }
       const available = this.assignments.state();

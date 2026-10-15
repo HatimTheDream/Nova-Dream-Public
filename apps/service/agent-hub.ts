@@ -10,11 +10,13 @@ import { assignmentNeedsApproval } from '../../packages/domain/assignment-approv
 import type { TeamWork } from '../../packages/domain/team-work.js';
 import type { Conversation, AssistantOperation } from '../../packages/domain/assistant.js';
 import { appendHubRoom, deskAvailable, hubLayoutCommandSchema, hubLayoutKey, roomFurnitureSlots, type HubLayout } from '../../packages/domain/hub-layout.js';
+import type { AgentActivity } from './agent-activity.js';
+import type { HubMeeting } from '../../packages/domain/hub-meetings.js';
 
 export class AgentHub {
   private cursor = -1;
   private records: Omit<HubAgent, 'status' | 'reason' | 'active' | 'returned' | 'unresolved' | 'latest' | 'routines' | 'reviews' | 'appliedChanges'>[] = [];
-  constructor(private store: Store, private assignments: AssignmentService, private now = Date.now, private approvals: () => readonly ReviewApproval[] = () => []) {}
+  constructor(private store: Store, private assignments: AssignmentService, private now = Date.now, private approvals: () => readonly ReviewApproval[] = () => [], private activity?: AgentActivity) {}
   changeLayout(device: string, raw: unknown): HubLayout {
     const input = hubLayoutCommandSchema.parse(raw);
     return this.store.admit(device, input, { type: 'hub.layout', ...input }, () => {
@@ -59,6 +61,7 @@ export class AgentHub {
   }
   state(before?: string, showArchived = false, focusId?: string): HubState {
     const activities = this.assignments.activity(), availability = this.assignments.availability();
+    const meetingPlans=new Map(this.store.internalList<HubMeeting&{epoch:string}>('hub:meeting:').filter(m=>m.epoch===this.store.epoch).flatMap(m=>m.turns.map(t=>[t.planId,m.id] as const)));
     const approvals = this.approvals();
     const waiting = new Set(activities.filter(a => assignmentHoldsSlot(a) && assignmentNeedsApproval(this.assignments.summary(a.id), approvals, this.now())).map(a => a.agentId));
     const changes = this.store.internalList<ModuleAction>('modules:action:').filter(a => a.epoch === this.store.epoch && a.assignmentId);
@@ -89,7 +92,8 @@ export class AgentHub {
     const page = all.slice(offset, offset + 12), routines = this.store.internalList<AgentRoutine>('agent-routines:item:');
     return { observedAt: this.now(), runtimeReady: availability.ready, runtimeReason: availability.ready ? 'Connected to this host’s assignment worker.' : 'Connect the Assistant on this host to run assignments.', total: all.length, activeAgentId: active?.agentId ?? null, nextCursor: offset + 12 < all.length ? page.at(-1)!.id : null,
       layout: this.store.internalRead<HubLayout>(hubLayoutKey)!,
-      roster: all.map(({ id, revision, name, position, appearance, archived }) => {const w=work(id);return { id, revision, name, position, appearance, archived, ...hubStatus(w.attempts.find(holds), availability.ready, w.attempts[0],w.pending,waiting.has(id)),...teamWork(id) };}),
+      ...(this.activity?{activity:this.activity.state()}:{}),
+      roster: all.map(({ id, revision, name, position, appearance, archived }) => {const w=work(id),active=w.attempts.find(holds),latest=w.attempts[0],review=w.reviews[0],item=active??latest;return { id, revision, name, position, appearance, archived, ...hubStatus(active, availability.ready, latest,w.pending,waiting.has(id)),...teamWork(id),...(review?{work:{assignmentId:review.assignmentId,attemptId:review.attemptId,title:review.title,kind:'review' as const}}:item?{work:{assignmentId:item.assignmentId,attemptId:item.id,title:item.title,kind:active?'active' as const:'result' as const,...(meetingPlans.has(item.assignmentId)?{meetingId:meetingPlans.get(item.assignmentId)}:{})}}:{}) };}),
       agents: page.map(agent => {
         const {attempts,reviews,actions,pending}=work(agent.id),current=attempts.find(holds),applied=actions.filter(a=>a.state==='applied');
         const linked = (kind:'task'|'content') => applied.filter(a=>a.operation==='records.save'&&a.input.kind===kind).flatMap(a=>{

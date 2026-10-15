@@ -110,7 +110,17 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
   const [storageError, setStorageError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [networkError, setNetworkError] = useState(false);
-  const inFlight = useRef(false);
+  const inFlight = useRef<object | null>(null);
+  const ownerScope = `${key}:${kind}:${snapshot.epoch}`;
+  const owner = useRef({ mounted: true, scope: ownerScope, generation: 0 });
+  if (owner.current.scope !== ownerScope) {
+    owner.current.scope = ownerScope; owner.current.generation++;
+  }
+  useEffect(() => {
+    owner.current.mounted = true; owner.current.generation++;
+    inFlight.current = null; setSaving(false);
+    return () => { owner.current.mounted = false; owner.current.generation++; };
+  }, [ownerScope]);
   const persist = useCallback((next: Journal<T>) => {
     ref.current = next; setJournal(next); const saved = saveLocal(key, next); setStorageError(!saved); return saved;
   }, [key]);
@@ -134,26 +144,37 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
       persist({ value: entity?.value ?? initial, revision: entity?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false });
     }
   }, [entity, snapshot.epoch, removedRevision, initial, persist]);
-  const flush = useCallback(async () => {
+  const flush = useCallback(async (payloadOverride?: T) => {
     const local = ref.current;
-    if (!local.dirty || local.conflict || inFlight.current) return;
-    const command = local.pending ?? { kind, entityId: id, requestId: crypto.randomUUID(), epoch: local.epoch, expectedRevision: local.revision, payload: local.value };
+    if (!owner.current.mounted || owner.current.scope !== ownerScope || !local.dirty || local.conflict || inFlight.current) return;
+    const scope = owner.current.scope, generation = owner.current.generation;
+    const stillOwns = () => owner.current.mounted && owner.current.scope === scope && owner.current.generation === generation;
+    // A scoped explicit save may send a saved-base payload while retaining the
+    // full local draft. A pending receipt always wins, including after reload.
+    const command = local.pending ?? { kind, entityId: id, requestId: crypto.randomUUID(), epoch: local.epoch, expectedRevision: local.revision, payload: payloadOverride === undefined ? local.value : payloadOverride };
     if (!persist({ ...local, pending: command })) return;
-    inFlight.current = true; setSaving(true);
+    const attempt = {}; inFlight.current = attempt; setSaving(true);
     try {
       const result = await commit<T>(command);
+      // Home or a newly mounted editor may have appended to this durable
+      // journal. Its old owner leaves the original receipt for reconciliation.
+      if (!stillOwns()) return;
       const latest = ref.current;
       // A response admitted before removal must never restore the removed draft.
       if (result.revision < removal.current) { await refresh(); return; }
       persist({ ...latest, revision: result.revision, pending: undefined, dirty: canonical(latest.value) !== canonical(command.payload), conflict: undefined });
-      setNetworkError(false); await refresh(); return result;
+      setNetworkError(false); await refresh(); if (stillOwns()) return result;
     } catch (error) {
+      if (!stillOwns()) return;
       if (error instanceof ApiError && ['revision_conflict', 'draft_removed', 'conversation_removed', 'conversation_removing', 'conversation_changed', 'epoch_changed', 'request_reused', 'validation', 'missing_project', 'attachment_changed', 'draft_branch', 'invalid_target', 'record_missing', 'record_quota', 'missing_agent', 'agent_changed', 'source_changed', 'contact_merged'].includes(error.code)) {
         persist({ ...ref.current, conflict: { code: error.code, message: error.message, current: error.current as Entity<T> | undefined } });
         if (error.code === 'draft_removed' || error.code === 'conversation_removed') await refresh();
       } else setNetworkError(true);
-    } finally { inFlight.current = false; setSaving(false); }
-  }, [id, kind, persist, refresh]);
+    } finally {
+      if (inFlight.current === attempt) inFlight.current = null;
+      if (stillOwns()) setSaving(false);
+    }
+  }, [id, kind, persist, refresh, ownerScope]);
   useEffect(() => { if (!autoSave) return; const timer = setTimeout(() => { void flush(); }, 600); return () => clearTimeout(timer); }, [journal.value, flush, autoSave]);
   useEffect(() => { if (!autoSave) return; const timer = setInterval(() => { void flush(); }, 4000); return () => clearInterval(timer); }, [flush, autoSave]);
   // Another tab sharing the cookie is another editor, never a silent overwrite.

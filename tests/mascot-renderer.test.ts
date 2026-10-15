@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { defaultMascotAppearance, createMascotAppearance, mascotOptions, resolveMascotAppearance } from '../packages/domain/mascot-appearance.js';
+import { defaultMascotAppearance, createMascotAppearance, mascotOptions, originalMascotOptions, resolveMascotAppearance } from '../packages/domain/mascot-appearance.js';
 import { createSquareLynxAppearance, resolveSquareLynxAppearance } from '../packages/domain/square-lynx.js';
 import { renderMascot } from '../apps/client/src/nova/square-lynx/mascot-art.js';
 import { SquareLynxSvg } from '../apps/client/src/nova/square-lynx/SquareLynxSvg.js';
@@ -38,7 +38,7 @@ test('untrusted colors and identifiers cannot inject SVG elements or attributes'
 });
 
 test('frame color changes only eyewear and cannot inject SVG content', () => {
-  for (const glasses of mascotOptions.glasses) {
+  for (const glasses of originalMascotOptions.glasses) {
     const appearance = { ...defaultMascotAppearance, glasses };
     const original = renderMascot(appearance, { uid: 'frame-color' });
     const recolored = renderMascot({ ...appearance, glassesColor: '#13579B' }, { uid: 'frame-color' });
@@ -64,7 +64,7 @@ test('nova-mascot-1 recipes render the exact pre-extension artwork for every gla
     square: 'ae83c471d6a7223430a3f2a1a758e212d7b1a80acd9490b08819a438bbd66bf6',
     browline: '167a3c01cbff084a4ebb5197b29ca36f1fd2f5440c3cbd525f4ab4f2a7848c54',
   };
-  for (const glasses of mascotOptions.glasses) {
+  for (const glasses of originalMascotOptions.glasses) {
     const source = Object.freeze({
       schemaVersion: 1, catalogRevision: 'nova-mascot-1',
       appearance: Object.freeze({ face: 'curious', pattern: 'patches', outfit: 'utility', glasses,

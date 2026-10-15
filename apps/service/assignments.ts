@@ -12,12 +12,13 @@ import type { AssignmentRoutineOrigin } from '../../packages/domain/agent-routin
 import { activityOf, type AssignmentActivity } from '../../packages/domain/agent-hub.js';
 import { captureAssignmentFiles } from './assignment-files.js';
 import { workerFailureMessage } from '../../packages/domain/worker-failure.js';
+import type { AgentConversationCapture } from '../../packages/domain/agent-activity.js';
 
-type SavedAttempt = AssignmentAttempt & { capture: AssignmentCapture; prompt: string; inputHash: string; uploadRequestId: string; pendingResult?: NonNullable<WorkerStatus['observation']> };
+type SavedAttempt = AssignmentAttempt & { capture: AssignmentCapture; prompt: string; inputHash: string; uploadRequestId: string; pendingResult?: NonNullable<WorkerStatus['observation']>; autonomy?: AgentConversationCapture };
 const summaryKey = (id: string) => `assignments:summary:${id}`;
 const attemptKey = (id: string) => `assignments:attempt:${id}`;
 const requiredMethods = ['e3.assignments.capabilities', 'e3.assignments.run', 'e3.assignments.stop', 'e3.assignments.status', 'chat.abort', 'chat.history'];
-const publicAttempt = ({ capture, prompt, inputHash, uploadRequestId, pendingResult, ...value }: SavedAttempt): AssignmentAttempt => value;
+const publicAttempt = ({ capture, prompt, inputHash, uploadRequestId, pendingResult, autonomy, ...value }: SavedAttempt): AssignmentAttempt => value;
 
 /** Saved plans and immutable attempts stay in Nova Dream's encrypted authority.
  * The native adapter owns only effect receipts. An uncertain call is never a retry. */
@@ -26,6 +27,16 @@ export class AssignmentService {
   private timer?: ReturnType<typeof setInterval>;
   private work = new Set<Promise<unknown>>();
   private checks = new Map<string, Promise<AssignmentAttempt>>();
+  private autonomyGuard?: (capture: AgentConversationCapture, attemptId?: string) => void;
+  private automaticEligibility?: (agentId: string) => boolean;
+  setAutonomyGuard(guard: (capture: AgentConversationCapture, attemptId?: string) => void) { this.autonomyGuard = guard; }
+  setAutomaticEligibility(check: (agentId: string) => boolean) { this.automaticEligibility = check; }
+  private checkAutonomy(capture: AgentConversationCapture, attemptId?: string) {
+    if (!this.autonomyGuard) throw new Fault(409, 'initiative_unavailable', 'The initiative service is unavailable. Nothing was dispatched.');
+    this.autonomyGuard(capture, attemptId);
+  }
+  /** Trusted service entry point. HTTP/model commands cannot supply this capture. */
+  startAutonomous(device: string, raw: unknown, capture: AgentConversationCapture) { return this.start(device, raw, undefined, capture); }
   constructor(private store: Store, private gateway: AssistantTransport, private now = Date.now) {
     // Rebuild missing compact projections from their existing canonical attempt
     // summaries. No attempt identity, state or result is inferred or replaced.
@@ -99,7 +110,7 @@ export class AssignmentService {
       throw new Fault(403, 'assignment_inactive', 'The originating assignment or its access is no longer active.');
     if (input.write && a.capture.plan.value.executionMode === 'discussion') throw new Fault(403, 'discussion_read_only', 'Meeting discussions can read context but cannot change the workspace. Assign follow-up work separately.');
     if (input.write && a.capture.plan.value.executionMode === 'proposal') throw new Fault(403, 'proposal_read_only', 'Content work returns a proposal. Apply the reviewed result from the Content workspace.');
-    if (!agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, input.operation, input.input, input.write)) throw new Fault(403, 'agent_access_denied', 'This operation is outside this agent’s selected capabilities.');
+    if (!agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, input.operation, input.input, input.write) || !this.sharedConversationRead(a, input.operation, input.input, input.write)) throw new Fault(403, 'agent_access_denied', 'This operation is outside this agent’s selected capabilities or the conversation’s shared read scope.');
     // Native identity comes from the authenticated plugin’s current SDK session,
     // never from model arguments. Once bound, a replacement session cannot act.
     if (!a.nativeSessionId) this.save({ ...a, nativeSessionId: input.nativeId });
@@ -107,17 +118,25 @@ export class AssignmentService {
   }
   canReviewModule(attemptId: string, operation: string, input: Record<string, unknown>, write: boolean) {
     const a = this.read(attemptId), current = this.store.readEntity('agent', a.agentId);
-    return !(write && ['discussion','proposal'].includes(a.capture.plan.value.executionMode ?? '')) && a.epoch === this.store.epoch && !!current && !current.value.archived && agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, operation, input, write);
+    return !(write && ['discussion','proposal'].includes(a.capture.plan.value.executionMode ?? '')) && a.epoch === this.store.epoch && !!current && !current.value.archived && agentMayUse(a.capture.agent.value.access ?? {}, current.value.access ?? {}, operation, input, write) && this.sharedConversationRead(a, operation, input, write);
+  }
+  private sharedConversationRead(attempt: SavedAttempt, operation: string, input: Record<string, unknown>, write: boolean) {
+    if (!attempt.autonomy) return true;
+    return !write && attempt.autonomy.participants.every(participant => {
+      const current = this.store.readEntity('agent', participant.agentId);
+      return !!current && !current.value.archived && agentMayUse(participant.access, current.value.access ?? {}, operation, input, false);
+    });
   }
   canUseComputer(attemptId: string) { return this.canUseLiveModule(attemptId,'computer.call'); }
   canUseLiveModule(attemptId: string, operation:string) {
     const attempt = this.read(attemptId);
     return !this.closing && !attempt.stopReason && this.now() < attempt.deadlineAt && this.canReviewModule(attemptId, operation, {}, true);
   }
-  start(device: string, raw: unknown, scheduled?: { origin: AssignmentRoutineOrigin; admitted: (attempt: AssignmentAttempt) => void }) {
+  start(device: string, raw: unknown, scheduled?: { origin: AssignmentRoutineOrigin; admitted: (attempt: AssignmentAttempt) => void }, autonomy?: AgentConversationCapture) {
     this.store.assertUpdateAdmission();
     const input = assignmentStartSchema.parse(raw);
     const admitted = this.store.admit(device, input, { type: 'assignment.start', ...input, ...(scheduled ? { routine: scheduled.origin } : {}) }, () => {
+      if (autonomy) this.checkAutonomy(autonomy);
       if (!this.state().canStart) throw new Fault(409, 'assignment_unavailable', this.state().reason);
       if (this.summaries().length >= 2000) throw new Fault(507, 'assignment_quota', 'The saved assignment limit is reached. Existing attempts are kept.');
       const plan = this.store.readEntity('assignment', input.assignmentId);
@@ -151,7 +170,7 @@ export class AssignmentService {
       ].join('\n\n');
       if (prompt.length > 200000) throw new Fault(413, 'assignment_input_large', 'The selected source text exceeds this worker’s limit. Reduce the selected sources; nothing was truncated or dispatched.');
       const at = this.now(), id = randomUUID();
-      const attempt = this.write({ id, epoch: input.epoch, deviceId: device, assignmentId: plan.id, assignmentRevision: plan.revision, title: plan.value.title, agentId: agent.id, agentRevision: agent.revision, agentName: agent.value.name, projectId: plan.value.projectId, createdAt: at, updatedAt: at, deadlineAt: at + (plan.value.maxMinutes ?? 5) * 60000, state: 'prepared', message: 'Preparing the saved assignment.', capture, prompt, inputHash: workerInputHash(prompt), uploadRequestId: randomUUID(), ...(scheduled ? { routine: scheduled.origin } : {}) });
+      const attempt = this.write({ id, epoch: input.epoch, deviceId: device, assignmentId: plan.id, assignmentRevision: plan.revision, title: plan.value.title, agentId: agent.id, agentRevision: agent.revision, agentName: agent.value.name, projectId: plan.value.projectId, createdAt: at, updatedAt: at, deadlineAt: at + (plan.value.maxMinutes ?? 5) * 60000, state: 'prepared', message: 'Preparing the saved assignment.', capture, prompt, inputHash: workerInputHash(prompt), uploadRequestId: randomUUID(), ...(scheduled ? { routine: scheduled.origin } : {}), ...(autonomy ? { autonomy: structuredClone(autonomy) } : {}) });
       // The occurrence, cursor, captured attempt and request receipt commit
       // together, before dispatch. A host crash cannot replay an elapsed job.
       scheduled?.admitted(publicAttempt(attempt));
@@ -182,6 +201,10 @@ export class AssignmentService {
       if (!caps.newRunsAvailable) throw new Fault(507, 'worker_outcome_quota', 'Worker result storage is full. Existing results and stop controls remain available; nothing was dispatched.');
       let value = this.read(id);
       if (assignmentTerminal(value.state) || value.stopReason || this.closing) return;
+      // Capabilities is asynchronous: recheck current permission/source state
+      // immediately before storing a native identity or contacting the worker.
+      if (value.autonomy) this.checkAutonomy(value.autonomy, value.id);
+      if (value.routine && this.automaticEligibility && !this.automaticEligibility(value.agentId)) throw new Fault(409, 'agent_asleep', 'This agent went to sleep before automatic dispatch. The original occurrence and attempt are kept; no native run was started.');
       if (Object.keys(value.capture.agent.value.access ?? {}).length && caps.tools !== 'workspace') throw new Fault(409, 'worker_policy_unavailable', 'The runtime has not confirmed this agent’s workspace tools. Nothing was dispatched. Reconnect the supported runtime before trying again.');
       const identity = { epoch: value.epoch, hostId: caps.hostId, attemptId: id, inputHash: value.inputHash, ...(Object.keys(value.capture.agent.value.access ?? {}).length ? { toolMode: 'workspace' as const, ...(caps.nativeTools?.length && !['proposal', 'discussion'].includes(value.capture.plan.value.executionMode ?? '') ? { nativeTools: caps.nativeTools } : {}) } : {}) };
       this.store.assertUpdateAdmission();

@@ -40,27 +40,32 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
     get dataset() { return { reorderItem: this.props['data-reorder-item'] }; }
     closest() { return this; }
     getBoundingClientRect() {
-      const left = direction === 'rtl' ? 14 + strip.clientWidth - this.index * 52 - 44 - strip.scrollLeft : 14 + this.index * 52 - strip.scrollLeft;
-      return { left, right: left + 44, width: 44 };
+      const edge = strip.getBoundingClientRect().left;
+      const left = this.label === 'Settings' ? direction === 'rtl' ? 14 : width - 58 : direction === 'rtl' ? edge + strip.clientWidth - this.index * 52 - 44 - strip.scrollLeft : edge + this.index * 52 - strip.scrollLeft;
+      return { left, right: left + 44, width: 44, top: 13, bottom: 57, height: 44 };
     }
-    focus() { doc.activeElement = this; stripTree().props.onFocusCapture({ currentTarget: strip, target: this }); }
+    focus() { doc.activeElement = this; dockTree().props.onFocusCapture?.({ currentTarget: dock, target: this }); if (strip.contains(this)) stripTree().props.onFocusCapture({ currentTarget: strip, target: this }); }
   }
   const buttons = new Map<string, ButtonFixture>(), captures = new Set<number>(), classes = new Set<string>();
   let left = 0;
   const strip = {
-    get clientWidth() { return width > 800 ? 0 : width - 28; },
-    get scrollWidth() { return buttons.size * 52 - 8; },
+    get clientWidth() { return width > 800 ? 0 : width - 28 - 44 - 25; },
+    get scrollWidth() { return (buttons.size - 1) * 52 - 8; },
     get scrollLeft() { return left; },
     set scrollLeft(value: number) { const max = Math.max(0, this.scrollWidth - this.clientWidth); left = direction === 'rtl' ? Math.max(-max, Math.min(0, value)) : Math.max(0, Math.min(max, value)); },
-    getBoundingClientRect() { return { left: 14, right: 14 + this.clientWidth }; },
+    getBoundingClientRect() { const left = direction === 'rtl' ? 83 : 14; return { left, right: left + this.clientWidth }; },
     scrollBy(options: { left: number; behavior: string }) { scrolls.push(options); this.scrollLeft += options.left; },
-    querySelector() { return [...buttons.values()].find(button => button.props['aria-current'] === 'page') ?? null; },
-    querySelectorAll() { return [...buttons.values()].sort((first, second) => first.index - second.index); },
-    contains(element: ButtonFixture | null) { return !!element && buttons.get(element.label) === element; },
+    querySelector() { return this.querySelectorAll().find(button => button.props['aria-current'] === 'page') ?? null; },
+    querySelectorAll() { return [...buttons.values()].filter(button => button.label !== 'Settings').sort((first, second) => first.index - second.index); },
+    contains(element: ButtonFixture | null) { return !!element && element.label !== 'Settings' && buttons.get(element.label) === element; },
     hasPointerCapture: (pointer: number) => captures.has(pointer),
     setPointerCapture: (pointer: number) => captures.add(pointer),
     releasePointerCapture: (pointer: number) => captures.delete(pointer),
     classList: { add: (name: string) => classes.add(name), remove: (name: string) => classes.delete(name), contains: (name: string) => classes.has(name) },
+  };
+  const dock = {
+    querySelectorAll: () => [...buttons.values()].sort((a, b) => a.index - b.index),
+    contains: (element: ButtonFixture | null) => !!element && buttons.get(element.label) === element,
   };
   const props = { items: order.map(id => ({ id, label: id, icon })), route, updateAvailable: true,
     reorder: undefined as Parameters<typeof BottomNavigation>[0]['reorder'],
@@ -92,10 +97,12 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
   const originals = Reflect.ownKeys(values).map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   for (const name of Reflect.ownKeys(values)) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: values[name] });
   function stripTree() { return nodes(tree).find(node => node.props?.className === 'bottom-navigation-strip'); }
+  function dockTree() { return nodes(tree).find(node => node.props?.className === 'bottom-navigation'); }
   function flush() {
     while (dirty) {
       dirty = false; cursor = 0; tree = BottomNavigation(props);
       stripTree().props.ref.current = strip;
+      dockTree().props.ref.current = dock;
       nodes(tree).filter(node => node.type === 'button').forEach((node, index) => {
         const label = node.props['aria-label'];
         const button = buttons.get(label) ?? new ButtonFixture(label, index, node.props);
@@ -112,19 +119,21 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
   };
   flush();
   return {
-    props, opened, scrolls, strip, captures, classes, doc, buttons, reorder, moves, holds,
+    props, opened, scrolls, strip, dock, captures, classes, doc, buttons, reorder, moves, holds,
     get cancelled() { return cancelled; },
     get tree() { return tree; }, get wideFocus() { return wideFocus; }, get subscriptions() { return observed.size + [...listeners.values()].reduce((count, set) => count + set.size, 0); },
     setAllowed(value: boolean) { allow = value; },
-    click(label: string, detail = 1) { let stopped = false; stripTree().props.onClickCapture({ detail, preventDefault() {}, stopPropagation() { stopped = true; } }); if (!stopped) buttons.get(label)!.props.onClick(); flush(); return !stopped; },
+    click(label: string, detail = 1) { let stopped = false; if (label !== 'Settings') stripTree().props.onClickCapture({ detail, preventDefault() {}, stopPropagation() { stopped = true; } }); if (!stopped) buttons.get(label)!.props.onClick(); flush(); return !stopped; },
     pointer,
-    key(label: string, key: string, altKey = false) { let prevented = false; stripTree().props.onKeyDown({ key, altKey, target: buttons.get(label), currentTarget: strip, preventDefault() { prevented = true; } }); flush(); return prevented; },
+    key(label: string, key: string, altKey = false) { let prevented = false; dockTree().props.onKeyDown({ key, altKey, target: buttons.get(label), currentTarget: dock, preventDefault() { prevented = true; } }); flush(); return prevented; },
     hold(label: string) { buttons.get(label)!.props.onPointerDown(); },
     pickedUp(id: ModuleId) { reorder.dragging = id; dirty = true; flush(); },
     focus(label: string) { buttons.get(label)!.focus(); flush(); },
     route(next: ModuleId | 'settings') { props.route = next; dirty = true; flush(); },
     rerender() { props.items = [...props.items]; dirty = true; flush(); },
-    resize(next: number) { width = next; strip.scrollLeft = strip.scrollLeft; for (const callback of observed) callback(); for (const callback of listeners.get('resize') ?? []) callback(); flush(); },
+    resize(next: number) { width = next; if (width > 800 && dock.contains(doc.activeElement)) { doc.activeElement = null; dockTree().props.onBlurCapture?.({ currentTarget: dock, relatedTarget: null }); } strip.scrollLeft = strip.scrollLeft; for (const callback of observed) callback(); for (const callback of listeners.get('resize') ?? []) callback(); flush(); },
+    focusOutside() { const outside = new ButtonFixture('Outside', 0, {}); dockTree().props.onBlurCapture?.({ currentTarget: dock, relatedTarget: outside }); doc.activeElement = outside; },
+    blurDock() { doc.activeElement = null; dockTree().props.onBlurCapture?.({ currentTarget: dock, relatedTarget: null }); },
     blur() { for (const callback of listeners.get('blur') ?? []) callback(); flush(); },
     scroll(value: number) { strip.scrollLeft = value; stripTree().props.onScroll(); flush(); },
     close() { for (const cell of cells) cell?.cleanup?.(); for (const [name, descriptor] of originals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); },
@@ -166,8 +175,8 @@ test('dock buttons hold through the shared reorder controller; Settings stays ou
     assert.equal(h.buttons.get('Settings')!.props.onPointerDown, undefined);
     assert.equal(h.key('home', 'ArrowRight', true), true);
     assert.deepEqual(h.moves, [['inbox', 'tasks', 'home', 'assistant', 'calendar', 'contacts', 'agents', 'content', 'profile']]);
-    assert.deepEqual(h.strip.querySelectorAll().map(button => button.label), [...h.moves[0], 'Settings']);
-    assert.equal(h.key('Settings', 'ArrowLeft', true), false);
+    assert.deepEqual(h.strip.querySelectorAll().map(button => button.label), h.moves[0]);
+    assert.equal(h.key('Settings', 'ArrowLeft', true), true);
     assert.equal(h.moves.length, 1);
     assert.deepEqual(h.opened, []);
   } finally { h.close(); }
@@ -180,7 +189,7 @@ test('RTL keyboard reordering follows the visual arrow without moving Settings',
     assert.equal(h.moves[0].indexOf('home'), 2);
     assert.equal(h.key('home', 'ArrowRight', true), true);
     assert.deepEqual(h.moves[1], order);
-    assert.equal(h.strip.querySelectorAll().at(-1)!.label, 'Settings');
+    assert.equal(h.strip.querySelectorAll().at(-1)!.label, 'profile');
   } finally { h.close(); }
 });
 
@@ -255,9 +264,10 @@ test('keyboard navigation reveals buttons, respects the finite ends, and waits f
   const h = host();
   try {
     h.focus('home');
+    const beforeSettings = h.strip.scrollLeft;
     assert.equal(h.key('home', 'End'), true);
     assert.equal(h.doc.activeElement, h.buttons.get('Settings'));
-    assert.equal(h.strip.scrollLeft, h.strip.scrollWidth - h.strip.clientWidth);
+    assert.equal(h.strip.scrollLeft, beforeSettings, 'End focuses fixed Settings without moving modules');
     h.key('Settings', 'ArrowRight');
     assert.equal(h.doc.activeElement, h.buttons.get('Settings'));
     h.key('Settings', 'Home');
@@ -279,6 +289,9 @@ test('RTL arrows follow visual direction; revealing and dragging reach the final
     h.key('tasks', 'ArrowRight');
     assert.equal(h.doc.activeElement, h.buttons.get('home'));
     h.key('home', 'End');
+    assert.equal(h.strip.scrollLeft, 0, 'fixed Settings does not reveal the end of the RTL strip');
+    h.key('Settings', 'ArrowRight');
+    assert.equal(h.doc.activeElement, h.buttons.get('profile'));
     assert.equal(h.strip.scrollLeft, -(h.strip.scrollWidth - h.strip.clientWidth));
     h.key('Settings', 'Home');
     assert.equal(h.strip.scrollLeft, 0);
@@ -292,16 +305,16 @@ test('RTL arrows follow visual direction; revealing and dragging reach the final
 test('selected modules remain visible on entry, route changes and resize; polling does not reset a browsed strip', () => {
   const h = host('settings', 320);
   try {
-    assert.equal(h.strip.scrollLeft, h.strip.scrollWidth - h.strip.clientWidth);
+    assert.equal(h.strip.scrollLeft, 0, 'Settings entry keeps the module scroll position');
     h.route('inbox'); assert.equal(h.strip.scrollLeft, 0);
     h.scroll(100); h.rerender();
     assert.equal(h.strip.scrollLeft, 100);
     h.route('settings'); h.resize(390);
-    assert.equal(h.strip.scrollLeft, h.strip.scrollWidth - h.strip.clientWidth);
+    assert.equal(h.strip.scrollLeft, 100);
     h.focus('Settings'); h.resize(900);
     assert.equal(h.wideFocus, 1);
     h.resize(320);
-    assert.equal(h.strip.scrollLeft, h.strip.scrollWidth - h.strip.clientWidth);
+    assert.equal(h.strip.scrollLeft, 100);
     assert.deepEqual(h.opened, []);
   } finally { h.close(); }
 });
@@ -329,4 +342,9 @@ test('unmount releases drag capture and resize listeners; server render does not
   const ssr = host('settings', 320, 'ltr', false, true);
   try { assert.equal(ssr.buttons.get('Settings')!.props['aria-current'], 'page'); assert.equal(ssr.subscriptions, 0); }
   finally { ssr.close(); }
+});
+test('wide navigation does not steal focus after an explicit outside focus, narrow blur or window blur',()=>{
+ for(const leave of ['outside','narrow','window']){
+  const h=host('settings',320);try{h.focus('Settings');if(leave==='outside'){h.focusOutside();h.doc.activeElement=null;}else if(leave==='narrow')h.blurDock();else{h.blur();h.doc.activeElement=null;}h.resize(900);assert.equal(h.wideFocus,0,leave);}finally{h.close();}
+ }
 });

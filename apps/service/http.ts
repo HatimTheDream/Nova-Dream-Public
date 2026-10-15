@@ -2,6 +2,8 @@ import { SpeechGatewayControl } from './speech-control.js';
 import { SpeechPlayback } from './read-aloud.js';
 import { TeamWorkService } from './team-work.js';
 import { HomeWeatherService } from './home-weather.js';
+import { HomeLibrary } from './home-library.js';
+import { HomeFeed } from './home-feed.js';
 import { HostBrowser } from './host-browser.js';
 import { browserInputSchema } from '../../packages/domain/host-browser.js';
 import { GitHubConnection } from './github.js';
@@ -52,6 +54,7 @@ import { Gateway, type AssistantTransport } from './gateway.js';
 import { AssistantService } from './assistant.js';
 import { AssignmentService } from './assignments.js';
 import { AgentRoutines } from './agent-routines.js';
+import { AgentActivity } from './agent-activity.js';
 import { HubMeetings } from './hub-meetings.js';
 import { ContentWorkspace } from './content-workspace.js';
 import { exportContentPackage } from './content-package.js';
@@ -96,7 +99,7 @@ const recoveredLocalRoutes = new Set([
   '/api/profile/quests', '/api/content/workspace', '/api/content/from-output', '/api/content/from-assignment',
   '/api/tasks/order', '/api/tasks/focus', '/api/tasks/history', '/api/tasks/reminders/action',
   '/api/records/history', '/api/records/follow-up', '/api/contacts/read', '/api/contacts/merge', '/api/contacts/restore',
-  '/api/contacts/crm', '/api/contacts/activity', '/api/contacts/organization', '/api/agents/hub/layout',
+  '/api/contacts/crm', '/api/contacts/activity', '/api/contacts/organization', '/api/agents/hub/layout', '/api/home/library', '/api/home/context', '/api/home/feed/open',
   '/api/calendar/local', '/api/storage/protect',
   '/api/storage/backups/create', '/api/storage/backups/upload', '/api/storage/backups/remove',
   '/api/storage/backups/inspect', '/api/storage/backups/restore', '/api/storage/backups/open',
@@ -135,6 +138,8 @@ export async function startServer(options: { directory: string; port: number; pr
   const workRepositories = new WorkRepositories(store, github);
   const accounts = new Accounts(store, options.providers, undefined, options.privateWeb?.origin);
   const homeWeather = new HomeWeatherService(store, options.weatherFetch);
+  const homeLibrary = new HomeLibrary(store);
+  const homeFeed = new HomeFeed(store);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
   const calendarGroups = new CalendarGroups(store, accounts, calendar, calendarWrites);
@@ -169,9 +174,11 @@ export async function startServer(options: { directory: string; port: number; pr
   const questions = new AssistantQuestions(store, gateway, () => assistant.conversations(), id => assistant.history(id), options.questionReviewFactory ?? (gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'question-review') : undefined));
   assistant.setApprovalReview(async id => { await Promise.all([approvals.prepare(id), questions.prepare(id)]); });
   const subtaskSuggestions = new SubtaskSuggestions(store, gateway);
-  const agentRoutines = new AgentRoutines(store, assignments);
-  const agentHub = new AgentHub(store, assignments, Date.now, () => approvals.state().items);
-  const hubMeetings = new HubMeetings(store, assignments);
+  const agentActivity = new AgentActivity(store, assignments);
+  const hubMeetings = new HubMeetings(store, assignments, Date.now, agentActivity);
+  agentActivity.attachMeetings(hubMeetings);
+  const agentRoutines = new AgentRoutines(store, assignments, Date.now, id => agentActivity.canStartAutomatic(id));
+  const agentHub = new AgentHub(store, assignments, Date.now, () => approvals.state().items, agentActivity);
   const contentWorkspace = new ContentWorkspace(store, assignments);
   const agentSkills = new AgentSkills(gateway);
   const skillWorkshop = new SkillWorkshop(store, gateway);
@@ -561,7 +568,18 @@ export async function startServer(options: { directory: string; port: number; pr
           const cmd = z.object({ id: z.string().uuid() }).strict().parse(await commandBody(request)); return json(200, await skillManagement.check(cmd.id));
         }
         if (url.pathname === '/api/agent-skills/operation/resolve' && request.method === 'POST') return json(200, skillManagement.resolve(device, await commandBody(request)));
-        if (url.pathname === '/api/agents/meetings' && request.method === 'GET') return json(200, hubMeetings.state());
+        if (url.pathname === '/api/home/library' && request.method === 'GET') return json(200, homeLibrary.state(device));
+        if (url.pathname === '/api/home/library' && request.method === 'POST') return json(200, homeLibrary.command(device, await commandBody(request, 500000)));
+        if (url.pathname === '/api/home/context' && request.method === 'POST') return json(200, homeLibrary.capture(device, await commandBody(request, 20000)));
+        if (url.pathname === '/api/home/feed' && request.method === 'GET') return json(200, homeFeed.state(device));
+        if (url.pathname === '/api/home/feed/open' && request.method === 'POST') return json(200, homeFeed.destination(device, await commandBody(request, 4096)));
+        if (url.pathname === '/api/agents/activity' && request.method === 'GET') return json(200, agentActivity.state());
+        if (url.pathname === '/api/agents/activity' && request.method === 'POST') return json(200, agentActivity.command(device, await commandBody(request, 12000)));
+        if (url.pathname === '/api/agents/meetings' && request.method === 'GET') {
+          if ([...url.searchParams.keys()].some(key => key !== 'meetingId') || url.searchParams.getAll('meetingId').length > 1) throw new Fault(400, 'meeting_query', 'Choose one saved discussion.');
+          const meetingId = url.searchParams.get('meetingId');
+          return json(200, meetingId ? hubMeetings.detail(z.string().uuid().parse(meetingId)) : hubMeetings.state());
+        }
         if (url.pathname === '/api/agents/meetings' && request.method === 'POST') return json(200, hubMeetings.command(device, await commandBody(request)));
         if (url.pathname === '/api/agents/hub/layout' && request.method === 'POST') return json(200, agentHub.changeLayout(device, await commandBody(request)));
         if (url.pathname === '/api/agents/hub' && request.method === 'GET') {
@@ -823,7 +841,7 @@ export async function startServer(options: { directory: string; port: number; pr
   await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
   if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); if(!store.updateMaintenanceHeld)contactCrm.tick();
     assignments.startPolling(); teamWork.start(); subtaskSuggestions.startPolling();
-    agentRoutines.start(); hubMeetings.startPolling(); }
+    agentRoutines.start(); hubMeetings.startPolling(); agentActivity.start(); }
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Unexpected listening address');
   ownOrigin = `http://127.0.0.1:${address.port}`;
   void softwareUpdates.start();
@@ -835,7 +853,7 @@ export async function startServer(options: { directory: string; port: number; pr
   let closePromise: Promise<void> | undefined;
   const close = () => {
     if (closePromise) return closePromise;
-    closing = true; softwareUpdates.close(); homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close();
+    closing = true; softwareUpdates.close(); homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close(); agentActivity.close();
     // Stop admission before closing any authority. Browsers may retain sockets
     // without a complete HTTP request, so idle-connection cleanup is insufficient.
     const httpClosed = new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));

@@ -1,6 +1,7 @@
 import { resolveSquareLynxAppearance } from '../../../../../packages/domain/square-lynx';
 import { defaultMascotAppearance, resolveMascotAppearance } from '../../../../../packages/domain/mascot-appearance';
 import { MascotSvg } from './MascotSvg';
+import type { MascotExpression } from './mascot-art';
 import { SquareLynxSvg } from './SquareLynxSvg';
 import './square-lynx.css';
 
@@ -14,11 +15,12 @@ export interface SquareLynxProps {
   accessibility: SquareLynxAccessibility;
   size?: SquareLynxSize;
   className?: string;
+  expression?: MascotExpression;
 }
 
 /** New recipes use the approved creator artwork. Existing square lynx recipes
  * retain their original renderer until explicitly edited and saved. */
-export function SquareLynx({ appearance, accessibility, size = 'roster', className }: SquareLynxProps) {
+export function SquareLynx({ appearance, accessibility, size = 'roster', className, expression = 'idle' }: SquareLynxProps) {
   const resolved = resolveMascotAppearance(appearance);
   const legacy = resolved.status === 'unsupported' ? resolveSquareLynxAppearance(appearance) : undefined;
   const dimension = SQUARE_LYNX_SIZES[size];
@@ -32,7 +34,7 @@ export function SquareLynx({ appearance, accessibility, size = 'roster', classNa
     >
       {legacy?.status === 'ready'
         ? <SquareLynxSvg modules={legacy.modules} className="square-lynx-art" />
-        : <MascotSvg appearance={resolved.status === 'ready' ? resolved.appearance : defaultMascotAppearance} className="square-lynx-art" />}
+        : <MascotSvg appearance={resolved.status === 'ready' ? resolved.appearance : defaultMascotAppearance} expression={expression} className="square-lynx-art" />}
     </span>
   );
 }
