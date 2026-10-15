@@ -52,6 +52,15 @@ export function verifyInstalledIdentity(proof, request) {
     && proof.runtimeProof.configurationSha256 === request.runtime.hostConfig.sha256
     && proof.appProcess?.ActiveState === 'active' && proof.appProcess.SubState === 'running' && Number(proof.appProcess.MainPID) > 1,
   'full-actual-installed-runtime-or-result-changed');
+  if(Object.hasOwn(proof.installationProof,'installerResultBytesBase64')){
+    const value=proof.installationProof.installerResultBytesBase64;
+    need(typeof value==='string'&&value.length<=5464,'full-original-result-bytes-invalid');
+    const raw=Buffer.from(value,'base64');
+    need(raw.length<=4096&&raw.toString('base64')===value&&sha256(raw)===proof.installationProof.installerResult?.sha256
+      &&equal(JSON.parse(raw),{format:1,jobId:request.jobId,candidateId:op.candidateId,priorCandidateId:op.priorCandidateId,
+        outcome:'completed',savedWorkVerified:true,accountsVerified:true,recoveryVerified:true,healthVerified:true}),
+      'full-original-result-bytes-invalid');
+  }
   return proof;
 }
 

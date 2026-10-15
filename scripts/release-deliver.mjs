@@ -7,9 +7,12 @@ import { ReleaseJournal } from './release-coordinate.mjs';
 import { DELIVERY_PHASES, deliveryDescriptorSchema } from './release-delivery-journal.mjs';
 import { readEvidenceFile, readReleaseInputFile, sha256 } from './release-plan.mjs';
 import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
+import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const verificationReason = error => /^[a-z][a-z0-9-]{0,99}$/.test(error?.message ?? '') ? error.message : 'producer-verification-rejected';
+const producerErrorCode = error => typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code
+  : typeof error?.message === 'string' && /^[a-z][a-z0-9-]{0,99}$/.test(error.message) ? error.message : 'producer-response-unavailable';
 const groups = [['private-source'], ['public-source'], ['private-ci', 'public-ci'], ...DELIVERY_PHASES.slice(4).map(p => [p])];
 export async function stepDelivery(journal, operationId, registry, { clock = Date.now, progress = () => {}, verificationScope = new Map() } = {}) {
   if (journal.deliveryDisposition(operationId)) return journal.deliveryStatus(operationId,clock());
@@ -22,7 +25,14 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
   if (integrationGaps.length) return { ...journal.deliveryStatus(operationId, clock()), integrationGaps, capabilityGaps, acceptanceGap: integrationGaps[0] };
   const fingerprint = intent => sha256(JSON.stringify({ operationId, phase: intent.phase, key: intent.key, inputSha256: intent.inputSha256,
     current: intent.current, validation: intent.validation }));
-  const advance = async (phase, forceVerification = false) => {
+  const verifyPrerequisites = phase => withVerificationPass({}, async scope => {
+    for (const dependency of DELIVERY_PHASES.filter(p => p !== phase && journal.deliveryPhase(operationId, p)?.state === 'completed')) {
+      const verified = await advance(dependency, true, scope);
+      if (verified.state !== 'completed') return verified;
+    }
+    return null;
+  }, { readOnly: true });
+  const advance = async (phase, forceVerification = false, scope = {}) => {
     const existing = journal.deliveryPhase(operationId, phase);
     if (existing?.state === 'failed') return existing;
     const prior = Object.fromEntries(DELIVERY_PHASES.filter(p => p !== phase).map(p => [p, journal.deliveryPhase(operationId, p)]).filter(([, p]) => p?.state === 'completed').map(([p, v]) => [p, v.current.output]));
@@ -39,14 +49,16 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
       const identity = fingerprint(existing);
       if (!forceVerification && existing.validation?.state !== 'failed' && verificationScope.get(phase) === identity) return existing;
       try {
-        await adapter.validate({ descriptor, prior, input, journal });
-        await adapter.verify(existing.current, { descriptor, prior, intent: existing, journal });
-        if (existing.validation?.state === 'failed') journal.recordDeliveryRevalidation(operationId, phase, { state: 'passed', reason: 'retained-producer-result-reverified' }, clock());
+        await withVerificationPass({ ...scope, descriptor, prior, input, intent: existing, journal }, async context => {
+          await adapter.validate(context);
+          await adapter.verify(existing.current, context);
+        }, { readOnly: true });
+        if (existing.validation?.state === 'failed') await verificationEffect(scope, () => journal.recordDeliveryRevalidation(operationId, phase, { state: 'passed', reason: 'retained-producer-result-reverified' }, clock()));
         verificationScope.set(phase, fingerprint(journal.deliveryPhase(operationId, phase)));
         return existing;
       } catch (error) {
         verificationScope.delete(phase);
-        const reason = verificationReason(error); journal.recordDeliveryRevalidation(operationId, phase, { state: 'failed', reason }, clock());
+        const reason = verificationReason(error); await verificationEffect(scope, () => journal.recordDeliveryRevalidation(operationId, phase, { state: 'failed', reason }, clock()));
         return { ...existing, state: 'failed', reason };
       }
     }
@@ -54,10 +66,8 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
     if (!existing) {
       // Fresh admission uses actual hashes, even if an earlier observation poll
       // cached this exact journal record. A changed artifact stops reservation.
-      for (const dependency of DELIVERY_PHASES.filter(p => p !== phase && journal.deliveryPhase(operationId, p)?.state === 'completed')) {
-        const verified = await advance(dependency, true);
-        if (verified.state !== 'completed') return verified;
-      }
+      const refused = await verifyPrerequisites(phase);
+      if (refused) return refused;
       // This hook may only produce read-only admission evidence. Run after
       // prerequisite verification, before the first outer effect reservation.
       if (adapter.admit) {
@@ -77,16 +87,14 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
         need(await registry.identity(descriptor) === descriptor.adapterIdentity, 'delivery-adapter-changed');
         need(await registry.targetIdentity(descriptor) === descriptor.targetIdentity, 'delivery-target-changed');
         need((await registry.phasePreflight?.(phase,descriptor,prior) ?? []).length===0,'delivery-phase-capability-unavailable');
-        for (const dependency of DELIVERY_PHASES.filter(p => p !== phase && journal.deliveryPhase(operationId, p)?.state === 'completed')) {
-          const verified = await advance(dependency, true);
-          need(verified.state === 'completed', 'delivery-prerequisite-verification-failed');
-        }
+        need(await verifyPrerequisites(phase) === null, 'delivery-prerequisite-verification-failed');
       } };
     let result, rejectedObservation;
     try {
       result = await (reservation.newlyReserved ? adapter.execute(context) : adapter.observe(context));
-    } catch {
-      result = { state: 'uncertain', externalId: reservation.intent.externalId, reason: 'producer-response-unavailable', receipt: null, output: null };
+    } catch (error) {
+      result = { state: 'uncertain', externalId: reservation.intent.externalId, reason: 'producer-response-unavailable', receipt: null,
+        output: { producerErrorCode: producerErrorCode(error), originalKey: reservation.intent.key, originalOutcomeUncertain: true } };
     }
     try { await adapter.verify(result, context); }
     catch (error) {
@@ -118,6 +126,11 @@ export async function deliver(journal, operationId, registry, { clock = Date.now
   }
 }
 export async function deliveryMain(args) {
+  if(args[0]==='start'&&args.length===2){
+    const {initializeDeliveryInput}=await import('./release-delivery-initialize.mjs');
+    const prepared=await initializeDeliveryInput(resolve(args[1]));
+    return deliveryMain(['start',prepared.journalDirectory,prepared.descriptor.path]);
+  }
   const [mode, directory, value, extra] = args;
   need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure'].includes(mode) && (mode === 'checkpoint' ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
   const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' });
@@ -134,8 +147,11 @@ export async function deliveryMain(args) {
       journal.initializeDelivery(descriptor); id = descriptor.operation.id;
     }
     const retained = journal.loadDelivery(id), remainingMs = retained.created_at + retained.descriptor.observationBudgetMs - Date.now();
-    if (remainingMs <= 0) return { ...journal.deliveryStatus(id), observationBudgetExpired: true };
-    return await deliver(journal, id, createDeliveryRegistry(), { invocationMs: remainingMs, progress: result => process.stderr.write(JSON.stringify(result) + '\n') });
+    const result=remainingMs<=0?{...journal.deliveryStatus(id),observationBudgetExpired:true}
+      :await deliver(journal, id, createDeliveryRegistry(), { invocationMs: remainingMs, progress: result => process.stderr.write(JSON.stringify(result) + '\n') });
+    const {exportSuccessorProfile}=await import('./release-delivery-initialize.mjs');
+    try{return {...result,successor:await exportSuccessorProfile(journal,id)};}
+    catch(error){return {...result,successor:{gap:/^[a-z][a-z0-9-]{1,99}$/.test(error.message)?error.message:'successor-profile-evidence-unavailable'}};}
   } finally { journal.close(); }
 }
 export function deliveryExitCode(mode, result) {

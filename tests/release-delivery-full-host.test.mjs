@@ -36,6 +36,7 @@ test('historical closed lease remains distinct from actual accepted running base
   v.health={status:'ready',candidateId:spec.base.candidateId,version:spec.base.priorVersion};v.accessContext={workspaceEpoch:spec.workspaceEpoch};
   assert.equal(verifyFullFacts(v,spec,v.observedAtMilliseconds).candidateId,spec.base.candidateId);
   assert.throws(()=>verifyFullFacts(v,spec,v.observedAtMilliseconds+900001),/expired/);
+  assert.throws(()=>verifyFullFacts(v,spec,v.observedAtMilliseconds-1),/expired/,'future facts require genuine catch-up before synchronous admission');
   const bad=copy(v);bad.protectedHashes[options.acceptedInstallation.path]='0'.repeat(64);assert.throws(()=>verifyFullFacts(bad,spec,v.observedAtMilliseconds),/binding/);
   const held=copy(v);held.operatorStatus.held=true;assert.throws(()=>verifyFullFacts(held,spec,v.observedAtMilliseconds),/idle/);
 });

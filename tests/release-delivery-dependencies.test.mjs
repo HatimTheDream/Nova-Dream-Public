@@ -12,6 +12,7 @@ import { advancePackageSubstep, createDependencyPairProducer, createDurableFullB
 import { packageUpdateBundle } from '../scripts/update-bundle.mjs';
 import { stepDelivery } from '../scripts/release-deliver.mjs';
 import { fixture as fullFixture } from '../support/full-fixture.mjs';
+import { verificationOnce } from '../scripts/release-verification-pass.mjs';
 
 const steps = PACKAGE_SUBSTEPS.filter(name => name !== 'bundle');
 const digest = x => sha256(String(x));
@@ -193,4 +194,49 @@ test('stepDelivery persists durable bundle completed and uncertain observations 
     assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id, 'package/bundle').key, child.key);
     if (partial) assert.equal(readFileSync(join(full.root, `delivery-full-${parent.key}.json`), 'utf8'), 'partial');
   });
+});
+
+function countedSource(f) {
+  const path=join(f.root,'counted-source'),reference={path,sha256:sha256('original')},namespace={};
+  writeFileSync(path,'original');const counts={calls:0,reads:0};
+  const check=c=>{counts.calls++;return verificationOnce(c,namespace,{descriptor:c.descriptor,parent:c.parentIntent??c.intent},()=>{counts.reads++;return readEvidenceFile(reference);});};
+  for(const name of ['validate','normalizePair','verifyPair']){const old=f.maintained[name];f.maintained[name]=async(...args)=>{check(name==='validate'?args[0]:args[1]);return old(...args);};}
+  for(const step of Object.values(f.maintained.steps))for(const name of ['input','validate','verify']){const old=step[name];step[name]=async(...args)=>{check(name==='verify'?args[1]:args[0]);return old(...args);};}
+  return{counts,path};
+}
+
+test('completed dependency inspection performs one source-content check and resume checks again', async t => {
+  const f=fixture(t),{counts,path}=countedSource(f),producer=f.producer();
+  assert.equal((await producer.execute(f.context)).state,'completed');
+  counts.calls=0;counts.reads=0;
+  assert.equal((await producer.inspect(f.context)).state,'completed');
+  assert.ok(counts.calls>=15);assert.equal(counts.reads,1);
+  const firstCalls=counts.calls;
+  t.diagnostic(JSON.stringify({inspection:'dependency',requests:firstCalls,fullContentReads:counts.reads}));
+  assert.equal((await producer.inspect(f.context)).state,'completed');
+  assert.equal(counts.calls,2*firstCalls);assert.equal(counts.reads,2);
+  writeFileSync(path,'corrupt!');
+  await assert.rejects(producer.inspect(f.context),/hash|changed/i);
+});
+
+test('full durable-bundle inspection shares one dependency verification across nested inspect and verify', async t => {
+  const full=fullFixture(),f=fixture(t,full);
+  f.maintained.normalizePair=async(_value,c)=>full.pairProducer.result(c).output;
+  const {counts,path}=countedSource(f),producer=f.producer();let packs=0;
+  const adapter=createDurableFullBundleAdapter({options:full.options,pairProducer:producer,clock:()=>f.now,
+    pack:(...args)=>{packs++;return packageUpdateBundle(...args);}});
+  const completed=await adapter.execute(f.context);assert.equal(completed.state,'completed');assert.equal(packs,1);
+  counts.calls=0;counts.reads=0;await adapter.verify(completed,f.context);
+  assert.ok(counts.calls>=45);assert.equal(counts.reads,1);
+  t.diagnostic(JSON.stringify({inspection:'durable-bundle',requests:counts.calls,fullContentReads:counts.reads}));
+  writeFileSync(path,'corrupt!');await assert.rejects(adapter.observe(f.context),/hash|changed/i);
+  assert.equal(packs,1);
+});
+
+test('source changed by admission is refused before a new child effect despite earlier cached inspection', async t => {
+  const f=fixture(t),{path}=countedSource(f);
+  f.context.beforeNewEffect=async()=>writeFileSync(path,'corrupt!');
+  await assert.rejects(f.producer().execute(f.context),/hash|changed/i);
+  assert.equal(f.calls['dependency-stage'],undefined);
+  assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'package/dependency-stage'),null);
 });

@@ -11,6 +11,7 @@ import { verifyRetainedCandidate } from './release-delivery-package.mjs';
 import { verifyCandidate } from './candidate.mjs';
 import { frontendRegular } from './frontend-contract.mjs';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
+import { withVerificationPass, verificationOnce, verificationEffect } from './release-verification-pass.mjs';
 
 const need = (value, code) => { if (!value) throw Error(code); };
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -20,20 +21,25 @@ const largeArtifact = reference => { const raw = frontendRegular(reference.path,
 const response = (state, reason, key, output = null) => ({ state, reason, externalId: key, receipt: null, output });
 const https = value => { const u = new URL(value); need(u.protocol === 'https:' && !u.username && !u.password && !u.hash, 'full-artifact-url-invalid'); return value; };
 
-function sourceCheck({ descriptor, input }) {
+const sourceNamespace = {}, pairNamespace = {};
+function sourceCheck(context) {
+  const { descriptor, input } = context;
+  return verificationOnce(context, sourceNamespace, { descriptor, input }, () => {
   need(input.route?.route === 'full', 'full-route-required');
   const candidates = Object.fromEntries(['private', 'public'].map(side => [side, verifyRetainedCandidate(input.artifacts[side], descriptor.sources[side])]));
   need(candidates.private.id === input.route.targetCandidateId && candidates.public.id === input.route.publicCandidateId
     && input.route.baseCandidateId === descriptor.operation.priorCandidateId, 'full-candidate-identity-changed');
   for (const c of Object.values(candidates)) need(c.manifest.version === descriptor.operation.version && c.manifest.buildVersion === descriptor.operation.buildVersion, 'full-candidate-version-changed');
   return candidates;
+  });
 }
 
 /** This verifies the produced flat pair; it does not create a dependency tree,
  * assert qualification, or weaken the required producer's own verification. */
 function pairCheck(value, context) {
+  return verificationOnce(context, pairNamespace, { descriptor: context.descriptor, intent: context.intent, value }, () => {
   const { descriptor, intent } = context, input = intent.input, output = value.output;
-  const candidates = sourceCheck({ descriptor, input });
+  const candidates = sourceCheck({ ...context, descriptor, input });
   need(value.state === 'completed' && value.externalId === intent.key && output?.kind === 'maintained-qualified-update-pair'
     && output.operationId === descriptor.operation.id && output.key === intent.key
     && isDeepStrictEqual(output.sourceCommits, descriptor.operation.sourceCommits)
@@ -71,13 +77,15 @@ function pairCheck(value, context) {
   'full-release-identity-changed');
   readEvidenceFile(output.preparation);
   return { output, pair, entries };
+  });
 }
 
 export function createFullBundleAdapter({ options, pairProducer = null, pack = packageUpdateBundle }) {
   const missing = context => response('gap', 'qualified-dependency-pair-producer-not-integrated', context.intent.key);
-  const reconcile = async (context, produced) => {
+  const reconcile = (context, produced) => withVerificationPass(context, async context => {
     if (!pairProducer) return missing(context);
-    const value = produced ?? await pairProducer.observe(context);
+    const value = produced ?? await (typeof pairProducer.inspect === 'function' ? pairProducer.inspect(context)
+      : verificationEffect(context, scoped => pairProducer.observe(scoped)));
     await pairProducer.verify(value, context);
     need(value.externalId === context.intent.key, 'full-pair-operation-key-changed');
     if (value.state !== 'completed') return value;
@@ -95,12 +103,12 @@ export function createFullBundleAdapter({ options, pairProducer = null, pack = p
       publicCandidateId: output.publicCandidateId, priorCandidateId: output.priorCandidateId, sourceCommits: output.sourceCommits,
       bundle: { path: bundlePath, sha256: sha256(raw) }, bundleMetadata: ref(metadataPath, 65536), dependencies: output.dependencies,
       runtime: output.runtime ?? null, release, preparation: output.preparation });
-  };
+  });
   return { input: async ({ prior }) => ({ route: prior.route, artifacts: prior.artifacts.repositories, options }),
-    validate: async context => { need(isDeepStrictEqual(context.input.options, options), 'full-package-options-changed');
+    validate: context => withVerificationPass(context, async context => { need(isDeepStrictEqual(context.input.options, options), 'full-package-options-changed');
       https(options.bundleUrl); https(options.dependenciesUrl); if (options.runtimeUrl) https(options.runtimeUrl);
-      sourceCheck(context); await pairProducer?.validate(context); },
-    execute: async context => {
+      sourceCheck(context); await pairProducer?.validate(context); }),
+    execute: context => verificationEffect(context, async context => {
       if (!pairProducer) return missing(context);
       const produced = await pairProducer.execute(context); await pairProducer.verify(produced, context);
       need(produced.externalId === context.intent.key, 'full-pair-operation-key-changed');
@@ -108,7 +116,7 @@ export function createFullBundleAdapter({ options, pairProducer = null, pack = p
       const { output } = pairCheck(produced, context);
       pack(output.directory, join(context.journal.directory, `delivery-full-${context.intent.key}.json`));
       return reconcile(context, produced);
-    }, observe: context => reconcile(context),
+    }), observe: context => reconcile(context),
     verify: async (value, context) => {
       if (value.state !== 'completed') return;
       need(isDeepStrictEqual(value.output, (await reconcile(context)).output), 'full-package-result-changed');
@@ -117,18 +125,25 @@ export function createFullBundleAdapter({ options, pairProducer = null, pack = p
 
 /** Load the selected service's verified feed contract; it is the consumer of
  * this update. Missing installed dependencies are an explicit route gap. */
-export async function loadSelectedFeedContract(base, descriptor) {
+const feedContractNamespace={};
+export async function loadSelectedFeedContract(base, descriptor, context={}) {
+  const {path,digest}=verificationOnce(context,feedContractNamespace,{base,descriptor,journalDirectory:context.journal?.directory??null},()=>{
   need(base.manifest.path === join(base.directory, 'dist', 'candidate.json'), 'selected-feed-contract-path-changed');
   readEvidenceFile(base.manifest);
   const selected = verifyCandidate(base.directory), name = 'dist/service/apps/service/update-feed.js';
   need(selected.id === base.candidateId && selected.id === descriptor.operation.priorCandidateId && selected.bytes.has(name), 'selected-feed-contract-changed');
-  const path = join(base.directory, name), module = await import(pathToFileURL(path).href + '?sha256=' + sha256(selected.bytes.get(name)));
+  return {path:join(base.directory,name),digest:sha256(selected.bytes.get(name))};
+  });
+  const module = await import(pathToFileURL(path).href + '?sha256=' + digest);
   need(module.updateManifestSchema?.parse && module.updateFeedLimits?.maxBytes === 128 * 1024, 'selected-feed-contract-unavailable');
   return module;
 }
 
 export function createFullSignAdapter({ signing, feed, base, storeReceipt, contractProvider = loadSelectedFeedContract, sign = signUpdateManifest }) {
-  const check = async ({ descriptor, input }) => {
+  const signingNamespace={};
+  const check = context => withVerificationPass(context,async context=>{
+    const {descriptor,input}=context;
+    const {publicRaw,release}=verificationOnce(context,signingNamespace,{descriptor,input,signing,feed,base,journalDirectory:context.journal?.directory??null},()=>{
     need(input.package.route === 'full' && isDeepStrictEqual(input.signing, signing) && isDeepStrictEqual(input.feed, feed), 'full-signing-input-changed');
     need(descriptor.operation.trustedPublicKeySha256 === signing.publicKey.sha256, 'trusted-signing-key-changed');
     const publicRaw = readEvidenceFile(signing.publicKey, { maximum: 16384 });
@@ -147,7 +162,9 @@ export function createFullSignAdapter({ signing, feed, base, storeReceipt, contr
       need(release.runtimeBundle?.sha256 === input.package.runtime.archive.sha256 && release.runtimeBundle.bytes === runtimeBytes.length, 'full-signing-runtime-changed');
     } else need(!release.runtimeBundle, 'full-signing-runtime-unbound');
     for (const artifact of [release.bundle, release.applicationDependenciesBundle, release.runtimeBundle].filter(Boolean)) https(artifact.url);
-    const contract = await contractProvider(base, descriptor), manifest = contract.updateManifestSchema.parse({ format: 1, ...feed, releases: [release] });
+    return {publicRaw,release};
+    });
+    const contract = await contractProvider(base, descriptor, context), manifest = contract.updateManifestSchema.parse({ format: 1, ...feed, releases: [release] });
     const publicKey = createPublicKey(publicRaw); need(publicKey.asymmetricKeyType === 'ed25519', 'full-public-key-invalid');
     if (signing.previousFeed === 'initial') need(manifest.sequence === 1, 'initial-full-sequence-invalid');
     else {
@@ -159,9 +176,9 @@ export function createFullSignAdapter({ signing, feed, base, storeReceipt, contr
       need(manifest.channel === prior.channel && manifest.sequence > prior.sequence, 'full-feed-sequence-not-advanced');
     }
     return { manifest, contract, publicKey };
-  };
-  const observe = async context => {
-    const { manifest, contract, publicKey } = await check({ descriptor: context.descriptor, input: context.intent.input });
+  },{readOnly:true});
+  const observe = context => withVerificationPass(context,async context => {
+    const { manifest, contract, publicKey } = await check({ ...context, input: context.intent.input });
     const path = join(context.journal.directory, `delivery-full-signature-${context.intent.key}.json`);
     if (!existsSync(path)) return response('uncertain', 'original-full-signature-unavailable', context.intent.key);
     const raw = frontendRegular(path, contract.updateFeedLimits.maxBytes), envelope = JSON.parse(raw);
@@ -171,14 +188,14 @@ export function createFullSignAdapter({ signing, feed, base, storeReceipt, contr
       && verify(null, payload, publicKey, signature) && payload.equals(Buffer.from(JSON.stringify(manifest))), 'full-signature-invalid');
     return response('completed', 'full-feed-signed', context.intent.key, { ...context.intent.input.package,
       signedFeed: { path, sha256: sha256(raw) }, publicKey: signing.publicKey, channel: manifest.channel, sequence: manifest.sequence });
-  };
+  },{readOnly:true});
   return { input: async ({ prior }) => ({ package: prior.package, signing, feed }), validate: check,
-    execute: async context => {
-      const { manifest, contract } = await check({ descriptor: context.descriptor, input: context.intent.input });
+    execute: context => verificationEffect(context,async context => {
+      const { manifest, contract } = await check({ ...context, input: context.intent.input });
       const stored = storeReceipt(context.journal, context.intent.key, 'full-manifest.json', json(manifest));
       await sign({ input: stored.path, privateKeyFile: signing.privateKeyPath, publicKeyFile: signing.publicKey.path,
         output: join(context.journal.directory, `delivery-full-signature-${context.intent.key}.json`),
         previous: signing.previousFeed === 'initial' ? 'initial' : signing.previousFeed.path }, contract);
       return observe(context);
-    }, observe, verify: async (value, context) => { if (value.state === 'completed') need(isDeepStrictEqual(value.output, (await observe(context)).output), 'full-signature-result-changed'); } };
+    }), observe, verify: async (value, context) => { if (value.state === 'completed') need(isDeepStrictEqual(value.output, (await observe(context)).output), 'full-signature-result-changed'); } };
 }

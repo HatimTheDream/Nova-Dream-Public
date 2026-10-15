@@ -10,7 +10,7 @@ const sha=b=>createHash('sha256').update(b).digest('hex');
 let measured,staged;
 const ledgerChecks=[];
 mock.module('../scripts/release-coordinate.mjs',{namedExports:{validateJournalDirectory:(p,o)=>{assert.equal(o.create,false);assert.ok(p?.endsWith('target-publication-ledger'));ledgerChecks.push(p);return p;}}});
-mock.module('../scripts/release-delivery-full-host.mjs',{namedExports:{verifyFullPremaintenance:()=>{},verifyFullCompletion:()=>{},fullHostOptionsSchema:{parse:v=>v},collectFullOnlineCapacity:async()=>measured}});
+mock.module('../scripts/release-delivery-full-host.mjs',{namedExports:{verifyFullPremaintenanceArtifacts:input=>({bytes:Object.fromEntries([['bundle',input.signed.bundle],['dependencies',input.signed.dependencies.archive],['manifest',input.signed.signedFeed]].map(([role,ref])=>[role,readFileSync(ref.path).length]))}),verifyFullCompletion:()=>{},fullHostOptionsSchema:{parse:v=>v},collectFullOnlineCapacity:async()=>measured}});
 mock.module('../scripts/release-delivery-install.mjs',{namedExports:{buildFullCoordinatorDescriptor:(c,v)=>({input:{operation:{id:c.descriptor.operation.id},evidence:{publication:v.evidence,capacity:v.capacityEvidence}}})}});
 mock.module('../scripts/release-delivery-full-prestage.mjs',{namedExports:{advanceFullPrestage:async()=>staged,verifyFullProtectedAssets:()=>{}}});
 const {createFullPublicationAdapter}=await import('../scripts/release-delivery-full-publication.mjs');

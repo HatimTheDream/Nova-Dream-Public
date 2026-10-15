@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { PACKAGE_SUBSTEPS, deliveryObservationSchema } from './release-delivery-journal.mjs';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { createFullBundleAdapter } from './release-delivery-full.mjs';
+import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 
 const need = (value, code) => { if (!value) throw Error(code); };
 const reason = e => /^[a-z][a-z0-9-]{0,99}$/.test(e?.message ?? '') ? e.message : 'dependency-result-rejected';
@@ -35,10 +36,10 @@ async function verifyStored(context, name, adapter, prior, clock = Date.now) {
     await adapter.validate(child);
     if (row.current.receipt) readEvidenceFile(row.current.receipt);
     await adapter.verify(row.current, child);
-    if (row.validation?.state === 'failed') context.journal.recordDeliveryRevalidation(context.descriptor.operation.id, row.phase,
-      { state: 'passed', reason: 'dependency-result-reverified' }, clock());
+    if (row.validation?.state === 'failed') await verificationEffect(context, () => context.journal.recordDeliveryRevalidation(context.descriptor.operation.id, row.phase,
+      { state: 'passed', reason: 'dependency-result-reverified' }, clock()));
   } catch (error) {
-    context.journal.recordDeliveryRevalidation(context.descriptor.operation.id, row.phase, { state: 'failed', reason: reason(error) }, clock());
+    await verificationEffect(context, () => context.journal.recordDeliveryRevalidation(context.descriptor.operation.id, row.phase, { state: 'failed', reason: reason(error) }, clock()));
     throw error;
   }
   return row.current.output;
@@ -61,16 +62,16 @@ export async function advancePackageSubstep(context, name, adapter, { prior = {}
   await adapter.validate({ ...context, input: payload, priorSubsteps: prior });
   if (!old) {
     need(typeof context.beforeNewEffect === 'function' && typeof admit === 'function', 'dependency-fresh-admission-required');
-    await context.beforeNewEffect(); await admit();
+    await verificationEffect(context, () => context.beforeNewEffect()); await admit();
     parent(context);
   }
-  const reserved = context.journal.reserveDeliveryPhase(id, phase, input, clock());
+  const reserved = await verificationEffect(context, () => context.journal.reserveDeliveryPhase(id, phase, input, clock()));
   // Another invoker can finish between our initial read and this transaction.
   if (reserved.intent.state === 'completed') { await verifyStored(context, name, adapter, prior, clock); return reserved.intent.current; }
   if (reserved.intent.state === 'failed') return reserved.intent.current;
   const child = childContext(context, reserved.intent, prior);
   let observed, rejectedObservation;
-  try { observed = await (reserved.newlyReserved ? adapter.execute(child) : adapter.observe(child)); }
+  try { observed = await verificationEffect(child, scoped => reserved.newlyReserved ? adapter.execute(scoped) : adapter.observe(scoped)); }
   catch { observed = { state: 'uncertain', externalId: reserved.intent.externalId, receipt: null, output: null, reason: 'dependency-response-unavailable' }; }
   try {
     deliveryObservationSchema.parse({ ...observed, key: reserved.intent.key });
@@ -80,7 +81,7 @@ export async function advancePackageSubstep(context, name, adapter, { prior = {}
     rejectedObservation = observed;
     observed = { state: 'failed', externalId: reserved.intent.externalId, receipt: null, output: { verificationFailed: true }, reason: reason(error) };
   }
-  return context.journal.recordDeliveryObservation(id, phase, { ...observed, key: reserved.intent.key }, clock(), { rejectedObservation }).current;
+  return verificationEffect(context, () => context.journal.recordDeliveryObservation(id, phase, { ...observed, key: reserved.intent.key }, clock(), { rejectedObservation }).current);
 }
 
 export function createDependencyPairProducer({ maintained = null, clock = Date.now } = {}) {
@@ -90,7 +91,7 @@ export function createDependencyPairProducer({ maintained = null, clock = Date.n
     for (const name of phases.slice(0, count)) prior[name] = await verifyStored(context, name, maintained.steps[name], prior, clock);
     return prior;
   };
-  const run = async (context, inspectOnly = false) => {
+  const run = (context, inspectOnly = false) => withVerificationPass(context, async context => {
     if (!maintained) return missing(context);
     need(phases.every(name => ['input', 'validate', 'execute', 'observe', 'verify'].every(method => typeof maintained.steps?.[name]?.[method] === 'function'))
       && typeof maintained.normalizePair === 'function' && typeof maintained.verifyPair === 'function', 'maintained-dependency-capabilities-incomplete');
@@ -108,8 +109,8 @@ export function createDependencyPairProducer({ maintained = null, clock = Date.n
       && output.priorCandidateId === context.descriptor.operation.priorCandidateId, 'dependency-pair-identity-changed');
     await maintained.verifyPair(output, context);
     return result('completed', 'maintained-dependency-pair-completed', context, output);
-  };
-  return { protocol: 'durable-dependency-substeps-v1', validate: async context => { if (maintained) await maintained.validate(context); },
+  }, { readOnly: inspectOnly });
+  return { protocol: 'durable-dependency-substeps-v1', validate: context => withVerificationPass(context, async context => { if (maintained) await maintained.validate(context); }),
     execute: context => run(context), observe: context => run(context), inspect: context => run(context, true),
     verify: async (value, context) => { if (value.state === 'completed') need(isDeepStrictEqual(value.output, (await run(context, true)).output), 'dependency-pair-result-changed'); } };
 }
@@ -118,9 +119,9 @@ export function createDependencyPairProducer({ maintained = null, clock = Date.n
  * newly reserved bundle substep may package; an uncertain bundle only observes. */
 export function createDurableFullBundleAdapter({ options, pairProducer = null, pack, clock = Date.now }) {
   const readonlyPair = { validate: context => pairProducer.validate(context), execute: context => pairProducer.inspect(context),
-    observe: context => pairProducer.inspect(context), verify: (value, context) => pairProducer.verify(value, context) };
+    inspect: context => pairProducer.inspect(context), observe: context => pairProducer.inspect(context), verify: (value, context) => pairProducer.verify(value, context) };
   const base = createFullBundleAdapter({ options, pairProducer: pairProducer ? readonlyPair : null, ...(pack ? { pack } : {}) });
-  const run = async (context, inspectOnly = false) => {
+  const run = (context, inspectOnly = false) => withVerificationPass(context, async context => {
     if (!pairProducer) return base.observe(context);
     need(typeof pairProducer.inspect === 'function', 'read-only-pair-inspection-required');
     const pair = await (inspectOnly ? pairProducer.inspect(context) : pairProducer.observe(context));
@@ -139,7 +140,7 @@ export function createDurableFullBundleAdapter({ options, pairProducer = null, p
     // parent producer returns only fields accepted by the observation contract.
     return { state: value.state, reason: value.reason, externalId: context.intent.key,
       receipt: value.receipt, output: value.output };
-  };
+  });
   return { input: base.input, validate: base.validate, execute: context => run(context), observe: context => run(context),
     verify: async (value, context) => { if (value.state === 'completed') need(isDeepStrictEqual(value.output, (await run(context, true)).output), 'durable-full-bundle-result-changed'); } };
 }

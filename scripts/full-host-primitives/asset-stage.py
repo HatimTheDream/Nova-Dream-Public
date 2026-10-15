@@ -214,13 +214,31 @@ def read_only_plan():
  parent=destination.parent.lstat();state=STATE.lstat()
  return {'format':1,'kind':'exact-full-private-prestage-plan','readOnly':True,'bundleSha256':BUNDLE,'candidateId':TARGET,'priorCandidateId':PRIOR,'rehearsalLeaseId':LEASE,'rehearsalProofSha256':PROOF,'incoming':str(INCOMING),'destination':str(destination),'files':{k:{'bytes':v[0],'sha256':v[1]} for k,v in SPECS.items()},'currentJob':CURRENT_FACTS['currentJob'],'currentResult':CURRENT_FACTS['result'],'destinationParentIdentity':[parent.st_dev,parent.st_ino,parent.st_mode,parent.st_uid,parent.st_gid],'stateIdentity':[state.st_dev,state.st_ino,state.st_mode,state.st_uid,state.st_gid],'transferTimeout':timeout_identity,'capacity':stage_capacity(0),'automaticReplayPermitted':False}
 
+def javascript_plan_projection_matches(exact,projected):
+ # Only the informational JS view may round unsafe integers. Host identity is
+ # always compared against the original Python integers from authenticated bytes.
+ import math
+ if isinstance(exact,dict):
+  return isinstance(projected,dict) and exact.keys()==projected.keys() and all(javascript_plan_projection_matches(v,projected[k]) for k,v in exact.items())
+ if isinstance(exact,list):
+  return isinstance(projected,list) and len(exact)==len(projected) and all(javascript_plan_projection_matches(a,b) for a,b in zip(exact,projected))
+ if type(exact) is int:
+  if abs(exact)<=2**53-1:return type(projected) is int and projected==exact
+  try:return type(projected) in (int,float) and math.isfinite(float(exact)) and math.isfinite(float(projected)) and float(exact)==float(projected)
+  except OverflowError:return False
+ if type(exact) is float:return type(projected) in (int,float) and math.isfinite(exact) and exact==projected
+ return type(exact) is type(projected) and exact==projected
+
 def verify_dispatch_plan():
  require(isinstance(STAGE_PLAN,dict) and isinstance(STAGE_INTENT,dict),'Actual readonly plan and separate intent required.')
- current=read_only_plan();expected=dict(STAGE_PLAN);a=current.pop('capacity');b=expected.pop('capacity');require(current==expected,'Exact readonly plan identity changed.')
- require({k:v for k,v in a.items() if k!='freeBytes'}=={k:v for k,v in b.items() if k!='freeBytes'},'Capacity contract changed.')
  import base64
- actual=base64.b64decode(STAGE_PLAN_RAW_BASE64,validate=True);require(len(actual)<=131072 and json.loads(actual)==STAGE_PLAN,'Original raw plan bytes differ.')
+ require(isinstance(STAGE_PLAN_RAW_BASE64,str) and len(STAGE_PLAN_RAW_BASE64)<=174764,'Original raw plan bound exceeded.')
+ actual=base64.b64decode(STAGE_PLAN_RAW_BASE64,validate=True);require(len(actual)<=131072,'Original raw plan bound exceeded.')
  require(STAGE_INTENT=={'format':1,'kind':'execute-exact-full-private-prestage','planSha256':hashlib.sha256(actual).hexdigest(),'bundleSha256':BUNDLE,'nonce':NONCE,'automaticReplayPermitted':False},'Separate exact execution intent differs.')
+ expected=json.loads(actual)
+ require(isinstance(expected,dict) and javascript_plan_projection_matches(expected,STAGE_PLAN),'Original structured plan differs from its JavaScript projection.')
+ current=read_only_plan();a=current.pop('capacity');b=expected.pop('capacity');require(current==expected,'Exact readonly plan identity changed.')
+ require({k:v for k,v in a.items() if k!='freeBytes'}=={k:v for k,v in b.items() if k!='freeBytes'},'Capacity contract changed.')
 
 def observe_original():
  import base64

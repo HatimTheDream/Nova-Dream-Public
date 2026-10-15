@@ -1,3 +1,23 @@
+## [2.5.0] — 2026-10-14
+
+### Added
+
+- Start a release from a data file containing exact private/public commits, a configured target and the original operation ID. Derive release metadata from those sources and resume interrupted initialization without creating another operation.
+- Export an immutable successor profile from actual publication, installation and saved-Assistant evidence, so the next release can use new commit inputs without a version-specific preparation script. Browser acceptance and unavailable legacy evidence remain explicit.
+- Add guarded collection of retained-state evidence for a future 2026.9.6-to-2026.9.8 runtime route. Its complete restoration qualification is still pending; this release does not enable that transition.
+
+### Improved
+
+- Reuse repeated file verification within a bounded read-only inspection. New effects, changed inputs and resumed operations still receive fresh verification.
+- Detect a missing or unsafe protected staging directory before packaging, with a precise prerequisite gap.
+
+### Fixed
+
+- Preserve uncertain publication responses for observation instead of running completed-only checks against them. Record bounded diagnostic codes in private results.
+- Allow progress after repeated missed forecasts only when each miss is reviewed and a new evidence-backed approach is recorded; preserve original deadlines, failures and release checks.
+- Wait briefly for small server clock differences during host observation and staging, while preserving raw timestamps, freshness limits and the exact failure cause.
+- Preserve exact filesystem timestamps across JavaScript and Python staging checks so rounding cannot reject an unchanged deployment plan.
+
 ## [2.4.0] — 2026-10-14
 
 ### Added

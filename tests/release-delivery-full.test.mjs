@@ -9,6 +9,9 @@ import { sha256 } from '../scripts/release-plan.mjs';
 import { verifyCandidate } from '../scripts/candidate.mjs';
 import { createFullBundleAdapter, createFullSignAdapter } from '../scripts/release-delivery-full.mjs';
 import { signUpdateManifest } from '../scripts/update-manifest.mjs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { withVerificationPass,verificationEffect } from '../scripts/release-verification-pass.mjs';
 
 const rawJson = value => Buffer.from(JSON.stringify(value) + '\n');
 function fixture() {
@@ -144,6 +147,17 @@ test('actual maintained signing with disposable Ed25519 keys verifies and observ
   const context = { descriptor: f.descriptor, intent: { input, key }, journal: { directory: f.root } };
   const completed = await adapter.execute(context); await adapter.verify(completed, context);
   assert.equal(completed.state, 'completed'); assert.equal(signingCalls, 1);
+  const open=fs.openSync,readCounts=new Map([[resolve(packaged.output.bundle.path),0],[resolve(packaged.output.dependencies.archive.path),0]]);
+  fs.openSync=function(path,...args){const key=typeof path==='string'?resolve(path):null;if(readCounts.has(key))readCounts.set(key,readCounts.get(key)+1);return open.call(this,path,...args);};syncBuiltinESMExports();
+  try{
+   await withVerificationPass({...context,input},async c=>{
+    await adapter.validate(c);await adapter.verify(completed,c);
+    assert.deepEqual([...readCounts.values()],[1,1]);
+    await verificationEffect(c,async()=>{});await adapter.validate(c);await adapter.verify(completed,c);
+    assert.deepEqual([...readCounts.values()],[2,2]);
+   });
+   await adapter.observe(context);assert.deepEqual([...readCounts.values()],[3,3]);
+  }finally{fs.openSync=open;syncBuiltinESMExports();}
   const signedBytes = readFileSync(completed.output.signedFeed.path);
   unlinkSync(privateKeyPath);
   const observed = await adapter.observe(context); assert.deepEqual(observed, completed); assert.equal(signingCalls, 1);

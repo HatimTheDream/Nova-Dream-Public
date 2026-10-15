@@ -9,6 +9,10 @@ import { assessCapacity, readEvidenceFile, readReleaseInputFile, sha256 } from '
 import { releaseTransportSchema, runInstallTransport } from './release-adapters.mjs';
 import { verifyRetainedCandidate } from './release-delivery-package.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
+import { verifyRuntimeQualificationReference } from './release-delivery-runtime-retained.mjs';
+import { runtimeTransition } from './release-runtime-artifact.mjs';
+import { verificationOnce } from './release-verification-pass.mjs';
+import { awaitObservationTime } from './release-observation-clock.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
 const hash=z.string().regex(/^[a-f0-9]{64}$/);
@@ -46,10 +50,10 @@ export function fullHostIdentity(key,role){
   const h=sha256(encoded({key,role,namespace:'maintained-full-host-v1'}));
   return h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-a'+h.slice(17,20)+'-'+h.slice(20,32);
 }
-export function fullFactsSpec(descriptor,options,key){
+export function fullFactsSpec(descriptor,options,key,runtime=null){
   fullHostOptionsSchema.parse(options);const op=descriptor.operation;
-  requireRuntimeCapability(op);
-  need(op.changeClass==='application'||op.changeClass==='presentation','full-changed-recovery-qualification-capability-required');
+  requireRuntimeCapability(op,runtime);
+  need(op.changeClass==='application'||op.changeClass==='presentation'||(runtime&&op.changeClass==='runtime'),'full-changed-recovery-qualification-capability-required');
   return {format:2,sourceCommit:descriptor.sources.private.commit,helperDirectory:options.helperDirectory,helperHashes:FULL_HELPERS,
     hostConfiguration:options.hostConfiguration.path,hostConfigurationSha256:options.hostConfiguration.sha256,
     startupGuardFile:options.startupGuardFile,workspaceEpoch:op.workspaceEpoch,leaseId:fullHostIdentity(key,'lease'),
@@ -61,6 +65,9 @@ export function fullFactsSpec(descriptor,options,key){
 // In particular, authentic runtime archives and synthetic migration results do
 // not supply the missing settled target startup/restart qualification.
 function requireRuntimeCapability(operation,runtime=null){
+  if(operation.priorAgentVersion==='2026.9.6'&&operation.agentVersion==='2026.9.8'){
+    verifyRuntimeQualificationReference(runtime,operation,FULL_HELPERS);return;
+  }
   const result=runtimeAdmissionCapability({fromVersion:operation.priorAgentVersion,toVersion:operation.agentVersion,schemaVersion:55,apiVersion:1});
   need(result.supported,result.gaps[0]?.code??'full-runtime-qualification-capability-required');
   need(runtime===null,'full-unexpected-runtime-artifact');
@@ -69,7 +76,7 @@ export function verifyFullFacts(value,spec,nowMs=Date.now(),fresh=true){
   need(value?.format===2&&value.kind==='current-rehearsal-facts'&&value.readOnly===true&&value.noHostWrites===true
     &&value.sourceCommit===spec.sourceCommit&&isDeepStrictEqual(value.base,spec.base)
     &&isDeepStrictEqual(value.acceptedInstallation,spec.acceptedInstallation),'full-host-facts-identity-changed');
-  need(Number.isSafeInteger(value.observedAtMilliseconds)&&(!fresh||nowMs-value.observedAtMilliseconds>=-5000&&nowMs-value.observedAtMilliseconds<=900000),'full-host-facts-expired');
+  need(Number.isSafeInteger(value.observedAtMilliseconds)&&(!fresh||nowMs-value.observedAtMilliseconds>=0&&nowMs-value.observedAtMilliseconds<=900000),'full-host-facts-expired');
   const r=value.review,l=value.operatorStatus?.lease;
   need(r?.leaseId===spec.leaseId&&r.candidateId===spec.base.candidateId&&r.novaVersion===spec.base.priorVersion
     &&r.agentVersion===spec.base.agentVersion&&r.workspaceEpoch===spec.workspaceEpoch&&isDeepStrictEqual(r.helperHashes,FULL_HELPERS)
@@ -99,7 +106,23 @@ async function invoke(context,{transport,run,storeReceipt},name,data){
     const detail={format:1,kind:'private-full-host-failure',operationId:context.descriptor.operation.id,key:context.intent.key,program:name,
       exitCode:raw.exitCode??null,uncertain:raw.uncertain===true,stdout:String(raw.stdout??'').slice(0,120000),stderr:String(raw.stderr??'').slice(0,4000)};
     return {state:'uncertain',diagnostic:record(context,storeReceipt,'full-host-failure-'+sha256(encoded(detail))+'.json',detail)};
-  }return value;
+  }
+  if(['collect-facts.py','collect-completion-template.py','online-capacity.py'].includes(name)){
+    const bytes=Buffer.from(raw.stdout,'utf8');need(bytes.length<=131072,'full-host-clock-response-too-large');
+    record(context,storeReceipt,'full-host-clock-response-'+sha256(bytes)+'.json',{format:1,program:name,stdoutRawBase64:bytes.toString('base64'),stdoutSha256:sha256(bytes)});
+  }
+  return value;
+}
+async function hostObservationTime(context,storeReceipt,value,{clock,monotonic,wait,maximumAgeMilliseconds=300000}){
+  const identity=sha256(encoded(value));let timing;
+  try{timing=await awaitObservationTime(value.observedAtMilliseconds,{clock,monotonic,wait,maximumAgeMilliseconds});}
+  catch(error){
+    const diagnostic={format:1,kind:'full-host-clock-refusal',operationId:context.descriptor.operation.id,key:context.intent.key,
+      observationSha256:identity,reason:error.message,clockObservation:error.clockObservation,originalTimestampChanged:false};
+    record(context,storeReceipt,'full-host-clock-refusal-'+sha256(encoded(diagnostic))+'.json',diagnostic);throw error;
+  }
+  const result={format:1,kind:'full-host-clock-accepted',operationId:context.descriptor.operation.id,key:context.intent.key,observationSha256:identity,clockObservation:timing};
+  record(context,storeReceipt,'full-host-clock-accepted-'+sha256(encoded(result))+'.json',result);return timing;
 }
 
 function hostInput(descriptor,prior,options){
@@ -155,14 +178,18 @@ export function verifyFullPlan(value,values){
       &&Object.values(value.planHostReceipts).every(x=>hash.safeParse(x).success)&&value.planHostReceipts.logSha256===value.logSha256,'full-plan-receipt-closure-changed');
   }
 }
-export function createFullCapacityAdapter({transport,options,storeReceipt,run=runInstallTransport,clock=Date.now}){
+export function createFullCapacityAdapter({transport,options,storeReceipt,run=runInstallTransport,clock=Date.now,monotonic,wait}){
   const bridge={transport,storeReceipt,run};const expected=({descriptor,prior})=>hostInput(descriptor,prior,options);
   const validate=context=>need(isDeepStrictEqual(context.input,expected(context)),'full-host-input-changed');
   const advance=async context=>{
-    const input=context.intent.input,spec=fullFactsSpec(context.descriptor,options,context.intent.key);
+    const input=context.intent.input,spec=fullFactsSpec(context.descriptor,options,context.intent.key,context.intent.input.signed.runtime??null);
     let facts=original(context,'full-facts.json');
-    if(!facts){facts=await invoke(context,bridge,'collect-facts.py',spec);if(facts.state==='uncertain')return outcome('uncertain','full-current-facts-unavailable',context,{diagnostic:facts.diagnostic});verifyFullFacts(facts,spec,clock());record(context,storeReceipt,'full-facts.json',facts);}
+    const newFacts=!facts;
+    if(newFacts){facts=await invoke(context,bridge,'collect-facts.py',spec);if(facts.state==='uncertain')return outcome('uncertain','full-current-facts-unavailable',context,{diagnostic:facts.diagnostic});}
+    verifyFullFacts(facts,spec,clock(),false);
+    if(!original(context,'full-stage-dispatch.json'))await hostObservationTime(context,storeReceipt,facts,{clock,monotonic,wait,maximumAgeMilliseconds:900000});
     verifyFullFacts(facts,spec,clock(),!original(context,'full-stage-dispatch.json'));
+    if(newFacts)record(context,storeReceipt,'full-facts.json',facts);
     const request=packetFor(input,facts,context.intent.key);let staged=original(context,'full-stage-result.json');
     if(!staged){
       if(original(context,'full-stage-dispatch.json')){
@@ -202,22 +229,26 @@ export function createFullCapacityAdapter({transport,options,storeReceipt,run=ru
   return {input:async c=>expected(c),validate,execute:advance,observe:advance,verify:async(value,context)=>{
     if(value.state!=='completed')return;need(value.externalId===context.descriptor.operation.id&&isDeepStrictEqual(JSON.parse(readEvidenceFile(value.receipt)),value.output),'full-capacity-receipt-changed');
     const o=value.output;need(o.operationId===context.descriptor.operation.id&&o.phaseKey===context.intent.key&&o.scope==='metadata-stage-only'&&o.fullRehearsalCapacityAdmitted===false,'full-capacity-scope-changed');
-    const spec=fullFactsSpec(context.descriptor,options,context.intent.key);verifyFullFacts(o.facts,spec,clock(),false);verifyFullStage(o.stageResult,packetFor(context.intent.input,o.facts,context.intent.key));verifyFullPlan(o.plan,o.values);readEvidenceFile(o.review);
+    const spec=fullFactsSpec(context.descriptor,options,context.intent.key,context.intent.input.signed.runtime??null);verifyFullFacts(o.facts,spec,clock(),false);verifyFullStage(o.stageResult,packetFor(context.intent.input,o.facts,context.intent.key));verifyFullPlan(o.plan,o.values);readEvidenceFile(o.review);
   }};
 }
 
-export function verifyFullPremaintenance(input,descriptor,nowMs=Date.now()){
+const premaintenanceNamespace={};
+/** Immutable byte facts can share one read-only pass. Current feed time is
+ * checked on every call; the returned review always carries the actual time. */
+export function verifyFullPremaintenanceArtifacts(input,descriptor,nowMs=Date.now(),context={}){
+  const facts=verificationOnce(context,premaintenanceNamespace,{input,descriptor,journalDirectory:context.journal?.directory??null},()=>{
   const s=input.signed,op=descriptor.operation;
   need(s?.route==='full'&&s.priorCandidateId===op.priorCandidateId&&s.candidateId===input.capacity?.targetCandidateId
     &&(op.candidateId===null||s.candidateId===op.candidateId),'full-readiness-package-required');
   requireRuntimeCapability(op,s.runtime??null);
-  need(s.runtime===null,'full-runtime-role-required');
+  if(s.runtime)runtimeTransition(s.runtime,s.release);
   need(isDeepStrictEqual(s.sourceCommits,op.sourceCommits)&&['private','public'].every(side=>s.sourceCommits[side]===descriptor.sources[side].commit),'full-readiness-source-changed');
   const feedRaw=readEvidenceFile(s.signedFeed,{maximum:256*1024}),feed=JSON.parse(feedRaw),key=createPublicKey(readEvidenceFile(s.publicKey,{maximum:16384}));
   need(s.publicKey.sha256===op.trustedPublicKeySha256&&key.asymmetricKeyType==='ed25519'&&typeof feed.payload==='string'&&typeof feed.signature==='string','full-readiness-trusted-key-required');
   const payload=Buffer.from(feed.payload,'base64'),signature=Buffer.from(feed.signature,'base64');
   need(payload.toString('base64')===feed.payload&&signature.length===64&&signature.toString('base64')===feed.signature&&verify(null,payload,key,signature),'full-readiness-signature-invalid');
-  const manifest=JSON.parse(payload);need(manifest.sequence===s.sequence&&manifest.channel===s.channel&&Date.parse(manifest.createdAt)<=nowMs&&Date.parse(manifest.expiresAt)>nowMs,'full-readiness-signed-feed-expired');
+  const manifest=JSON.parse(payload);need(manifest.sequence===s.sequence&&manifest.channel===s.channel,'full-readiness-signed-feed-expired');
   const release=manifest.releases?.filter(r=>r.candidateId===s.candidateId);need(release?.length===1&&isDeepStrictEqual(release[0],s.release)
     &&s.release.fromCandidateId===op.priorCandidateId&&s.release.novaVersion===op.version&&s.release.agentVersion===op.agentVersion,'full-readiness-signed-release-changed');
   const bundle=readEvidenceFile(s.bundle,{maximum:128*1024**2}),description=s.dependencies.description;
@@ -235,21 +266,28 @@ export function verifyFullPremaintenance(input,descriptor,nowMs=Date.now()){
   for(const [name,digest] of Object.entries(FULL_HELPERS).filter(([n])=>n!=='operator_rehearsal.py')){
     const rows=files.filter(f=>f.name===name);need(rows.length===1&&rows[0].sha256===digest&&sha256(Buffer.from(rows[0].data,'base64'))===digest,'full-reviewed-helper-changed');
   }
-  return {format:1,kind:'automated-full-premaintenance-check',operationId:op.id,candidateId:s.candidateId,priorCandidateId:s.priorCandidateId,
+  return {createdAt:manifest.createdAt,expiresAt:manifest.expiresAt,bytes:{bundle:bundle.length,dependencies:archive.length,manifest:feedRaw.length},review:{format:1,kind:'automated-full-premaintenance-check',operationId:op.id,candidateId:s.candidateId,priorCandidateId:s.priorCandidateId,
     sourceCommits:s.sourceCommits,bundleSha256:s.bundle.sha256,dependenciesSha256:description.archiveSha256,signedFeedSha256:s.signedFeed.sha256,
-    qualificationSha256:s.dependencies.qualification.sha256,helperHashes:FULL_HELPERS,evaluatedAtMilliseconds:nowMs,
-    humanReviewClaimed:false,stoppedCapacityStillRequired:true,freshFullRehearsalStillRequired:true};
+    qualificationSha256:s.dependencies.qualification.sha256,helperHashes:FULL_HELPERS,
+    humanReviewClaimed:false,stoppedCapacityStillRequired:true,freshFullRehearsalStillRequired:true}};
+  });
+  need(Date.parse(facts.createdAt)<=nowMs&&Date.parse(facts.expiresAt)>nowMs,'full-readiness-signed-feed-expired');
+  return {review:{...facts.review,evaluatedAtMilliseconds:nowMs},bytes:{...facts.bytes}};
+}
+export function verifyFullPremaintenance(input,descriptor,nowMs=Date.now(),context={}){
+  return verifyFullPremaintenanceArtifacts(input,descriptor,nowMs,context).review;
 }
 
 /** Called after rehearsal by the fixed publication adapter immediately before
  * coordinator preparation. No old stage/closed receipt is relabeled as fresh. */
-export async function collectFullOnlineCapacity(context,{transport,options,storeReceipt,run=runInstallTransport,clock=Date.now}){
+export async function collectFullOnlineCapacity(context,{transport,options,storeReceipt,run=runInstallTransport,clock=Date.now,monotonic,wait}){
   const prior=context.prior,completed=prior.recovery;
   // Refuse unavailable runtime qualification before even observing an old
   // rehearsal. Its successful prior-runtime starts cannot qualify the target.
   requireRuntimeCapability(context.descriptor.operation,prior.sign?.runtime??null);
   need(completed?.kind==='nova-delivery-full-rehearsal','full-current-rehearsal-required');verifyFullCompletion(completed.completion,completed.values);
   let recoveryEvidence=completed.evidence;
+  if(completed.completion.observedAtMilliseconds>clock())await hostObservationTime(context,storeReceipt,completed.completion,{clock,monotonic,wait});
   if(clock()-completed.completion.observedAtMilliseconds>55*60000){
     // Re-observe the original completed operation; never repeat a rehearsal or
     // replace its proof to refresh an expired observation.
@@ -258,23 +296,31 @@ export async function collectFullOnlineCapacity(context,{transport,options,store
     const raw=verifyFullCompletion(current,completed.values);
     need(raw.proofRaw.equals(readEvidenceFile(completed.evidence.proof))&&current.rehearsalEvidenceSha256===completed.completion.rehearsalEvidenceSha256
       &&current.completedProof.reviewSha256===completed.evidence.review.sha256,'full-original-completed-rehearsal-changed');
-    need(Number.isSafeInteger(current.observedAtMilliseconds)&&clock()-current.observedAtMilliseconds>=0&&clock()-current.observedAtMilliseconds<=300000,'full-original-rehearsal-observation-expired');
+    await hostObservationTime(context,storeReceipt,current,{clock,monotonic,wait});
     recoveryEvidence={...completed.evidence,observation:record(context,storeReceipt,'full-rehearsal-reobservation-'+sha256(encoded(current))+'.json',current)};
   }
   const metadata=JSON.parse(readEvidenceFile(prior.artifacts.repositories.private.metadata));
-  const input={spec:fullFactsSpec(context.descriptor,options,context.intent.key),collectorSource:primitive('collect-facts.py').toString('base64'),
+  const input={spec:fullFactsSpec(context.descriptor,options,context.intent.key,prior.sign.runtime??null),collectorSource:primitive('collect-facts.py').toString('base64'),
     collectorSha256:sha256(primitive('collect-facts.py')),application:Object.fromEntries(['archiveBytes','expandedBytes','fileCount'].map(k=>[k,metadata[k]])),
     dependencies:prior.sign.dependencies.description,bundleBytes:prior.sign.release.bundle.bytes,
+    ...(prior.sign.runtime?{runtime:runtimeTransition(prior.sign.runtime,prior.sign.release)}: {}),
     recoveryEvidence:{path:completed.values.stateDirectory+'/operator-maintenance/'+completed.leaseId+'/rehearsal.json',sha256:completed.completion.rehearsalEvidenceSha256}};
   const value=await invoke(context,{transport,storeReceipt,run},'online-capacity.py',input);
   if(value.state==='uncertain')return value;
-  need(value.format===1&&value.kind==='measured-full-online-capacity'&&value.readOnly===true&&value.hostEffects===false
+  need(value.format===(prior.sign.runtime?2:1)&&value.kind==='measured-full-online-capacity'&&value.readOnly===true&&value.hostEffects===false
     &&value.workspaceEpoch===context.descriptor.operation.workspaceEpoch&&value.health?.status==='ready'
     &&value.health.candidateId===context.descriptor.operation.priorCandidateId&&value.runtime?.agentVersion===context.descriptor.operation.priorAgentVersion
     &&value.sourceCommit===context.descriptor.sources.private.commit&&isDeepStrictEqual(value.helperHashes,FULL_HELPERS)
     &&isDeepStrictEqual(value.originalClosedEvidence,input.recoveryEvidence)&&value.expectedReclaimBytes===0&&value.dependencyReuseCreditBytes===0
     &&value.authoritativeStoppedAdmission===false&&value.stoppedAndPostStartChecksStillRequired===true,'full-measured-capacity-authority-changed');
-  need(Number.isSafeInteger(value.observedAtMilliseconds)&&clock()-value.observedAtMilliseconds>=0&&clock()-value.observedAtMilliseconds<=300000,'full-measured-capacity-expired');
+  await hostObservationTime(context,storeReceipt,value,{clock,monotonic,wait});
+  if(prior.sign.runtime){
+    const p=value.runtimeProjection,d=prior.sign.runtime.description;
+    need(p?.kind==='conservative-runtime-online-projection'&&p.fromVersion===d.fromVersion&&p.toVersion===d.toVersion
+      &&p.archiveSha256===d.archiveSha256&&p.runtimeReuseCreditBytes===0&&p.actualTargetStartupQualified===false
+      &&p.runtimeAdmission===false&&p.runtimeArchiveBytes>=2*d.archiveBytes&&p.runtimeExpansionBytes>=d.expandedBytes
+      &&p.nativeMigrationBytes>=0&&p.managedCompanionBytes>0,'full-runtime-online-projection-incomplete');
+  }else need(!value.runtimeProjection,'full-unexpected-runtime-projection');
   const assessed=assessCapacity(value.capacity);need(assessed.fits&&assessed.lifecycle==='online'&&assessed.requiredFreeBytes===value.capacity.requiredFreeBytes,'full-measured-capacity-incomplete');
   return {state:'completed',evidence:{observation:record(context,storeReceipt,'full-online-capacity-'+sha256(encoded(value))+'.json',value)},recoveryEvidence,output:value};
 }
@@ -304,7 +350,7 @@ export function verifyFullCompletion(value,values){
     &&value.status.roles?.trial===null&&value.status.roles?.restore===null,'full-rehearsal-restoration-or-native-proof-changed');
   return {proofRaw,detailRaw};
 }
-export function createFullRehearsalAdapter({transport,options,storeReceipt,run=runInstallTransport,clock=Date.now}){
+export function createFullRehearsalAdapter({transport,options,storeReceipt,run=runInstallTransport,clock=Date.now,monotonic,wait}){
   const bridge={transport,storeReceipt,run};const expected=({descriptor,prior})=>{
     const c=prior.capacity;need(prior.route?.route==='full'&&c?.kind==='nova-delivery-full-capacity'&&c.operationId===descriptor.operation.id,'full-maintained-plan-required');
     verifyFullPlan(c.plan,c.values);need(c.plan.planPassed===true,'full-maintained-plan-not-passed');
@@ -340,7 +386,8 @@ export function createFullRehearsalAdapter({transport,options,storeReceipt,run=r
     if(!status.automaticRehearsalPassed){const terminal=status.unitState?.ActiveState==='failed';return outcome(terminal?'failed':'running',terminal?'full-original-rehearsal-failed':'full-original-rehearsal-running',context,{status});}
     const completed=await invoke(context,bridge,'collect-completion-template.py',{values:v});
     if(completed.state==='uncertain')return outcome('uncertain','full-original-completion-unavailable',context,{diagnostic:completed.diagnostic});
-    const raw=verifyFullCompletion(completed,v),evidence={observation:record(context,storeReceipt,'full-rehearsal-completion.json',completed),review:c.review,
+    const raw=verifyFullCompletion(completed,v);await hostObservationTime(context,storeReceipt,completed,{clock,monotonic,wait});
+    const evidence={observation:record(context,storeReceipt,'full-rehearsal-completion.json',completed),review:c.review,
       proof:storeReceipt(context.journal,context.intent.key,'full-rehearsal-proof.json',raw.proofRaw)};
     const output={kind:'nova-delivery-full-rehearsal',operationId:context.descriptor.operation.id,leaseId:v.leaseId,executionId:v.executionId,unit:v.executionUnit,
       helperHashes:FULL_HELPERS,values:v,evidence,completion:completed,originalReturned:true,savedReplyAccepted:false,browserAccepted:false};

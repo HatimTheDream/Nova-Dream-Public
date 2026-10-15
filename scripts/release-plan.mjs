@@ -311,7 +311,20 @@ export function assessTimeline(raw, { nowMs = Date.now(), previous, previousAsse
   }
   const dueReviews = deadlineAssessments.filter(e => e.state === 'missed' && !reviewed.has(e.deadlineId));
   const misses = Object.fromEntries(['total', ...PHASES].map(step => [step, deadlineAssessments.filter(e => e.step === step && e.state === 'missed').length]));
-  const suspendNewAttemptsFor = Object.entries(misses).filter(([step, count]) => count >= 2 && (step === 'total' ? !PHASES.every(id => phases.some(p => p.id === id && p.state === 'passed')) : !phases.some(p => p.id === step && p.state === 'passed'))).map(([step]) => step);
+  const changedApproachReviewed = step => {
+    const missed = deadlineAssessments.filter(e => e.step === step && e.state === 'missed');
+    if (!missed.length || missed.some(e => !reviewed.has(e.deadlineId))) return false;
+    const latestDeadline = Math.max(...missed.map(e => e.deadlineAtMs));
+    return timeline.reviews.some((item, index) => item.action === 'change-approach'
+      && missed.some(e => e.deadlineId === item.deadlineId) && item.reviewedAtMs >= latestDeadline
+      // A later miss requires a genuinely new correction record. Reusing the
+      // same evidence cannot clear another suspension or reset its history.
+      && !timeline.reviews.slice(0, index).some(old => old.action === 'change-approach'
+        && old.evidenceSha256 === item.evidenceSha256));
+  };
+  const suspendNewAttemptsFor = Object.entries(misses).filter(([step, count]) => count >= 2
+    && (step === 'total' ? !PHASES.every(id => phases.some(p => p.id === id && p.state === 'passed')) : !phases.some(p => p.id === step && p.state === 'passed'))
+    && !changedApproachReviewed(step)).map(([step]) => step);
   const groups = [['private-ci', 'public-ci', 'capacity'], ['package'], ['recovery'], ['publication'], ['installation'], ['acceptance']];
   let remainingRangeMs = [0, 0];
   for (const group of groups) {

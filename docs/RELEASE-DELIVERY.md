@@ -1,96 +1,53 @@
 # Resumable release delivery
 
-`release:deliver` extends the existing release planner and coordinator. It keeps
-source publication, CI, packaging, signing, recovery, installation and acceptance
-in one private operation record. The configured controller and maintained recovery
-tools remain responsible for host admission and installation.
-
-Run from the application root with the qualified Node toolchain and application
-dependencies. The command accepts exact committed private and public sources and
-a hash-bound private deployment configuration. It does not commit working files,
-infer a replacement host or purchase resources.
-
-## Commands
+Run `release:deliver` from the application root with an exact committed private/public source pair and a provisioned private deployment target. The target configuration binds the trusted signing key, authenticated artifact access, protected staging parents, selected service identity and required qualification evidence. Keep this configuration, the journal, signing keys and operational evidence outside both source repositories. Provision the protected staging parent once; it is reusable across operation-specific children.
 
 ```sh
-npm run release:deliver -- start JOURNAL_DIRECTORY DESCRIPTOR_JSON
-npm run release:deliver -- status JOURNAL_DIRECTORY OPERATION_UUID
-npm run release:deliver -- resume JOURNAL_DIRECTORY OPERATION_UUID
-npm run release:deliver -- checkpoint JOURNAL_DIRECTORY OPERATION_UUID TIMELINE_JSON
-npm run release:deliver -- reconcile-failure JOURNAL_DIRECTORY OPERATION_UUID
+npm run release:deliver -- start /absolute/private/input.json
 ```
 
-Use absolute private paths for the journal and descriptor. Keep the journal
-outside source repositories and synchronized folders, with its SQLite and WAL
-files together. The existing coordinator enforces private POSIX permissions or
-protected Windows ACLs. Use direct `node scripts/release-deliver.mjs` invocation
-when stdout must be JSON without npm's command banner.
+The command publishes the exact sources, observes canonical CI in parallel, retrieves authenticated artifacts, chooses the verified route, packages and signs, performs capacity and recovery checks, publishes, installs and checks acceptance. It retains successful phase results and original effect identities in the private journal. Read-only prerequisite checks identify missing protected staging directories before packaging.
 
-`start` initializes the exact descriptor and advances its operation. After an
-interruption, use `resume` with the same journal and operation UUID. A changed
-adapter graph, target, source identity or reserved input is refused. Do not edit
-the journal, create a replacement operation or repeat an uncertain installation
-to work around that refusal. An existing request is observed under its original
-key and deadline; absence of a response does not prove absence of its effect.
+[The data-only input and profile](RELEASE-DELIVERY-INPUT.md) supply the exact commit pair, an immutable configured target, a stable caller operation ID and the actual initial timeline. Version, build, signed sequence and selected prior bindings are derived from committed sources and retained accepted evidence. The original three-argument form, `start JOURNAL DESCRIPTOR`, remains available for already prepared operations.
 
-`status` reads retained results without dispatching work. `checkpoint` appends a
-timeline update while preserving the original estimate and deadline. Neither
-command makes old admission evidence fresh. `reconcile-failure` supports only
-explicitly qualified failure policies; it derives and records evidence itself.
-It does not accept a caller's claim that an unknown effect never happened, and it
-never resumes a closed failed operation.
+After installation and the saved Assistant reply pass, the result returns an immutable `successor.profile` reference for the next release input. A frontend release preserves the accepted backend base. A full release exports the actual new candidate manifests, original installer result and published signed feed. Browser acceptance remains a separate result. Missing legacy evidence produces an explicit successor export gap; it is never reconstructed as a successful receipt.
 
-For `start` and `resume`, exit `0` means the operation completed, `2` means it
-remains incomplete, and `1` means input or producer validation failed. Inspect
-the returned phase states and capability or acceptance gaps. Exit `0` from
-`status` only means the retained status was read successfully.
+Once the target is provisioned and its initial accepted profile is available, ordinary supported releases use new commit inputs and the returned profile; they do not require a new preparation script for each version. Retrying an interrupted initialization requires the same input and operation ID. Source implementation and focused tests are distinct from a completed release: use the original journal's installation and acceptance results to establish what is live.
 
-## Configuration and scope
+After an interruption, keep the original journal and operation ID:
 
-The exported `deliveryDescriptorSchema` in
-`scripts/release-delivery-journal.mjs` defines committed sources, operation
-identity, original timeline, target reference, adapter identity and observation
-budget. `deliveryTargetSchema` in `scripts/release-delivery-adapters.mjs` defines
-the private tools, selected baseline, host transport, signing and release options.
-File references contain an absolute path and the SHA256 of the actual bytes.
-Signing keys, SSH configuration, installed-host records and operational evidence
-must remain private; none belongs in the public source tree.
+```sh
+npm run release:deliver -- status /absolute/private/journal ORIGINAL_OPERATION_ID
+npm run release:deliver -- resume /absolute/private/journal ORIGINAL_OPERATION_ID
+```
 
-Both repositories retain independent histories. Source phases verify their exact
-commits. Canonical Linux CI is observed in parallel, and retained artifacts are
-downloaded through authenticated APIs and checked against the exact run, source,
-candidate and toolchain. The verified candidate comparison selects frontend or
-full delivery; an operator label cannot force the frontend route.
+Resume observes an uncertain original publication, installation or Assistant request before considering another action. A failed check stops its dependent actions. Investigate its recorded cause; creating a new operation or changing a receipt is not failure recovery. The original observation budget and timing history survive a new invocation.
 
-Compatible frontend delivery preserves the running backend and existing windows'
-asset namespaces. Backend, shared-contract, dependency, runtime, schema and
-deployment changes select the full route. Selecting that route does not establish
-that every changed component has a qualified producer. Unsupported runtime,
-dependency, migration or helper transitions produce an explicit capability gap
-and stop dependent effects. Current qualification boundaries are enforced by the
-configured adapters, rather than inferred from the version number.
+An uncertain publication is not treated as a completed publication. Completed artifact, ledger and source checks still apply when completion is observed. Bounded diagnostic codes stay in private output to identify a failed prerequisite without exposing credentials or changing the original uncertain effect.
 
-## Progress and acceptance
+## Supported routes
 
-Progress comes from recorded phase results, original keys and actual timestamps.
-Coding and preparation, canonical CI, service maintenance, installation and live
-acceptance are distinct durations. A short prepared frontend switch is not a
-development-to-live timing promise. Parallel CI time must not be counted twice.
+| Change | Route |
+| --- | --- |
+| Eligible client JavaScript, TypeScript, React or entry document | Signed frontend bundle with atomic promotion, old-window asset retention and explicit rollback. Existing windows offer Refresh or Later. |
+| Ordinary backend change with the qualified runtime, native dependencies, startup/helpers and schema/API contracts | Full release with its required fresh rehearsal, installation and acceptance. |
+| Exact runtime 2026.9.6 to 2026.9.8 transition | Not qualified in this release. The guarded route requires a complete verified retained-state proof covering target startup, restart, native-data migration and restoration of the original runtime. The selected prior installation and accepted target anchor have distinct roles; complete service, helper and native bindings must match the proof. |
+| Other runtime transitions, application schema/API changes or changed native dependencies/startup/recovery contracts | An explicit qualification gap until a matching producer and verifier have been implemented and qualified. The existing evidence cannot admit different inputs. |
 
-Installation, a saved Assistant reply and browser/reload evidence are separate
-results. A successful backend reply does not prove a window refreshed or retained
-its draft. When a browser producer is unavailable or unintegrated, the command
-reports that gap and remains incomplete; a separate browser check must not be
-presented as a completed command journal phase. Preserve the original Assistant
-request after a timeout instead of submitting another for acceptance.
+The runtime path requires actual completed isolated qualification. Synthetic tests, a downloaded runtime archive or an existing-state check alone do not establish that proof. Ordinary application updates that preserve the qualified runtime use their separate full route and still require its fresh rehearsal and acceptance checks.
 
-Completed immutable artifacts and qualified exact-input evidence are reused.
-Mutable host capacity and admission are checked before maintenance. A completed
-rehearsal is not rerun just to renew a historical observation: where supported,
-the adapter observes that same proof again. Required fresh rehearsal and live
-saved-work checks still apply to a new full release.
+## Acceptance and timing
 
-An authorized delivery proceeds through passing technical gates without routine
-owner confirmations. A failed gate stops dependent actions and preserves the
-original failure. Diagnose its cause before another attempt; uncertain external
-effects require reconciliation, not replay.
+A completed saved Assistant reply and browser/reload verification are separate results. A missing browser capability is reported as an acceptance gap. `start` and `resume` exit with code 2 when the delivery is incomplete, including that gap; inspect the phase summary to distinguish successful installation from incomplete acceptance.
+
+Progress reports include phase states, elapsed time, original deadlines and actual operation keys. A checkpoint can append a reviewed forecast without replacing the original estimate:
+
+```sh
+npm run release:deliver -- checkpoint /absolute/private/journal ORIGINAL_OPERATION_ID /absolute/private/timeline.json
+```
+
+After repeated misses, progress requires a review for every missed deadline and a new evidence-backed change of approach recorded after the latest miss. That review preserves the earlier estimates and failures; it does not satisfy a failed technical gate, extend an uncertain request or authorize replay.
+
+Preparation, CI, rehearsal, installation and acceptance are measured separately. A prepared frontend switch is only one part of delivery. Full releases retain their capacity and recovery checks. The verifier reuses repeated content reads only within a bounded read-only inspection; writes, new effects, changed inputs and resumed invocations require fresh verification.
+
+Small host clock differences use a bounded wait for the local wall clock to catch up. Raw observations and their timestamps are retained, and their original maximum ages still apply. Exact host filesystem timestamps remain the staging authority across the JavaScript/Python boundary.

@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {join} from 'node:path';
-import {writeFileSync} from 'node:fs';
+import {writeFileSync,readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {createDeliveryRegistry,deliveryTargetSchema,deliveryPhaseIntegrationGaps} from '../scripts/release-delivery-adapters.mjs';
 import {dependencyFixture} from '../support/dependency-transport-fixture.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
+import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
+import {sha256} from '../scripts/release-plan.mjs';
 
 function fixture(t,options={}) {
   const f=dependencyFixture(t,{format:2,...options}),host=fullHostFixture().options,effects=[];
@@ -25,7 +27,7 @@ function fixture(t,options={}) {
   const descriptor={...f.descriptor,target:f.put(join(f.root,'full-target.json'),target)};
   const prior={route:f.route,artifacts:{repositories:f.artifacts},'private-ci':{release:{id:101}},'public-ci':{release:{id:102}}};
   const registry=createDeliveryRegistry({command:async()=>{effects.push('command');assert.fail('No command permitted');},
-    run:async()=>{effects.push('host');assert.fail('No host permitted');}});
+    run:async(...args)=>{effects.push('host');if(options.runHost)return options.runHost(...args);assert.fail('No host permitted');}});
   return {...f,target,descriptor,prior,registry,effects};
 }
 
@@ -39,6 +41,32 @@ test('configured full registry resolves all maintained producers while browser s
   assert.equal(typeof f.registry.adapter('installation',f.descriptor,f.prior).admit,'function');
   assert.deepEqual(await f.registry.phasePreflight('browser',f.descriptor,f.prior),['browser-capability-unavailable','browser-reload-producer-not-integrated']);
   assert.deepEqual(f.effects,[]);
+});
+
+test('qualified source reaches the fixed missing-host-parent preflight before package reservation',async t=>{
+  let f;f=fixture(t,{runHost:async(_target,program)=>{
+    assert.match(program,/fixed-full-host-directory-preflight/);
+    return{exitCode:0,stdout:JSON.stringify({format:1,kind:'full-host-directory-preflight',stageParent:f.target.full.host.stageParent,
+      hostConfiguration:f.target.full.host.hostConfiguration,readOnly:true,noHostWrites:true,passed:false,
+      gaps:['full-host-stage-parent-missing'],directories:{},capacityAdmitted:false,recoveryAdmitted:false})};
+  }});
+  // Native receipts remain synthetic. Only immutable helper source is real,
+  // so the registry's existing source gate can reach the mocked directory read.
+  const pair=JSON.parse(readFileSync(f.options.selectedPair.path)),bundle=JSON.parse(readFileSync(f.options.selectedBundle.path));
+  for(const [name,digest] of Object.entries(FULL_HELPERS)){
+    const raw=readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url));assert.equal(sha256(raw),digest);
+    for(const a of Object.values(f.artifacts))a.sourceHashes['deploy/update-runner/'+name]=f.put(join(a.frozenSourceDirectory,'deploy/update-runner',name),raw);
+    const entry=bundle.files.find(x=>x.name===name);if(entry){entry.data=raw.toString('base64');entry.sha256=digest;if(name!=='install.py')pair.helpers[name]=digest;}
+  }
+  f.options.selectedPair=f.put(f.options.selectedPair.path,pair);
+  const member=bundle.files.find(x=>x.name==='reviewed-pair.json');member.data=readFileSync(f.options.selectedPair.path).toString('base64');member.sha256=f.options.selectedPair.sha256;
+  f.options.selectedBundle=f.put(f.options.selectedBundle.path,bundle);
+  const native=JSON.parse(readFileSync(f.options.nativeInput.path));native.acceptedPair=f.options.selectedPair;native.acceptedBundle=f.options.selectedBundle;
+  f.options.nativeInput=f.put(f.options.nativeInput.path,native);f.descriptor.target=f.put(f.descriptor.target.path,f.target);
+  assert.deepEqual(await f.registry.phasePreflight('package',f.descriptor,f.prior),['full-host-stage-parent-missing']);
+  assert.deepEqual(f.effects,['host']);assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'package/dependency-stage'),null);
+  writeFileSync(join(f.artifacts.private.applicationDirectory,'dist/client/index.html'),'corrupt source');
+  await assert.rejects(f.registry.phasePreflight('package',f.descriptor,f.prior));assert.deepEqual(f.effects,['host']);
 });
 
 test('known runtime transitions stop initial delivery before source publication',async t=>{

@@ -7,6 +7,7 @@ import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,readReleaseInputFile,sha256} from './release-plan.mjs';
 import {FULL_HELPERS,verifyFullCompletion,fullHostOptionsSchema} from './release-delivery-full-host.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
+import {awaitObservationTime} from './release-observation-clock.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -20,6 +21,23 @@ export function unwrapFullPrestage(value){
  const raw=Buffer.from(value.stdoutRawBase64,'base64');
  need(raw.length<=131072&&raw.toString('base64')===value.stdoutRawBase64&&sha256(raw)===value.stdoutSha256&&same(JSON.parse(raw),value.remoteResult),'full-prestage-raw-response-changed');
  return value.remoteResult;
+}
+/** Share the five-second genuine-clock catch-up policy with full-host
+ * observations while preserving the original five-minute freshness limit. */
+export async function awaitFullPrestageFactsTime(observedAtMilliseconds,options={}){
+ const reasons={
+  'observation-timestamp-invalid':'full-prestage-facts-timestamp-invalid',
+  'observation-clock-offset-exceeded':'full-prestage-facts-clock-offset-exceeds-5s',
+  'observation-monotonic-clock-invalid':'full-prestage-facts-monotonic-clock-invalid',
+  'observation-local-clock-moved-backward':'full-prestage-local-clock-moved-backward',
+  'observation-clock-wait-budget-expired':'full-prestage-facts-clock-wait-budget-expired',
+  'observation-expired':'full-prestage-current-facts-expired',
+  'observation-local-clock-did-not-catch-up':'full-prestage-local-clock-did-not-catch-up',
+  'observation-clock-wait-interrupted':'full-prestage-facts-clock-wait-interrupted',
+  'observation-clock-did-not-progress':'full-prestage-facts-clock-did-not-progress',
+ };
+ try{return{...await awaitObservationTime(observedAtMilliseconds,{...options,maximumWaitMilliseconds:5000,maximumAgeMilliseconds:300000,maximumSamples:128}),kind:'full-prestage-facts-clock-observation'};}
+ catch(error){error.message=reasons[error.message]??error.message;if(error.clockObservation)error.clockObservation.kind='full-prestage-facts-clock-observation';throw error;}
 }
 export function fullPrestageBinding(c,options,facts,assets){
  fullHostOptionsSchema.parse(options);const op=c.descriptor.operation,s=c.prior.sign,r=c.prior.recovery;
@@ -106,7 +124,7 @@ export function verifyFullProtectedAssets(value,{operationId,publicationKey,bund
  }
  verifyPrepared(o.prepared,input.binding);return verifyFullPrestageResult(o.stage,input.binding,o.prepared);
 }
-export async function advanceFullPrestage(c,{assets,transport,options,tools,command,storeReceipt,clock=Date.now}){
+export async function advanceFullPrestage(c,{assets,transport,options,tools,command,storeReceipt,clock=Date.now,monotonic,wait}){
  const hashes=fullPrestageHelpers(),original=retained(c,'full-prestage-input.json');
  const target=JSON.parse(readEvidenceFile(transport));readEvidenceFile(target.sshConfig,{maximum:65536});
  const common={format:1,operationId:c.descriptor.operation.id,key:c.intent.key,inputSha256:c.intent.inputSha256,transport:target,
@@ -121,7 +139,13 @@ export async function advanceFullPrestage(c,{assets,transport,options,tools,comm
  let input=original?.value;
  if(!input){
   const factsResult=await call('facts',null,{});if(factsResult.state!=='completed')return factsResult;const facts=unwrapFullPrestage(factsResult.output);
-  need(Number.isSafeInteger(facts.observedAtMilliseconds)&&clock()-facts.observedAtMilliseconds>=0&&clock()-facts.observedAtMilliseconds<=300000,'full-prestage-current-facts-expired');
+  try{await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});}
+  catch(error){
+   const actualFacts=save(c,storeReceipt,'full-prestage-clock-facts-'+factsResult.output.stdoutSha256+'.json',factsResult.output);
+   const diagnostic={format:1,operationId:common.operationId,key:common.key,inputSha256:common.inputSha256,actualFacts,
+    reason:error.message,clockObservation:error.clockObservation,planStarted:false,hostEffectStarted:false,automaticReplayPermitted:false};
+   return{state:'failed',externalId:common.operationId,reason:error.message,output:{diagnostic:save(c,storeReceipt,'full-prestage-clock-diagnostic-'+sha256(encoded(diagnostic))+'.json',diagnostic)}};
+  }
   const initial=fullPrestageBinding(c,options,facts,assets),planned=await call('plan',initial.binding,initial.files);if(planned.state!=='completed')return planned;
   input={format:1,operationId:common.operationId,key:common.key,inputSha256:common.inputSha256,helperHashes:hashes,transport,binding:bindFullPrestagePlan(initial.binding,planned.output),files:initial.files,
    actualFacts:save(c,storeReceipt,'full-prestage-facts.json',factsResult.output),actualPlan:save(c,storeReceipt,'full-prestage-plan.json',planned.output)};

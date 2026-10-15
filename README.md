@@ -1,10 +1,12 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-2.4.0-blue)
+![Version](https://img.shields.io/badge/Version-2.5.0-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 
 [Accounts and chat history](docs/ACCOUNTS-AND-CHAT-HISTORY.md) explains multiple ChatGPT connections, usage, safe account switching and saved conversation recovery.
+
+[Resumable release delivery](docs/RELEASE-DELIVERY.md) explains how to start from exact committed sources and a private target profile, resume an interrupted operation, and reuse its accepted successor profile. The guide lists supported update routes and separate installation, saved-reply and browser checks.
 
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 

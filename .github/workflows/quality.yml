@@ -81,9 +81,12 @@ jobs:
           python3 -B tests/test_dependency_metadata_policy.py -v
           python3 -B tests/release-delivery-full-publication.test.py -v
           python3 -B tests/release-delivery-full-prestage.test.py -v
+          python3 -B tests/release-prestage-plan-precision.test.py -v
           python3 -B tests/release-runtime-publication.test.py -v
           python3 -B tests/test_runtime_qualification.py -v
           python3 -B tests/release-full-runtime-capacity.test.py -v
+          python3 -B tests/release-runtime-retained-proof.test.py -v
+          python3 -B tests/release-host-preflight.test.py -v
       - name: Retain the canonical hosted build
         run: python3 -B scripts/retain-ci-candidate.py
       - name: Upload the verified application archive

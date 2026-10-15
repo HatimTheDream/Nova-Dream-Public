@@ -12,6 +12,8 @@ import { stepDelivery, deliver } from '../scripts/release-deliver.mjs';
 import { chooseDeliveryRoute, createSourceAdapter, fixedCommand } from '../scripts/release-delivery-adapters.mjs';
 import { createCiAdapter } from '../scripts/release-delivery-ci-adapter.mjs';
 import { createCoordinatorInstallationAdapter } from '../scripts/release-delivery-install.mjs';
+import { verificationOnce } from '../scripts/release-verification-pass.mjs';
+import { createFullPublicationAdapter } from '../scripts/release-delivery-full-publication.mjs';
 
 const digest = text => sha256(String(text));
 const root = fileURLToPath(new URL('../support/fixtures', import.meta.url)); if (!existsSync(root)) mkdirSync(root);
@@ -47,6 +49,32 @@ function syntheticRegistry(f, behaviors = {}) {
   return { registry, counts, keys };
 }
 const observation = (intent, state, externalId = null) => ({ key: intent.key, state, externalId, reason: `fixture-${state}`, receipt: null, output: state === 'completed' ? { done: true } : null });
+
+test('real journal prerequisite sweeps share validate/verify bytes, but each child and resume rechecks',async t=>{
+ const f=fixture(t),g=syntheticRegistry(f),namespaces=new Map(),counts=new Map(),snapshots=[];
+ const artifact=join(root,'verification-sweep-'+f.id);writeFileSync(artifact,'original');
+ const adapter=g.registry.adapter.bind(g.registry);let children=0;
+ g.registry.adapter=(phase,...args)=>{
+  const a=adapter(phase,...args);if(!namespaces.has(phase))namespaces.set(phase,{});
+  const pure=c=>verificationOnce(c,namespaces.get(phase),{descriptor:c.descriptor,input:c.input??c.intent.input,journalDirectory:c.journal.directory},()=>{
+   counts.set(phase,(counts.get(phase)??0)+1);assert.equal(readFileSync(artifact,'utf8'),'original');return true;
+  });
+  a.validate=pure;a.verify=(_value,c)=>pure(c);
+  if(phase==='publication')a.execute=async c=>{
+   counts.clear();await c.beforeNewEffect();snapshots.push(Object.fromEntries(counts));children++;
+   counts.clear();await c.beforeNewEffect();snapshots.push(Object.fromEntries(counts));children++;
+   writeFileSync(artifact,'changed');
+   await c.beforeNewEffect();throw Error('must not reach a third effect');
+  };
+  return a;
+ };
+ const result=await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+1});
+ assert.equal(result.complete,false);assert.equal(children,2);assert.equal(snapshots.length,2);
+ for(const snapshot of snapshots){assert.ok(Object.keys(snapshot).length>5);assert.ok(Object.values(snapshot).every(n=>n===1),JSON.stringify(snapshot));}
+ const before=counts.get('private-source');await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+2});
+ assert.equal(counts.get('private-source'),before+1);assert.equal(children,2);
+ assert.equal(f.journal.deliveryPhase(f.id,'private-source').validation.state,'failed');
+});
 
 test('additive schema preserves version-one coordinator records and refuses changed descriptors', t => {
   const f = fixture(t); const oldCount = f.journal.db.prepare('SELECT count(*) AS n FROM operations').get().n;
@@ -198,6 +226,27 @@ test('known missing producer integration stops before source publication', async
   const result = await stepDelivery(f.journal, f.id, g.registry, { clock: () => f.now });
   assert.equal(result.complete, false); assert.deepEqual(g.counts, {}); assert.equal(result.integrationGaps[0], 'retained-artifact-producer-not-integrated');
 });
+
+test('reviewed changed approach permits a new reservation after two misses while retaining the journal history', t => {
+  const f = fixture(t), timeline = structuredClone(f.descriptor.timeline), at = f.now + 50000;
+  timeline.revisions.push({ ...timeline.original, id: randomUUID(), issuedAtMs: f.now + 30000,
+    remainingMs: [1, 2], nextCheckpointAtMs: f.now + 330000 });
+  timeline.lastCheckpointAtMs = at;
+  f.journal.checkpointDelivery(f.id, timeline, at);
+  assert.throws(() => f.journal.reserveDeliveryPhase(f.id, 'private-source', { testOnly: true }, at), /overrun-review-required/);
+  const originalBefore = f.journal.deliveryStatus(f.id, at).originalEstimate;
+  timeline.reviews.push({ deadlineId: timeline.original.id, reviewedAtMs: at + 1, action: 'continue-observing',
+    reason: 'Earlier miss retained.', evidenceSha256: digest('original-evidence') },
+  { deadlineId: timeline.revisions[0].id, reviewedAtMs: at + 1, action: 'change-approach',
+    reason: 'New tested correction reviewed before the first effect.', evidenceSha256: digest('new-correction-evidence') });
+  timeline.lastCheckpointAtMs = at + 1; f.journal.checkpointDelivery(f.id, timeline, at + 1);
+  const reserved = f.journal.reserveDeliveryPhase(f.id, 'private-source', { testOnly: true }, at + 1);
+  assert.equal(reserved.newlyReserved, true);
+  const status = f.journal.deliveryStatus(f.id, at + 1);
+  assert.equal(status.eta.deadlineMisses.total, 2); assert.deepEqual(status.eta.suspendNewAttemptsFor, []);
+  assert.deepEqual(status.originalEstimate, originalBefore); assert.equal(status.complete, false);
+  assert.equal(f.journal.reserveDeliveryPhase(f.id, 'private-source', { testOnly: true }, at + 2).newlyReserved, false);
+});
 test('CI adapter binds maintained helper and configured tools and rejects a replacement attempt', async t => {
   const f = fixture(t), tools = { git: target, python: target, gitExecPath: root };
   const a = createCiAdapter('private', { tools, command: async () => { throw Error('must-not-execute'); }, validateTools: () => {} });
@@ -347,4 +396,44 @@ test('one invocation skips repeated completed hashing during polls but rechecks 
   assert.equal(result.phases.find(p => p.phase === 'artifacts').reason, 'evidence-hash-changed');
   assert.equal(hashes, atFirstWait + 1);
   assert.equal(g.counts['artifacts:execute'], 1); assert.equal(g.counts['recovery:execute'], undefined);
+});
+
+
+test('unknown publication retains only a bounded code and resumes the original reservation', async t => {
+  const cases = [
+    [Error('unprotected-journal-directory'), 'unprotected-journal-directory'],
+    [Object.assign(Error('private C:\\secret token=never-copy'), {code:'EACCES'}), 'EACCES'],
+    [Error('private C:\\secret token=never-copy'), 'producer-response-unavailable'],
+    [Object.assign(Error('private details'), {code:'TOKEN=never-copy'}), 'producer-response-unavailable'],
+    [Error('a'.repeat(101)), 'producer-response-unavailable'],
+    [{message:{toString:()=> 'apparently-safe',secret:'never-copy'},code:{toString:()=> 'EACCES',secret:'never-copy'}}, 'producer-response-unavailable'],
+  ];
+  for (const [error, code] of cases) {
+    const f=fixture(t),g=syntheticRegistry(f,{publication:{execute:async()=>{throw error;},observe:async()=>{throw error;}}});
+    const original=g.registry.adapter;
+    g.registry.adapter=(phase,...args)=>{const a=original(phase,...args);if(phase==='publication')a.verify=createFullPublicationAdapter({}).verify;return a;};
+    const first=await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+1});
+    const retained=f.journal.deliveryPhase(f.id,'publication'), key=retained.key;
+    assert.equal(first.complete,false);assert.equal(retained.state,'uncertain');
+    assert.equal(retained.current.reason,'producer-response-unavailable');assert.equal(retained.current.receipt,null);
+    assert.deepEqual(retained.current.output,{producerErrorCode:code,originalKey:key,originalOutcomeUncertain:true});
+    assert.equal(JSON.stringify(retained).includes('never-copy'),false);assert.equal(JSON.stringify(retained).includes('stack'),false);
+    assert.equal(g.counts['installation:execute'],undefined);
+    await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+2});
+    assert.equal(f.journal.deliveryPhase(f.id,'publication').state,'uncertain');
+    assert.equal(g.counts['publication:execute'],1);assert.equal(g.counts['publication:observe'],1);
+    assert.deepEqual(g.keys.publication,[key,key]);assert.equal(g.counts['installation:execute'],undefined);
+  }
+});
+test('an explicit publication producer failure remains terminal without completed-claim verification',async t=>{
+  const f=fixture(t),g=syntheticRegistry(f,{publication:{execute:async()=>({state:'failed',externalId:'original-publication',reason:'publication-proof-rejected',receipt:null,output:{producerRefused:true}})}});
+  const original=g.registry.adapter;
+  g.registry.adapter=(phase,...args)=>{const a=original(phase,...args);if(phase==='publication')a.verify=createFullPublicationAdapter({}).verify;return a;};
+  await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+1});
+  const originalFailure=f.journal.deliveryPhase(f.id,'publication');
+  assert.equal(originalFailure.state,'failed');assert.equal(originalFailure.current.reason,'publication-proof-rejected');
+  assert.deepEqual(originalFailure.current.output,{producerRefused:true});
+  await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+2});
+  assert.deepEqual(f.journal.deliveryPhase(f.id,'publication'),originalFailure);
+  assert.equal(g.counts['publication:execute'],1);assert.equal(g.counts['publication:observe'],undefined);assert.equal(g.counts['installation:execute'],undefined);
 });

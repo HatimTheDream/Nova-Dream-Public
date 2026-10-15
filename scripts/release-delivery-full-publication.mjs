@@ -5,11 +5,12 @@ import { join,relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual as same } from 'node:util';
 import { readEvidenceFile,readReleaseInputFile,sha256 } from './release-plan.mjs';
-import { verifyFullPremaintenance,verifyFullCompletion,collectFullOnlineCapacity,fullHostOptionsSchema } from './release-delivery-full-host.mjs';
+import { verifyFullPremaintenanceArtifacts,verifyFullCompletion,collectFullOnlineCapacity,fullHostOptionsSchema } from './release-delivery-full-host.mjs';
 import { buildFullCoordinatorDescriptor } from './release-delivery-install.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
 import { advanceFullPrestage,verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
+import { withVerificationPass,verificationOnce,verificationEffect } from './release-verification-pass.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -40,21 +41,26 @@ export function fullPublicationInput({descriptor,prior,tools,releaseIds,options}
   sources:descriptor.sources,previousFeed:options.signing.previousFeed,capacity:prior.capacity,recovery:prior.recovery,host:options.host,
   ledgerDirectory:fullPublicationLedgerDirectory(options.publicationLedgerDirectory)};
 }
-export function verifyFullPublicationInput(input,descriptor,now=Date.now()){
+const publicationNamespace={};
+export function verifyFullPublicationInput(input,descriptor,now=Date.now(),context={}){
  need(input.operationId===descriptor.operation.id&&input.version===descriptor.operation.version&&input.buildVersion===descriptor.operation.buildVersion
   &&input.priorCandidateId===descriptor.operation.priorCandidateId&&input.trustedPublicKeySha256===descriptor.operation.trustedPublicKeySha256
   &&same(input.sources,descriptor.sources)&&same(input.sourceCommits,descriptor.operation.sourceCommits),'full-publication-operation-changed');
  need(same(input.helperHashes,fullPublicationHelpers()),'full-publication-helper-changed');
  fullPublicationLedgerDirectory(input.ledgerDirectory);
  for(const side of ['private','public'])need(input.sourceCommits[side]===descriptor.sources[side].commit&&Number.isSafeInteger(input.releaseIds[side])&&input.releaseIds[side]>0,'full-publication-source-release-changed');
+ const facts=verifyFullPremaintenanceArtifacts(input,descriptor,now,context);
+ const specs=verificationOnce(context,publicationNamespace,{input,descriptor,journalDirectory:context.journal?.directory??null},()=>{
  for(const name of ['node','python','git'])readEvidenceFile(input.tools[name],{maximum:128*1024**2});
- readEvidenceFile(input.previousFeed,{maximum:256*1024});verifyFullPremaintenance(input,descriptor,now);verifyFullCompletion(input.recovery.completion,input.recovery.values);
+ readEvidenceFile(input.previousFeed,{maximum:256*1024});verifyFullCompletion(input.recovery.completion,input.recovery.values);
  const refs={app:input.applicationArchive,bundle:input.signed.bundle,dependencies:input.signed.dependencies.archive,manifest:input.signed.signedFeed};
  if(input.signed.runtime){
   need(descriptor.operation.priorAgentVersion==='2026.9.6'&&descriptor.operation.agentVersion==='2026.9.8','full-runtime-publication-transition-changed');
   runtimeTransition(input.signed.runtime,input.signed.release);refs.runtime=input.signed.runtime.archive;
  }else need(!input.signed.release?.runtimeBundle,'full-runtime-publication-unbound');
- return rolesFor(input.signed).map(role=>({role,name:'nova-'+input.version+'-'+suffix[role],...refs[role],bytes:role==='runtime'?input.signed.runtime.description.archiveBytes:readEvidenceFile(refs[role],{maximum:128*1024**2}).length}));
+ return rolesFor(input.signed).map(role=>({role,name:'nova-'+input.version+'-'+suffix[role],...refs[role],bytes:role==='runtime'?input.signed.runtime.description.archiveBytes:role==='app'?readEvidenceFile(refs[role],{maximum:128*1024**2}).length:facts.bytes[role]}));
+ });
+ return specs.map(spec=>({...spec}));
 }
 export function verifyFullPublishedAsset(value,spec,c){
  need(value?.operationId===c.descriptor.operation.id&&value.key===c.intent.key&&value.inputSha256===c.intent.inputSha256&&value.role===spec.role
@@ -79,7 +85,7 @@ export function pairedFullPublicationReceipt(input,repositories,readback){
 }
 export function createFullPublicationAdapter({tools,releaseIds,options,transport,base,command,storeReceipt,run,clock=Date.now}){
  const expected=c=>fullPublicationInput({...c,tools,releaseIds,options});
- const validate=c=>{need(same(c.input,expected(c)),'full-publication-input-changed');return verifyFullPublicationInput(c.input,c.descriptor,clock());};
+ const validate=c=>withVerificationPass(c,c=>{need(same(c.input,expected(c)),'full-publication-input-changed');return verifyFullPublicationInput(c.input,c.descriptor,clock(),c);},{readOnly:true});
  const python=async(c,name,mode,request,requestName)=>{
   const ref=save(c,storeReceipt,requestName,request);readEvidenceFile(tools.python,{maximum:128*1024**2});
   need(same(request.helperHashes,fullPublicationHelpers()),'full-publication-execution-helper-changed');
@@ -88,9 +94,9 @@ export function createFullPublicationAdapter({tools,releaseIds,options,transport
   catch(error){const diagnostic={name:String(error.name),message:String(error.message).slice(0,1000),request:ref,originalOutcomeUncertain:true};return output('uncertain','full-original-publication-response-unavailable',c,{diagnostic:save(c,storeReceipt,'full-publication-diagnostic-'+sha256(encoded(diagnostic))+'.json',diagnostic)});}
   need(['completed','uncertain','failed'].includes(response?.state),'full-publication-child-response-invalid');return response;
  };
- const fresh=async c=>{need(typeof c.beforeNewEffect==='function','full-publication-fresh-prerequisites-required');await c.beforeNewEffect();verifyFullPublicationInput(c.intent.input,c.descriptor,clock());};
+ const fresh=async c=>{need(typeof c.beforeNewEffect==='function','full-publication-fresh-prerequisites-required');await c.beforeNewEffect();verifyFullPublicationInput(c.intent.input,c.descriptor,clock(),c);};
  const advance=async c=>{
-  const input=c.intent.input,specs=verifyFullPublicationInput(input,c.descriptor,clock()),done=retained(c,'full-publication.json');
+  const input=c.intent.input,specs=verifyFullPublicationInput(input,c.descriptor,clock(),c),done=retained(c,'full-publication.json');
   if(done){const value=output('completed','full-paired-publication-completed',c,done.value,done.ref);await verifyResult(value,c,specs);return value;}
   const common=Object.fromEntries(['format','operationId','version','buildVersion','sourceCommits','priorCandidateId','trustedPublicKeySha256','signed','applicationArchive','tools','releaseIds','helperHashes'].map(n=>[n,input[n]]));
   Object.assign(common,{key:c.intent.key,inputSha256:c.intent.inputSha256,ledgerDirectory:input.ledgerDirectory});
@@ -157,5 +163,11 @@ export function createFullPublicationAdapter({tools,releaseIds,options,transport
   need(o.coordinatorDescriptor?.input?.operation?.id===c.descriptor.operation.id&&same(o.coordinatorDescriptor.input.evidence.publication,o.evidence)
    &&same(o.coordinatorDescriptor.input.evidence.capacity,o.capacityEvidence),'full-publication-coordinator-changed');
  };
- return{input:async c=>expected(c),validate,execute:advance,observe:advance,verify:async(v,c)=>verifyResult(v,c,verifyFullPublicationInput(c.intent.input,c.descriptor,clock()))};
+ return{input:async c=>expected(c),validate,execute:c=>verificationEffect(c,advance),observe:c=>verificationEffect(c,advance),
+  verify:(v,c)=>{
+   // An unknown response has no completed claim to authenticate. Keep its
+   // original outcome resumable; every completed claim still takes all checks.
+   if(v.state!=='completed')return;
+   return withVerificationPass(c,c=>verifyResult(v,c,verifyFullPublicationInput(c.intent.input,c.descriptor,clock(),c)),{readOnly:true});
+  }};
 }

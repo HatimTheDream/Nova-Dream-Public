@@ -1,7 +1,7 @@
 """Read-only full-install identity from the original maintained requester/job.
 No staging, installation dispatch, session creation or saved-reply admission.
 """
-import hashlib,json,pathlib,re,time,uuid
+import base64,hashlib,json,pathlib,re,time,uuid
 P=pathlib.Path
 REQUESTER_SHA='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06'
 def need(v,r):
@@ -66,7 +66,7 @@ def original(binding,s):
         raise RuntimeError('full-offline-dependency-installation-required')
     proof={'jobId':binding['jobId'],'releaseId':op['bundleSha256'],'jobSha256':sha(enc(job)),
       'operationReference':{'path':str(path),'sha256':sha(operation_raw)},'intentSha256':sha(enc(intent)),
-      'installerResult':{'path':str(result_path),'sha256':sha(result_raw)},'reviewedPairSha256':sha(pair_raw),
+      'installerResult':{'path':str(result_path),'sha256':sha(result_raw)},'installerResultBytesBase64':base64.b64encode(result_raw).decode('ascii'),'reviewedPairSha256':sha(pair_raw),
       'applicationDependencies':dependencies,'candidateId':op['candidateId'],'candidateFilesSha256':sha(package+candidate),'hostConfigSha256':sha(config_raw)}
     return proof,client
 def observe(binding,s):

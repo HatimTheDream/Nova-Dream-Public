@@ -28,6 +28,8 @@ import { fullHostOptionsSchema, FULL_HELPERS, createFullCapacityAdapter, createF
 import { createFullPublicationAdapter } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
+import {createRuntimeRetainedCollector} from './release-delivery-runtime-retained.mjs';
+import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const canonical = v => JSON.stringify(v, (_k, x) => x && typeof x === 'object' && !Array.isArray(x)
@@ -75,10 +77,10 @@ function targetInput(descriptor) {
   readEvidenceFile(transport.sshConfig, { maximum: 65536 });
   return { target, transport };
 }
-export function deliveryAdapterIdentity() {
+export function deliveryAdapterSourceFiles() {
   // Include implementation and all directly delegated authority/validation code.
   const files = ['release-delivery-adapters.mjs', 'release-delivery-ci-adapter.mjs', 'release-delivery-ci.py', 'release-ci-primitives.py', 'release-delivery-install.mjs', 'release-delivery-artifact-adapter.mjs', 'release-delivery-artifacts.py', 'release-artifact-primitives.py',
-    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-delivery-dependency-transport.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
+    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-assistant.mjs', 'release-delivery-assistant-transport.mjs', 'release-assistant-transport.py',
@@ -88,8 +90,11 @@ export function deliveryAdapterIdentity() {
     'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/online-capacity.py',
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
-    'release-deliver.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
-  return sha256(canonical(files.map(name => ({ name, sha256: sha256(readFileSync(new URL(name, import.meta.url))) }))));
+    'release-deliver.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
+  return files;
+}
+export function deliveryAdapterIdentity() {
+  return sha256(canonical(deliveryAdapterSourceFiles().map(name => ({ name, sha256: sha256(readFileSync(new URL(name, import.meta.url))) }))));
 }
 export function deliveryTargetIdentity(descriptor) {
   const { transport } = targetInput(descriptor);
@@ -167,12 +172,21 @@ export function deliveryPhaseIntegrationGaps(phase,target,prior={}) {
 }
 export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now } = {}) {
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
-    base:target.bases.private,storeReceipt:receiptStore,run:command,clock });
+    base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
+    ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}) });
   // This command currently has the maintained schema55/API1 host closure.
   // Actual candidate schema/runtime comparisons still run after authenticated
   // artifact retrieval; declared operation fields cannot override those bytes.
-  const runtimeGaps = descriptor => runtimeAdmissionCapability({fromVersion:descriptor.operation.priorAgentVersion,
-    toVersion:descriptor.operation.agentVersion,schemaVersion:55,apiVersion:1}).gaps.map(gap=>gap.code);
+  const runtimeGaps = async (descriptor,target) => {
+    const op=descriptor.operation;
+    if(op.priorAgentVersion==='2026.9.6'&&op.agentVersion==='2026.9.8'&&target.full?.dependencyTransport?.format===3){
+      if(!target.full.runtimeUrl)return ['runtime-artifact-publication-url-required'];
+      const proof=await createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})();
+      need(proof.prior.candidateId===op.priorCandidateId&&proof.workspaceEpoch===op.workspaceEpoch,'actual-runtime-selected-prior-binding-changed');
+      return [];
+    }
+    return runtimeAdmissionCapability({fromVersion:op.priorAgentVersion,toVersion:op.agentVersion,schemaVersion:55,apiVersion:1}).gaps.map(gap=>gap.code);
+  };
   const sourceCapabilityGaps = async (descriptor,target,prior) => {
     // Reuse the maintained source-only validator before any package reservation.
     // Only known unsupported transitions become capability gaps. Corrupt or
@@ -186,7 +200,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       if(claimed?.sha256!==digest)return ['full-helper-qualification-capability-required'];
       readEvidenceFile({path:join(artifact.frozenSourceDirectory,'deploy','update-runner',name),sha256:digest},{maximum:2*1024**2});
     }
-    return ['application','presentation'].includes(descriptor.operation.changeClass)?[]:['full-changed-recovery-qualification-capability-required'];
+    return (['application','presentation'].includes(descriptor.operation.changeClass)||(descriptor.operation.changeClass==='runtime'&&target.full.dependencyTransport.format===3))?[]:['full-changed-recovery-qualification-capability-required'];
   };
   const installationAdmission = (target,descriptor) => {
     need(canonical(target.full.host.hostConfiguration)===canonical(target.assistantHost.hostConfig),'full-assistant-host-configuration-changed');
@@ -203,11 +217,12 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
   };
   return { identity: async () => deliveryAdapterIdentity(), targetIdentity: async descriptor => deliveryTargetIdentity(descriptor),
     preflight: async descriptor => { const { target } = targetInput(descriptor); return [...(target.sourceTools ? [] : ['source-toolchain-not-configured']), ...(target.artifactTools ? [] : ['artifact-toolchain-not-configured']),
-      ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...runtimeGaps(descriptor)]; },
+      ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...await runtimeGaps(descriptor,target)]; },
     phasePreflight: async (phase,descriptor,prior) => {
       const {target}=targetInput(descriptor),gaps=deliveryPhaseIntegrationGaps(phase,target,prior);
       if(gaps.length||phase!=='package'||prior.route?.route!=='full')return gaps;
-      return sourceCapabilityGaps(descriptor,target,prior);
+      const sourceGaps=await sourceCapabilityGaps(descriptor,target,prior);
+      return sourceGaps.length?sourceGaps:fullHostPrerequisiteGaps({transport:target.transport,options:target.full.host,run});
     },
     // Report unsupported acceptance separately from route admission. Neither a
     // capability flag nor completed installation can satisfy these phases.

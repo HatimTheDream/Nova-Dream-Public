@@ -202,6 +202,68 @@ test('early completion is not a miss, unobserved completion time is unknown, and
   assert.equal(laterExpired.deadlineAssessments[0].state, 'completed-on-time'); assert.equal(laterExpired.dueReviews.length, 0);
 });
 
+function overdueCorrectionFixture(step = 'recovery') {
+  const original = estimate(step, now, [10, 20]), revision = estimate(step, now + 10, [100, 200]);
+  const timeline = { startedAtMs: now, original, revisions: [revision], reviews: [], lastCheckpointAtMs: now + 220 };
+  const review = (deadline, action, evidence = 'a', at = now + 220) => ({ deadlineId: deadline.id,
+    reviewedAtMs: at, action, reason: 'Recorded correction with separately retained evidence.', evidenceSha256: hash(evidence) });
+  return { timeline, original, revision, review };
+}
+
+test('a changed approach clears suspension after every miss is reviewed without erasing misses', () => {
+  const f = overdueCorrectionFixture(), before = assessTimeline(f.timeline, { nowMs: now + 220 });
+  f.timeline.reviews.push(f.review(f.original, 'continue-observing'), f.review(f.revision, 'change-approach'));
+  const after = assessTimeline(f.timeline, { nowMs: now + 220, previousAssessments: before.deadlineAssessments });
+  assert.deepEqual(after.suspendNewAttemptsFor, []); assert.deepEqual(after.dueReviews, []);
+  assert.deepEqual(after.deadlineAssessments, before.deadlineAssessments);
+  assert.equal(after.deadlineMisses.recovery, 2); assert.deepEqual(after.original, before.original);
+  assert.equal(after.cancelRunningOperation, false);
+});
+
+for (const action of ['continue-observing', 'supported-recovery', 'blocked']) test(`${action} alone does not clear repeated-miss suspension`, () => {
+  const f = overdueCorrectionFixture();
+  f.timeline.reviews.push(f.review(f.original, action), f.review(f.revision, action));
+  assert.deepEqual(assessTimeline(f.timeline, { nowMs: now + 220 }).suspendNewAttemptsFor, ['recovery']);
+});
+
+test('unreviewed misses and a correction before the latest miss still suspend new attempts', () => {
+  const f = overdueCorrectionFixture();
+  f.timeline.reviews.push(f.review(f.revision, 'change-approach'));
+  assert.deepEqual(assessTimeline(f.timeline, { nowMs: now + 220 }).suspendNewAttemptsFor, ['recovery']);
+  f.timeline.reviews = [f.review(f.original, 'change-approach', 'a', now + 30), f.review(f.revision, 'continue-observing')];
+  assert.deepEqual(assessTimeline(f.timeline, { nowMs: now + 220 }).suspendNewAttemptsFor, ['recovery']);
+});
+
+test('another missed deadline suspends again and requires new correction evidence', () => {
+  const f = overdueCorrectionFixture();
+  f.timeline.reviews.push(f.review(f.original, 'continue-observing'), f.review(f.revision, 'change-approach'));
+  const previous = structuredClone(f.timeline), prior = assessTimeline(previous, { nowMs: now + 220 });
+  const next = estimate('recovery', now + 230, [10, 20]); f.timeline.revisions.push(next); f.timeline.lastCheckpointAtMs = now + 260;
+  const inspect = () => assessTimeline(f.timeline, { nowMs: now + 260, previous, previousAssessments: prior.deadlineAssessments });
+  assert.deepEqual(inspect().suspendNewAttemptsFor, ['recovery']);
+  f.timeline.reviews.push(f.review(next, 'change-approach', 'a', now + 260));
+  assert.deepEqual(inspect().suspendNewAttemptsFor, ['recovery']);
+  f.timeline.reviews.at(-1).evidenceSha256 = hash('b');
+  assert.deepEqual(inspect().suspendNewAttemptsFor, []); assert.equal(inspect().deadlineMisses.recovery, 3);
+});
+
+test('a phase correction does not clear a separate total-delivery suspension', () => {
+  const f = overdueCorrectionFixture('total');
+  const phase = estimate('recovery', now + 15, [10, 20]); f.timeline.revisions.push(phase);
+  f.timeline.reviews.push(f.review(f.original, 'continue-observing'), f.review(f.revision, 'continue-observing'), f.review(phase, 'change-approach'));
+  assert.deepEqual(assessTimeline(f.timeline, { nowMs: now + 220 }).suspendNewAttemptsFor, ['total']);
+});
+
+test('overrun correction never supplies missing release or signature evidence', t => {
+  const f = fixture(t), c = overdueCorrectionFixture('total');
+  c.timeline.reviews.push(c.review(c.original, 'continue-observing'), c.review(c.revision, 'change-approach'));
+  f.input.timeline = c.timeline;
+  const result = f.run(now + 220);
+  assert.deepEqual(result.eta.suspendNewAttemptsFor, []);
+  assert.equal(result.installationAuthorized, false); assert.equal(result.readiness, 'blocked');
+  assert.notEqual(result.phases.find(p => p.id === 'publication').state, 'passed');
+});
+
 test('a 40-minute completed release retains historical gaps without treating them as new admission authority', t => {
   const f = fixture(t); f.all(); const later = now + 40 * 60_000;
   const capacityReceipt = f.input.evidence.capacity.observation;

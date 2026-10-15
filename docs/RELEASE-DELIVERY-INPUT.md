@@ -1,0 +1,25 @@
+# Data-only delivery input
+
+Use `npm run release:deliver -- start /absolute/private/input.json` from the committed application checkout. Keep the input, profile, configuration and resulting journal outside both repositories and synced directories. Provisioning the first deployment profile is a configuration task: it requires the actual accepted installation, authenticated retained candidates, existing tools and signing configuration. A missing accepted record is a qualification gap, not an invitation to create a passing receipt.
+
+The input has these fields:
+
+| Field | Value |
+| --- | --- |
+| `format` | `1` |
+| `operationId` | A stable caller-assigned UUID, retained for every retry of this operation. |
+| `profile` | `{ "path": "/absolute/private/profile.json", "sha256": "..." }`, using the actual SHA256. |
+| `sourceCommits` | Exact full `private` and `public` commit hashes from the independent canonical repositories. |
+| `outputRoot` | An absolute protected private directory outside either source checkout. |
+| `timeline` | The existing release timeline schema, with the actual start time, original estimate and next checkpoint. A new operation begins without revisions or retrospective reviews. |
+| `observationBudgetMs` | An integer from 60000 to 86400000. Reopening the request does not renew it. |
+
+The version and build come from the committed package files; both repositories must agree. The executing delivery source must match the exact committed adapter graph. Signed publication sequence and validity timestamps derive from the authenticated predecessor and original input time. Route selection still compares authenticated candidate contents. Declaring a desired route cannot bypass compatibility checks.
+
+The profile contains `format: 1`, `target` (a hash-bound target configuration), `targetIdentity`, independent `sources.private` and `sources.public` (`root`, canonical `repository`, `branch: "main"`), and `accepted` references to the actual installed `identity`, original installer `result`, reviewed `pair` and signed `bundle`. The target holds the existing tool references, selected private/public candidate directories and manifests, protected host roles, native qualification anchor, public signing-key reference and private-key location. Private-key contents are not read during initialization. Optional `qualificationEvidence` preserves separately verified immutable provenance; it does not make a qualification pass.
+
+Initialization creates immutable `request-OPERATION_ID/initialization.json`, `target.json` and `descriptor.json`, then starts the existing engine in `journal-OPERATION_ID`. Repeating the same input resumes those exact bytes. Changed input, partial conflicting output or an unrelated pre-existing journal is refused. The initializer does not contact the host, publish, sign or install; the existing engine owns those phases and their current gates.
+
+After accepted installation and a saved Assistant reply, `successor.profile` identifies the next immutable profile. It retains the original publication and Assistant receipts and both actual candidate manifests. Full releases advance the accepted backend and signed feed; frontend releases preserve the backend and advance only the signed frontend predecessor. For another release, use this reference, a new stable operation ID, the next committed source pair and an actual new timeline. No version-specific preparation script is needed. If the original identity lacks retained installer-result bytes, automatic export reports `original-installer-result-bytes-unavailable`; preserve that gap and supply the real original record during bootstrap configuration.
+
+An exported profile does not claim browser acceptance and does not move a global selection pointer. Unsupported runtime, dependency, startup or schema transitions retain the existing explicit qualification gaps. `status` is read-only; `resume` can reconcile a completed immutable export after a lost response, even when the original effect observation budget has expired, without restarting any effect.
