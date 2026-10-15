@@ -1,3 +1,11 @@
+## [2.5.1] — 2026-10-15
+
+### Fixed
+
+- Build the next-release profile from the verified package-pair receipt and accepted bundle instead of assuming the signing result supplies a directory.
+- Prepare the retained feed parser's exact locked dependency from its authenticated archive before export or next-release initialization. Interrupted preparation resumes matching local files; conflicting or changed content is refused.
+- Verify normal parser loading before publishing a successor profile, preserve existing profile bytes, and carry dependency references through frontend updates.
+
 ## [2.5.0] — 2026-10-14
 
 ### Added

@@ -79,6 +79,7 @@ jobs:
           python3 -B tests/release-installed-identity.test.py -v
           python3 -B tests/test_dependency_local_worker.py -v
           python3 -B tests/test_dependency_metadata_policy.py -v
+          python3 -I -B tests/test_retained_feed_dependencies.py -v
           python3 -B tests/release-delivery-full-publication.test.py -v
           python3 -B tests/release-delivery-full-prestage.test.py -v
           python3 -B tests/release-prestage-plan-precision.test.py -v

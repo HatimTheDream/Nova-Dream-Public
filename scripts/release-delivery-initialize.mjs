@@ -14,6 +14,7 @@ import {verifyCandidate} from './candidate.mjs';
 import {verifyRetainedCandidate} from './release-delivery-package.mjs';
 import {frontendRegular,validateFrontendManifest} from './frontend-contract.mjs';
 import {loadSelectedFeedContract} from './release-delivery-full.mjs';
+import {materializeRetainedFeedDependencies,retainedAcceptedFeedDependencies,retainedAcceptedPairReference} from './release-retained-feed-dependencies.mjs';
 import {verifyInstalledIdentity} from './release-delivery-installed-identity.mjs';
 import {validateInstalledIdentityRequest} from './release-delivery-assistant-full.mjs';
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
@@ -29,7 +30,7 @@ export const deliveryStartInputSchema=z.object({format:z.literal(1),operationId:
  observationBudgetMs:z.number().int().min(60000).max(86400000)}).strict();
 export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targetIdentity:hash,
  sources:z.object({private:source,public:source}).strict(),
- accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref}).strict(),
+ accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref,feedDependencies:z.object({archive:ref,metadata:ref}).strict().optional()}).strict(),
  qualificationEvidence:z.array(ref).max(32).default([]),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
   sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.literal(false)}).strict().optional()}).strict();
@@ -116,7 +117,7 @@ export async function qualifyDeliverySources(input,profile,target,accepted,{comm
  return {sources,package:packages.private};
 }
 
-export async function deriveDeliveryConfiguration(input,profile,{command=fixedCommand,clock=Date.now,sourceOptions={},acceptedOptions={},feedContract=loadSelectedFeedContract,adapterIdentity=deliveryAdapterIdentity}={}){
+export async function deriveDeliveryConfiguration(input,profile,{command=fixedCommand,clock=Date.now,sourceOptions={},acceptedOptions={},feedContract=loadSelectedFeedContract,prepareFeedDependencies=materializeRetainedFeedDependencies,adapterIdentity=deliveryAdapterIdentity}={}){
  const target=deliveryTargetSchema.parse(json(profile.target,256*1024));
  need(deliveryTargetIdentity({target:profile.target})===profile.targetIdentity,'configured-target-identity-changed');
  const accepted=validateAcceptedProfile(profile,target,acceptedOptions);
@@ -129,7 +130,11 @@ export async function deriveDeliveryConfiguration(input,profile,{command=fixedCo
   need(same(target.full.signing.publicKey,keyRef),'configured-full-key-changed');
   const envelope=json(target.full.signing.previousFeed,128*1024),raw=Buffer.from(envelope.payload,'base64'),sig=Buffer.from(envelope.signature,'base64');
   need(raw.toString('base64')===envelope.payload&&sig.toString('base64')===envelope.signature,'predecessor-envelope-invalid');signature(raw,sig,key);
-  const contract=await feedContract(target.bases.private,{operation:{priorCandidateId:accepted.operation.candidateId}}),previous=contract.updateManifestSchema.parse(JSON.parse(raw));
+  if(profile.previousDelivery||profile.accepted.feedDependencies){
+   const dependencies=retainedAcceptedFeedDependencies(profile);
+   await prepareFeedDependencies({base:target.bases.private,pair:profile.accepted.pair,dependencies,python:target.sourceTools.python,command});
+  }
+ const contract=await feedContract(target.bases.private,{operation:{priorCandidateId:accepted.operation.candidateId}}),previous=contract.updateManifestSchema.parse(JSON.parse(raw));
   need(previous.channel===target.full.feed.channel&&previous.releases.some(r=>r.candidateId===accepted.operation.candidateId&&r.bundle.sha256===profile.accepted.bundle.sha256),'accepted-feed-predecessor-changed');
   target.full.feed={channel:previous.channel,sequence:nextSequence(previous.sequence),createdAt,expiresAt};
   target.full.bundleUrl=`https://github.com/${fullRepository}/releases/download/nova-v${version}/nova-${version}-operator-bundle.json`;
@@ -214,7 +219,7 @@ function retainedSavedReply(journal,descriptor,parent,prior){
  need(same(parent.current.output,{format:1,kind:'nova-delivery-saved-assistant-reply',operationId:id,key:parent.key,inputSha256:parent.inputSha256,
   originalDeadlineAtMs:parent.createdAtMs+300000,...proof}),'successor-saved-assistant-proof-changed');
 }
-export async function exportSuccessorProfile(journal,id){
+export async function exportSuccessorProfile(journal,id,{command=fixedCommand,feedContract=loadSelectedFeedContract,prepareFeedDependencies=materializeRetainedFeedDependencies}={}){
  const descriptor=journal.loadDelivery(id).descriptor,directory=dirname(descriptor.target.path),recordPath=join(directory,'initialization.json');
  if(!existsSync(recordPath))return {gap:'data-profile-initialization-unavailable'};
  const record=JSON.parse(frontendRegular(recordPath,2*1024**2));
@@ -248,7 +253,7 @@ export async function exportSuccessorProfile(journal,id){
   need(published.kind==='nova-delivery-full-publication'&&same(published.evidence?.feed,sign.signedFeed)
    &&same(published.evidence?.publicKey,sign.publicKey)&&same(sign.publicKey,target.full.signing.publicKey),'successor-published-feed-changed');
   readEvidenceFile(sign.signedFeed,{maximum:128*1024});readEvidenceFile(published.evidence.receipt);
-  const pair=reference(join(sign.directory,'reviewed-pair.json'));need(pair.sha256===identity.installationProof.reviewedPairSha256&&sign.bundle.sha256===identity.request.operation.bundleSha256,'successor-signed-pair-changed');
+  const pair=retainedAcceptedPairReference(journal,id,sign,identity.installationProof.reviewedPairSha256);need(pair.sha256===identity.installationProof.reviewedPairSha256&&sign.bundle.sha256===identity.request.operation.bundleSha256,'successor-signed-pair-changed');
   if(target.full.dependencyTransport?.format===3){
    need(identity.request.operation.agentVersion===descriptor.operation.agentVersion&&descriptor.operation.agentVersion==='2026.9.8'
     &&identity.request.operation.priorAgentVersion===descriptor.operation.priorAgentVersion&&descriptor.operation.priorAgentVersion==='2026.9.6',
@@ -265,12 +270,20 @@ export async function exportSuccessorProfile(journal,id){
    target.full.dependencyTransport={...unchanged,format:2,mode:'retained-native-metadata-successor'};
   }
   profile.accepted={identity:normalizedRef(installed.acceptanceIdentityReceipt),result:exactFile(join(directory,'accepted-installer-result.json'),result),pair,bundle:normalizedRef(sign.bundle)};
+  const feedDependencies={archive:normalizedRef(sign.dependencies.archive),metadata:normalizedRef(sign.dependencies.metadata)};
+  await prepareFeedDependencies({base:actualBases.private,pair,dependencies:feedDependencies,python:target.sourceTools.python,command});
+  await feedContract(actualBases.private,{operation:{priorCandidateId:actualBases.private.candidateId}});
+  // Existing exports retain their exact bytes; readiness does not rewrite history.
+  const oldSuccessor=join(directory,'successor-profile.json');
+  if(!existsSync(oldSuccessor)||json(reference(oldSuccessor)).accepted.feedDependencies)profile.accepted.feedDependencies=feedDependencies;
   target.full.signing.previousFeed=normalizedRef(sign.signedFeed);
   if(target.full.host)Object.assign(target.full.host,{acceptedInstallation:identity.installationProof.installerResult,priorVersion:identity.request.operation.version,priorBuildVersion:identity.request.operation.buildVersion,priorJobId:identity.jobId});
   if(target.full.dependencyTransport)Object.assign(target.full.dependencyTransport,{selectedPair:pair,selectedInstaller:profile.accepted.result,selectedBundle:profile.accepted.bundle});
   if(target.frontendHost)target.frontendHost.baseVersion=identity.request.operation.version;
  }else{
   need(route.route==='frontend'&&target.signing&&sign.manifest&&sign.signature,'successor-frontend-evidence-unavailable');
+  if(!profile.accepted.feedDependencies&&profile.previousDelivery&&!existsSync(join(directory,'successor-profile.json')))
+   profile.accepted.feedDependencies=retainedAcceptedFeedDependencies(profile);
   const raw=readEvidenceFile(sign.manifest,{maximum:128*1024}),manifest=validateFrontendManifest(JSON.parse(raw),{admission:false});
   signature(raw,readEvidenceFile(sign.signature,{maximum:64}),createPublicKey(readEvidenceFile(target.signing.publicKey,{maximum:16384})));
   need(manifest.base.candidateId===target.bases.private.candidateId&&manifest.sourceRevision===descriptor.sources.private.commit

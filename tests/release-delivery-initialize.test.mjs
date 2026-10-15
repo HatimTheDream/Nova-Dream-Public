@@ -12,6 +12,31 @@ import {runtimeCommandFixture} from '../support/runtime-command-fixture.mjs';
 import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
 
 const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f.input).path,{protect:f.protect,clock:()=>f.now,derive:(input,profile)=>deriveDeliveryConfiguration(input,profile,f.options),...extra});
+test('full export prepares dependencies then imports before writing successor and preserves legacy output bytes',async t=>{
+ const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);
+ assert.equal(c.phases.sign.current.output.directory,undefined);
+ const output=join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json'),events=[];
+ const options={...f.options,prepareFeedDependencies:async()=>{events.push('prepare');assert.equal(existsSync(output),false);},
+  feedContract:async(...args)=>{events.push('import');assert.equal(existsSync(output),false);return f.options.feedContract(...args);}};
+ const first=await exportSuccessorProfile(c.journal,f.input.operationId,options);
+ assert.deepEqual(events,['prepare','import']);
+ const original=JSON.parse(readFileSync(output));delete original.accepted.feedDependencies;
+ writeFileSync(output,JSON.stringify(original)+'\n');const legacyBytes=readFileSync(output);
+ const resumed=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
+ assert.deepEqual(readFileSync(output),legacyBytes);assert.equal(resumed.profile.path,first.profile.path);
+});
+test('failed normal import prevents successor publication',async t=>{
+ const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);
+ await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,{...f.options,feedContract:async()=>{throw Error('synthetic-import-gap');}}),/synthetic-import-gap/);
+ assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json')),false);
+});
+test('frontend export retains accepted dependency references for the next initialization',async t=>{
+ const f=initializeFixture(t);enableFrontendFixture(f);
+ const dependencies={archive:f.put('accepted-deps.tgz',Buffer.from('synthetic')),metadata:f.put('accepted-deps.json',{})};
+ f.profile.accepted.feedDependencies=dependencies;f.input.profile=f.put('profile-ready.json',f.profile);
+ const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
+ assert.deepEqual(JSON.parse(readFileSync(out.profile.path)).accepted.feedDependencies,dependencies);
+});
 test('generic committed versions, independent bases, signed sequence and current runtime derive without effects',async t=>{
  const f=initializeFixture(t),v=await deriveDeliveryConfiguration(f.input,f.profile,f.options);
  assert.equal(v.operation.version,'3.2.0');assert.equal(v.operation.buildVersion,'1.0.400');assert.equal(v.sources.private.baseCommit,'a'.repeat(40));assert.equal(v.sources.public.baseCommit,'b'.repeat(40));assert.equal(v.target.full.feed.sequence,13);
@@ -46,7 +71,7 @@ test('successor export requires actual installation and saved reply separately',
  const journal={loadDelivery:()=>({descriptor}),deliveryPhase:()=>null};assert.deepEqual(await exportSuccessorProfile(journal,f.input.operationId),{gap:'installation-and-saved-assistant-reply-required'});
 });
 test('full successor exports actual accepted candidates, original result and published feed; lost response returns same bytes',async t=>{
- const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v),a=await exportSuccessorProfile(c.journal,f.input.operationId),b=await exportSuccessorProfile(c.journal,f.input.operationId);
+ const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v),a=await exportSuccessorProfile(c.journal,f.input.operationId,f.options),b=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  assert.notEqual(c.phases.assistant.current.output.operationId,f.input.operationId);assert.equal(c.phases.assistant.current.externalId,f.input.operationId);
  assert.deepEqual(a,b);const profile=JSON.parse(readFileSync(a.profile.path)),target=JSON.parse(readFileSync(profile.target.path));
  assert.equal(profile.previousDelivery.publicationReceipt.sha256,c.phases.publication.current.receipt.sha256);assert.equal(profile.previousDelivery.browserAccepted,false);
@@ -56,32 +81,32 @@ test('full successor exports actual accepted candidates, original result and pub
 });
 test('saved reply export verifies the original child graph and refuses a replacement request',async t=>{
  const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);
- c.phases['assistant/submit'].input.parentKey=randomUUID();await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId),/assistant-child/);
+ c.phases['assistant/submit'].input.parentKey=randomUUID();await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options),/assistant-child/);
 });
 test('completed install and reply cannot substitute for actual completed publication',async t=>{
  const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);c.phases.publication.state='uncertain';
- await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId),/phase-not-accepted/);assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json')),false);
+ await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options),/phase-not-accepted/);assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json')),false);
 });
 test('different published feed refuses successor export',async t=>{
  const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);c.set('publication',{...c.phases.publication.current.output,evidence:{...c.phases.publication.current.output.evidence,feed:f.signedFeed}});
- await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId),/published-feed/);
+ await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options),/published-feed/);
 });
 test('an exported accepted full profile initializes a subsequent release through data changes only',async t=>{
- const f=initializeFixture(t),first=await initialize(f),c=completedDeliveryFixture(f,first),successor=await exportSuccessorProfile(c.journal,f.input.operationId);
+ const f=initializeFixture(t),first=await initialize(f),c=completedDeliveryFixture(f,first),successor=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  const profile=JSON.parse(readFileSync(successor.profile.path));f.input.operationId=randomUUID();f.input.profile=successor.profile;f.input.sourceCommits={private:'3'.repeat(40),public:'4'.repeat(40)};
  for(const side of ['private','public']){f.packages[side].version='3.3.0';f.packages[side].edition3.buildVersion='1.0.401';f.locks[side].version='3.3.0';f.locks[side].packages[''].version='3.3.0';}
  const next=await deriveDeliveryConfiguration(f.input,profile,f.options);
  assert.equal(next.operation.version,'3.3.0');assert.equal(next.operation.priorCandidateId,c.repositories.private.candidateId);assert.equal(next.sources.private.baseCommit,'1'.repeat(40));assert.equal(next.sources.public.baseCommit,'2'.repeat(40));assert.equal(next.target.full.feed.sequence,14);
 });
 test('frontend successor refuses reusing the already selected UI version',async t=>{
- const f=initializeFixture(t);enableFrontendFixture(f);const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),out=await exportSuccessorProfile(c.journal,f.input.operationId);
+ const f=initializeFixture(t);enableFrontendFixture(f);const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  await assert.rejects(deriveDeliveryConfiguration({...f.input,operationId:randomUUID()},JSON.parse(readFileSync(out.profile.path)),f.options),/new-frontend-version/);
 });
 test('older accepted proof lacks raw installer bytes and yields explicit export gap',async t=>{
- const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v,{legacy:true});assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId),{gap:'original-installer-result-bytes-unavailable'});
+ const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v,{legacy:true});assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),{gap:'original-installer-result-bytes-unavailable'});
 });
 test('frontend successor preserves accepted service bases and updates only signed UI predecessor',async t=>{
- const f=initializeFixture(t);enableFrontendFixture(f);const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),out=await exportSuccessorProfile(c.journal,f.input.operationId);
+ const f=initializeFixture(t);enableFrontendFixture(f);const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  const p=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(p.target.path));
  assert.deepEqual(target.bases,f.target.bases);assert.deepEqual(p.accepted,f.profile.accepted);assert.equal(target.full.signing.previousFeed.sha256,f.signedFeed.sha256);
  assert.equal(target.signing.previousManifest.sha256,c.phases.sign.current.output.manifest.sha256);assert.equal(target.signing.previousSignature.sha256,c.phases.sign.current.output.signature.sha256);
@@ -124,14 +149,14 @@ test('format1 and format2 still bind the selected accepted pair instead of stale
 });
 test('a completed runtime delivery exports format2 with new accepted refs and original qualification provenance',async t=>{
  const{f,r,runtimeFor}=runtimeInitializationFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v,{runtimeFor});
- const originalTarget=readFileSync(JSON.parse(readFileSync(v.descriptor.path)).target.path),out=await exportSuccessorProfile(c.journal,f.input.operationId);
+ const originalTarget=readFileSync(JSON.parse(readFileSync(v.descriptor.path)).target.path),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  const profile=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(profile.target.path)),options=target.full.dependencyTransport;
  assert.equal(options.format,2);assert.equal(options.mode,'retained-native-metadata-successor');
  for(const name of['nativeAnchor','runtimeQualification','runtime'])assert.equal(name in options,false);
  for(const [name,accepted]of[['selectedPair','pair'],['selectedInstaller','result'],['selectedBundle','bundle']])assert.deepEqual(options[name],profile.accepted[accepted]);
  assert.deepEqual(profile.qualificationEvidence,[c.phases.sign.current.output.runtime.qualification]);assert.notDeepEqual(options.selectedPair,r.transportOptions.selectedPair);
  assert.deepEqual(readFileSync(JSON.parse(readFileSync(v.descriptor.path)).target.path),originalTarget);validateAcceptedProfile(profile,target);
- assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId),out);
+ assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),out);
  for(const side of['private','public']){f.packages[side].version='3.3.0';f.packages[side].edition3.buildVersion='1.0.401';f.locks[side].version='3.3.0';f.locks[side].packages[''].version='3.3.0';}
  f.input.operationId=randomUUID();f.input.sourceCommits={private:'3'.repeat(40),public:'4'.repeat(40)};
  const next=await deriveDeliveryConfiguration(f.input,profile,f.options);
@@ -144,7 +169,7 @@ test('runtime successor refuses missing, changed or wrongly bound original quali
   if(kind==='corrupt')writeFileSync(runtime.qualification.path,'corrupt');
   if(kind==='different-request'){const proof=JSON.parse(readFileSync(runtime.qualification.path));proof.request.parent.sha256='f'.repeat(64);runtime.qualification=f.put('wrong-runtime-proof.json',proof);}
   if(kind==='wrong-installed-runtime'){const identity=c.phases.installation.current.output.acceptanceIdentity;identity.request.operation.agentVersion='2026.9.6';identity.runtimeProof.openclawVersion='2026.9.6';c.phases.installation.current.output.acceptanceIdentityReceipt=f.put('wrong-installed-runtime.json',identity);}
-  await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId),/runtime|hash|changed|mismatch|saved-assistant/i);
+  await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options),/runtime|hash|changed|mismatch|saved-assistant/i);
   assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json')),false);
  }
 });

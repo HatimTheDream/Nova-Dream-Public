@@ -53,12 +53,14 @@ export function initializeFixture(t,{version='3.2.0',buildVersion='1.0.400'}={})
   if(a[0]==='show')return JSON.stringify(a[1].endsWith('package-lock.json')?locks[side]:packages[side]);
   throw Error('unexpected synthetic command');
  };
+ const feedEvents=[];
  const protect=(path,{create=false}={})=>{assert.ok(resolve(path).startsWith(root));if(create)mkdirSync(path,{recursive:true,mode:0o700});return resolve(path);};
  return{root,put,input,profile,target,identity,request,result,resultRef,pair,bundle,feed,signedFeed,packages,locks,calls,command,protect,now,keys,
-  corruptSource:()=>{corruptSource=true;},options:{command,clock:()=>now,feedContract:async()=>feedContract}};
+  feedEvents,corruptSource:()=>{corruptSource=true;},options:{command,clock:()=>now,prepareFeedDependencies:async()=>{feedEvents.push('prepare');},feedContract:async()=>{feedEvents.push('import');return feedContract;}}};
 }
 
 export function enableFrontendFixture(f){
+ f.profile.accepted.feedDependencies={archive:f.put('accepted-feed-dependencies.tgz',Buffer.from('synthetic')),metadata:f.put('accepted-feed-dependencies.json',{})};
  f.target.frontend={artifactUrl:'https://example.invalid/ui.tgz',sequence:1,createdAt:new Date(f.now).toISOString(),expiresAt:new Date(f.now+86400000).toISOString()};
  f.target.frontendHost={baseVersion:'3.1.0',worker:{path:'/opt/synthetic/worker.py',sha256:'1'.repeat(64)},config:{path:'/etc/synthetic/config.json',sha256:'2'.repeat(64)}};
  f.target.signing={privateKeyPath:f.target.full.signing.privateKeyPath,publicKey:f.target.full.signing.publicKey,previousManifest:'initial'};
@@ -96,7 +98,9 @@ export function completedDeliveryFixture(f,prepared,{route='full',legacy=false,r
   Object.assign(feed.releases[0].compatibility,{pluginVersion:op.version,fromNovaVersion:'3.1.0',fromAgentVersion:op.priorAgentVersion});
   feed.releases[0].bundle={...feed.releases[0].bundle,sha256:bundle.sha256,bytes:readFileSync(bundle.path).length};
   const feedRaw=enc(feed),signedFeed=f.put('signed/feed.json',{payload:feedRaw.toString('base64'),signature:sign(null,feedRaw,f.keys.privateKey).toString('base64')});
-  set('sign',{route,directory:join(f.root,'signed'),bundle,signedFeed,publicKey:f.target.full.signing.publicKey,...(runtimeFor?{runtime:runtimeFor({descriptor,repositories})}:{})});
+  const dependencies={archive:f.put('synthetic-dependencies.tgz',Buffer.from('synthetic')),metadata:f.put('synthetic-dependencies.metadata.json',{})};
+  set('package/pair',{kind:'maintained-qualified-update-pair',operationId:id,candidateId,priorCandidateId,sourceCommits:descriptor.operation.sourceCommits,dependencies,directory:join(f.root,'signed')});
+  set('sign',{route,candidateId,priorCandidateId,sourceCommits:descriptor.operation.sourceCommits,dependencies,bundle,signedFeed,publicKey:f.target.full.signing.publicKey,...(runtimeFor?{runtime:runtimeFor({descriptor,repositories})}:{})});
   set('publication',{kind:'nova-delivery-full-publication',operationId:id,evidence:{receipt:f.put('paired-publication.json',{operationId:id,feedSha256:signedFeed.sha256}),feed:signedFeed,publicKey:f.target.full.signing.publicKey}});
  }else{
   const files=['.vite/manifest.json','index.html'].map(path=>({path,bytes:1,sha256:sha256('x')})),frontendId=frontendIdentity(files);

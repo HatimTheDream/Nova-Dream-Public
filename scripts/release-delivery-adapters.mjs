@@ -90,6 +90,7 @@ export function deliveryAdapterSourceFiles() {
     'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/online-capacity.py',
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
+    'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',
     'release-deliver.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
   return files;
 }
