@@ -56,7 +56,9 @@ function fixture(t: any, kind: 'existing' | 'queue' | 'new', refinement = false,
   let draft: Draft = { ...emptyDraft, text: 'Help with a desk tidy', workMode: mode, ...(kind === 'new' ? {} : { conversationId: conversation.id }), ...(refinement ? { refineSource, attachments: [file] } : {}) };
   const captured = structuredClone(draft);
   let storageFull = false;
-  const journal = { get value() { return draft; }, revision: 1, dirty: false, saving: false, retainForNavigation: () => true, change(update: Draft | ((value: Draft) => Draft)) { draft = typeof update === 'function' ? update(draft) : update; return !storageFull; }, flush: async () => {} };
+  // This fixture models an already acknowledged draft. The real retained-save
+  // tests cover dirty/in-flight saves, conflicts and unknown acknowledgements.
+  const journal = { get value() { return draft; }, revision: 1, dirty: false, saving: false, submitBlocked: false, retainForNavigation: () => true, change(update: Draft | ((value: Draft) => Draft)) { draft = typeof update === 'function' ? update(draft) : update; return !storageFull; }, flush: async () => {}, flushForSubmit: async () => ({ value: structuredClone(draft), revision: journal.revision, epoch: 'epoch' }) };
   let admission: 'pending' | 'accepted' | 'rejected' | 'unknown' = 'pending';
   let release!: () => void;
   let gate = new Promise<void>(resolve => { release = resolve; });
