@@ -24,7 +24,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from codex_log_retention import attest_runtime, qualify_logs
+from codex_log_retention import MAX_STARTUP_WINDOW_SECONDS, attest_runtime, qualify_logs
 
 RESERVE = 1610612736
 ALLOWANCE = 128 * 1024 ** 2
@@ -2799,6 +2799,151 @@ def migrated_native_rows(before, after, tables, before_path, after_path, node, b
                 'Native migration did not retain saved work, history, configuration or permissions.')
 
 
+NATIVE_EVENT_RETENTION_SOURCES = {
+    'execution-identity-context-D1Y_Xgc7.mjs': 'e529185c78b6a30bc0f6098b8767c9d996e321cbeb383466a609bcfcb40a6a98',
+    'audit-recorder-3ttoiiH6.mjs': '29287cbbd7b5249875b2b7334952a11d78e0b2efdaff86c017498401e67f9698',
+    'audit-config-BXFCjLO0.mjs': 'd596a3b2d9455104aa236ba1d720d58ed49964db9399200d322ac32b4860742b',
+    'openclaw-state-worker-runtime-CckKB9al.mjs': '70fd0b674f23dec869fbefb10bbcf38afb1a7a4798070fa51a257b093dd6c892',
+    'server-runtime-subscriptions-DwYcUJ9S.mjs': '2f46d2f70165a65a81a4927711a1e8a01efc1f945b0aaa3090dd749196b590e6',
+    'session-state-events.kernel-D8yu7kie.mjs': '615ca61709caf68e38f86900c49d7bbb47732ec12883202239407f193475a393',
+    'session-state-events-DxrQGYa3.mjs': '8952311290ddb6e374bfddba8dd9d32d9c7285a0d05a1d2efeb342c9fd33e2c3',
+    'server-startup-post-attach-D5xEByJv.mjs': '4084679bb9641dd941a65c5f154a8a9b8dcc8ba7205825376f239a0b38f6d18a',
+}
+NATIVE_EVENT_RETENTION_SQL = '''
+CREATE TABLE audit_events (
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, source_id TEXT NOT NULL UNIQUE,
+ schema_version INTEGER NOT NULL DEFAULT 1, source_sequence INTEGER NOT NULL, occurred_at INTEGER NOT NULL,
+ kind TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, actor_type TEXT NOT NULL,
+ actor_id TEXT NOT NULL, agent_id TEXT, session_key TEXT, session_id TEXT, run_id TEXT, tool_call_id TEXT,
+ tool_name TEXT, direction TEXT, channel TEXT, conversation_kind TEXT, message_outcome TEXT, reason_code TEXT,
+ delivery_kind TEXT, failure_stage TEXT, duration_ms INTEGER, result_count INTEGER, account_ref TEXT,
+ conversation_ref TEXT, message_ref TEXT, target_ref TEXT
+) STRICT;
+CREATE TABLE session_state_events (
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT, dedupe_key TEXT UNIQUE, session_key TEXT NOT NULL, session_id TEXT,
+ agent_id TEXT NOT NULL, kind TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT, run_id TEXT,
+ occurred_at INTEGER NOT NULL, summary TEXT NOT NULL, payload_json TEXT
+) STRICT;
+CREATE TABLE session_state_heads (
+ session_key TEXT NOT NULL, agent_id TEXT NOT NULL, last_sequence INTEGER NOT NULL,
+ pruned_max_sequence INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+ PRIMARY KEY (session_key, agent_id)
+) STRICT;
+'''
+
+
+def attest_native_event_retention(runtime_root):
+    """Bind the reviewed 9.8 startup writers, not a caller-selected expiry policy."""
+    require(runtime_root is not None, 'Native event retention lacks runtime authority.')
+    runtime = pathlib.Path(runtime_root)
+    require(runtime.is_absolute() and runtime.resolve(strict=True) == runtime
+            and runtime.name == 'openclaw' and runtime.parent.name == 'node_modules'
+            and re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name),
+            'Native event retention runtime is outside the reviewed managed engine.')
+    paths = [runtime.parent.parent, runtime.parent, runtime, runtime / 'dist', runtime / 'package.json']
+    paths += [runtime / 'dist' / name for name in NATIVE_EVENT_RETENTION_SOURCES]
+    identities = {}
+    for path in paths:
+        require(path.resolve(strict=True) == path and (path.is_dir() or path.is_file()),
+                'Native event retention source was redirected.')
+        info = path.lstat()
+        require(os.name != 'posix' or (info.st_uid == 0 and not info.st_mode & 0o022),
+                'Native event retention source is not protected.')
+        identities[path] = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    package = bounded_json(runtime / 'package.json', 1024 * 1024)
+    require(package.get('name') == 'openclaw' and package.get('version') == '2026.9.8',
+            'Native event retention runtime identity changed.')
+    for name, expected in NATIVE_EVENT_RETENTION_SOURCES.items():
+        path = runtime / 'dist' / name
+        require(path.stat().st_size <= 1024 * 1024 and digest(path) == expected,
+                'Native event retention implementation changed.')
+    for path, expected in identities.items():
+        info = path.lstat()
+        require(expected == (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                and path.resolve(strict=True) == path, 'Native event retention source changed during verification.')
+
+
+def retained_native_event_history(before, after, relative, selected, runtime_root, startup_window):
+    """Account for a complete, unambiguous 9.8 startup prune; retain every survivor.
+
+    Audit startup repeats 1,024-row age batches until settled. Session startup
+    prunes by age, then global sequence count, and stamps durable head watermarks.
+    New/intermediate inserts, incomplete pruning and cutoff ambiguity require a
+    separate proof. Permissions, audit identities and other tables stay retained.
+    """
+    names = ('audit_events', 'session_state_events', 'session_state_heads')
+    old = {name: rows(before, name) for name in names}
+    new = {name: rows(after, name) for name in names}
+    if all(old[name] <= new[name] for name in names):
+        return frozenset()
+    require(pathlib.Path(relative) == pathlib.Path(selected) / 'openclaw-runtime/state/state/openclaw.sqlite',
+            'Native event retention is outside the selected shared database.')
+    require(isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
+            and all(type(value) in (int, float) and math.isfinite(value) for value in startup_window)
+            and 0 <= startup_window[0] <= startup_window[1] <= 9007199254740991 / 1000
+            and startup_window[1] - startup_window[0] <= MAX_STARTUP_WINDOW_SECONDS,
+            'Native event retention lacks a finite closed startup window.')
+    attest_native_event_retention(runtime_root)
+    with contextlib.closing(sqlite3.connect(':memory:')) as model:
+        model.executescript(NATIVE_EVENT_RETENTION_SQL)
+        for table in names:
+            expected = model.execute('select sql from sqlite_schema where type=\'table\' and name=?', (table,)).fetchone()[0]
+            compact = lambda value: re.sub(r'\s+', '', value)
+            for connection in (before, after):
+                actual = connection.execute('select sql from sqlite_schema where type=\'table\' and name=?', (table,)).fetchone()
+                require(actual is not None and compact(actual[0]) == compact(expected),
+                        'Native event retention schema changed.')
+                require(not connection.execute('select 1 from sqlite_schema where type=\'trigger\' and tbl_name=?', (table,)).fetchone(),
+                        'Native event retention has an unreviewed trigger.')
+    start, end = (value * 1000 for value in startup_window)
+    retention_ms = 2592000000
+    columns = {name: [item[1] for item in before.execute('pragma table_info("' + name + '")')] for name in names}
+    for name in names[:2]:
+        require(all(count == 1 for count in old[name].values()) and new[name] <= old[name],
+                'Native retained event was added or changed during pruning.')
+        sequence = lambda connection: list(connection.execute('select seq from sqlite_sequence where name=?', (name,)))
+        require(sequence(before) == sequence(after), 'Native event pruning includes an unaccounted intermediate insert.')
+        at = columns[name].index('occurred_at')
+        require(all(type(row[at]) is int and 0 <= row[at] <= 9007199254740991 for row in old[name]),
+                'Native event retention timestamp is outside the reviewed range.')
+        require(not any(start - retention_ms <= row[at] < end - retention_ms for row in old[name]),
+                'Native event expiry crosses the recorded startup boundary.')
+    require(sum(old['audit_events'].values()) <= 100000, 'Audit count-cap pruning needs separate derivation.')
+    expected_audit = Counter({row: count for row, count in old['audit_events'].items()
+                              if row[columns['audit_events'].index('occurred_at')] >= start - retention_ms})
+    require(new['audit_events'] == expected_audit, 'Native audit expiry is not the complete settled age derivation.')
+    event_columns = columns['session_state_events']
+    survivors = [row for row in old['session_state_events'] if row[event_columns.index('occurred_at')] >= start - retention_ms]
+    survivors.sort(key=lambda row: row[event_columns.index('sequence')], reverse=True)
+    expected_events = Counter(survivors[:50000])
+    require(new['session_state_events'] == expected_events, 'Native session expiry differs from its age and global-count derivation.')
+    removed = old['session_state_events'] - expected_events
+    watermarks = {}
+    for row in removed:
+        key = (row[event_columns.index('session_key')], row[event_columns.index('agent_id')])
+        watermarks[key] = max(watermarks.get(key, 0), row[event_columns.index('sequence')])
+    head_columns = columns['session_state_heads']
+    key_of = lambda row: (row[head_columns.index('session_key')], row[head_columns.index('agent_id')])
+    current_heads = {key_of(row): row for row in new['session_state_heads']}
+    require(len(current_heads) == sum(new['session_state_heads'].values()) == sum(old['session_state_heads'].values()),
+            'Native session heads were added or removed during pruning.')
+    stamp_times = set()
+    for row in old['session_state_heads']:
+        key = key_of(row)
+        current = current_heads.get(key)
+        require(current is not None, 'A retained native session head disappeared.')
+        watermark_at, updated_at = head_columns.index('pruned_max_sequence'), head_columns.index('updated_at')
+        expected = list(row)
+        if key in watermarks and watermarks[key] > row[watermark_at]:
+            require(type(current[updated_at]) is int and start <= current[updated_at] <= end,
+                    'Native session prune stamp is outside the closed startup window.')
+            expected[watermark_at], expected[updated_at] = watermarks[key], current[updated_at]
+            stamp_times.add(current[updated_at])
+        require(tuple(expected) == current, 'Native session watermark or retained head content changed.')
+    require(len(stamp_times) <= 1, 'Native session pruning includes unaccounted multiple write times.')
+    return frozenset(names)
+
+
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
                        log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
                        logical_workspace_root=None, catalog_runtime_root=None):
@@ -2855,9 +3000,14 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
             require(old_tables == new_tables, 'An unchanged native database changed its schema.')
             schema = lambda connection: Counter(connection.execute("select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%'"))
             require(schema(before) == schema(after), 'An unchanged native database changed its schema definitions.')
+            retained_events = (retained_native_event_history(before, after, relative, selected, catalog_runtime_root, log_retention_window)
+                               if to_version == '2026.9.8' and relative.name == 'openclaw.sqlite'
+                               and {'audit_events', 'session_state_events', 'session_state_heads'} <= old_tables else frozenset())
             for table in old_tables:
                 require(re.fullmatch(r'[a-zA-Z0-9_]+', table), 'Unexpected native table name.')
                 require(list(before.execute('pragma table_info("' + table + '")')) == list(after.execute('pragma table_info("' + table + '")')), 'An unchanged native table changed its columns.')
+                if table in retained_events:
+                    continue
                 if table == 'config_machine_state':
                     if to_version in {'2026.9.6', '2026.9.8'}:
                         retained_plugin_index(before, after, node, live / relative, from_version, to_version,

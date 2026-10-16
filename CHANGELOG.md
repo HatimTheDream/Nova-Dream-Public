@@ -10,6 +10,7 @@
 
 - Enable Send and Enter immediately after typing, including while an ordinary draft save is running. Save the exact current draft before dispatch, keep a synchronous duplicate-send lock, and preserve conflicts and uncertain original requests.
 - Coordinate device appearance and navigation requests across windows, preserve unsaved-writing guards, and report actual window confirmation rather than claiming a queued request was applied.
+- Recognize verified expiry of old runtime diagnostic events during update checks while preserving checks on saved work, permissions and surviving records.
 
 ## [2.6.0] — 2026-10-15
 

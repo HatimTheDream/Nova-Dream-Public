@@ -25,6 +25,7 @@ jobs:
           python3 -B tests/update-runner.test.py -v
           python3 -B tests/update-runtime-profile.test.py -v
           python3 -B tests/recovery-native98.test.py -v
+          python3 -B tests/recovery-event-retention.test.py -v
           python3 -B tests/recovery-allocation.test.py -v
           python3 -B tests/update-snapshot-admission.test.py -v
           python3 -B tests/recovery-managed-generation.test.py -v
