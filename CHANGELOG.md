@@ -1,3 +1,9 @@
+## [2.7.1] — 2026-10-16
+
+### Fixed
+
+- Align release checks with the corrected retained-state verifier and give the corrected candidate a new immutable release version.
+
 ## [2.7.0] — 2026-10-15
 
 ### Added
