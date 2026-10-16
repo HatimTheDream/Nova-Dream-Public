@@ -30,7 +30,7 @@ export const FULL_HELPERS=Object.freeze({
   'codex_log_retention.py':'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4',
   'install.py':'d417d652163cb134583b1d766c650ad0a8597084bfa25ee876d7cf5155f013c4',
   'operator_rehearsal.py':'cec0f65413550a5872c2e97c0835434647a7aeadccd73e8c812ecda0fe251c3c',
-  'recovery.py':'03e06cd1e9881cb3814abd91fb91c4486a440e1625c097d12a412a0fb5f2aa71',
+  'recovery.py':'520c337ceb9deb252bdeaaa7d5a4a7ca1e6c4fc09c8d001f91e2e8ad9b3946bf',
   'verify-session-bindings.mjs':'1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0',
   'workspace_key.py':'e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2',
 });
