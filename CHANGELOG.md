@@ -1,3 +1,9 @@
+## [2.7.6] — 2026-10-17
+
+### Improved
+
+- Press Escape to clear task search. The clear-search button now returns focus to the search field so you can immediately type another query.
+
 ## [2.7.5] — 2026-10-17
 
 ### Fixed
