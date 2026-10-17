@@ -10,7 +10,7 @@ import { releaseTransportSchema } from './release-adapters.mjs';
 import { browserOptionsSchema, canonicalBrowser, writeBrowserOnce } from './release-delivery-browser.mjs';
 import {verifyBrowserTool} from './release-delivery-browser-primitives.mjs';
 
-import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,verifySecondPage,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
+import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,verifyInitialBrowserIdentity,verifySecondPage,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
 export {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity} from './release-delivery-browser-checks.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const hash=v=>sha256(canonicalBrowser(v)),read=p=>JSON.parse(readFileSync(p,'utf8'));
@@ -46,10 +46,10 @@ export async function runBrowserDriver(originalPath) {
       viewport:{width:1280,height:800},acceptDownloads:false,timeout:30000});
     context.setDefaultTimeout(20000);oldPage=context.pages()[0]??await context.newPage();
     await oldPage.goto(options.baseUrl,{waitUntil:'domcontentloaded'});const initial=await ready(oldPage,options.baseUrl);
-    verifyBrowserHealth(initial.health,{candidateId:binding.priorCandidateId,epoch:binding.epoch},initial.epoch);verifyDocumentIdentity(initial.identity,initial.health);
+    const initialContract=verifyInitialBrowserIdentity(initial,binding);
     await tasks(oldPage);const field=await draft(oldPage);need(await field.inputValue()==='','browser-owned-profile-draft-not-empty');
     const text=`Nova release verification ${binding.operationId} — retained unsent draft`;await field.fill(text);
-    const secondPage=await verifySecondPage(context,options,initial);
+    const secondPage=await verifySecondPage(context,options,initial,undefined,initialContract);
     prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:hash(binding),startedAtMs:Date.now(),
       document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text,secondPage};
     const heartbeat=()=>{const temporary=join(dir,'heartbeat.tmp');writeFileSync(temporary,canonicalBrowser({operationId:binding.operationId,

@@ -10,6 +10,7 @@ import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import { assistantAcceptanceInput } from './release-delivery-assistant.mjs';
 import {prepareRemoteBrowser,remoteBrowserAcceptance} from './release-delivery-browser-remote.mjs';
+import {verifyFullBundledIdentity,verifyDocumentIdentity,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const localBrowserOptionsSchema = z.object({ format:z.literal(1), node:ref, executable:ref, playwright:ref, ssh:ref,
@@ -31,8 +32,21 @@ export function writeBrowserOnce(path,value) {
   const fd=openSync(path,'wx',0o600);try{writeFileSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}
 }
 export function browserBinding(context,options,transport) {
+  const op=context.descriptor.operation;
+  let fullTarget,priorBundledTarget;
+  if(context.prior.route.route==='full'){
+    const candidateId=context.prior.route.targetCandidateId;
+    need(context.prior.sign?.candidateId===candidateId&&context.prior.sign.priorCandidateId===op.priorCandidateId
+      &&(op.candidateId==null||op.candidateId===candidateId),'browser-full-target-binding-changed');
+    fullTarget={candidateId,version:op.version,buildVersion:op.buildVersion};
+    const target=JSON.parse(readEvidenceFile(context.descriptor.target)),base=target.bases?.private;
+    need(base?.candidateId===op.priorCandidateId,'browser-prior-bundled-binding-changed');
+    const manifest=JSON.parse(readEvidenceFile(base.manifest));
+    priorBundledTarget={candidateId:base.candidateId,version:manifest.version,buildVersion:manifest.buildVersion};
+  }
   return {format:1,operationId:context.descriptor.operation.id,descriptorSha256:hash(context.descriptor),
     options:browserOptionsSchema.parse(options),transport,route:context.prior.route.route,
+    ...(fullTarget?{fullTarget,priorBundledTarget}:{}),
     priorCandidateId:context.descriptor.operation.priorCandidateId,epoch:context.descriptor.operation.workspaceEpoch};
 }
 function directory(context) {
@@ -102,7 +116,9 @@ export function browserAcceptanceInput(context,options,transport) {
   need(kept.record&&existsSync(join(kept.dir,'prepared.json')),'browser-pre-promotion-session-required');
   const prepared=read(join(kept.dir,'prepared.json'));
   need(prepared.bindingSha256===hash(kept.binding),'browser-preparation-binding-changed');
+  if(installed.route==='full')verifyFullBundledIdentity(installed.installedHealth,kept.binding.fullTarget);
   return {format:1,operationId:installed.operationId,installed,assistant,
+    ...(installed.route==='full'?{fullTarget:kept.binding.fullTarget}:{}),
     original:proofReference(kept.dir,'original.json'),prepared:proofReference(kept.dir,'prepared.json')};
 }
 export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
@@ -116,6 +132,12 @@ export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
     &&output.savedReplySha256===input.assistant.replySha256
     &&output.savedMessageId===input.assistant.savedMessageId,'browser-acceptance-binding-changed');
   const expected=input.installed.installedHealth,loaded=output.loadedDocument;
+  if(input.installed.route==='full'){
+    need(isDeepStrictEqual(input.fullTarget,original.binding.fullTarget),'browser-full-target-binding-changed');
+    verifyFullBundledIdentity(expected,input.fullTarget);
+    verifyDocumentIdentity(loaded,expected,{route:'full'});
+    need(isDeepStrictEqual(output.selectorDiagnostics,browserSelectorDiagnostics(expected)),'browser-selector-diagnostic-proof-changed');
+  }else need(!expected.frontend?.blocked,'browser-service-identity-changed');
   need(loaded?.candidateId===expected.candidateId&&loaded.frontendId===expected.frontend.id
     &&loaded.version===expected.frontend.version&&loaded.buildVersion===expected.frontend.buildVersion
     &&isDeepStrictEqual(output.originalDocument,prepared.document),'browser-loaded-document-proof-changed');

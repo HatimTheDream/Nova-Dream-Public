@@ -1,3 +1,9 @@
+## [2.7.9] — 2026-10-17
+
+### Fixed
+
+- Verify the exact bundled interface after a full update when an older interface selection is safely ignored. Keep the old-selection diagnostic and strict frontend-only acceptance checks.
+
 ## [2.7.8] — 2026-10-17
 
 ### Fixed

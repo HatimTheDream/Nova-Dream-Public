@@ -5,10 +5,11 @@ import { join, resolve, dirname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { sha256 } from '../scripts/release-plan.mjs';
-import { prepareDeliveryBrowser, canonicalBrowser, writeBrowserOnce, browserOptionsSchema, verifyBrowserAcceptance, verifyBrowserSessionAlive, createBrowserAcceptanceAdapter } from '../scripts/release-delivery-browser.mjs';
+import { prepareDeliveryBrowser, canonicalBrowser, writeBrowserOnce, browserOptionsSchema, verifyBrowserAcceptance, verifyBrowserSessionAlive, createBrowserAcceptanceAdapter, browserAcceptanceInput } from '../scripts/release-delivery-browser.mjs';
 import { verifyBrowserHealth, verifyDocumentIdentity, verifyPlaywrightClosure } from '../scripts/release-delivery-browser-driver.mjs';
 import {remoteBrowserAcceptance,remoteBrowserCall,prepareRemoteBrowser,verifyRemoteBrowserSessionAlive} from '../scripts/release-delivery-browser-remote.mjs';
 import {verifyBrowserTool} from '../scripts/release-delivery-browser-primitives.mjs';
+import {verifyInitialBrowserIdentity,verifySecondPage} from '../scripts/release-delivery-browser-checks.mjs';
 
 const hash=v=>sha256(canonicalBrowser(v));
 test('streamed tool verification covers later chunks and enforces exact size bounds',t=>{
@@ -156,6 +157,85 @@ test('document proof is bound to selected assets and both version identities',()
   const health={candidateId:sha256('backend'),frontend:{id:sha256('ui'),version:'2.7.6',buildVersion:'1.0.303'}};
   const doc={candidateId:health.candidateId,frontendId:health.frontend.id,version:'2.7.6',buildVersion:'1.0.303',assets:'/frontend/assets/'};
   verifyDocumentIdentity(doc,health);assert.throws(()=>verifyDocumentIdentity({...doc,frontendId:sha256('old')},health));
+});
+
+test('full browser health admits exact bundled fallback while frontend selection remains strict',()=>{
+  const target={candidateId:sha256('full target'),version:'2.7.8',buildVersion:'1.0.305'},contract={route:'full',target};
+  const health={application:'nova-dream-edition-3',status:'ready',candidateId:target.candidateId,processIdentity:randomUUID(),serviceInputsSha256:sha256('service'),
+    frontend:{id:target.candidateId,version:target.version,buildVersion:target.buildVersion,source:'bundled',blocked:true}};
+  const expected={...health,epoch:randomUUID()},document={candidateId:target.candidateId,frontendId:target.candidateId,version:target.version,buildVersion:target.buildVersion,
+    assets:`/__bundled/${target.candidateId}/`};
+  verifyBrowserHealth(health,expected,expected.epoch,contract);verifyDocumentIdentity(document,health,contract);
+  assert.throws(()=>verifyBrowserHealth(health,expected,expected.epoch,{route:'frontend'}));
+  for(const changed of [{candidateId:sha256('wrong')},{status:'failed'},...[
+    {source:'frontend'},{id:sha256('old')},{version:'2.7.6'},{buildVersion:'1.0.303'},{blocked:'true'},
+  ].map(frontend=>({frontend:{...health.frontend,...frontend}}))])
+    assert.throws(()=>verifyBrowserHealth({...health,...changed},expected,expected.epoch,contract));
+  for(const assets of [`/__frontend/${target.candidateId}/`,`/__bundled/${sha256('old')}/`,'/','/__bundled/../'])
+    assert.throws(()=>verifyDocumentIdentity({...document,assets},health,contract),/browser-loaded-bundled-namespace-changed/);
+  assert.throws(()=>verifyBrowserHealth({...health,frontend:{...health.frontend,blocked:false}},expected,expected.epoch,contract),/browser-selector-diagnostic-changed/);
+});
+
+test('full browser input and proof bind frozen bundled target and retain rejected-selector diagnostic',async t=>{
+  const {root,context,options,ref}=fixture(t),op=context.descriptor.operation;
+  Object.assign(op,{candidateId:sha256('new full'),version:'2.7.8',buildVersion:'1.0.305'});
+  const health={candidateId:op.candidateId,epoch:op.workspaceEpoch,processIdentity:randomUUID(),serviceInputsSha256:sha256('service'),
+    frontend:{id:op.candidateId,version:op.version,buildVersion:op.buildVersion,source:'bundled',blocked:true}};
+  context.prior={route:{route:'full',targetCandidateId:op.candidateId},sign:{candidateId:op.candidateId,priorCandidateId:op.priorCandidateId},installation:{controllerCompleted:true,
+    acceptanceIdentity:{kind:'maintained-installed-acceptance-identity',operationId:op.id,candidateId:op.candidateId,health}},
+    assistant:{kind:'nova-delivery-saved-assistant-reply',key:randomUUID(),savedReplyAccepted:true,browserUiVerified:false,replySha256:sha256('reply'),savedMessageId:'message'}};
+  const manifest=join(root,'base-manifest.json'),target=join(root,'target.json');writeFileSync(manifest,JSON.stringify({version:'2.7.5',buildVersion:'1.0.302'}));
+  writeFileSync(target,JSON.stringify({bases:{private:{candidateId:op.priorCandidateId,manifest:{path:manifest,sha256:sha256(readFileSync(manifest))}}}}));
+  context.descriptor.target={path:target,sha256:sha256(readFileSync(target))};
+  const candidateId=op.candidateId;op.candidateId=null;op.stage='draft';
+  const launch=()=>{const dir=join(root,'browser-session'),original=JSON.parse(readFileSync(join(dir,'original.json')));
+    writeBrowserOnce(join(dir,'heartbeat.json'),{operationId:op.id,originalSha256:sha256(readFileSync(join(dir,'original.json'))),pid:process.pid,atMs:Date.now(),browserAlive:true,tunnelAlive:true});
+    writeBrowserOnce(join(dir,'prepared.json'),{bindingSha256:hash(original.binding),epoch:op.workspaceEpoch,document:{candidateId:op.priorCandidateId},startedAtMs:Date.now()});return {on(){},unref(){}};};
+  await prepareDeliveryBrowser(context,{options,transport:ref,launch});
+  const input=browserAcceptanceInput(context,options,ref),prepared=JSON.parse(readFileSync(input.prepared.path));
+  assert.deepEqual(input.fullTarget,{candidateId,version:op.version,buildVersion:op.buildVersion});
+  const image=join(root,'screen.png'),closed=join(root,'closed.json');writeFileSync(image,'pixels');
+  writeFileSync(closed,JSON.stringify({operationId:op.id,browserClosed:true,tunnelClosed:true}));
+  const output={kind:'nova-real-browser-acceptance',operationId:op.id,inputSha256:hash(input),accepted:true,browserUiVerified:true,
+    gatewayCoverage:'not-tested-loopback-host-surface',savedReplySha256:input.assistant.replySha256,savedMessageId:'message',
+    startedAtMs:prepared.startedAtMs,completedAtMs:Date.now(),originalDocument:prepared.document,
+    loadedDocument:{candidateId,frontendId:candidateId,version:op.version,buildVersion:op.buildVersion,assets:`/__bundled/${candidateId}/`},
+    selectorDiagnostics:[{code:'retained-frontend-selector-rejected',servedSource:'bundled',blocked:true}],
+    checks:['old-document-retained','old-client-fence','new-document-identity','retained-draft-after-refresh','ui-behavior','saved-assistant-reply-visible','owned-draft-cleaned'].map(name=>({name,passed:true})),
+    screenshot:{path:image,sha256:sha256('pixels')},closed:{path:closed,sha256:sha256(readFileSync(closed))}};
+  verifyBrowserAcceptance(output,input);
+  for(const selectorDiagnostics of [undefined,[],[{code:'retained-frontend-selector-rejected',servedSource:'frontend',blocked:true}]])
+    assert.throws(()=>verifyBrowserAcceptance({...output,selectorDiagnostics},input),/browser-selector-diagnostic-proof-changed/);
+  assert.throws(()=>verifyBrowserAcceptance({...output,loadedDocument:{...output.loadedDocument,assets:'/'}},input),/browser-loaded-bundled-namespace-changed/);
+  const altered={...input,fullTarget:{...input.fullTarget,version:'2.7.6'}};
+  assert.throws(()=>verifyBrowserAcceptance({...output,inputSha256:hash(altered)},altered),/browser-full-target-binding-changed/);
+  for(const patch of [{source:'frontend'},{id:sha256('other')},{version:'2.7.6'},{buildVersion:'1.0.303'}]){
+    context.prior.installation.acceptanceIdentity.health={...health,frontend:{...health.frontend,...patch}};
+    assert.throws(()=>browserAcceptanceInput(context,options,ref),/browser-full-bundled-identity-changed/);
+  }
+  context.prior.installation.acceptanceIdentity.health=health;
+  context.prior.sign.candidateId=sha256('unsigned other');
+  assert.throws(()=>browserAcceptanceInput(context,options,ref),/browser-full-target-binding-changed/);
+  context.prior.sign.candidateId=candidateId;writeFileSync(manifest,'changed');
+  assert.throws(()=>browserAcceptanceInput(context,options,ref),/hash|changed|mismatch/i);
+});
+
+test('full preparation and second tab verify a bound prior bundled fallback without relaxing frontend preparation',async()=>{
+  const target={candidateId:sha256('prior bundled'),version:'2.7.8',buildVersion:'1.0.305'},epoch=randomUUID();
+  const initial={health:{application:'nova-dream-edition-3',status:'ready',candidateId:target.candidateId,processIdentity:randomUUID(),serviceInputsSha256:sha256('service'),
+    frontend:{id:target.candidateId,version:target.version,buildVersion:target.buildVersion,source:'bundled',blocked:true}},epoch,
+    identity:{candidateId:target.candidateId,frontendId:target.candidateId,version:target.version,buildVersion:target.buildVersion,assets:`/__bundled/${target.candidateId}/`}};
+  const binding={route:'full',priorCandidateId:target.candidateId,epoch,priorBundledTarget:target},contract=verifyInitialBrowserIdentity(initial,binding);
+  assert.throws(()=>verifyInitialBrowserIdentity(initial,{...binding,route:'frontend'}));
+  assert.throws(()=>verifyInitialBrowserIdentity(initial,{...binding,priorBundledTarget:{...target,version:'2.7.5'}}));
+  assert.throws(()=>verifyInitialBrowserIdentity({...initial,health:{...initial.health,frontend:{...initial.health.frontend,source:'frontend'}}},binding));
+  let closed=0,current=initial;
+  const page={goto:async()=>{},locator:()=>({waitFor:async()=>{}}),evaluate:async()=>current.identity,
+    request:{get:async url=>({ok:()=>true,json:async()=>url.endsWith('/api/health')?current.health:{epoch:current.epoch}})},close:async()=>{closed++;}};
+  const context={newPage:async()=>page,pages:()=>[{},page]},options={baseUrl:'http://127.0.0.1:4383'};
+  await verifySecondPage(context,options,initial,undefined,contract);assert.equal(closed,1);
+  current={...initial,identity:{...initial.identity,assets:'/__frontend/'+target.candidateId+'/'}};
+  await assert.rejects(verifySecondPage(context,options,initial,undefined,contract),/browser-loaded-bundled-namespace-changed/);assert.equal(closed,2);
 });
 test('acceptance requires screenshot integrity, all browser checks and owned process closure',t=>{
   const {root}=fixture(t),image=join(root,'screen.png'),closed=join(root,'closed.json'),id=randomUUID();writeFileSync(image,'pixels');
