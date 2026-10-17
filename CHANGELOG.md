@@ -1,3 +1,10 @@
+## [2.7.5] — 2026-10-17
+
+### Fixed
+
+- Verify cancellation correctly when Linux retains a terminated child process until reaping, while still rejecting running descendants and blocking later work.
+- Give the corrected delivery tooling its own immutable source release version.
+
 ## [2.7.4] — 2026-10-17
 
 ### Fixed
