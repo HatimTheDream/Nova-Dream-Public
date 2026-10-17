@@ -217,7 +217,8 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     'storage-required-use-release-deliver-start-input');
   const { ref, config } = storageDefaultConfiguration({ env }), actualEntry = canonical(entry);
   need(config.applicationRoots.some(root => join(canonical(root), 'scripts', 'release-deliver.mjs') === actualEntry), 'storage-entry-not-configured');
-  const argv = ['-I', '-B', config.runner.path, '--config', ref.path, '--entry', actualEntry, '--mode', mode];
+  const argv = ['-I', '-B', config.runner.path, '--config', ref.path, '--entry', actualEntry, '--mode', mode,
+    '--launcher-pid', String(process.pid), '--launcher-cwd', canonical(process.cwd())];
   if (mode === 'start') {
     argv.push('--input', absolute(resolve(args[1])));
     if (args.length === 4) argv.push('--budget', absolute(resolve(args[3])));

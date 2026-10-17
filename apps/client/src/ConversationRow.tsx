@@ -32,7 +32,7 @@ export function ConversationRow({ conversation, controller, snapshot, selected, 
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Removal was not confirmed.'); }
     finally { setBusy(false); }
   };
-  return <SidebarRow title={conversation.title} icon={<MessageSquare size={16}/>} pinned={conversation.pinned} unread={conversation.unread} selected={selected} secondary={<>{workStatus ? <strong>{workStatus}</strong> : conversation.state === 'ready' ? formatSaved(updatedAt) : 'Needs status check'}{hasDraft ? ' · Draft' : ''}</>} open={open} kind={view === 'actions' ? 'menu' : 'dialog'} onClose={() => { setView('actions'); setError(''); }}>
+  return <SidebarRow conversationId={conversation.id} title={conversation.title} icon={<MessageSquare size={16}/>} pinned={conversation.pinned} unread={conversation.unread} attention={interrupted ? 'Interrupted operation needs attention' : undefined} selected={selected} secondary={<>{workStatus ? <strong>{workStatus}</strong> : conversation.state === 'ready' ? formatSaved(updatedAt) : 'Needs status check'}{hasDraft ? ' · Draft' : ''}</>} open={open} kind={view === 'actions' ? 'menu' : 'dialog'} onClose={() => { setView('actions'); setError(''); }}>
       {close => view === 'actions' ? <>
         {conversation.nativeId && <><button role="menuitem" disabled={blocked} onClick={() => void save({ pinned: !conversation.pinned }, close)}>{conversation.pinned ? 'Unpin' : 'Pin'}</button>
         <button role="menuitem" disabled={blocked} onClick={() => { setTitle(conversation.title); setView('rename'); }}>Rename</button>

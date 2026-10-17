@@ -30,6 +30,7 @@ import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs'
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
 import {createRuntimeRetainedCollector} from './release-delivery-runtime-retained.mjs';
 import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
+import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter} from './release-delivery-browser.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const canonical = v => JSON.stringify(v, (_k, x) => x && typeof x === 'object' && !Array.isArray(x)
@@ -54,6 +55,7 @@ export const deliveryTargetSchema = z.object({ format: z.literal(1), transport: 
     publicationLedgerDirectory:z.string().min(1).max(4096).refine(isAbsolute),
     feed: z.object({ channel: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), sequence: z.number().int().positive(), createdAt: z.iso.datetime(), expiresAt: z.iso.datetime() }).strict(),
     signing: z.object({ privateKeyPath: z.string().min(1), publicKey: ref, previousFeed: z.union([z.literal('initial'), ref]) }).strict() }).strict().optional(),
+  browserTools: browserOptionsSchema.optional(),
   browserCapability: z.enum(['available', 'unavailable']) }).strict();
 const executeFile = promisify(execFile);
 export async function fixedCommand(executable, args, { cwd, maximum = 8 * 1024 ** 2, binary = false, timeoutMs = 120000, acceptJsonFailure = false, gitExecPath } = {}) {
@@ -83,6 +85,10 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
+    'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
+    'release-delivery-browser.mjs', 'release-delivery-browser-driver.mjs',
+    'release-delivery-browser-checks.mjs', 'release-delivery-browser-primitives.mjs',
+    'release-delivery-browser-remote.mjs', 'release-delivery-browser-remote-worker.mjs', 'release-delivery-browser-remote.py',
     'release-delivery-assistant.mjs', 'release-delivery-assistant-transport.mjs', 'release-assistant-transport.py',
     'release-delivery-assistant-full.mjs', 'release-delivery-installed-identity.mjs', 'release-delivery-full-coordinator.mjs', 'release-installed-identity.py', '../deploy/update-runner/request_install.py',
     'release-delivery-install-admission.mjs', 'release-delivery-full-host.mjs',
@@ -158,7 +164,7 @@ export function deliveryPhaseIntegrationGaps(phase,target,prior={}) {
     if (!['frontend','full'].includes(prior.route?.route)) return ['verified-delivery-route-required'];
     return target.assistantHost ? [] : ['assistant-host-target-not-configured'];
   }
-  if (phase === 'browser') return target.browserCapability === 'unavailable' ? ['browser-capability-unavailable','browser-reload-producer-not-integrated'] : ['browser-reload-producer-not-integrated'];
+  if (phase === 'browser') return target.browserCapability === 'unavailable' ? ['browser-capability-unavailable','browser-reload-producer-not-integrated'] : target.browserTools ? [] : ['browser-reload-producer-not-integrated'];
   if (['private-source','public-source','private-ci','public-ci','artifacts','route'].includes(phase)) return [];
   if (!['frontend','full'].includes(prior.route?.route)) return ['verified-delivery-route-required'];
   if (prior.route.route === 'full') return [...(target.full?.dependencyTransport && target.bases ? [] : ['qualified-dependency-worker-transport-not-integrated']),
@@ -171,7 +177,26 @@ export function deliveryPhaseIntegrationGaps(phase,target,prior={}) {
     ...(target.frontendHost ? [] : ['frontend-protected-host-target-not-configured']),
     ...(['private','public'].every(side=>Number.isSafeInteger(prior[side+'-ci']?.release?.id) && prior[side+'-ci'].release.id>0)?[]:['verified-ci-source-releases-required'])];
 }
+export function withBrowserPreparation(adapter, prepare) {
+  const advance = async (context, observeOnly) => {
+    try { await prepare(context, observeOnly); }
+    catch (error) {
+      return {state:'gap',reason:/^browser-[a-z0-9-]{1,90}$/.test(error?.message??'') ? error.message : 'browser-preparation-unavailable',
+        output:null,receipt:null,externalId:context.descriptor.operation.id};
+    }
+    return observeOnly ? adapter.observe(context) : adapter.execute(context);
+  };
+  return {...adapter,execute:context=>advance(context,false),observe:context=>advance(context,true)};
+}
 export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now } = {}) {
+  // Keep the old document alive before publication. This is an owned browser
+  // effect, never an input/admission callback or a manually asserted receipt.
+  const publicationBrowser = (adapter, target) => {
+    if (target.browserCapability !== 'available' || !target.browserTools) return adapter;
+    const prepare = (context, inspectOnly) => prepareDeliveryBrowser(context, {
+      options:target.browserTools, transport:target.transport, clock, inspectOnly });
+    return withBrowserPreparation(adapter,prepare);
+  };
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
     ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}) });
@@ -228,7 +253,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     // Report unsupported acceptance separately from route admission. Neither a
     // capability flag nor completed installation can satisfy these phases.
     capabilityGaps: async descriptor => { const { target }=targetInput(descriptor);return [
-      ...(target.assistantHost?[]:['assistant-host-target-not-configured']),...(target.browserCapability==='unavailable'?['browser-capability-unavailable']:[]),'browser-reload-producer-not-integrated']; },
+      ...(target.assistantHost?[]:['assistant-host-target-not-configured']),...deliveryPhaseIntegrationGaps('browser',target)]; },
     adapter(phase, descriptor, prior = {}) {
       if (['private-source', 'public-source', 'private-ci', 'public-ci'].includes(phase)) {
         const { target } = targetInput(descriptor); if (!target.sourceTools) return null;
@@ -242,7 +267,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       if (phase === 'sign' && prior.route?.route === 'frontend') { const { target } = targetInput(descriptor); return target.signing ? createFrontendSignAdapter(target.signing) : null; }
       if (phase === 'capacity' && prior.route?.route === 'frontend') { const { target }=targetInput(descriptor); return target.frontendHost ? createFrontendStageCapacityAdapter({ transport:target.transport,options:target.frontendHost,storeReceipt:receiptStore,run }) : null; }
       if (phase === 'recovery' && prior.route?.route === 'frontend') { const { target }=targetInput(descriptor); return createFrontendBoundRecoveryAdapter({ transport:target.transport,storeReceipt:receiptStore,run }); }
-      if (phase === 'publication' && prior.route?.route === 'frontend') { const { target }=targetInput(descriptor); const releaseIds=Object.fromEntries(['private','public'].map(side=>[side,prior[side+'-ci']?.release?.id])); return Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0) && target.sourceTools && target.artifactTools ? createFrontendPublicationAdapter({ tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,command,storeReceipt:receiptStore }) : null; }
+      if (phase === 'publication' && prior.route?.route === 'frontend') { const { target }=targetInput(descriptor); const releaseIds=Object.fromEntries(['private','public'].map(side=>[side,prior[side+'-ci']?.release?.id])); return Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0) && target.sourceTools && target.artifactTools ? publicationBrowser(createFrontendPublicationAdapter({ tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,command,storeReceipt:receiptStore }),target) : null; }
       if (phase === 'installation' && prior.route?.route === 'frontend') { const { target }=targetInput(descriptor);return createFrontendExecutionAdapter({transport:target.transport,storeReceipt:receiptStore,run}); }
       if (phase === 'assistant' && prior.route?.route === 'frontend') {
         const { target }=targetInput(descriptor);return target.assistantHost ? createAssistantAcceptanceAdapter({
@@ -253,6 +278,11 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
         const { target }=targetInput(descriptor);return target.assistantHost ? createAssistantAcceptanceAdapter({
           transport:createFullAssistantHostTransport({transport:target.transport,...target.assistantHost,storeReceipt:receiptStore,run}),
           storeReceipt:receiptStore,clock }) : null;
+      }
+      if (phase === 'browser') {
+        const {target}=targetInput(descriptor);
+        return target.browserCapability==='available' && target.browserTools
+          ? createBrowserAcceptanceAdapter({options:target.browserTools,transport:target.transport,storeReceipt:receiptStore}) : null;
       }
       if (phase === 'package' && prior.route?.route === 'full') {
         const { target } = targetInput(descriptor);
@@ -267,8 +297,8 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       if (phase === 'publication' && prior.route?.route === 'full') {
         const {target}=targetInput(descriptor),releaseIds=Object.fromEntries(['private','public'].map(side=>[side,prior[side+'-ci']?.release?.id]));
         return target.full?.host && target.sourceTools && target.artifactTools && target.bases && Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0)
-          ? createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,
-            transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run,clock}) : null;
+          ? publicationBrowser(createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,
+            transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run,clock}),target) : null;
       }
       if (phase === 'installation' && prior.route?.route === 'full') {
         const { target }=targetInput(descriptor);return target.assistantHost && target.full?.host ? createCoordinatorInstallationAdapter({clock,

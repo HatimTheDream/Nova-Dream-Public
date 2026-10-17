@@ -50,6 +50,24 @@ function syntheticRegistry(f, behaviors = {}) {
 }
 const observation = (intent, state, externalId = null) => ({ key: intent.key, state, externalId, reason: `fixture-${state}`, receipt: null, output: state === 'completed' ? { done: true } : null });
 
+test('real delivery step gives browser input the original journal before reservation and retains its input on resume',async t=>{
+ const f=fixture(t),g=syntheticRegistry(f),original=g.registry.adapter;let inputs=0;
+ g.registry.adapter=(phase,...args)=>{
+  const a=original.call(g.registry,phase,...args);
+  if(phase==='browser')a.input=async context=>{
+   inputs++;assert.equal(context.journal,f.journal);assert.equal(context.journal.directory,root);
+   assert.equal(context.descriptor.operation.id,f.id);assert.equal(context.prior.assistant.phase,'assistant');
+   assert.equal(context.journal.deliveryPhase(f.id,'browser'),null);
+   return {phase,journalDirectory:context.journal.directory,operationId:context.descriptor.operation.id};
+  };
+  return a;
+ };
+ assert.equal((await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+1})).complete,true);
+ assert.deepEqual(f.journal.deliveryPhase(f.id,'browser').input,{phase:'browser',journalDirectory:root,operationId:f.id});
+ assert.equal((await stepDelivery(f.journal,f.id,g.registry,{clock:()=>f.now+2})).complete,true);
+ assert.equal(inputs,1);assert.equal(g.counts['browser:execute'],1);assert.equal(g.counts['browser:observe'],undefined);
+});
+
 test('real journal prerequisite sweeps share validate/verify bytes, but each child and resume rechecks',async t=>{
  const f=fixture(t),g=syntheticRegistry(f),namespaces=new Map(),counts=new Map(),snapshots=[];
  const artifact=join(root,'verification-sweep-'+f.id);writeFileSync(artifact,'original');

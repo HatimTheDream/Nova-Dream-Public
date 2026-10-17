@@ -9,6 +9,7 @@ import { runInNewContext } from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { frontendStagePacket,buildFrontendStageProgram,verifyStageReceipt,verifyCapacity,createFrontendStageCapacityAdapter,createFrontendBoundRecoveryAdapter } from '../scripts/release-delivery-frontend-stage.mjs';
 import { sha256 } from '../scripts/release-plan.mjs';
+import { frontendReadinessIdentity } from '../scripts/release-delivery-frontend-readiness.mjs';
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x),enc=v=>Buffer.from(canonical(v)+'\n');
 function fixture(){
   const root=fileURLToPath(new URL(`../support/fixtures/frontend-stage-${randomUUID()}/`,import.meta.url));mkdirSync(root,{recursive:true});mkdirSync(join(root,'delivery-evidence'));
@@ -32,6 +33,16 @@ function stageFacts(packet){
   return {plan,receipt:{format:1,kind:'protected-frontend-input-stage',identity,intent,preStageCapacity:cap(),staged:true}};
 }
 function data(program){return JSON.parse(Buffer.from(program.match(/b64decode\('([^']+)'/)[1],'base64'));}
+function withReady(run){return async(target,program,options)=>{
+  const {value}=data(program);
+  if(value?.mode==='readiness-plan'){
+    const b=value.binding,plan={format:1,kind:'frontend-readiness-plan',operationId:b.operationId,runId:b.runId,binding:b,sourceSha256:frontendReadinessIdentity(),readOnly:true,ready:true,retirementRequired:false,
+      health:{base:{candidateId:b.baseCandidateId,serviceInputsSha256:b.serviceInputsSha256},epoch:b.workspaceEpoch,frontend:{source:'bundled',id:b.baseCandidateId}}};
+    return {exitCode:0,stdout:JSON.stringify(plan)};
+  }
+  return run(target,program,options);
+};}
+
 test('packet uses exact six fixed paths and does not let caller supply code files',()=>{
   const f=fixture(),packet=frontendStagePacket(f.input,randomUUID());assert.deepEqual(Object.keys(packet.files).sort(),['frontend-executor.py','frontend-plan.py','frontend.json','frontend.sig','frontend.tgz','operation.json']);
   const wire=data(buildFrontendStageProgram({mode:'plan',packet}));assert.equal(sha256(Buffer.from(wire.sourceBase64,'base64')),wire.sourceSha256);assert.deepEqual(wire.value.packet,packet);
@@ -59,7 +70,7 @@ test('stage receipt binds all original service/source/config/assets and operatio
 test('lost stage response preserves original dispatch and only observes original stage',async()=>{
   const f=fixture(),modes=[];let facts,checks=0;
   const run=async(_t,program)=>{const {value}=data(program);modes.push(value.mode);facts??=stageFacts(value.packet);if(value.mode==='plan')return {exitCode:0,stdout:JSON.stringify(facts.plan)};if(value.mode==='stage'){assert.equal(checks,1);assert.ok(existsSync(join(f.root,'delivery-evidence',value.packet.runId+'-frontend-stage-dispatch.json')));return {uncertain:true};}if(value.mode==='capacity')return {exitCode:0,stdout:JSON.stringify({kind:'frontend-stage-capacity-reverified',operationId:value.packet.operationId,runId:value.packet.runId,readOnly:true,capacity:cap(true)})};return {exitCode:0,stdout:JSON.stringify(facts.receipt)};};
-  const adapter=createFrontendStageCapacityAdapter({...f,run}),input=await adapter.input(f),context={...f,input,intent:{input,key:randomUUID()},journal:{directory:f.root},beforeNewEffect:async()=>{checks++;}};
+  const adapter=createFrontendStageCapacityAdapter({...f,run:withReady(run)}),input=await adapter.input(f),context={...f,input,intent:{input,key:randomUUID()},journal:{directory:f.root},beforeNewEffect:async()=>{checks++;}};
   adapter.validate(context);assert.equal((await adapter.execute(context)).state,'uncertain');const value=await adapter.observe(context);assert.equal(value.state,'completed');await adapter.verify(value,context);assert.deepEqual(modes,['plan','stage','observe','capacity']);assert.equal(checks,1);
   const again=await adapter.observe(context);assert.deepEqual(again,value);assert.equal(modes.filter(m=>m==='stage').length,1);
 });
@@ -82,7 +93,7 @@ test('private refusal and lost-response diagnostics retain cause without replayi
     if(value.mode==='plan'&&refuse)return {exitCode:2,stdout:JSON.stringify({state:'uncertain',reason:'frontend-stage-original-result-unavailable',privateDiagnostic:{mode:'plan',exceptionType:'RuntimeError',message:'frontend-capacity-insufficient'}}),stderr:'private context'};
     if(value.mode==='plan')return {exitCode:0,stdout:JSON.stringify(facts.plan)};
     return {uncertain:true,reasonCode:'transport-timeout',stdout:'partial original response',stderr:'original transport detail'};};
-  const adapter=createFrontendStageCapacityAdapter({...f,run}),input=await adapter.input(f),context={...f,input,intent:{input,key:randomUUID()},journal:{directory:f.root},beforeNewEffect:async()=>{}};
+  const adapter=createFrontendStageCapacityAdapter({...f,run:withReady(run)}),input=await adapter.input(f),context={...f,input,intent:{input,key:randomUUID()},journal:{directory:f.root},beforeNewEffect:async()=>{}};
   const one=await adapter.execute(context);assert.equal(one.state,'uncertain');assert.equal(one.reason,'frontend-stage-plan-unavailable');await adapter.verify(one,context);
   let diagnostic=JSON.parse(readFileSync(one.output.privateDiagnostic.path));assert.match(diagnostic.transport.stdout,/frontend-capacity-insufficient/);assert.equal(diagnostic.transport.stderr,'private context');assert.equal(diagnostic.mode,'plan');
   refuse=false;const two=await adapter.observe(context);assert.equal(two.state,'uncertain');diagnostic=JSON.parse(readFileSync(two.output.privateDiagnostic.path));assert.equal(diagnostic.transport.reasonCode,'transport-timeout');assert.equal(diagnostic.transport.stdout,'partial original response');assert.equal(diagnostic.transport.stderr,'original transport detail');assert.equal(diagnostic.mode,'stage');

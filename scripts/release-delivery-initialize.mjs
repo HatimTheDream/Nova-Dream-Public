@@ -18,6 +18,7 @@ import {materializeRetainedFeedDependencies,retainedAcceptedFeedDependencies,ret
 import {verifyInstalledIdentity} from './release-delivery-installed-identity.mjs';
 import {validateInstalledIdentityRequest} from './release-delivery-assistant-full.mjs';
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
+import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
 import {FULL_HELPERS} from './release-delivery-full-host.mjs';
 
@@ -33,7 +34,9 @@ export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targ
  accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref,feedDependencies:z.object({archive:ref,metadata:ref}).strict().optional()}).strict(),
  qualificationEvidence:z.array(ref).max(32).default([]),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
-  sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.literal(false)}).strict().optional()}).strict();
+  sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional()}).strict()
+  .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
+    'Accepted browser evidence must be complete and separate from saved Assistant evidence.').optional()}).strict();
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const encoded=v=>Buffer.from(canonical(v)+'\n');
@@ -83,6 +86,11 @@ export function validateAcceptedProfile(profile,target,{candidate=verifyCandidat
  if(target.full?.host)need(same(target.full.host.hostConfiguration,request.runtime.hostConfig),'accepted-host-configuration-changed');
  for(const r of profile.qualificationEvidence)readEvidenceFile(r,{maximum:2*1024**2});
  if(profile.previousDelivery)for(const r of [profile.previousDelivery.assistantReceipt,profile.previousDelivery.publicationReceipt,...Object.values(profile.previousDelivery.sourceCandidates)])readEvidenceFile(r,{maximum:2*1024**2});
+ if(profile.previousDelivery?.browserAccepted){
+  const prior=profile.previousDelivery,input=json(prior.browserInput),output=json(prior.browserReceipt);
+  need(input.operationId===prior.operationId&&same(input.assistant,json(prior.assistantReceipt)),'accepted-browser-original-delivery-changed');
+  verifyBrowserAcceptance(output,input);
+ }
  return {bases,identity,operation,pair};
 }
 
@@ -294,9 +302,19 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
   target.signing.previousManifest=normalizedRef(sign.manifest);target.signing.previousSignature=normalizedRef(sign.signature);
  }
  validateAcceptedProfile(profile,target);
+ const browser=journal.deliveryPhase(id,'browser');let browserEvidence={browserAccepted:false};
+ if(browser?.state==='completed'&&browser.validation?.state!=='failed'){
+  need(browser.current.receipt&&same(json(browser.current.receipt),browser.current.output)
+   &&browser.input.operationId===id&&same(browser.input.assistant,accepted.current.output),'successor-browser-original-evidence-changed');
+  verifyBrowserAcceptance(browser.current.output,browser.input);
+  browserEvidence={browserAccepted:true,browserInput:exactFile(join(directory,'accepted-browser-input.json'),encoded(browser.input)),
+   browserReceipt:normalizedRef(browser.current.receipt)};
+ }
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
-  publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,browserAccepted:false};
+  publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...browserEvidence};
  profile.target=exactFile(join(directory,'successor-target.json'),encoded(deliveryTargetSchema.parse(target)));
- const output=exactFile(join(directory,'successor-profile.json'),encoded(deliveryProfileSchema.parse(profile)));
- return {profile:output,operationId:id,browserAccepted:false,mutableSelectionUpdated:false};
+ // Late browser acceptance creates a new immutable successor. It does not
+ // rewrite an earlier profile which accurately recorded an acceptance gap.
+ const output=exactFile(join(directory,browserEvidence.browserAccepted?'successor-profile-browser-accepted.json':'successor-profile.json'),encoded(deliveryProfileSchema.parse(profile)));
+ return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,mutableSelectionUpdated:false};
 }

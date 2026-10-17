@@ -1,3 +1,13 @@
+## [2.7.7] — 2026-10-17
+
+### Fixed
+
+- Recognize the exact storage-check caller without treating unrelated release processes as safe, and separate the required delivery reserve from optional backup housekeeping.
+- Reconcile an obsolete signed interface selection automatically before frontend staging while preserving the previous interface assets and backend identity.
+
+### Improved
+
+- Run retained-window, refresh, draft and saved-reply checks through the delivery browser producer; retain explicit gaps when browser capability is unavailable.
 ## [2.7.6] — 2026-10-17
 
 ### Improved

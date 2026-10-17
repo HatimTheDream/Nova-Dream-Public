@@ -42,7 +42,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
     const adapter = registry.adapter(phase, descriptor, prior);
     if (!adapter) return { state: 'gap', reason: `missing-${phase}-adapter` };
     // Computing/validating immutable input is read-only and precedes reservation.
-    let input = existing?.input ?? await adapter.input({ descriptor, prior });
+    let input = existing?.input ?? await adapter.input({ descriptor, prior, journal });
     if (existing?.state === 'completed') {
       // This cache only avoids rereading immutable completed output during
       // observation polls. Every new effect below forces content verification

@@ -10,8 +10,81 @@ import {verifyInstalledIdentity} from '../scripts/release-delivery-installed-ide
 import {sha256} from '../scripts/release-plan.mjs';
 import {runtimeCommandFixture} from '../support/runtime-command-fixture.mjs';
 import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
+import {canonicalBrowser} from '../scripts/release-delivery-browser.mjs';
 
 const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f.input).path,{protect:f.protect,clock:()=>f.now,derive:(input,profile)=>deriveDeliveryConfiguration(input,profile,f.options),...extra});
+
+// Inert retained browser evidence: exercises export verification, never launches a browser.
+function completedBrowser(f,c){
+ const digest=value=>sha256(canonicalBrowser(value)),installed=c.phases.assistant.input;
+ const binding={format:1,operationId:f.input.operationId,route:installed.route,descriptorSha256:digest(c.descriptor),
+  priorCandidateId:c.descriptor.operation.priorCandidateId,epoch:c.descriptor.operation.workspaceEpoch};
+ const original=f.put('browser-original.json',{binding,startedAtMs:f.now,deadlineAtMs:f.now+300000});
+ const document={candidateId:binding.priorCandidateId,frontendId:f.identity.health.frontend.id,version:'3.1.0',buildVersion:'1.0.399'};
+ const prepared=f.put('browser-prepared.json',{bindingSha256:digest(binding),epoch:binding.epoch,document,startedAtMs:f.now+1});
+ const input={format:1,operationId:f.input.operationId,installed,assistant:c.phases.assistant.current.output,original,prepared};
+ const health=installed.installedHealth,output={format:1,kind:'nova-real-browser-acceptance',operationId:f.input.operationId,
+  inputSha256:digest(input),accepted:true,browserUiVerified:true,gatewayCoverage:'not-tested-loopback-host-surface',
+  savedReplySha256:input.assistant.replySha256,savedMessageId:input.assistant.savedMessageId,originalDocument:document,
+  loadedDocument:{candidateId:health.candidateId,frontendId:health.frontend.id,version:health.frontend.version,buildVersion:health.frontend.buildVersion},
+  startedAtMs:f.now+1,completedAtMs:f.now+100,
+  checks:['old-document-retained',installed.route==='frontend'?'old-lazy-module':'old-client-fence','new-document-identity',
+   'retained-draft-after-refresh','ui-behavior','saved-assistant-reply-visible','owned-draft-cleaned'].map(name=>({name,passed:true})),
+  screenshot:f.put('browser-screenshot.png',Buffer.from('inert screenshot fixture')),
+  closed:f.put('browser-closed.json',{operationId:f.input.operationId,browserClosed:true,tunnelClosed:true})};
+ c.set('browser',output);c.phases.browser.input=input;
+ return {input,output};
+}
+
+test('browser-accepted successor retains exact verified browser evidence separately from the saved reply',async t=>{
+ const f=initializeFixture(t);enableFrontendFixture(f);
+ const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),browser=completedBrowser(f,c);
+ const out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options),p=JSON.parse(readFileSync(out.profile.path));
+ assert.equal(out.browserAccepted,true);assert.equal(p.previousDelivery.browserAccepted,true);
+ assert.deepEqual(p.previousDelivery.browserReceipt,c.phases.browser.current.receipt);
+ assert.deepEqual(p.previousDelivery.assistantReceipt,c.phases.assistant.current.receipt);
+ assert.notDeepEqual(p.previousDelivery.browserReceipt,p.previousDelivery.assistantReceipt);
+ assert.deepEqual(JSON.parse(readFileSync(p.previousDelivery.browserInput.path)),browser.input);
+ assert.equal(p.previousDelivery.browserInput.sha256,sha256(readFileSync(p.previousDelivery.browserInput.path)));
+ validateAcceptedProfile(p,JSON.parse(readFileSync(p.target.path)));
+ assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),out);
+ writeFileSync(browser.output.screenshot.path,'changed proof');
+ assert.throws(()=>validateAcceptedProfile(p,JSON.parse(readFileSync(p.target.path))),/hash|changed|mismatch/i);
+});
+
+test('browser export rejects completed claims with corrupt identity, missing checks or changed retained proof',async t=>{
+ for(const corruption of ['identity','checks','proof']){
+  const f=initializeFixture(t);enableFrontendFixture(f);
+  const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'}),browser=completedBrowser(f,c);
+  if(corruption==='identity')browser.output.loadedDocument.frontendId='0'.repeat(64);
+  if(corruption==='checks')browser.output.checks=browser.output.checks.filter(check=>check.name!=='retained-draft-after-refresh');
+  if(corruption==='proof')writeFileSync(browser.output.screenshot.path,'changed proof');
+  c.set('browser',browser.output);c.phases.browser.input=browser.input;
+  await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options),
+   corruption==='identity'?/browser-loaded-document-proof-changed/:corruption==='checks'?/browser-required-check-missing/:/hash|changed|mismatch/i);
+  assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile-browser-accepted.json')),false);
+ }
+});
+
+test('late browser acceptance exports a distinct immutable profile and preserves the earlier unaccepted profile bytes',async t=>{
+ const f=initializeFixture(t);enableFrontendFixture(f);
+ const v=await initialize(f),c=completedDeliveryFixture(f,v,{route:'frontend'});
+ const before=await exportSuccessorProfile(c.journal,f.input.operationId,f.options),bytes=readFileSync(before.profile.path);
+ const earlier=JSON.parse(bytes);assert.equal(before.browserAccepted,false);assert.equal(earlier.previousDelivery.browserAccepted,false);
+ assert.equal('browserInput' in earlier.previousDelivery,false);assert.equal('browserReceipt' in earlier.previousDelivery,false);
+ completedBrowser(f,c);
+ const after=await exportSuccessorProfile(c.journal,f.input.operationId,f.options),accepted=JSON.parse(readFileSync(after.profile.path));
+ assert.equal(after.browserAccepted,true);assert.notEqual(after.profile.path,before.profile.path);assert.notEqual(after.profile.sha256,before.profile.sha256);
+ assert.deepEqual(readFileSync(before.profile.path),bytes);assert.equal(sha256(bytes),before.profile.sha256);
+ assert.equal(accepted.previousDelivery.operationId,earlier.previousDelivery.operationId);
+ assert.deepEqual(accepted.previousDelivery.assistantReceipt,earlier.previousDelivery.assistantReceipt);
+ assert.deepEqual(accepted.target,earlier.target);
+ validateAcceptedProfile(earlier,JSON.parse(readFileSync(earlier.target.path)));
+ validateAcceptedProfile(accepted,JSON.parse(readFileSync(accepted.target.path)));
+ assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),after);
+ assert.deepEqual(readFileSync(before.profile.path),bytes);
+});
+
 test('full export prepares dependencies then imports before writing successor and preserves legacy output bytes',async t=>{
  const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);
  assert.equal(c.phases.sign.current.output.directory,undefined);

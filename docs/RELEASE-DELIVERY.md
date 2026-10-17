@@ -58,6 +58,8 @@ does not remove retained-member verification or full-release rehearsal.
 
 A completed saved Assistant reply and browser/reload verification are separate results. A missing browser capability is reported as an acceptance gap. `start` and `resume` exit with code 2 when the delivery is incomplete, including that gap; inspect the phase summary to distinguish successful installation from incomplete acceptance.
 
+With a verified private browser configuration, publication first prepares one owned browser and retains its original document and unsent draft. Acceptance checks the new document, the old window's route-specific behavior, the draft after refresh, the selected UI check and the exact saved Assistant reply. It closes its own browser and retains the screenshot and closeout proof. A lost session or expired original deadline is an explicit gap; observation cannot create a replacement old window or submit another Assistant request. Loopback-host browser proof does not claim external gateway sign-in coverage.
+
 Progress reports include phase states, elapsed time, original deadlines and actual operation keys. A checkpoint can append a reviewed forecast without replacing the original estimate:
 
 ```sh

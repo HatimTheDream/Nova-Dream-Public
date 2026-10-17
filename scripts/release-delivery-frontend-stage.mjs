@@ -7,6 +7,7 @@ import { readEvidenceFile,readReleaseInputFile,sha256 } from './release-plan.mjs
 import { releaseTransportSchema,runInstallTransport } from './release-adapters.mjs';
 import { frontendPlanInputSchema,verifyFrontendPlanResult,requestFrontendPlan,verifyFrontendWorkerInstallation } from './release-delivery-frontend-plan.mjs';
 import { frontendExecutionRequest,frontendExecutionRequestSchema } from './release-delivery-frontend-executor.mjs';
+import { ensureFrontendReadiness,frontendReadinessIdentity } from './release-delivery-frontend-readiness.mjs';
 const need=(v,why)=>{if(!v)throw Error(why);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const encoded=v=>Buffer.from(canonical(v)+'\n');
@@ -73,7 +74,7 @@ export function verifyCapacity(value,{staged}){
 function stageInput(descriptor,prior,options){
   need(prior.route?.route==='frontend'&&prior.sign?.frontendId&&options?.worker&&options?.config&&options?.baseVersion,'frontend-stage-configuration-required');
   const value={operation:descriptor.operation,sourceRevision:descriptor.sources.private.commit,serviceInputsSha256:prior.route.serviceInputsSha256,frontendId:prior.sign.frontendId,
-    baseVersion:options.baseVersion,worker:options.worker,config:options.config,...(options.workerInstallation===undefined?{}:{workerInstallation:options.workerInstallation}),assets:{manifest:prior.sign.manifest,signature:prior.sign.signature,archive:prior.sign.archive},implementationSha256:frontendStageIdentity()};
+    baseVersion:options.baseVersion,worker:options.worker,config:options.config,...(options.workerInstallation===undefined?{}:{workerInstallation:options.workerInstallation}),assets:{manifest:prior.sign.manifest,signature:prior.sign.signature,archive:prior.sign.archive},implementationSha256:frontendStageIdentity(),readinessImplementationSha256:frontendReadinessIdentity()};
   // Validate locally without claiming that protected host inputs already exist.
   frontendStagePacket(value,descriptor.operation.id);return value;
 }
@@ -85,6 +86,8 @@ export function createFrontendStageCapacityAdapter({transport,options,storeRecei
     const dispatched=original(context,'frontend-stage-dispatch.json');
     if(dispatched){need(dispatched.packetSha256===sha256(encoded(packet)),'frontend-stage-original-dispatch-changed');result=await invoke(transport,{mode:'observe',packet},run,context,storeReceipt);}
     else {
+      const readiness=await ensureFrontendReadiness({context,packet,transport,storeReceipt,run});
+      if(readiness.state!=='completed')return readiness;
       let plan=original(context,'frontend-stage-plan.json');
       if(!plan){plan=await invoke(transport,{mode:'plan',packet},run,context,storeReceipt);if(!plan||plan.state==='uncertain')return outcome('uncertain','frontend-stage-plan-unavailable',failureOutput(plan),null,packet.operationId);record(storeReceipt,context,'frontend-stage-plan.json',plan);}
       need(plan.kind==='frontend-protected-stage-plan'&&plan.readOnly===true&&plan.identity?.packetSha256===sha256(encoded(packet)),'frontend-stage-plan-response-changed');verifyCapacity(plan.capacity,{staged:false});

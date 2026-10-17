@@ -36,6 +36,14 @@ The private runner owns storage policy, measured per-filesystem allocation
 checks and narrowly qualified cleanup. Provision it with the deployment target;
 this source repository does not invent a storage policy for an unknown host.
 
+The reviewed runner distinguishes its exact launcher and storage worker from
+competing operations by process identity and command bytes. Other release
+processes still block cleanup. Delivery closeout preserves the required operating
+reserve and reports any optional housekeeping shortfall separately; it does not
+start a backup transfer solely to reach a larger housekeeping target. Explicit
+after-acceptance housekeeping retains its configured target. Candidate allocation
+admission and protected recovery roles remain mandatory.
+
 ## Interrupted operations and legacy commands
 
 ```sh

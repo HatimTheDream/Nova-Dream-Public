@@ -190,7 +190,8 @@ test('start and resume route fixed argv and propagate pending/completed state', 
   const calls = [], launch = async (executable, argv) => { calls.push({ executable, argv }); return { code: 2, value: { state: 'release-pending', release: { complete: false } } }; };
   const start = await routeStorageDelivery(['start', join(f.root, 'input.json'), '--storage-budget', join(f.root, 'budget.json')], entry, { env: f.env, launch });
   assert.equal(start.result.complete, false); assert.deepEqual(calls[0], { executable: process.execPath, argv: ['-I', '-B', f.config.runner.path,
-    '--config', f.configRef.path, '--entry', entry, '--mode', 'start', '--input', join(f.root, 'input.json'), '--budget', join(f.root, 'budget.json')] });
+    '--config', f.configRef.path, '--entry', entry, '--mode', 'start', '--launcher-pid', String(process.pid), '--launcher-cwd', process.cwd(),
+    '--input', join(f.root, 'input.json'), '--budget', join(f.root, 'budget.json')] });
   const complete = await routeStorageDelivery(['resume', f.journalDirectory, f.id], entry, { env: f.env,
     launch: async (executable, argv) => { calls.push({ executable, argv }); return { code: 0, value: { state: 'complete', release: { complete: true }, storageCloseoutPerformed: true } }; } });
   assert.equal(complete.result.complete, true); assert.deepEqual(calls[1].argv.slice(-4), ['--journal', f.journalDirectory, '--operation', f.id]);
