@@ -2,8 +2,8 @@
 import {existsSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {canonicalBrowser,sha256,readEvidenceFile,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
-import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
+import {canonicalBrowser,sha256,verifyBrowserTool,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
+import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,verifySecondPage,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms)),read=p=>JSON.parse(readFileSync(p,'utf8'));
 const safe=e=>/^[a-z][a-z0-9-]{0,99}$/.test(e?.message??'')?e.message:'browser-dom-or-transport-check-failed';
 export async function remoteBrowserWorker(originalPath){
@@ -11,9 +11,18 @@ export async function remoteBrowserWorker(originalPath){
   need(options.mode==='remote'&&options.baseUrl==='http://127.0.0.1:4383'&&['tasks-search-escape','tasks-search-focus'].includes(options.suite)
     &&Number.isSafeInteger(original.deadlineAtMs)&&original.deadlineAtMs===original.startedAtMs+options.timeoutMs
     &&options.timeoutMs>=300000&&options.timeoutMs<=1800000&&Date.now()<original.deadlineAtMs&&process.getuid()!==0,'browser-remote-input-invalid');
-  readEvidenceFile(options.node,{maximum:128*1024**2});readEvidenceFile(options.executable,{maximum:512*1024**2});
+  verifyBrowserTool(options.node,{maximum:128*1024**2});verifyBrowserTool(options.executable,{maximum:512*1024**2});
   const closurePath=join(dir,'playwright-closure.json'),entry=verifyPlaywrightClosure({path:closurePath,sha256:options.playwright.sha256});
   writeBrowserOnce(join(dir,'worker-identity.json'),{pid:process.pid,operationId:binding.operationId,originalSha256:sha256(readFileSync(originalPath))});
+  const milestone=name=>{
+    const cgroup=readFileSync('/proc/self/cgroup','utf8').split('\n').find(line=>line.startsWith('0::'))?.slice(3);
+    need(cgroup?.startsWith('/')&&!cgroup.split('/').includes('..'),'browser-memory-cgroup-invalid');
+    const root='/sys/fs/cgroup'+cgroup;
+    writeBrowserOnce(join(dir,'memory-'+name+'.json'),{operationId:binding.operationId,atMs:Date.now(),milestone:name,
+      currentBytes:Number(readFileSync(root+'/memory.current','utf8').trim()),peakBytes:Number(readFileSync(root+'/memory.peak','utf8').trim()),
+      stat:readFileSync(root+'/memory.stat','utf8'),events:readFileSync(root+'/memory.events','utf8')});
+  };
+  milestone('tools-verified');
   let context,oldPage,prepared,accepted,timer;
   try{
     const {chromium}=await import(pathToFileURL(entry).href);
@@ -21,9 +30,11 @@ export async function remoteBrowserWorker(originalPath){
       viewport:{width:1280,height:800},acceptDownloads:false,timeout:30000});context.setDefaultTimeout(20000);
     oldPage=context.pages()[0]??await context.newPage();await oldPage.goto(options.baseUrl,{waitUntil:'domcontentloaded'});
     const initial=await ready(oldPage,options.baseUrl);verifyBrowserHealth(initial.health,{candidateId:binding.priorCandidateId,epoch:binding.epoch},initial.epoch);verifyDocumentIdentity(initial.identity,initial.health);
+    milestone('first-page-ready');
     await tasks(oldPage);const field=await draft(oldPage);need(await field.inputValue()==='','browser-owned-profile-draft-not-empty');
     const text=`Nova release verification ${binding.operationId} — retained unsent draft`;await field.fill(text);
-    prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:sha256(canonicalBrowser(binding)),startedAtMs:Date.now(),document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text};
+    const secondPage=await verifySecondPage(context,options,initial,milestone);
+    prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:sha256(canonicalBrowser(binding)),startedAtMs:Date.now(),document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text,secondPage};
     const heartbeat=()=>{const path=join(dir,'heartbeat.tmp');writeFileSync(path,canonicalBrowser({operationId:binding.operationId,originalSha256:sha256(readFileSync(originalPath)),
       pid:process.pid,atMs:Date.now(),browserAlive:!oldPage.isClosed(),tunnelAlive:true,transport:'remote-direct'})+'\n',{mode:0o600});renameSync(path,join(dir,'heartbeat.json'));};
     heartbeat();timer=setInterval(heartbeat,2000);writeBrowserOnce(join(dir,'prepared.json'),prepared);
@@ -35,6 +46,7 @@ export async function remoteBrowserWorker(originalPath){
     need(accepted,'browser-original-deadline-exhausted');
   }catch(error){writeBrowserOnce(join(dir,'failed.json'),{operationId:binding.operationId,reason:safe(error),detail:String(error.message).slice(0,2000),atMs:Date.now()});}
   finally{clearInterval(timer);if(context)await context.close().catch(()=>{});
+    milestone('browser-closed');
     writeBrowserOnce(join(dir,'closed.json'),{operationId:binding.operationId,atMs:Date.now(),browserClosed:!context||context.pages().length===0,tunnelClosed:true,transport:'remote-direct'});}
   if(accepted){const path=join(dir,'closed.json');writeBrowserOnce(join(dir,'acceptance.json'),{...accepted,closed:{path,sha256:sha256(readFileSync(path))}});}
 }

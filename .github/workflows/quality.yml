@@ -76,6 +76,7 @@ jobs:
           python3 -B tests/release-frontend-plan.test.py -v
           python3 -B tests/release-frontend-executor.test.py -v
           sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/release-frontend-readiness.test.py -v
+          python3 -B tests/test_release_delivery_browser_remote.py -v
           python3 -B tests/release-assistant-transport.test.py -v
           python3 -B tests/release-assistant-runtime-stream.test.py -v
           python3 -B tests/release-installed-identity.test.py -v

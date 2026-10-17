@@ -10,14 +10,16 @@ import {verifyInstalledIdentity} from '../scripts/release-delivery-installed-ide
 import {sha256} from '../scripts/release-plan.mjs';
 import {runtimeCommandFixture} from '../support/runtime-command-fixture.mjs';
 import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
-import {canonicalBrowser} from '../scripts/release-delivery-browser.mjs';
+import {canonicalBrowser,browserOptionsSchema} from '../scripts/release-delivery-browser.mjs';
 
 const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f.input).path,{protect:f.protect,clock:()=>f.now,derive:(input,profile)=>deriveDeliveryConfiguration(input,profile,f.options),...extra});
 
 // Inert retained browser evidence: exercises export verification, never launches a browser.
 function completedBrowser(f,c){
  const digest=value=>sha256(canonicalBrowser(value)),installed=c.phases.assistant.input;
- const binding={format:1,operationId:f.input.operationId,route:installed.route,descriptorSha256:digest(c.descriptor),
+ const tool=f.target.artifactTools.node,options=browserOptionsSchema.parse({format:1,node:tool,executable:tool,playwright:tool,ssh:tool,
+  baseUrl:'http://127.0.0.1:4383',timeoutMs:300000,suite:'tasks-search-escape'});
+ const binding={format:1,operationId:f.input.operationId,route:installed.route,descriptorSha256:digest(c.descriptor),options,
   priorCandidateId:c.descriptor.operation.priorCandidateId,epoch:c.descriptor.operation.workspaceEpoch};
  const original=f.put('browser-original.json',{binding,startedAtMs:f.now,deadlineAtMs:f.now+300000});
  const document={candidateId:binding.priorCandidateId,frontendId:f.identity.health.frontend.id,version:'3.1.0',buildVersion:'1.0.399'};

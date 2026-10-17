@@ -8,8 +8,18 @@ import { sha256 } from '../scripts/release-plan.mjs';
 import { prepareDeliveryBrowser, canonicalBrowser, writeBrowserOnce, browserOptionsSchema, verifyBrowserAcceptance, verifyBrowserSessionAlive, createBrowserAcceptanceAdapter } from '../scripts/release-delivery-browser.mjs';
 import { verifyBrowserHealth, verifyDocumentIdentity, verifyPlaywrightClosure } from '../scripts/release-delivery-browser-driver.mjs';
 import {remoteBrowserAcceptance} from '../scripts/release-delivery-browser-remote.mjs';
+import {verifyBrowserTool} from '../scripts/release-delivery-browser-primitives.mjs';
 
 const hash=v=>sha256(canonicalBrowser(v));
+test('streamed tool verification covers later chunks and enforces exact size bounds',t=>{
+  const {root}=fixture(t),path=join(root,'binary'),bytes=Buffer.alloc(3*64*1024+17,42);
+  bytes[bytes.length-1]=219;writeFileSync(path,bytes);
+  const ref={path,sha256:sha256(bytes)};
+  assert.deepEqual(verifyBrowserTool(ref,{maximum:bytes.length}),{...ref,bytes:bytes.length});
+  assert.throws(()=>verifyBrowserTool(ref,{maximum:bytes.length-1}),/browser-reference-not-bounded-file/);
+  bytes[bytes.length-2]^=1;writeFileSync(path,bytes);
+  assert.throws(()=>verifyBrowserTool(ref,{maximum:bytes.length}),/browser-reference-sha256-changed/);
+});
 function fixture(t) {
   const parent=resolve(tmpdir()),root=mkdtempSync(join(parent,'nova-browser-'));
   t.after(()=>{assert.equal(dirname(root),parent);assert.ok(root.startsWith(parent+sep));rmSync(root,{recursive:true,force:true});});

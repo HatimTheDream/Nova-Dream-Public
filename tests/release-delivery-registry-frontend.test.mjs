@@ -10,6 +10,7 @@ import {stepDelivery} from '../scripts/release-deliver.mjs';
 import {createDeliveryRegistry,deliveryPhaseIntegrationGaps,deliveryTargetSchema} from '../scripts/release-delivery-adapters.mjs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {createCiAdapter} from '../scripts/release-delivery-ci-adapter.mjs';
+import {frontendReadinessIdentity} from '../scripts/release-delivery-frontend-readiness.mjs';
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x),enc=v=>Buffer.from(canonical(v)+'\n');
 test('private target supports explicit installed worker identity with strict fields',()=>{
   const ref={path:'/private/config',sha256:'a'.repeat(64)},workerInstallation={version:'2.3.0',candidateId:'e'.repeat(64)};
@@ -47,6 +48,14 @@ async function assembly(t,{route='frontend',host=true,installStub=false,independ
   const target={format:1,transport:f.transport,sourceTools:{git:f.transport,python:f.transport,gitExecPath:f.root},artifactTools:{git:f.transport,python:f.transport,node:f.transport,ciNodeSha256:'f'.repeat(64),nodeToolchain:{nodeVersion:'22.23.2',platform:'win32',arch:'x64'}},bases:Object.fromEntries(['private','public'].map(side=>[side,{directory:f.root,candidateId:'a'.repeat(64),manifest:f.input.assets.manifest}])),frontend:{artifactUrl:'https://example.invalid/frontend.tgz',sequence:2,createdAt:'2026-10-13T00:00:00Z',expiresAt:'2026-10-20T00:00:00Z'},signing:{privateKeyPath:'not-executed',publicKey:f.transport,previousManifest:'initial'},...(host?{frontendHost:f.options}:{}),browserCapability:'unavailable'};
   const run=async(_target,program)=>{
     const wire=data(program);
+    if(wire.value?.mode==='readiness-plan'){
+      modes.push('readiness-plan');const b=wire.value.binding;
+      assert.equal(b.operationId,f.descriptor.operation.id);assert.equal(b.baseCandidateId,f.descriptor.operation.priorCandidateId);
+      assert.equal(b.workspaceEpoch,f.descriptor.operation.workspaceEpoch);assert.deepEqual(b.worker,f.options.worker);assert.deepEqual(b.config,f.options.config);
+      const plan={format:1,kind:'frontend-readiness-plan',operationId:b.operationId,runId:b.runId,binding:b,sourceSha256:frontendReadinessIdentity(),readOnly:true,ready:true,retirementRequired:false,
+        health:{base:{candidateId:b.baseCandidateId,serviceInputsSha256:b.serviceInputsSha256},epoch:b.workspaceEpoch,frontend:{source:'bundled',id:b.baseCandidateId}}};
+      return {exitCode:0,stdout:JSON.stringify(plan)};
+    }
     if(wire.input){modes.push('native-plan');const i=facts.receipt.identity.planInput,base={candidateId:i.baseCandidateId,serviceInputsSha256:i.serviceInputsSha256,apiVersion:1,schemaVersion:55};
       const plan={format:1,operationId:i.operationId,operationSha256:i.operation.sha256,configSha256:i.config.sha256,manifestSha256:i.assets.manifest.sha256,signatureSha256:i.assets.signature.sha256,archiveSha256:i.assets.archive.sha256,frontendId:i.frontendId,live:{...base,epoch:i.workspaceEpoch,active:false},health:{...base,epoch:i.workspaceEpoch,processIdentity:i.processIdentity},priorRecovery:{base}};
       const raw=enc(plan);recovery={format:1,kind:'nova-maintained-frontend-plan',operationId:i.operationId,workerSha256:i.worker.sha256,plan,planRawBase64:raw.toString('base64'),planSha256:sha256(raw),readOnly:true,capacityQualified:false,effectDispatchQualified:false};return {exitCode:0,stdout:JSON.stringify(recovery)};
@@ -80,6 +89,7 @@ test('registry assembly resumes the same stage, binding and worker through the r
   r=await f.tick();assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'recovery').state,'uncertain');
   r=await f.tick();assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'installation')?.state,'uncertain',JSON.stringify(r));const installKey=f.journal.deliveryPhase(f.descriptor.operation.id,'installation').key;
   r=await f.tick();assert.equal(r.complete,false);assert.equal(f.modes.filter(m=>m==='stage').length,1);assert.equal(f.modes.filter(m=>m==='bind').length,1);assert.equal(f.modes.filter(m=>m==='worker-execute').length,1);assert.equal(f.modes.filter(m=>m==='worker-observe').length,1);
+  assert.equal(f.modes.filter(m=>m==='readiness-plan').length,1);assert.equal(f.modes[0],'readiness-plan');
   assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'capacity').key,stageKey);assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'installation').key,installKey);assert.equal(r.originalDeadlineAtMs,f.now+1200000);
   assert.ok(r.capabilityGaps.includes('assistant-host-target-not-configured'));assert.ok(r.capabilityGaps.includes('browser-capability-unavailable'));
   const bound=f.journal.deliveryPhase(f.descriptor.operation.id,'recovery').current.output;assert.equal(bound.stagedExecution.request.runId,stageKey);

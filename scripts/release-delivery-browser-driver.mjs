@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { releaseTransportSchema } from './release-adapters.mjs';
 import { browserOptionsSchema, canonicalBrowser, writeBrowserOnce } from './release-delivery-browser.mjs';
+import {verifyBrowserTool} from './release-delivery-browser-primitives.mjs';
 
-import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
+import {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity,verifySecondPage,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
 export {verifyPlaywrightClosure,verifyBrowserHealth,verifyDocumentIdentity} from './release-delivery-browser-checks.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const hash=v=>sha256(canonicalBrowser(v)),read=p=>JSON.parse(readFileSync(p,'utf8'));
@@ -31,7 +32,8 @@ export async function runBrowserDriver(originalPath) {
   const transport=releaseTransportSchema.parse(JSON.parse(readEvidenceFile(binding.transport)));
   need(Number.isSafeInteger(original.deadlineAtMs)&&original.deadlineAtMs===original.startedAtMs+options.timeoutMs
     &&Date.now()<original.deadlineAtMs,'browser-original-deadline-exhausted');
-  for(const item of [options.executable,options.node,options.ssh])readEvidenceFile(item,{maximum:128*1024**2});
+  for(const item of [options.node,options.ssh])verifyBrowserTool(item,{maximum:128*1024**2});
+  verifyBrowserTool(options.executable,{maximum:512*1024**2});
   readEvidenceFile(transport.sshConfig,{maximum:65536});const entry=verifyPlaywrightClosure(options.playwright);
   writeBrowserOnce(join(dir,'worker-identity.json'),{pid:process.pid,operationId:binding.operationId,originalSha256:sha256(readFileSync(originalPath))});
   let tunnel,context,oldPage,prepared,accepted,heartbeatTimer;
@@ -47,8 +49,9 @@ export async function runBrowserDriver(originalPath) {
     verifyBrowserHealth(initial.health,{candidateId:binding.priorCandidateId,epoch:binding.epoch},initial.epoch);verifyDocumentIdentity(initial.identity,initial.health);
     await tasks(oldPage);const field=await draft(oldPage);need(await field.inputValue()==='','browser-owned-profile-draft-not-empty');
     const text=`Nova release verification ${binding.operationId} — retained unsent draft`;await field.fill(text);
+    const secondPage=await verifySecondPage(context,options,initial);
     prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:hash(binding),startedAtMs:Date.now(),
-      document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text};
+      document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text,secondPage};
     const heartbeat=()=>{const temporary=join(dir,'heartbeat.tmp');writeFileSync(temporary,canonicalBrowser({operationId:binding.operationId,
       originalSha256:sha256(readFileSync(originalPath)),pid:process.pid,atMs:Date.now(),browserAlive:!oldPage.isClosed(),tunnelAlive:tunnel.exitCode===null})+'\n',{mode:0o600});
       renameSync(temporary,join(dir,'heartbeat.json'));};

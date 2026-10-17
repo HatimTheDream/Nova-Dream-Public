@@ -3,11 +3,22 @@
 DATA is supplied by the maintained local transport, never a shell command.
 The caller creates no account, installs no package and changes no existing ACL.
 """
-import base64, hashlib, json, os, pathlib, pwd, re, signal, subprocess, time, uuid, shutil
+import base64, hashlib, json, os, pathlib, re, signal, subprocess, time, uuid, shutil
 
 NAMES = ('release-delivery-browser-primitives.mjs', 'release-delivery-browser-checks.mjs', 'release-delivery-browser-remote-worker.mjs')
+MEMORY_MAX_BYTES = 1073741824
+HOST_RESERVE_BYTES = 2147483648
 def need(value, reason):
     if not value: raise RuntimeError(reason)
+def available_memory():
+    match=re.search(r'^MemAvailable:\s+(\d+) kB$',pathlib.Path('/proc/meminfo').read_text(),re.M)
+    need(match is not None,'browser-remote-memory-unavailable')
+    return int(match.group(1))*1024
+def memory_admission(mode, existing, sample=available_memory):
+    if mode!='plan' and (mode!='start' or existing):return None
+    available=sample()
+    need(type(available)==int and available>=MEMORY_MAX_BYTES+HOST_RESERVE_BYTES,'browser-remote-memory-headroom-insufficient')
+    return {'availableBytes':available,'requiredBytes':MEMORY_MAX_BYTES+HOST_RESERVE_BYTES,'atMs':int(time.time()*1000)}
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 def digest(value): return hashlib.sha256(value).hexdigest()
 def protected(path, directory=False):
@@ -33,6 +44,7 @@ def json_file(path):
     need(path.is_file() and not path.is_symlink() and path.stat().st_size<2097152,'browser-remote-result-not-bounded-file')
     return json.loads(path.read_bytes())
 def main(data):
+    import pwd
     need(os.geteuid()==0,'browser-remote-root-required')
     mode=data['mode'];need(mode in ('plan','start','status','request','close','screenshot','cleanup'),'browser-remote-mode-invalid')
     original=data['original'];binding=original['binding'];options=binding['options'];operation=str(uuid.UUID(binding['operationId']))
@@ -47,7 +59,8 @@ def main(data):
     for name,value in source.items():need(len(value)<262144 and digest(value)==data['sources'][name]['sha256'],'browser-remote-worker-source-changed')
     worker_sha=digest(canonical({name:digest(source[name]) for name in NAMES}));tool=root/('worker-'+worker_sha)
     plan={'format':1,'kind':'nova-remote-browser-plan','operationId':operation,'directory':str(path),'unit':unit,'uid':who.pw_uid,'gid':who.pw_gid,
-          'workerSha256':worker_sha,'originalSha256':digest(original_bytes),'node':options['node'],'executable':options['executable'],'playwrightSha256':options['playwright']['sha256']}
+          'workerSha256':worker_sha,'originalSha256':digest(original_bytes),'node':options['node'],'executable':options['executable'],'playwrightSha256':options['playwright']['sha256'],
+          'memoryMaxBytes':MEMORY_MAX_BYTES,'hostReserveBytes':HOST_RESERVE_BYTES}
     if mode in ('plan','start'):
         need(time.time()*1000<original['deadlineAtMs'] and original['deadlineAtMs']==original['startedAtMs']+options['timeoutMs'] and 300000<=options['timeoutMs']<=1800000,'browser-original-deadline-exhausted')
         bytes_ref(options['node']);bytes_ref(options['executable'],536870912)
@@ -56,20 +69,22 @@ def main(data):
         need(manifest['format']==1 and len(manifest['files'])<5000,'browser-remote-closure-invalid')
         for ref in manifest['files']:bytes_ref(ref,67108864)
         need(any(ref['path']==manifest['entry'] for ref in manifest['files']),'browser-remote-entry-unbound')
-        if mode=='plan':return {'state':'planned','plan':plan,'planSha256':digest(canonical(plan)),'existingOperation':path.exists()}
+        if mode=='plan':return {'state':'planned','plan':plan,'planSha256':digest(canonical(plan)),'existingOperation':path.exists(),'memoryAdmission':memory_admission(mode,path.exists())}
         need(data['intent']=={'operationId':operation,'planSha256':digest(canonical(plan)),'originalSha256':plan['originalSha256']},'browser-remote-intent-changed')
         # A retained launch reservation is observation-only, even if no unit exists.
         if not path.exists():
+            admission=memory_admission(mode,False)
             directory(tool,0,who.pw_gid,0o750)
             for name,value in source.items():exact(tool/name,value,gid=who.pw_gid)
             directory(path,who.pw_uid,who.pw_gid,0o700)
             exact(path/'original.json',original_bytes,gid=who.pw_gid)
             exact(path/'playwright-closure.json',closure,gid=who.pw_gid)
             exact(path/'launch-intent.json',canonical(data['intent'])+b'\n',gid=who.pw_gid)
+            exact(path/'memory-admission.json',canonical(admission)+b'\n',gid=who.pw_gid)
             remaining=max(1,int((original['deadlineAtMs']-time.time()*1000)/1000))
             argv=['systemd-run','--quiet','--collect','--unit='+unit,'--uid='+options['user'],'--gid='+str(who.pw_gid),
                   '--property=RuntimeMaxSec='+str(remaining),'--property=TimeoutStopSec=15','--property=KillMode=control-group',
-                  '--property=MemoryMax=536870912','--working-directory='+str(path),'--setenv=HOME='+str(path),
+                  '--property=MemoryMax='+str(MEMORY_MAX_BYTES),'--working-directory='+str(path),'--setenv=HOME='+str(path),
                   '--setenv=XDG_CONFIG_HOME='+str(path/'config'),'--setenv=XDG_CACHE_HOME='+str(path/'cache'),
                   options['node']['path'],str(tool/NAMES[-1]),str(path/'original.json')]
             result=subprocess.run(argv,capture_output=True,text=True,timeout=15)
@@ -87,7 +102,8 @@ def main(data):
         screenshot=path/'accepted-ui.png';need(not screenshot.is_symlink() and screenshot.is_file() and screenshot.stat().st_size<=16777216,'browser-remote-screenshot-invalid')
         value=screenshot.read_bytes();offset=data['offset'];need(type(offset)==int and 0<=offset<len(value),'browser-remote-screenshot-offset-invalid')
         return {'state':'screenshot','sha256':digest(value),'bytes':len(value),'offset':offset,'base64':base64.b64encode(value[offset:offset+49152]).decode()}
-    files={name:json_file(path/(name+'.json')) for name in ('prepared','heartbeat','failed','closed','acceptance','worker-identity','launch-result')}
+    files={name:json_file(path/(name+'.json')) for name in ('prepared','heartbeat','failed','closed','acceptance','worker-identity','launch-result','memory-admission',
+           'memory-tools-verified','memory-first-page-ready','memory-second-page-opened','memory-second-page-ready','memory-browser-closed')}
     owned=[]
     for proc in pathlib.Path('/proc').iterdir():
         if proc.name.isdigit():

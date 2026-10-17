@@ -44,6 +44,18 @@ export async function ready(page,baseUrl) {
   need(h.ok()&&s.ok(),'browser-authenticated-readiness-unavailable');
   const health=await h.json(),snapshot=await s.json();return {health,epoch:snapshot.epoch,identity};
 }
+export async function verifySecondPage(context,options,initial,milestone=()=>{}) {
+  const page=await context.newPage();
+  try{
+    milestone('second-page-opened');
+    await page.goto(options.baseUrl,{waitUntil:'domcontentloaded'});
+    const second=await ready(page,options.baseUrl);
+    verifyBrowserHealth(second.health,{...initial.health,epoch:initial.epoch},second.epoch);
+    verifyDocumentIdentity(second.identity,initial.health);
+    milestone('second-page-ready');
+    return {simultaneousPages:context.pages().length,document:second.identity,verifiedAtMs:Date.now()};
+  }finally{await page.close();}
+}
 async function nav(page,label) {
   const rail=page.locator('#main-navigation');
   if(!await rail.isVisible()){const show=page.getByRole('button',{name:'Show main navigation',exact:true});if(await show.isVisible())await show.click();}
