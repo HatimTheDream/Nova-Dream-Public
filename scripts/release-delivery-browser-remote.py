@@ -132,7 +132,8 @@ def main(data):
             shutil.rmtree(disposable);need(not disposable.exists(),'browser-remote-disposable-removal-incomplete');removed.append(name)
         report={'operationId':operation,'removed':removed,'removedAllocatedBytes':allocated,'evidencePreserved':True,'atMs':int(time.time()*1000)}
         exact(path/'cleanup.json',canonical(report)+b'\n',gid=who.pw_gid);return {'state':'cleaned','cleanup':report}
-    return {'state':'observed','operationId':operation,'files':files,'unitState':state,'ownedPids':owned,'originalSha256':plan['originalSha256']}
+    return {'state':'observed','operationId':operation,'files':files,'unitState':state,'ownedPids':owned,'originalSha256':plan['originalSha256'],
+            'observedAtMs':int(time.time()*1000)}
 if __name__=='__main__':
     signal.alarm(90)
     try:print(json.dumps(main(DATA),separators=(',',':'),ensure_ascii=False))

@@ -1,33 +1,40 @@
 /** Normal authenticated SSH transport for the fixed remote browser caller. */
 import {readFileSync,existsSync,writeFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {runInstallTransport,releaseTransportSchema} from './release-adapters.mjs';
 import {canonicalBrowser,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms)),hash=v=>sha256(canonicalBrowser(v));
 const read=p=>JSON.parse(readFileSync(p,'utf8'));
 const names=['release-delivery-browser-primitives.mjs','release-delivery-browser-checks.mjs','release-delivery-browser-remote-worker.mjs'];
-export async function remoteBrowserCall(original,transport,mode,extra={},run=runInstallTransport){
+const transportTimings=new WeakMap();
+export async function remoteBrowserCall(original,transport,mode,extra={},run=runInstallTransport,monotonic=()=>performance.now()){
   const config=releaseTransportSchema.parse(JSON.parse(readEvidenceFile(transport))),closure=readEvidenceFile(original.binding.options.playwright,{maximum:2*1024**2});
   const sources=Object.fromEntries(names.map(name=>{const bytes=readFileSync(new URL(name,import.meta.url));return [name,{base64:bytes.toString('base64'),sha256:sha256(bytes)}];}));
   const data={mode,original,sources,closure:closure.toString('base64'),...extra};
   const helper=readFileSync(new URL('release-delivery-browser-remote.py',import.meta.url),'utf8');
   const program=`import base64,json\nDATA=json.loads(base64.b64decode('${Buffer.from(JSON.stringify(data)).toString('base64')}'))\n`+helper;
-  const result=await run(config,program,{captureDiagnostics:true});
+  const started=monotonic(),result=await run(config,program,{captureDiagnostics:true}),transportElapsedMs=monotonic()-started;
   need(typeof result.stdout==='string'&&!result.diagnosticsTruncated,'browser-remote-response-unavailable');
   const output=JSON.parse(result.stdout);if(output.state==='gap')throw Error(output.reason);
-  need(result.exitCode===0,'browser-remote-caller-failed');return output;
+  need(result.exitCode===0,'browser-remote-caller-failed');
+  // This duration belongs to the local transport; host timestamps remain on the host clock.
+  const observed={...output,transportElapsedMs};
+  transportTimings.set(observed,{started,monotonic});return observed;
 }
 function keepStatus(dir,status,original){
   need(status.operationId===original.binding.operationId&&status.originalSha256===sha256(readFileSync(join(dir,'original.json'))),'browser-remote-status-binding-changed');
   for(const [name,value]of Object.entries(status.files))if(value&&name!=='heartbeat'&&name!=='acceptance')writeBrowserOnce(join(dir,name+'.json'),value);
   return status;
 }
-function alive(status,original,dir){
-  const beat=status.files.heartbeat,now=Date.now();
+export function verifyRemoteBrowserSessionAlive(status,original,dir,now=Date.now()){
+  const beat=status.files.heartbeat,hostNow=status.observedAtMs,timing=transportTimings.get(status);
+  const localElapsedMs=timing?timing.monotonic()-timing.started:NaN;
   need(!status.files.failed&&!status.files.closed&&now<original.deadlineAtMs&&beat?.operationId===original.binding.operationId
     &&beat.originalSha256===sha256(readFileSync(join(dir,'original.json')))&&beat.browserAlive===true&&beat.transport==='remote-direct'
-    &&Number.isSafeInteger(beat.atMs)&&beat.atMs<=now+1000&&now-beat.atMs<=10000
+    &&Number.isSafeInteger(hostNow)&&Number.isSafeInteger(beat.atMs)&&beat.atMs<=hostNow
+    &&Number.isFinite(localElapsedMs)&&localElapsedMs>=0&&hostNow-beat.atMs+localElapsedMs<=10000
     &&status.unitState.includes('ActiveState=active\n')&&status.unitState.includes(`MainPID=${beat.pid}\n`),'browser-original-remote-session-unavailable');
 }
 export async function prepareRemoteBrowser(kept,context,{options,transport,inspectOnly=false,clock=Date.now,run}={}){
@@ -45,7 +52,7 @@ export async function prepareRemoteBrowser(kept,context,{options,transport,inspe
   while(Date.now()<deadline){
     const status=keepStatus(dir,await remoteBrowserCall(original,transport,'status',{},run),original);
     if(status.files.failed)throw Error(status.files.failed.reason);
-    if(status.files.prepared){alive(status,original,dir);const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};}
+    if(status.files.prepared){verifyRemoteBrowserSessionAlive(status,original,dir);const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};}
     need(!status.files.closed,'browser-original-session-closed');await sleep(1500);
   }
   throw Error('browser-original-response-unavailable');

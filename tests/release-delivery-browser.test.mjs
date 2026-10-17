@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { sha256 } from '../scripts/release-plan.mjs';
 import { prepareDeliveryBrowser, canonicalBrowser, writeBrowserOnce, browserOptionsSchema, verifyBrowserAcceptance, verifyBrowserSessionAlive, createBrowserAcceptanceAdapter } from '../scripts/release-delivery-browser.mjs';
 import { verifyBrowserHealth, verifyDocumentIdentity, verifyPlaywrightClosure } from '../scripts/release-delivery-browser-driver.mjs';
-import {remoteBrowserAcceptance} from '../scripts/release-delivery-browser-remote.mjs';
+import {remoteBrowserAcceptance,remoteBrowserCall,prepareRemoteBrowser,verifyRemoteBrowserSessionAlive} from '../scripts/release-delivery-browser-remote.mjs';
 import {verifyBrowserTool} from '../scripts/release-delivery-browser-primitives.mjs';
 
 const hash=v=>sha256(canonicalBrowser(v));
@@ -29,6 +29,69 @@ function fixture(t) {
     prior:{route:{route:'frontend'}},beforeNewEffect:async()=>{}};
   return {root,ref,options,context};
 }
+function remoteFixture(t){
+  const f=fixture(t),id=f.context.descriptor.operation.id,now=Date.now(),transportPath=join(f.root,'transport.json'),closurePath=join(f.root,'closure.json');
+  writeFileSync(transportPath,JSON.stringify({format:1,hostAlias:'fixture',sshConfig:f.ref}));writeFileSync(closurePath,'{}');
+  const transport={path:transportPath,sha256:sha256(readFileSync(transportPath))},options={mode:'remote',playwright:{path:closurePath,sha256:sha256('{}')}};
+  const original={binding:{operationId:id,options},startedAtMs:now,deadlineAtMs:now+300000};
+  writeBrowserOnce(join(f.root,'original.json'),original);
+  const beat={operationId:id,originalSha256:sha256(readFileSync(join(f.root,'original.json'))),pid:42,atMs:now+3000,browserAlive:true,transport:'remote-direct'};
+  const status={state:'observed',operationId:id,originalSha256:beat.originalSha256,observedAtMs:now+4000,transportElapsedMs:100,
+    files:{heartbeat:beat,prepared:{bindingSha256:hash(original.binding)}},unitState:'ActiveState=active\nMainPID=42\n'};
+  return {...f,now,original,status,options,transport};
+}
+async function timedRemoteStatus(f,status=f.status,elapsed=100,delay=0){
+  const ticks=[0,elapsed,elapsed+delay];let n=0;
+  return remoteBrowserCall(f.original,f.transport,'status',{},async()=>({exitCode:0,stdout:JSON.stringify(status)}),()=>ticks[Math.min(n++,2)]);
+}
+test('remote liveness compares host times under positive and negative clock skew',async t=>{
+  const f=remoteFixture(t);
+  for(const skew of [3000,60000,-60000]){
+    const status=await timedRemoteStatus(f,{...f.status,observedAtMs:f.now+skew,files:{...f.status.files,heartbeat:{...f.status.files.heartbeat,atMs:f.now+skew-1000}}});
+    assert.doesNotThrow(()=>verifyRemoteBrowserSessionAlive(status,f.original,f.root,f.now));
+  }
+});
+test('remote liveness rejects stale or future host beats, slow transport and expired original deadline',async t=>{
+  const f=remoteFixture(t);
+  for(const patch of [
+    {files:{...f.status.files,heartbeat:{...f.status.files.heartbeat,atMs:f.status.observedAtMs-10001}}},
+    {files:{...f.status.files,heartbeat:{...f.status.files.heartbeat,atMs:f.status.observedAtMs+1}}},
+    {observedAtMs:undefined},
+  ]){const status=await timedRemoteStatus(f,{...f.status,...patch});assert.throws(()=>verifyRemoteBrowserSessionAlive(status,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);}
+  for(const elapsed of [10001,-1]){const status=await timedRemoteStatus(f,f.status,elapsed);assert.throws(()=>verifyRemoteBrowserSessionAlive(status,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);}
+  const status=await timedRemoteStatus(f);
+  assert.throws(()=>verifyRemoteBrowserSessionAlive(status,f.original,f.root,f.original.deadlineAtMs),/browser-original-remote-session-unavailable/);
+});
+test('remote status duration uses local monotonic elapsed time, not a claimed host duration',async t=>{
+  const f=remoteFixture(t),times=[100,10101,10101];
+  const status=await remoteBrowserCall(f.original,f.transport,'status',{},async()=>({exitCode:0,stdout:JSON.stringify({...f.status,transportElapsedMs:0})}),()=>times.shift());
+  assert.equal(status.transportElapsedMs,10001);
+  assert.throws(()=>verifyRemoteBrowserSessionAlive(status,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);
+});
+test('remote liveness bounds combined host age, round trip and delayed local consumption',async t=>{
+  const f=remoteFixture(t),nineSecondsOld={...f.status,files:{...f.status.files,heartbeat:{...f.status.files.heartbeat,atMs:f.status.observedAtMs-9000}}};
+  const slow=await timedRemoteStatus(f,nineSecondsOld,9000);
+  assert.throws(()=>verifyRemoteBrowserSessionAlive(slow,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);
+  const delayed=await timedRemoteStatus(f,f.status,100,9000);
+  assert.throws(()=>verifyRemoteBrowserSessionAlive(delayed,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);
+  // Copying host-controlled timing fields cannot manufacture a local timing observation.
+  const copied={...await timedRemoteStatus(f)};
+  assert.throws(()=>verifyRemoteBrowserSessionAlive(copied,f.original,f.root,f.now),/browser-original-remote-session-unavailable/);
+});
+test('lost remote status response resumes only the original session without relaunch',async t=>{
+  const f=remoteFixture(t);writeBrowserOnce(join(f.root,'remote-launch-intent.json'),{operationId:f.original.binding.operationId});
+  const modes=[];let fail=true,effects=0;f.context.beforeNewEffect=async()=>{effects++;};
+  const run=async(_config,program)=>{
+    const payload=JSON.parse(Buffer.from(program.match(/base64\.b64decode\('([^']+)'\)/)[1],'base64').toString());modes.push(payload.mode);
+    if(fail){fail=false;throw Error('original-status-response-lost');}
+    return {exitCode:0,stdout:JSON.stringify(f.status)};
+  };
+  const kept={dir:f.root,path:join(f.root,'original.json'),record:f.original,binding:f.original.binding};
+  await assert.rejects(prepareRemoteBrowser(kept,f.context,{options:f.options,transport:f.transport,run}),/original-status-response-lost/);
+  const proof=await prepareRemoteBrowser(kept,f.context,{options:f.options,transport:f.transport,run});
+  assert.equal(proof.path,join(f.root,'prepared.json'));assert.deepEqual(modes,['status','status']);assert.equal(effects,0);
+  assert.equal(JSON.parse(readFileSync(kept.path)).deadlineAtMs,f.original.deadlineAtMs);
+});
 test('pre-promotion browser reservation survives launch response loss without duplicate browser',async t=>{
   const {root,options,context,ref}=fixture(t);let launches=0;
   const launch=()=>{launches++;const dir=join(root,'browser-session'),original=JSON.parse(readFileSync(join(dir,'original.json')));

@@ -1,3 +1,9 @@
+## [2.7.8] — 2026-10-17
+
+### Fixed
+
+- Check remote browser heartbeat freshness on the server's own clock, so a small clock difference cannot reject a healthy verification session. Keep transport freshness and the original execution deadline enforced separately.
+
 ## [2.7.7] — 2026-10-17
 
 ### Fixed
