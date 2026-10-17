@@ -1,3 +1,11 @@
+## [2.7.2] — 2026-10-17
+
+### Fixed
+
+- Run configured storage maintenance automatically through the normal release command before delivery and after acceptance. Resume the original release and its storage records after interruption.
+- Require an exact storage admission for raw delivery and redirect the old installation-coordinator command to the normal delivery route; keep status, planning, checkpoints and qualified failure reconciliation available.
+- Keep the storage runner and its reviewed configuration private, and stop with actionable guidance when setup or measured allocation evidence is missing.
+
 ## [2.7.1] — 2026-10-16
 
 ### Fixed

@@ -139,8 +139,14 @@ npm run release:coordinate -- init JOURNAL_DIRECTORY DESCRIPTOR_JSON
 npm run release:coordinate -- status JOURNAL_DIRECTORY OPERATION_UUID
 npm run release:coordinate -- plan JOURNAL_DIRECTORY OPERATION_UUID
 npm run release:coordinate -- checkpoint JOURNAL_DIRECTORY OPERATION_UUID PLAN_JSON
-npm run release:coordinate -- resume JOURNAL_DIRECTORY OPERATION_UUID
 ```
+
+Use `npm run release:deliver -- resume JOURNAL_DIRECTORY OPERATION_UUID` to
+continue a delivery through its configured storage runner. Direct coordinator
+`resume` is retired as an operator command; the guarded delivery engine still
+uses the coordinator internally. It cannot skip the normal entrypoint. Read-only
+status and planning remain available without that session. See
+[storage admission](RELEASE-STORAGE.md).
 
 `init` stores a frozen descriptor and first checkpoint. Reinitializing the same
 identity is permitted only with the same descriptor. `status` reads retained
@@ -149,7 +155,7 @@ evidence without changing the journal. `checkpoint` appends a new plan input and
 report with unchanged operation identity and preserved timeline. The coordinator
 owns the previous report chain, so its inputs must omit `previousReport`.
 
-`resume` is the effectful command. It first requires all preparation phases and
+The coordinator's internal `resumeRelease` API is effectful. It first requires all preparation phases and
 overrun reviews to pass, then transactionally reserves one local installation
 intent and idempotency key. Its fixed adapter stages the reviewed request helper
 and root-private operation record, then requests the maintained controller once.

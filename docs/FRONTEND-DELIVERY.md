@@ -71,9 +71,14 @@ raw hash before execution.
 
 ```text
 python3 -B deploy/update-runner/frontend.py --plan OPERATION --config CONFIG
-python3 -B deploy/update-runner/frontend.py --execute OPERATION --config CONFIG --plan-receipt PLAN --intent INTENT
-python3 -B deploy/update-runner/frontend.py --resume OPERATION --config CONFIG
 ```
+
+For ordinary delivery, use `npm run release:deliver -- start INPUT` and its
+original-operation `resume` command. This includes configured storage checks.
+The native worker's execute/resume interfaces are internal adapter and qualified
+recovery primitives, not alternative operator deployment commands. They retain
+their native plan, signature, capacity, intent and recovery checks; the outer
+storage default does not replace those checks or intercept arbitrary host commands.
 
 Preparation verifies the signature, compatibility, admission period, monotonic
 sequence, every archived path and every asset byte before acquiring exclusion.

@@ -289,7 +289,9 @@ async function main(args) {
     const path = resolve(value);
     return initializeRelease(directory, readInput(path), { baseDirectory: dirname(path) });
   }
-  if (command === 'resume') return resumeRelease(directory, uuid.parse(value));
+  if (command === 'resume') {
+    throw Error('storage-delivery-resume-required');
+  }
   const journal = new ReleaseJournal(directory, { readOnly: command !== 'checkpoint' });
   try {
     if (command === 'status') return journal.status(uuid.parse(value));
@@ -300,5 +302,6 @@ async function main(args) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { process.stdout.write(JSON.stringify(await main(process.argv.slice(2)), null, 2) + '\n'); }
-  catch (error) { process.stdout.write(JSON.stringify({ format: 1, kind: 'nova-release-coordination-error', reason: /^[a-z][a-z0-9-]{1,99}$/.test(error.message) ? error.message : 'coordinator-input-storage-or-evidence-rejected', automaticReplayPermitted: false }) + '\n'); process.exitCode = 1; }
+  catch (error) { process.stdout.write(JSON.stringify({ format: 1, kind: 'nova-release-coordination-error', reason: /^[a-z][a-z0-9-]{1,99}$/.test(error.message) ? error.message : 'coordinator-input-storage-or-evidence-rejected',
+    ...(error.message === 'storage-delivery-resume-required' ? { hint: 'Use npm run release:deliver -- resume JOURNAL OPERATION_ID to retain the original storage-aware operation.' } : {}), automaticReplayPermitted: false }) + '\n'); process.exitCode = 1; }
 }

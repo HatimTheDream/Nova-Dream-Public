@@ -2,12 +2,13 @@
  * An already-reserved phase is ALWAYS observed, including reservation/dispatch
  * crashes. Only a new transaction winner is allowed to make its first effect. */
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ReleaseJournal } from './release-coordinate.mjs';
 import { DELIVERY_PHASES, deliveryDescriptorSchema } from './release-delivery-journal.mjs';
 import { readEvidenceFile, readReleaseInputFile, sha256 } from './release-plan.mjs';
 import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
+import { routeStorageDelivery } from './release-storage-default.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const verificationReason = error => /^[a-z][a-z0-9-]{0,99}$/.test(error?.message ?? '') ? error.message : 'producer-verification-rejected';
@@ -126,11 +127,8 @@ export async function deliver(journal, operationId, registry, { clock = Date.now
   }
 }
 export async function deliveryMain(args) {
-  if(args[0]==='start'&&args.length===2){
-    const {initializeDeliveryInput}=await import('./release-delivery-initialize.mjs');
-    const prepared=await initializeDeliveryInput(resolve(args[1]));
-    return deliveryMain(['start',prepared.journalDirectory,prepared.descriptor.path]);
-  }
+  const storage = await routeStorageDelivery(args, fileURLToPath(import.meta.url));
+  if (storage.handled) return storage.result;
   const [mode, directory, value, extra] = args;
   need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure'].includes(mode) && (mode === 'checkpoint' ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
   const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' });

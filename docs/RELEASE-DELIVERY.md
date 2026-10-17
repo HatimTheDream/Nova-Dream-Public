@@ -1,6 +1,6 @@
 # Resumable release delivery
 
-Run `release:deliver` from the application root with an exact committed private/public source pair and a provisioned private deployment target. The target configuration binds the trusted signing key, authenticated artifact access, protected staging parents, selected service identity and required qualification evidence. Keep this configuration, the journal, signing keys and operational evidence outside both source repositories. Provision the protected staging parent once; it is reusable across operation-specific children.
+Run `release:deliver` from the application root with an exact committed private/public source pair and a provisioned private deployment target. The normal command automatically enters the configured storage runner; a separate storage delivery command is unnecessary. The target configuration binds the trusted signing key, authenticated artifact access, protected staging parents, selected service identity and required qualification evidence. Keep this configuration, the journal, signing keys and operational evidence outside both source repositories. Provision the protected staging parent once; it is reusable across operation-specific children. See [storage setup and admission](RELEASE-STORAGE.md).
 
 ```sh
 npm run release:deliver -- start /absolute/private/input.json
@@ -8,7 +8,7 @@ npm run release:deliver -- start /absolute/private/input.json
 
 The command publishes the exact sources, observes canonical CI in parallel, retrieves authenticated artifacts, chooses the verified route, packages and signs, performs capacity and recovery checks, publishes, installs and checks acceptance. It retains successful phase results and original effect identities in the private journal. Read-only prerequisite checks identify missing protected staging directories before packaging.
 
-[The data-only input and profile](RELEASE-DELIVERY-INPUT.md) supply the exact commit pair, an immutable configured target, a stable caller operation ID and the actual initial timeline. Version, build, signed sequence and selected prior bindings are derived from committed sources and retained accepted evidence. The original three-argument form, `start JOURNAL DESCRIPTOR`, remains available for already prepared operations.
+[The data-only input and profile](RELEASE-DELIVERY-INPUT.md) supply the exact commit pair, an immutable configured target, a stable caller operation ID and the actual initial timeline. Version, build, signed sequence and selected prior bindings are derived from committed sources and retained accepted evidence. The original three-argument form, `start JOURNAL DESCRIPTOR`, is an internal runner interface: direct use without the exact storage session is rejected before opening a writable release journal. Direct Node invocations enforce the same boundary as npm.
 
 After installation and the saved Assistant reply pass, the result returns an immutable `successor.profile` reference for the next release input. A frontend release preserves the accepted backend base. A full release exports the actual new candidate manifests, original installer result and published signed feed. Browser acceptance remains a separate result. Missing legacy evidence produces an explicit successor export gap; it is never reconstructed as a successful receipt.
 
