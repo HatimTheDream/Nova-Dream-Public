@@ -1,3 +1,9 @@
+## [2.7.4] — 2026-10-17
+
+### Fixed
+
+- Align the full-release staging check with the current verified recovery helper. Check every staging helper pin against the actual source bytes before delivery.
+
 ## [2.7.3] — 2026-10-17
 
 ### Improved
