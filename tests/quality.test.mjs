@@ -16,6 +16,26 @@ const marker = (name, value = 'done') => `writeFileSync(${JSON.stringify(name)},
 const waitFor = name => `await new Promise((ok,no)=>{const end=Date.now()+8000;const timer=setInterval(()=>{if(existsSync(${JSON.stringify(name)})){clearInterval(timer);ok();}else if(Date.now()>end){clearInterval(timer);no(Error('peer did not start'));}},10);});`;
 const fsImport = "import {writeFileSync,existsSync} from 'node:fs';";
 
+function processState(pid) {
+  try { process.kill(pid, 0); } catch (error) {
+    if (error.code === 'ESRCH') return 'terminated';
+    throw error;
+  }
+  if (process.platform !== 'linux') return 'running';
+  let stat;
+  try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch (error) {
+    if (error.code === 'ENOENT') return 'terminated';
+    throw error;
+  }
+  const boundary = stat.lastIndexOf(') ');
+  assert.ok(boundary > 0, `Malformed process stat for ${pid}`);
+  const state = stat.slice(boundary + 2).split(' ')[0];
+  assert.match(state, /^[RSDZTtXxKWIP]$/, `Unknown process state for ${pid}`);
+  // An orphan can remain visible until its new parent reaps it. Z/X processes
+  // have already terminated; a running or sleeping descendant must still fail.
+  return state === 'Z' || state === 'X' || state === 'x' ? 'terminated' : state;
+}
+
 test('quality preserves all five scripts and bounds only its test file workers to four', t => {
   const root = fixture(t), npm = join(root, 'npm-cli.js'); writeFileSync(npm, 'fixture');
   const plan = qualityPlan(npm);
@@ -85,15 +105,31 @@ test('explicit cancellation ends the owned child and its descendant and blocks l
     `spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(grandchild)}],{stdio:'inherit',shell:false,windowsHide:true});` +
     "writeFileSync('parent.pid',String(process.pid));setInterval(()=>{},1000);";
   const running = runQualityPlan([[command('parent', parent), command('later', fsImport + marker('unexpected-later'))]], { cwd: root, signal: controller.signal });
-  const deadline = Date.now() + 8000;
-  while (!existsSync(join(root, 'grandchild.pid')) && Date.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
-  controller.abort(); const result = await running;
+  const pids = [];
+  let result;
+  try {
+    const deadline = Date.now() + 8000;
+    while (!existsSync(join(root, 'grandchild.pid')) && Date.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
+    for (const name of ['parent.pid', 'grandchild.pid']) {
+      assert.equal(existsSync(join(root, name)), true);
+      const pid = Number(readFileSync(join(root, name), 'utf8'));
+      assert.ok(Number.isSafeInteger(pid) && pid > 0);
+      assert.notEqual(processState(pid), 'terminated', `${name} must be alive before cancellation`);
+      pids.push({ name, pid });
+    }
+  } finally {
+    controller.abort(); result = await running;
+  }
   assert.equal(result.cancelled, true); assert.equal(result.passed, false); assert.equal(result.checks[1].state, 'blocked');
   assert.equal(existsSync(join(root, 'unexpected-later')), false);
-  for (const name of ['parent.pid', 'grandchild.pid']) {
-    assert.equal(existsSync(join(root, name)), true);
-    const pid = Number(readFileSync(join(root, name), 'utf8'));
-    assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH');
+  for (const { name, pid } of pids) {
+    const deadline = Date.now() + 1000;
+    let state = processState(pid);
+    while (state !== 'terminated' && Date.now() < deadline) {
+      await new Promise(ok => setTimeout(ok, 20));
+      state = processState(pid);
+    }
+    assert.equal(state, 'terminated', `${name} (${pid}) survived cancellation: ${state}`);
   }
 });
 
