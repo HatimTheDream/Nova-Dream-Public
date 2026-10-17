@@ -5,6 +5,7 @@ the original exclusive output; it never downloads or re-extracts after a lost
 response. Partial output remains uncertain, preserving the original operation.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib.util
 import json
@@ -105,12 +106,16 @@ def collect(request, *, observe=False, token_provider=credentials):
         root.mkdir(mode=0o700)
         C.write_json(root / 'request.json', request)
     need(C.read_json(root / 'request.json')[0] == request, 'retained-artifact-request-changed')
-    token = None if observe else token_provider(git)
-    results = {}
-    for side, repo in [('private', 'Nova-Dream'), ('public', 'Nova-Dream-Public')]:
+    repositories = (('private', 'Nova-Dream'), ('public', 'Nova-Dream-Public'))
+    # Validate both source selections before either worker can contact GitHub.
+    for side, repo in repositories:
         source_input, ci = request['sources'][side], request['ci'][side]
         need(source_input['repository'] == 'HatimTheDream/' + repo and ci['sourceCommit'] == source_input['commit']
              and C.positive(ci['runId']) and C.positive(ci['runAttempt']), 'ci-source-binding-changed')
+    token = None if observe else token_provider(git)
+
+    def prepare_repository(side, repo):
+        source_input, ci = request['sources'][side], request['ci'][side]
         selected = {k: ci[k] for k in ('sourceCommit', 'runId', 'runAttempt')}
         if observe:
             need((root / ('frozen-source-' + repo + '-' + source_input['commit'])).is_dir(), 'original-frozen-source-unavailable')
@@ -131,9 +136,25 @@ def collect(request, *, observe=False, token_provider=credentials):
         need(len(raw) == artifact['size_in_bytes'] and (artifact.get('digest') is None or artifact['digest'] == 'sha256:' + C.sha(raw)), 'artifact-retained-zip-corrupt')
         receipt, metadata = validate_receipts(request, side, bound, output)
         candidate = C.verify_application(source, bound, output, metadata, node, verify_existing=observe)
-        results[side] = {'repository': source_input['repository'], **selected, 'candidateId': candidate['id'], 'applicationDirectory': str(output / 'verified-application'),
-                         'archive': reference(output / 'app.tgz'), 'metadata': reference(output / 'app.tgz.metadata.json'), 'ciSourceReceipt': reference(output / 'ci-source.json'),
-                         'zip': reference(output / 'artifact.zip'), 'artifactId': artifact['id'], 'sourceHashes': bound, 'frozenSourceDirectory': str(source)}
+        return {'repository': source_input['repository'], **selected, 'candidateId': candidate['id'], 'applicationDirectory': str(output / 'verified-application'),
+                'archive': reference(output / 'app.tgz'), 'metadata': reference(output / 'app.tgz.metadata.json'), 'ciSourceReceipt': reference(output / 'ci-source.json'),
+                'zip': reference(output / 'artifact.zip'), 'artifactId': artifact['id'], 'sourceHashes': bound, 'frozenSourceDirectory': str(source)}
+
+    # Each worker owns distinct frozen-source and repository output directories.
+    # All primitive subprocesses use explicit cwd; HTTP clients and verification
+    # namespaces are per call. Never change the process cwd/environment here.
+    results, errors = {}, []
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix='nova-artifact') as workers:
+        pending = [(side, workers.submit(prepare_repository, side, repo)) for side, repo in repositories]
+        for side, future in pending:
+            try:
+                results[side] = future.result()
+            except Exception as error:
+                errors.append(error)
+    # A failure is reported only after both original workers close. Retain every
+    # partial output, and never hide an uncertain peer behind a known refusal.
+    if errors:
+        raise next((error for error in errors if failure_result(error)['state'] == 'uncertain'), errors[0])
     value = {'format': 1, 'kind': 'nova-delivery-authenticated-artifacts', 'key': request['key'], 'operationId': request['operationId'], 'inputSha256': request['inputSha256'],
              'repositories': results, 'authenticatedGithubCollection': True, 'rebuilt': False, 'deliveryQualification': False}
     if observe:

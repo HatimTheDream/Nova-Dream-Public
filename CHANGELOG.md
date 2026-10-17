@@ -1,3 +1,11 @@
+## [2.7.3] — 2026-10-17
+
+### Improved
+
+- Run the existing quality checks in independent lanes and test files with four bounded workers, preserving every test, security check, release validation and build requirement.
+- Collect and verify the private and public CI artifacts concurrently, retaining each original operation and waiting for both results before packaging.
+- Admit the exact CI-command metadata change through a versioned retained-dependency policy; preserve all dependency, lockfile, native-member and full-release checks.
+
 ## [2.7.2] — 2026-10-17
 
 ### Fixed

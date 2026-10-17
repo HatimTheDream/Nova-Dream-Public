@@ -25,11 +25,12 @@ export const dependencyTransportSchema=z.discriminatedUnion('format',[
   metadataPolicy:z.literal('release-deliver-script-v1'),
   nativeAnchor:z.object({directory:z.string(),candidateId:hash,manifest:ref}).strict(),
   runtimeQualification:retainedRuntimeOptionsSchema,runtime:z.object({archive:ref,metadata:ref}).strict()}).strict(),
+ z.object({format:z.literal(4),...transportFields,metadataPolicy:z.literal('release-deliver-quality-script-v1')}).strict(),
 ]);
-export const DEPENDENCY_SUCCESSOR_SHA='962645b929a50754a6307d64d1ed35ac7bad51a8635737ebcc8d708b433e17c0';
+export const DEPENDENCY_SUCCESSOR_SHA='2acaf64f7a41b0a3299f7893c6649a2372f367c263ca57def6bab1eb46b1449a';
 export const DEPENDENCY_PARSER_SHA='e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290';
 const producer=fileURLToPath(new URL('./release-dependency-metadata-successor.py',import.meta.url));
-export const DEPENDENCY_WORKER_SHA='3b0e74ca8a34ce9fbedd5876090997a87dda24ed17b9879c806a166055c6d615';
+export const DEPENDENCY_WORKER_SHA='a08ac43e2d6acc0d39ec0d42dc8f118cad915c946184b7e3cb4f5b58a2176aea';
 const workerPath=fileURLToPath(new URL('./release-dependency-local-worker.py',import.meta.url));
 const MAX=128*1024**2,RESERVE=256*1024**2,WINDOW=600000;
 const helpers=['install.py','recovery.py','codex_log_retention.py','app_dependencies.py','workspace_key.py','verify-session-bindings.mjs'];
@@ -37,6 +38,9 @@ const startup=['gateway.js','http.js','runtime.js','software-updates.js','store.
 const need=(value,reason)=>{if(!value)throw Error(reason);};
 const canonical=value=>JSON.stringify(value,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const encoded=value=>Buffer.from(canonical(value)+'\n');
+const QUALITY_POLICY='release-deliver-quality-script-v1',QUALITY_COMMAND='node scripts/quality.mjs';
+const OLD_QUALITY='npm run typecheck && npm test && npm run security:audit && npm run validate:release && npm run build';
+const OLD_TEST='tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs',QUALITY_TEST='tsx --test --test-concurrency=4 tests/*.test.ts tests/*.test.mjs';
 const json=(reference,maximum=8*1024**2)=>JSON.parse(readEvidenceFile(ref.parse(reference),{maximum}));
 const reference=(path,maximum=MAX)=>({path,sha256:sha256(frontendRegular(path,maximum))});
 const result=(state,reason,c,output=null,receipt=null)=>({state,reason,externalId:c.intent.key,receipt,output});
@@ -47,11 +51,18 @@ function writeExclusive(path,bytes){const fd=openSync(path,constants.O_WRONLY|co
 function versionMetadataOnly(oldPackage,oldLock,newPackage,newLock,policy='version-only'){
  const a=structuredClone(oldPackage),b=structuredClone(newPackage),x=structuredClone(oldLock),y=structuredClone(newLock);
  need(a.edition3&&b.edition3&&x.packages?.['']&&y.packages?.[''],'dependency-metadata-shape-required');
- need(['version-only','release-deliver-script-v1'].includes(policy),'unsupported-dependency-metadata-policy');
- if(policy==='release-deliver-script-v1'){
+ need(['version-only','release-deliver-script-v1',QUALITY_POLICY].includes(policy),'unsupported-dependency-metadata-policy');
+ if(['release-deliver-script-v1',QUALITY_POLICY].includes(policy)){
   need(a.scripts&&b.scripts&&typeof a.scripts==='object'&&typeof b.scripts==='object'&&!Array.isArray(a.scripts)&&!Array.isArray(b.scripts)
    &&b.scripts['release:deliver']==='node scripts/release-deliver.mjs'&&(!Object.hasOwn(a.scripts,'release:deliver')||a.scripts['release:deliver']===b.scripts['release:deliver']),'release-command-metadata-differs');
   if(!Object.hasOwn(a.scripts,'release:deliver'))delete b.scripts['release:deliver'];
+ }
+ if(policy===QUALITY_POLICY){
+  need([OLD_QUALITY,QUALITY_COMMAND].includes(a.scripts.quality)&&b.scripts.quality===QUALITY_COMMAND,'quality-command-metadata-differs');
+  need(a.scripts.test===OLD_TEST&&b.scripts.test===OLD_TEST&&b.scripts['test:quality']===QUALITY_TEST
+   &&(!Object.hasOwn(a.scripts,'test:quality')||a.scripts['test:quality']===QUALITY_TEST),'quality-test-command-metadata-differs');
+  if(!Object.hasOwn(a.scripts,'test:quality'))delete b.scripts['test:quality'];
+  b.scripts.quality=a.scripts.quality;
  }
  b.version=a.version;b.edition3.buildVersion=a.edition3.buildVersion;y.version=x.version;y.packages[''].version=x.packages[''].version;
  need(same(a,b)&&same(x,y),'changed-dependency-qualification-producer-required');
@@ -67,7 +78,7 @@ function exactBundle(referenceValue,pairReference){
 }
 
 export function createMaintainedDependencyTransport({options:rawOptions,base,storeReceipt,run,runtimeCollector=null,clock=Date.now}){
- const options=dependencyTransportSchema.parse(rawOptions),runtimeRoute=options.format===3,producerFormat=runtimeRoute?2:options.format;
+ const options=dependencyTransportSchema.parse(rawOptions),runtimeRoute=options.format===3,producerFormat=runtimeRoute?2:options.format===4?3:options.format;
  let retainedProof=null;
  const ensureRuntime=async()=>{if(runtimeRoute&&!retainedProof){need(typeof runtimeCollector==='function','actual-settled-runtime-qualification-producer-required');retainedProof=await runtimeCollector();}};
  const checkNamespace={};
@@ -108,9 +119,9 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   for(const side of ['private','public']){const artifact=input.artifacts[side],receipt=json(artifact.ciSourceReceipt),sideLock=frontendRegular(join(artifact.applicationDirectory,'package-lock.json'),8*1024**2);need(receipt.application.packageLockSha256===sha256(sideLock)&&sideLock.equals(lock)&&candidates[side].bytes.get('package.json').equals(pkg),'paired-official-dependency-metadata-changed');}
   const selectedPackage=nativeSelected.bytes.get('package.json'),selectedLock=frontendRegular(join(nativeBase.directory,'package-lock.json'),8*1024**2);
   need(sha256(selectedLock)===pair.applicationDependencies.packageLockSha256,'selected-official-lock-changed');
-  versionMetadataOnly(JSON.parse(selectedPackage),JSON.parse(selectedLock),JSON.parse(pkg),JSON.parse(lock),producerFormat===2?options.metadataPolicy:'version-only');
-  let releaseCommand;
-  if(producerFormat===2){
+  versionMetadataOnly(JSON.parse(selectedPackage),JSON.parse(selectedLock),JSON.parse(pkg),JSON.parse(lock),producerFormat>=2?options.metadataPolicy:'version-only');
+  let releaseCommand,qualityCommand;
+  if(producerFormat>=2){
    const sources={};let commandBytes;
    for(const side of ['private','public']){
     const artifact=input.artifacts[side],claimed=artifact.sourceHashes?.['scripts/release-deliver.mjs'];
@@ -119,13 +130,24 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
     need(bytes.length>0&&sha256(bytes)===claimed.sha256&&(!commandBytes||bytes.equals(commandBytes)),'paired-release-command-source-changed');
     commandBytes=bytes;sources[side]={path,sha256:claimed.sha256};
    }
-   releaseCommand={policy:options.metadataPolicy,command:'node scripts/release-deliver.mjs',sourceCommits:descriptor.operation.sourceCommits,sources};
+   releaseCommand={policy:'release-deliver-script-v1',command:'node scripts/release-deliver.mjs',sourceCommits:descriptor.operation.sourceCommits,sources};
+  }
+  if(producerFormat===3){
+   const sources={};let commandBytes;
+   for(const side of ['private','public']){
+    const artifact=input.artifacts[side],claimed=artifact.sourceHashes?.['scripts/quality.mjs'];
+    need(hash.safeParse(claimed?.sha256).success,'authenticated-quality-command-required');
+    const path=join(artifact.frozenSourceDirectory,'scripts/quality.mjs'),bytes=frontendRegular(path,2*1024**2);
+    need(bytes.length>0&&sha256(bytes)===claimed.sha256&&(!commandBytes||bytes.equals(commandBytes)),'paired-quality-command-source-changed');
+    commandBytes=bytes;sources[side]={path,sha256:claimed.sha256};
+   }
+   qualityCommand={policy:QUALITY_POLICY,command:QUALITY_COMMAND,sourceCommits:descriptor.operation.sourceCommits,sources};
   }
   // The maintained outer adapter validates before reserving its package phase.
   // This path validates sources only and cannot derive effect paths or identities.
   if(!parent)return{pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,pkg,lock};
   const directory=rootPath(c),targetPackage={path:join(directory,'package.json'),sha256:sha256(pkg)},targetLock={path:join(directory,'package-lock.json'),sha256:sha256(lock)};
-  const successor={...anchor,...(releaseCommand?{format:2,releaseCommand}:{}),helper:options.helper,targetPackage,targetLock,transition:{...anchor.transition,toVersion:descriptor.operation.version,toBuild:descriptor.operation.buildVersion}};
+  const successor={...anchor,...(releaseCommand?{format:producerFormat,releaseCommand}:{}),...(qualityCommand?{qualityCommand}:{}),helper:options.helper,targetPackage,targetLock,transition:{...anchor.transition,toVersion:descriptor.operation.version,toBuild:descriptor.operation.buildVersion}};
   const identity={format:1,operationId:descriptor.operation.id,parentKey:parent.key,parentInputSha256:parent.inputSha256,sourceCommits:descriptor.operation.sourceCommits,candidateId:candidates.private.id,publicCandidateId:candidates.public.id,priorCandidateId:selected.id,producerSha256:DEPENDENCY_SUCCESSOR_SHA,options,base,...(runtimeRoute?{runtimeQualification:retainedProof}: {})};
   const runtime=runtimeRoute?{...options.runtime,description:runtimeDescription,qualificationBinding:{candidateId:candidates.private.id,priorCandidateId:selected.id,nativeAnchorCandidateId:nativeSelected.id,sourceCommits:descriptor.operation.sourceCommits},qualification:{path:join(directory,'runtime-qualification.json'),sha256:sha256(encoded(retainedProof))}}:null;
   return{identity,directory,pkg,lock,successor,pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,runtime};

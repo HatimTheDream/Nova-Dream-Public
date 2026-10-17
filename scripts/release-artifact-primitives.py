@@ -159,6 +159,8 @@ def frozen_source(repo, commit, git, *, checkout=None, output_root=None, committ
         # Bind the exact committed command source; never take it from a mutable
         # checkout or infer its presence from a package script alone.
         paths.append('scripts/release-deliver.mjs')
+    if package.get('scripts', {}).get('quality') == 'node scripts/quality.mjs':
+        paths.append('scripts/quality.mjs')
     bound, blobs = {}, {}
     for relative in paths:
         name = prefix + '/' + relative if prefix else relative

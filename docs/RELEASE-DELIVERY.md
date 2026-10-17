@@ -36,6 +36,24 @@ An uncertain publication is not treated as a completed publication. Completed ar
 
 The runtime path requires actual completed isolated qualification. Synthetic tests, a downloaded runtime archive or an existing-state check alone do not establish that proof. Ordinary application updates that preserve the qualified runtime use their separate full route and still require its fresh rehearsal and acceptance checks.
 
+## CI and artifact preparation
+
+Canonical CI retains every required check. `npm run quality` runs test files with
+four bounded workers alongside independent security checks and an ordered
+typecheck, release-validation and build lane. A failed lane blocks its dependent
+work; all started lanes settle before the final result. Ordinary `npm test` keeps
+its existing two-worker limit.
+
+The authenticated private and public artifact collections run concurrently in
+separate immutable output directories. Each retains its own source, run, archive
+and extraction checks. Both results must pass before packaging; observation of an
+interrupted operation verifies the original outputs instead of downloading again.
+
+The explicit `release-deliver-quality-script-v1` dependency metadata policy admits
+only these exact CI script changes and their paired committed runner bytes. It
+does not permit changes to dependencies, lifecycle hooks or other scripts, and it
+does not remove retained-member verification or full-release rehearsal.
+
 ## Acceptance and timing
 
 A completed saved Assistant reply and browser/reload verification are separate results. A missing browser capability is reported as an acceptance gap. `start` and `resume` exit with code 2 when the delivery is incomplete, including that gap; inspect the phase summary to distinguish successful installation from incomplete acceptance.

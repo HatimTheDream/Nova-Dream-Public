@@ -5,7 +5,7 @@ are retained with the original reservation instead of hidden by process errors.
 """
 import argparse, hashlib, json, os, pathlib, re, stat, sys, time, types, uuid
 P=pathlib.Path
-PRODUCER_SHA='962645b929a50754a6307d64d1ed35ac7bad51a8635737ebcc8d708b433e17c0'
+PRODUCER_SHA='2acaf64f7a41b0a3299f7893c6649a2372f367c263ca57def6bab1eb46b1449a'
 def need(value,reason):
  if not value:raise RuntimeError(reason)
 def identity(value):return (value.st_dev,value.st_ino,value.st_size,value.st_mode,value.st_nlink,value.st_mtime_ns,value.st_ctime_ns,getattr(value,'st_birthtime_ns',None))

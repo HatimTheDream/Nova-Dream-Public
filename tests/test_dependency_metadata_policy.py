@@ -12,9 +12,11 @@ class MetadataPolicy(unittest.TestCase):
   def put(name,value):
    path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value if isinstance(value,bytes) else m.enc(value));return m.ref(path)
   old={'name':'nova-dream-edition-3','version':'2.3.5','edition3':{'buildVersion':'1.0.292'},'dependencies':{'fixture':'1.0.0'},'engines':{'node':'>=22.19.0'},'scripts':{'build':'node build.mjs','postinstall':'node prepare.mjs'}}
+  if format==3:old['scripts'].update(quality=m.OLD_QUALITY,test=m.OLD_TEST)
   lock={'name':old['name'],'version':old['version'],'lockfileVersion':3,'packages':{'':{'name':old['name'],'version':old['version'],'dependencies':old['dependencies']},'node_modules/fixture':{'version':'1.0.0'}}}
   new=copy.deepcopy(old);new['version']='2.4.0';new['edition3']['buildVersion']='1.0.293'
   if script:new['scripts']['release:deliver']='node scripts/release-deliver.mjs'
+  if format==3:new['scripts'].update(quality=m.QUALITY_COMMAND,**{'test:quality':m.QUALITY_TEST})
   target_lock=copy.deepcopy(lock);target_lock['version']=target_lock['packages']['']['version']=new['version']
   entries=[('package.json',m.enc(old)),('package-lock.json',m.enc(lock)),('node_modules',None),('node_modules/fixture',None),('node_modules/fixture/package.json',m.enc({'name':'fixture','version':'1.0.0'})),('node_modules/fixture/index.js',b'export const fixture = 1;\n'),('node_modules/.bin',None),('node_modules/.bin/fixture','../fixture/index.js')]
   archive=root/'old.tgz';expanded=0
@@ -28,7 +30,8 @@ class MetadataPolicy(unittest.TestCase):
   helper=m.ref(ROOT/'deploy/update-runner/app_dependencies.py');pair={'candidateId':'a'*64,'applicationDependencies':description};pair_ref=put('pair.json',pair)
   native={'passed':True,'kind':'exact-231-dependency-repack-result','applicationDependencies':description,'dependencyArchive':m.ref(archive),'actualNativeIdentity':{k:description[k] for k in ('platform','arch','nodeVersion','nodeAbi')},'packerSha256':m.HELPER_SHA}
   value={'format':format,'kind':'metadata-only-dependency-successor','helper':helper,'oldArchive':m.ref(archive),'oldMetadata':put('metadata.json',description),'nativeReceipt':put('native-synthetic.json',native),'acceptedPair':pair_ref,'acceptedInstaller':put('installed-synthetic.json',{'outcome':'completed','candidateId':'a'*64,**{k:True for k in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')}}),'acceptedBundle':put('bundle-synthetic.json',{'format':1,'files':[{'name':'reviewed-pair.json','data':base64.b64encode(m.read(pair_ref)).decode(),'sha256':pair_ref['sha256']}]}),'acceptedCandidate':'a'*64,'targetPackage':put('target/package.json',new),'targetLock':put('target/package-lock.json',target_lock),'transition':{'fromVersion':old['version'],'toVersion':new['version'],'fromBuild':old['edition3']['buildVersion'],'toBuild':new['edition3']['buildVersion']}}
-  if format==2:value['releaseCommand']={'policy':'release-deliver-script-v1','command':'node scripts/release-deliver.mjs','sourceCommits':{'private':'b'*40,'public':'c'*40},'sources':{side:put(side+'/scripts/release-deliver.mjs',b'// synthetic authenticated command\n') for side in ('private','public')}}
+  if format in (2,3):value['releaseCommand']={'policy':'release-deliver-script-v1','command':'node scripts/release-deliver.mjs','sourceCommits':{'private':'b'*40,'public':'c'*40},'sources':{side:put(side+'/scripts/release-deliver.mjs',b'// synthetic authenticated command\n') for side in ('private','public')}}
+  if format==3:value['qualityCommand']={'policy':m.QUALITY_POLICY,'command':m.QUALITY_COMMAND,'sourceCommits':dict(value['releaseCommand']['sourceCommits']),'sources':{side:put(side+'/scripts/quality.mjs',b'// synthetic paired committed quality runner\n') for side in ('private','public')}}
   return root,value,old,lock,new,target_lock,put
  def test_explicit_v2_parser_pack_preserves_every_module_member_and_native_claim(self):
   root,v,*_=self.fixture();out=m.produce(v,root/'produced')
@@ -58,21 +61,53 @@ class MetadataPolicy(unittest.TestCase):
    else:path.write_bytes(b'changed command');ref.update(m.ref(path) if change=='different-public' else {})
    with self.assertRaises((RuntimeError,FileNotFoundError)):m.produce(v,root/'must-not-exist')
    self.assertFalse((root/'must-not-exist').exists())
+ def test_explicit_quality_policy_preserves_native_members_and_old_policy_semantics(self):
+  root,v,old,lock,new,new_lock,_=self.fixture(format=3)
+  with self.assertRaisesRegex(RuntimeError,'package-change-exceeds'):
+   m.metadata_delta(old,lock,new,new_lock,v['transition'],'release-deliver-script-v1')
+  out=m.produce(v,root/'produced')
+  self.assertEqual(out['format'],3);self.assertEqual(out['metadataPolicy'],m.QUALITY_POLICY)
+  self.assertTrue(out['everyRetainedMemberIdentical']);self.assertEqual(out['retainedMemberCount'],6)
+  self.assertFalse(out['newNativeExecutionClaimed']);self.assertFalse(out['newTargetStartupClaimed'])
+  self.assertTrue(out['freshFullRehearsalStillRequired']);self.assertEqual(out['input']['qualityCommand'],v['qualityCommand'])
+  later=copy.deepcopy(new);later['version']='2.4.1';later['edition3']['buildVersion']='1.0.294'
+  later_lock=copy.deepcopy(new_lock);later_lock['version']=later_lock['packages']['']['version']='2.4.1'
+  m.metadata_delta(new,new_lock,later,later_lock,{'fromVersion':'2.4.0','toVersion':'2.4.1','fromBuild':'1.0.293','toBuild':'1.0.294'},m.QUALITY_POLICY)
+ def test_quality_policy_rejects_unknown_commands_hooks_and_dependency_changes(self):
+  _,v,old,lock,new,new_lock,_=self.fixture(format=3)
+  changes=[lambda x:x['scripts'].__setitem__('quality','node other.mjs'),lambda x:x['scripts'].__setitem__('test','tsx --test tests/*.test.ts'),lambda x:x['scripts'].__setitem__('test:quality',m.QUALITY_TEST+' --watch'),lambda x:x['scripts'].__setitem__('test:quality',m.QUALITY_TEST.replace('4','8')),lambda x:x['scripts'].__setitem__('pretest:quality','install stuff'),lambda x:x['scripts'].__setitem__('postinstall','changed'),lambda x:x['dependencies'].__setitem__('fixture','2.0.0')]
+  for change in changes:
+   candidate=copy.deepcopy(new);change(candidate)
+   with self.assertRaises(RuntimeError):m.metadata_delta(old,lock,candidate,new_lock,v['transition'],m.QUALITY_POLICY)
+  wrong_old=copy.deepcopy(old);wrong_old['scripts']['quality']='npm test'
+  with self.assertRaisesRegex(RuntimeError,'quality-command-metadata'):m.metadata_delta(wrong_old,lock,new,new_lock,v['transition'],m.QUALITY_POLICY)
+  changed=copy.deepcopy(new_lock);changed['packages']['node_modules/fixture']['version']='2.0.0'
+  with self.assertRaisesRegex(RuntimeError,'dependency-lock-graph'):m.metadata_delta(old,lock,new,changed,v['transition'],m.QUALITY_POLICY)
+ def test_quality_proof_requires_matching_paired_committed_bytes_and_lineage(self):
+  for change in ('missing','different','path','commit'):
+   root,v,*_=self.fixture(format=3);source=v['qualityCommand']['sources']['public'];path=pathlib.Path(source['path'])
+   if change=='missing':path.unlink()
+   elif change=='different':path.write_bytes(b'different');source.update(m.ref(path))
+   elif change=='path':source['path']=str(path.with_name('not-quality.mjs'))
+   else:v['qualityCommand']['sourceCommits']['public']='d'*40
+   with self.assertRaises((RuntimeError,FileNotFoundError)):m.produce(v,root/'must-not-exist')
+   self.assertFalse((root/'must-not-exist').exists())
 
 class FrozenCommandSource(unittest.TestCase):
  def test_optional_command_is_read_from_exact_git_commit_and_absence_is_not_invented(self):
   c=load('artifact_primitives',ROOT/'scripts/release-artifact-primitives.py')
-  for enabled,missing in ((False,False),(True,False),(True,True)):
+  for command,enabled,missing in ((command,enabled,missing) for command in ('release:deliver','quality') for enabled,missing in ((False,False),(True,False),(True,True))):
    with tempfile.TemporaryDirectory(prefix='nova-source-policy-') as temporary:
     root=pathlib.Path(temporary).resolve();checkout=root/'checkout';checkout.mkdir();commit='a'*40;calls=[]
-    package={'scripts':{'release:deliver':'node scripts/release-deliver.mjs'}} if enabled else {'scripts':{}}
+    filename='release-deliver.mjs' if command=='release:deliver' else 'quality.mjs'
+    package={'scripts':{command:'node scripts/'+filename}} if enabled else {'scripts':{}}
     def run(args,**kwargs):
      command=args[1:];calls.append(command)
      if command[0]=='rev-parse':raw=(commit+'\n').encode()
      elif command[:3]==['remote','get-url','origin']:raw=b'https://github.com/HatimTheDream/Nova-Dream-Public.git\n'
      elif command[0]=='show':
       name=command[1].split(':',1)[1]
-      if name=='scripts/release-deliver.mjs' and missing:return SimpleNamespace(returncode=1,stdout=b'',stderr=b'missing')
+      if name=='scripts/'+filename and missing:return SimpleNamespace(returncode=1,stdout=b'',stderr=b'missing')
       raw=json.dumps(package).encode() if name=='package.json' else b'exact committed source'
      else:raise AssertionError(command)
      return SimpleNamespace(returncode=0,stdout=raw,stderr=b'')
@@ -81,7 +116,7 @@ class FrozenCommandSource(unittest.TestCase):
       with self.assertRaisesRegex(RuntimeError,'Frozen Git source check failed'):c.frozen_source('Nova-Dream-Public',commit,'fixture-git',checkout=checkout,output_root=root,committed_only=True)
      else:
       source,bound=c.frozen_source('Nova-Dream-Public',commit,'fixture-git',checkout=checkout,output_root=root,committed_only=True)
-      self.assertEqual('scripts/release-deliver.mjs' in bound,enabled)
-      if enabled:self.assertEqual((source/'scripts/release-deliver.mjs').read_bytes(),b'exact committed source')
-    self.assertEqual(['show',commit+':scripts/release-deliver.mjs'] in calls,enabled)
+      self.assertEqual('scripts/'+filename in bound,enabled)
+      if enabled:self.assertEqual((source/'scripts'/filename).read_bytes(),b'exact committed source')
+    self.assertEqual(['show',commit+':scripts/'+filename] in calls,enabled)
 if __name__=='__main__':unittest.main()

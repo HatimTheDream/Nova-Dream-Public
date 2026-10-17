@@ -2,8 +2,10 @@
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import tempfile
+import threading
 import types
 import unittest
 import uuid
@@ -59,14 +61,118 @@ class ArtifactProducerTests(unittest.TestCase):
         request, zips, frozen, exact, verify = self.fixture()
         runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
         with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), patch.object(D.C, 'exact_run', side_effect=exact) as api, \
-             patch.object(D.C, 'download_zip', side_effect=lambda prefix, *_: zips[prefix.split('/')[-1]]) as download, patch.object(D.C, 'verify_application', side_effect=verify):
+             patch.object(D.C, 'download_zip', side_effect=lambda prefix, *_: zips[prefix.split('/')[-1]]) as download, patch.object(D.C, 'verify_application', side_effect=verify), \
+             patch.object(D.C, 'extract_zip', wraps=D.C.extract_zip) as extract:
             first = D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
             second = D.collect(request, observe=True, token_provider=lambda _: self.fail('Observe must not request credentials'))
             self.assertEqual(first, second); self.assertEqual(api.call_count, 2); self.assertEqual(download.call_count, 2)
+            self.assertEqual(extract.call_count, 2)
             archive = pathlib.Path(second['output']['repositories']['private']['archive']['path']); archive.write_bytes(b'corrupt')
             with self.assertRaisesRegex(RuntimeError, 'retained-archive-corrupt'):
                 D.collect(request, observe=True, token_provider=lambda _: self.fail('No credentials'))
             self.assertEqual(download.call_count, 2)
+            self.assertEqual(extract.call_count, 2)
+
+    def test_repository_preparation_overlaps_and_result_order_is_stable(self):
+        request, zips, frozen, exact, verify = self.fixture()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        together = threading.Barrier(2); thread_ids = set(); lock = threading.Lock()
+        original_cwd, original_environment = pathlib.Path.cwd(), dict(os.environ)
+        def download(prefix, *_):
+            with lock: thread_ids.add(threading.get_ident())
+            together.wait(timeout=5)
+            return zips[prefix.split('/')[-1]]
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), \
+             patch.object(D.C, 'exact_run', side_effect=exact), patch.object(D.C, 'download_zip', side_effect=download), \
+             patch.object(D.C, 'verify_application', side_effect=verify), patch.object(D.os, 'chdir', side_effect=AssertionError('global cwd mutation')):
+            result = D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+        self.assertEqual(len(thread_ids), 2)
+        self.assertEqual(list(result['output']['repositories']), ['private', 'public'])
+        self.assertEqual(pathlib.Path.cwd(), original_cwd); self.assertEqual(dict(os.environ), original_environment)
+        outputs = [pathlib.Path(row['applicationDirectory']) for row in result['output']['repositories'].values()]
+        self.assertNotEqual(outputs[0].parent, outputs[1].parent)
+
+    def test_failure_waits_for_peer_and_partial_output_never_replays(self):
+        request, zips, frozen, exact, verify = self.fixture()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        public_entered, release_public, finished = threading.Event(), threading.Event(), threading.Event()
+        caught = []
+        def download(prefix, *_):
+            if prefix.endswith('/Nova-Dream'):
+                if not public_entered.wait(5): raise TimeoutError('peer did not start')
+                raise RuntimeError('retained-archive-corrupt')
+            public_entered.set()
+            if not release_public.wait(5): raise TimeoutError('fixture peer was not released')
+            return zips['Nova-Dream-Public']
+        def run():
+            try: D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+            except Exception as error: caught.append(error)
+            finally: finished.set()
+        output = pathlib.Path(request['outputDirectory'])
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), \
+             patch.object(D.C, 'exact_run', side_effect=exact), patch.object(D.C, 'download_zip', side_effect=download) as downloader, \
+             patch.object(D.C, 'verify_application', side_effect=verify), patch.object(D.C, 'extract_zip', wraps=D.C.extract_zip) as extract:
+            worker = threading.Thread(target=run); worker.start()
+            try:
+                self.assertTrue(public_entered.wait(5)); self.assertFalse(finished.wait(.05))
+                self.assertFalse((output / 'result.json').exists())
+            finally:
+                release_public.set(); worker.join(10)
+            self.assertFalse(worker.is_alive()); self.assertEqual(len(caught), 1)
+            self.assertEqual(str(caught[0]), 'retained-archive-corrupt')
+            self.assertTrue((output / 'public/verified-application').is_dir())
+            self.assertFalse((output / 'result.json').exists())
+            before = {str(p.relative_to(output)): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+            with self.assertRaises(RuntimeError) as observed:
+                D.collect(request, observe=True, token_provider=lambda _: self.fail('No observation credentials'))
+            self.assertEqual(D.failure_result(observed.exception)['state'], 'uncertain')
+            with self.assertRaises(FileExistsError):
+                D.collect(request, token_provider=lambda _: self.fail('Never replay an exclusive output'))
+            self.assertEqual(downloader.call_count, 2); self.assertEqual(extract.call_count, 1)
+            self.assertEqual(before, {str(p.relative_to(output)): p.read_bytes() for p in output.rglob('*') if p.is_file()})
+
+    def test_uncertain_peer_is_not_hidden_by_other_repository_refusal(self):
+        request, _, frozen, exact, verify = self.fixture()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        def download(prefix, *_):
+            if prefix.endswith('/Nova-Dream'): raise RuntimeError('retained-archive-corrupt')
+            raise TimeoutError('synthetic private response details must not escape')
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), \
+             patch.object(D.C, 'exact_run', side_effect=exact), patch.object(D.C, 'download_zip', side_effect=download) as downloads, \
+             patch.object(D.C, 'verify_application', side_effect=verify):
+            with self.assertRaises(TimeoutError) as failed:
+                D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+            self.assertEqual(downloads.call_count, 2)
+        result = D.failure_result(failed.exception)
+        self.assertEqual(result['state'], 'uncertain'); self.assertNotIn('private response', json.dumps(result))
+        self.assertFalse((pathlib.Path(request['outputDirectory']) / 'result.json').exists())
+
+    def test_lost_terminal_response_observes_original_without_extraction(self):
+        request, zips, frozen, exact, verify = self.fixture()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        write = D.C.write_json
+        def lose_response(path, value):
+            result = write(path, value)
+            if path.name == 'result.json': raise ConnectionError('synthetic lost terminal response')
+            return result
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), \
+             patch.object(D.C, 'exact_run', side_effect=exact) as api, \
+             patch.object(D.C, 'download_zip', side_effect=lambda prefix, *_: zips[prefix.split('/')[-1]]) as downloads, \
+             patch.object(D.C, 'verify_application', side_effect=verify), patch.object(D.C, 'extract_zip', wraps=D.C.extract_zip) as extract, \
+             patch.object(D.C, 'write_json', side_effect=lose_response):
+            with self.assertRaises(ConnectionError): D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+            retained = D.collect(request, observe=True, token_provider=lambda _: self.fail('No observation credentials'))
+            self.assertEqual(retained['state'], 'completed'); self.assertEqual(retained['externalId'], request['key'])
+            self.assertEqual(api.call_count, 2); self.assertEqual(downloads.call_count, 2); self.assertEqual(extract.call_count, 2)
+
+    def test_invalid_peer_binding_stops_before_either_worker_or_credentials(self):
+        request, *_ = self.fixture(); request['ci']['public']['sourceCommit'] = '0' * 40
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source') as frozen, \
+             patch.object(D.C, 'exact_run') as api, patch.object(D.C, 'download_zip') as download:
+            with self.assertRaisesRegex(RuntimeError, 'ci-source-binding-changed'):
+                D.collect(request, token_provider=lambda _: self.fail('Both bindings must pass before credentials'))
+            frozen.assert_not_called(); api.assert_not_called(); download.assert_not_called()
 
     def test_partial_original_output_is_preserved_and_never_replayed(self):
         request, *_ = self.fixture(); output = pathlib.Path(request['outputDirectory']); output.mkdir()

@@ -9,6 +9,11 @@ import base64,contextlib,copy,hashlib,io,json,os,pathlib,re,stat,tarfile,time,ty
 P=pathlib.Path
 HELPER_SHA='e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290'
 MAXIMUM=128*1024**2
+QUALITY_POLICY='release-deliver-quality-script-v1'
+OLD_QUALITY='npm run typecheck && npm test && npm run security:audit && npm run validate:release && npm run build'
+QUALITY_COMMAND='node scripts/quality.mjs'
+OLD_TEST='tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs'
+QUALITY_TEST='tsx --test --test-concurrency=4 tests/*.test.ts tests/*.test.mjs'
 def need(value,reason):
  if not value:raise RuntimeError(reason)
 def sha(raw):return hashlib.sha256(raw).hexdigest()
@@ -42,10 +47,15 @@ def metadata_delta(old_package,old_lock,new_package,new_lock,transition,policy='
  need(set(transition)=={'fromVersion','toVersion','fromBuild','toBuild'},'exact-transition-required')
  a,b=copy.deepcopy(old_package),copy.deepcopy(new_package)
  need(a['version']==transition['fromVersion'] and b['version']==transition['toVersion'] and a['edition3']['buildVersion']==transition['fromBuild'] and b['edition3']['buildVersion']==transition['toBuild'],'official-transition-differs')
- need(policy in ('version-only','release-deliver-script-v1'),'unsupported-dependency-metadata-policy')
- if policy=='release-deliver-script-v1':
+ need(policy in ('version-only','release-deliver-script-v1',QUALITY_POLICY),'unsupported-dependency-metadata-policy')
+ if policy in ('release-deliver-script-v1',QUALITY_POLICY):
   need(isinstance(a.get('scripts'),dict) and isinstance(b.get('scripts'),dict) and b['scripts'].get('release:deliver')=='node scripts/release-deliver.mjs' and ('release:deliver' not in a['scripts'] or a['scripts']['release:deliver']==b['scripts']['release:deliver']),'release-command-metadata-differs')
   if 'release:deliver' not in a['scripts']:del b['scripts']['release:deliver']
+ if policy==QUALITY_POLICY:
+  need(a['scripts'].get('quality') in (OLD_QUALITY,QUALITY_COMMAND) and b['scripts'].get('quality')==QUALITY_COMMAND,'quality-command-metadata-differs')
+  need(a['scripts'].get('test')==b['scripts'].get('test')==OLD_TEST and b['scripts'].get('test:quality')==QUALITY_TEST and ('test:quality' not in a['scripts'] or a['scripts']['test:quality']==QUALITY_TEST),'quality-test-command-metadata-differs')
+  if 'test:quality' not in a['scripts']:del b['scripts']['test:quality']
+  b['scripts']['quality']=a['scripts']['quality']
  b['version']=a['version'];b['edition3']['buildVersion']=a['edition3']['buildVersion'];need(a==b,'package-change-exceeds-release-metadata')
  a,b=copy.deepcopy(old_lock),copy.deepcopy(new_lock)
  need(a['version']==a['packages']['']['version']==transition['fromVersion'] and b['version']==b['packages']['']['version']==transition['toVersion'],'root-lock-transition-differs')
@@ -82,11 +92,22 @@ def release_command(value):
   sources.append(read(source))
  need(sources[0] and sources[0]==sources[1],'paired-release-command-source-changed')
  return command['policy']
+def quality_command(value):
+ release_command(value)
+ command=value['qualityCommand']
+ need(set(command)=={'policy','command','sourceCommits','sources'} and command['policy']==QUALITY_POLICY and command['command']==QUALITY_COMMAND,'exact-quality-command-policy-required')
+ need(command['sourceCommits']==value['releaseCommand']['sourceCommits'] and set(command['sources'])=={'private','public'},'exact-quality-command-sources-required')
+ sources=[]
+ for source in command['sources'].values():
+  need(P(source['path']).parts[-2:]==('scripts','quality.mjs'),'quality-command-source-path-changed')
+  sources.append(read(source))
+ need(sources[0] and sources[0]==sources[1],'paired-quality-command-source-changed')
+ return command['policy']
 def validate(value):
  fields={'format','kind','helper','oldArchive','oldMetadata','nativeReceipt','acceptedPair','acceptedInstaller','acceptedBundle','acceptedCandidate','targetPackage','targetLock','transition'}
- need(set(value)==fields|({'releaseCommand'} if value.get('format')==2 else set()),'exact-input-schema-required')
- need(value['format'] in (1,2) and value['kind']=='metadata-only-dependency-successor','unsupported-successor')
- policy=release_command(value) if value['format']==2 else 'version-only'
+ need(set(value)==fields|({'releaseCommand','qualityCommand'} if value.get('format')==3 else {'releaseCommand'} if value.get('format')==2 else set()),'exact-input-schema-required')
+ need(value['format'] in (1,2,3) and value['kind']=='metadata-only-dependency-successor','unsupported-successor')
+ policy=quality_command(value) if value['format']==3 else release_command(value) if value['format']==2 else 'version-only'
  deps=module(value['helper']);old=P(value['oldArchive']['path']);need(digest(old)==value['oldArchive']['sha256'],'old-archive-changed')
  description=json.loads(read(value['oldMetadata']));members=deps.archive_members(old,description)
  native=json.loads(read(value['nativeReceipt']));pair=json.loads(read(value['acceptedPair']))
@@ -135,11 +156,13 @@ def produce(value,directory):
  need(digest(old)==value['oldArchive']['sha256'],'original-archive-changed-during-packaging')
  for name in ('helper','oldMetadata','nativeReceipt','acceptedPair','acceptedInstaller','targetPackage','targetLock'):read(value[name])
  read(value['acceptedBundle'],16*1024**2)
- if value['format']==2:release_command(value)
+ if value['format']==3:quality_command(value)
+ elif value['format']==2:release_command(value)
  write(directory/'app-dependencies.tgz.metadata.json',enc(successor))
  need(digest(output)==successor['archiveSha256'],'successor-archive-changed-after-verification')
  result={'format':1,'kind':'verified-metadata-only-dependency-successor','passed':True,'input':value,'inputSha256':sha(enc(value)),'originalArchive':value['oldArchive'],'archive':ref(output),'metadata':ref(directory/'app-dependencies.tgz.metadata.json'),'description':successor,'retainedMemberCount':len(original_inventory),'retainedInventorySha256':sha(enc(original_inventory)),'everyRetainedMemberIdentical':True,'originalNativeQualificationReused':value['nativeReceipt'],'newNativeExecutionClaimed':False,'newTargetStartupClaimed':False,'hostEffects':False,'deliveryQualification':False,'freshFullRehearsalStillRequired':True,'liveAcceptanceStillRequired':True,'elapsedSeconds':time.monotonic()-started}
- if value['format']==2:result.update(format=2,metadataPolicy=value['releaseCommand']['policy'])
+ if value['format']==3:result.update(format=3,metadataPolicy=value['qualityCommand']['policy'])
+ elif value['format']==2:result.update(format=2,metadataPolicy=value['releaseCommand']['policy'])
  write(directory/'result.json',enc(result));return result
 if __name__=='__main__':
  import argparse

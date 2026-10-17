@@ -17,7 +17,38 @@ test('format1 remains version-only; format2 admits only the exact release comman
  assert.equal(sha256(readFileSync(new URL('../scripts/release-dependency-metadata-successor.py',import.meta.url))),DEPENDENCY_SUCCESSOR_SHA);
 });
 test('synthetic selected native/source bindings admit without child reservations or commands',async t=>{
- for(const format of [1,2])await t.test('format'+format,async t=>{const f=dependencyFixture(t,{format});await f.transport.validate({descriptor:f.descriptor,input:f.intent.input});await f.transport.validate(f.context);assert.equal(f.calls.length,0);assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'package/dependency-stage'),null);});
+ for(const format of [1,2,4])await t.test('format'+format,async t=>{const f=dependencyFixture(t,{format});await f.transport.validate({descriptor:f.descriptor,input:f.intent.input});await f.transport.validate(f.context);assert.equal(f.calls.length,0);assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'package/dependency-stage'),null);});
+});
+test('format4 admits only exact quality/test command metadata and preserves format2',()=>{
+ const p={version:'1.0.0',edition3:{buildVersion:'1.0.1'},scripts:{quality:'npm run typecheck && npm test && npm run security:audit && npm run validate:release && npm run build',test:'tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs','release:deliver':'node scripts/release-deliver.mjs',postinstall:'same'},dependencies:{one:'1'}};
+ const l={version:'1.0.0',packages:{'':{version:'1.0.0',dependencies:{one:'1'}}}},q=structuredClone(p),m=structuredClone(l);
+ q.version='1.0.1';q.edition3.buildVersion='1.0.2';m.version=m.packages[''].version=q.version;
+ q.scripts.quality='node scripts/quality.mjs';q.scripts['test:quality']='tsx --test --test-concurrency=4 tests/*.test.ts tests/*.test.mjs';
+ assert.throws(()=>versionMetadataOnly(p,l,q,m,'release-deliver-script-v1'));
+ assert.doesNotThrow(()=>versionMetadataOnly(p,l,q,m,'release-deliver-quality-script-v1'));
+ assert.doesNotThrow(()=>versionMetadataOnly(q,m,q,m,'release-deliver-quality-script-v1'));
+ for(const change of [x=>x.scripts.quality='node other.mjs',x=>x.scripts.test+=' --watch',x=>x.scripts['test:quality']=x.scripts['test:quality'].replace('4','8'),x=>x.scripts['test:quality']=x.scripts['test:quality'].replace('tests/*.test.ts','other/*.ts'),x=>x.scripts['pretest:quality']='install',x=>x.scripts.postinstall='changed',x=>x.dependencies.one='2']){
+  const changed=structuredClone(q);change(changed);assert.throws(()=>versionMetadataOnly(p,l,changed,m,'release-deliver-quality-script-v1'));
+ }
+ const wrong=structuredClone(p);wrong.scripts.quality='npm test';assert.throws(()=>versionMetadataOnly(wrong,l,q,m,'release-deliver-quality-script-v1'));
+});
+test('format4 stages paired committed quality proof with unchanged release policy',async t=>{
+ const f=dependencyFixture(t,{format:4}),now=Date.now();
+ const stage=await f.transport.steps['dependency-stage'].execute({...f.context,worker:{reservedAtMs:now,deadlineAtMs:now+615000}});
+ const value=JSON.parse(readFileSync(stage.output.input.path));
+ assert.equal(value.format,3);assert.equal(value.releaseCommand.policy,'release-deliver-script-v1');
+ assert.equal(value.qualityCommand.policy,'release-deliver-quality-script-v1');
+ assert.deepEqual(value.qualityCommand.sourceCommits,f.descriptor.operation.sourceCommits);
+ assert.equal(value.qualityCommand.sources.private.sha256,value.qualityCommand.sources.public.sha256);
+ assert.equal(f.calls.length,0);
+});
+test('format4 rejects missing, changed or unpaired committed quality sources before effects',async t=>{
+ for(const change of ['missing-binding','corrupt-file','different-public'])await t.test(change,async t=>{
+  const f=dependencyFixture(t,{format:4}),artifact=f.context.intent.input.artifacts.public,ref=artifact.sourceHashes['scripts/quality.mjs'];
+  if(change==='missing-binding')delete artifact.sourceHashes['scripts/quality.mjs'];
+  else{writeFileSync(ref.path,'different source');if(change==='different-public')ref.sha256=sha256(readFileSync(ref.path));}
+  await assert.rejects(f.transport.validate(f.context),/quality-command/);assert.equal(f.calls.length,0);
+ });
 });
 test('runtime/schema/startup/accepted-baseline/helper changes refuse before child effects',async t=>{
  for(const change of ['runtime','schema','startup','selected-baseline','helper'])await t.test(change,async t=>{

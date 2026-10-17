@@ -1,6 +1,6 @@
 {
   "name": "nova-dream-edition-3",
-  "version": "2.7.2",
+  "version": "2.7.3",
   "private": true,
   "type": "module",
   "description": "Nova Dream daily workspace",
@@ -8,7 +8,7 @@
     "node": ">=22.19.0"
   },
   "edition3": {
-    "buildVersion": "1.0.299",
+    "buildVersion": "1.0.300",
     "schemaVersion": 55,
     "apiVersion": 1,
     "appId": "private.novadream.edition3.preview"
@@ -19,6 +19,7 @@
     "start": "node scripts/serve.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs",
+    "test:quality": "tsx --test --test-concurrency=4 tests/*.test.ts tests/*.test.mjs",
     "build": "npm run build:service && node scripts/prepare-desktop.mjs && vite build && node scripts/budget.mjs",
     "version:bump": "node scripts/version.mjs",
     "validate:release": "node scripts/validate.mjs",
@@ -26,7 +27,7 @@
     "release:observe-host": "node scripts/release-observe-host.mjs",
     "release:coordinate": "node scripts/release-coordinate.mjs",
     "security:audit": "npm audit --omit=dev --audit-level=moderate && npm --prefix deploy/vercel audit --omit=dev --audit-level=moderate",
-    "quality": "npm run typecheck && npm test && npm run security:audit && npm run validate:release && npm run build",
+    "quality": "node scripts/quality.mjs",
     "shortcut": "node scripts/shortcut.mjs",
     "launch": "node scripts/launch.mjs",
     "postinstall": "node scripts/prepare-pty.mjs",
