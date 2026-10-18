@@ -8,7 +8,7 @@ export type TaskAssistantLaunchScope = { deviceId: string; epoch: string; taskId
 type PlanCommand = Command & { kind: 'assignment'; payload: Assignment };
 type LinkCommand = Command & { kind: 'task'; payload: Task };
 export type TaskAssistantLaunchJournal = {
-  version: 1;
+  version: 1 | 2;
   scope: TaskAssistantLaunchScope;
   capturedTask: Entity<Task>;
   projectRevision: number | null;
@@ -17,7 +17,7 @@ export type TaskAssistantLaunchJournal = {
   startRequestId: string;
   plan?: Entity<Assignment>;
   linkCommand?: LinkCommand;
-  linkRefusal?: 'revision_conflict';
+  linkRefusal?: 'revision_conflict' | 'task_work_changed' | 'source_changed' | 'task_trashed';
   task?: Entity<Task>;
   startRequest?: AssignmentStart;
   attempt?: AssignmentAttempt;
@@ -33,13 +33,13 @@ const entitySchema = <T extends z.ZodTypeAny>(value: T) => z.object({
   id: z.string().min(1), revision: z.number().int().positive(), updatedAt: z.string(), deviceId: z.string().min(1), value,
 }).strict();
 const journalSchema = z.object({
-  version: z.literal(1), scope: scopeSchema, capturedTask: entitySchema(taskSchema),
+  version: z.union([z.literal(1), z.literal(2)]), scope: scopeSchema, capturedTask: entitySchema(taskSchema),
   projectRevision: z.number().int().positive().nullable(),
   planCommand: commandSchema.extend({ kind: z.literal('assignment'), payload: assignmentSchema }),
   linkRequestId: z.string().uuid(), startRequestId: z.string().uuid(),
   plan: entitySchema(assignmentSchema).optional(),
   linkCommand: commandSchema.extend({ kind: z.literal('task'), payload: taskSchema }).optional(),
-  linkRefusal: z.literal('revision_conflict').optional(),
+  linkRefusal: z.enum(['revision_conflict', 'task_work_changed', 'source_changed', 'task_trashed']).optional(),
   task: entitySchema(taskSchema).optional(), startRequest: assignmentStartSchema.optional(),
   // AssignmentAttempt has no runtime schema. Validate the identity and fields
   // consumed here while retaining its complete service response for the UI.
@@ -57,6 +57,9 @@ function invalid(): never {
   throw new TaskAssistantLaunchError('task_launch_invalid', 'Request unverified. Keep it for recovery; further work is blocked.');
 }
 function linkedValue(journal: TaskAssistantLaunchJournal): Task {
+  if (journal.version === 2) return { ...journal.capturedTask.value, workLink: {
+    assignmentId: journal.plan!.id, assignmentRevision: journal.plan!.revision, taskRevision: journal.capturedTask.revision,
+  } };
   const origin = journal.capturedTask.value.origin;
   return { ...journal.capturedTask.value, origin: origin && origin.kind !== 'assignment' ? origin : {
     kind: 'assignment', id: journal.plan!.id, revision: journal.plan!.revision,
@@ -74,6 +77,7 @@ export function readTaskAssistantLaunch(value: unknown, scope: TaskAssistantLaun
   }
   const { capturedTask, planCommand, plan, linkCommand, task, startRequest, attempt } = journal;
   if (capturedTask.id !== scope.taskId || capturedTask.value.trashed || planCommand.epoch !== scope.epoch ||
+      (journal.version === 2 && !!capturedTask.value.workLink) ||
       planCommand.expectedRevision !== 0 || !planCommand.entityId.startsWith('assignment:') ||
       planCommand.payload.projectId !== (capturedTask.value.projectId ?? null) ||
       (planCommand.payload.projectId === null) !== (journal.projectRevision === null) ||
@@ -83,7 +87,8 @@ export function readTaskAssistantLaunch(value: unknown, scope: TaskAssistantLaun
       linkCommand.entityId !== scope.taskId || linkCommand.expectedRevision !== capturedTask.revision ||
       canonical(linkCommand.payload) !== canonical(linkedValue(journal)))) return invalid();
   if (task && (!linkCommand || task.id !== scope.taskId || task.revision !== capturedTask.revision + 1 ||
-      canonical(task.value.origin) !== canonical(linkCommand.payload.origin))) return invalid();
+      canonical(task.value.origin) !== canonical(linkCommand.payload.origin) ||
+      (journal.version === 2 && canonical(task.value.workLink) !== canonical(linkCommand.payload.workLink)))) return invalid();
   if (journal.linkRefusal && (!linkCommand || task || startRequest || attempt)) return invalid();
   if (startRequest && (!plan || !task || startRequest.requestId !== journal.startRequestId || startRequest.epoch !== scope.epoch ||
       startRequest.assignmentId !== plan.id || startRequest.revision !== plan.revision || startRequest.projectRevision !== journal.projectRevision)) return invalid();
@@ -97,7 +102,7 @@ export function createTaskAssistantLaunch(input: {
   brief: string; expectedOutput: string; maxMinutes: number;
 }, uuid: () => string = () => crypto.randomUUID()): TaskAssistantLaunchJournal {
   const journal: TaskAssistantLaunchJournal = {
-    version: 1, scope: structuredClone(input.scope), capturedTask: structuredClone(input.task), projectRevision: input.projectRevision,
+    version: 2, scope: structuredClone(input.scope), capturedTask: structuredClone(input.task), projectRevision: input.projectRevision,
     planCommand: {
       kind: 'assignment', entityId: `assignment:${uuid()}`, requestId: uuid(), epoch: input.scope.epoch, expectedRevision: 0,
       payload: { ...planValueFromTask(input.task.value, input.agent), brief: input.brief, expectedOutput: input.expectedOutput, maxMinutes: input.maxMinutes },
@@ -132,7 +137,7 @@ export async function resumeTaskAssistantLaunch(value: TaskAssistantLaunchJourna
     catch (reason) {
       // A confirmed link conflict cannot have admitted this task write. Keep
       // the original plan and proposal, but release the task editor after reload.
-      if (reason && typeof reason === 'object' && 'code' in reason && reason.code === 'revision_conflict') keep({ ...journal, linkRefusal: 'revision_conflict' });
+      if (reason && typeof reason === 'object' && 'code' in reason && ['revision_conflict', 'task_work_changed', 'source_changed', 'task_trashed'].includes(String(reason.code))) keep({ ...journal, linkRefusal: reason.code as TaskAssistantLaunchJournal['linkRefusal'] });
       throw reason;
     }
     // The UI can adopt this confirmed revision even if the subsequent start

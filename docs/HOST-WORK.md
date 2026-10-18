@@ -48,6 +48,19 @@ If a response is interrupted, check the saved original request or publication
 receipt. Nova checks the actual Git branch or GitHub result instead of repeating
 an unconfirmed effect. Code stays on the host when the phone disconnects.
 
+## Assistant work from a task
+
+Save a task, open its details, and choose **Start assistant work**. The saved
+work link opens the same plan and results on every device connected to that
+workspace. A task created from Contact or Content keeps its original source.
+For an older plan kept only in this browser, use **Save work link** in the
+task's Assistant work section before switching devices.
+
+Use **Review result** to inspect the saved output and accept it into the task.
+If a response is interrupted, use **Reconcile acceptance** or reopen the task
+and choose **Reconcile save**. Nova checks the original saved request. It keeps
+your writing and pauses further edits until that request is resolved.
+
 ## Team work
 
 Create at least two agents in Agents. In Work → **Team work**, select a local
@@ -56,6 +69,12 @@ stages run sequentially in one checkout. Each receives the saved previous
 handoffs and its captured agent instructions. Implementation can edit files;
 research and review use read-only sessions. App tools also require both the
 captured and current agent capability. The hub links to each current conversation.
+
+Use **Active** for ongoing or unresolved workflows and **History** for completed
+or cancelled ones. History loads 25 workflows at a time; **Load more history**
+reaches older results and their full saved handoffs. Finished history does not
+consume the active-work limit. If history changes between pages, **Refresh
+history** reads the latest list while already loaded results remain available.
 
 **Pause after stage** lets the current stage finish and prevents another from
 starting. **Stop team** cancels the original current run and retains its changes.

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { attemptsForPlan, briefFromTask } from '../../../packages/domain/task-work';
+import { attemptsForPlan, briefFromTask, taskWorkOrigin } from '../../../packages/domain/task-work';
 import { assignmentTerminal, type AssignmentState } from '../../../packages/domain/assignments';
 import { commit, mayPoll, request, saveLocal } from './api';
 import { pollReader } from './polling';
@@ -21,12 +21,13 @@ function loadLaunch(key: string, scope: TaskAssistantLaunchScope) {
   return readTaskAssistantLaunch(value, scope);
 }
 
-export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty, saved, blocked, openOrigin, onTaskConfirmed, onPendingChange, onReview }: {
+export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty, saved, blocked, openOrigin, onTaskConfirmed, onPendingChange, onReview, onLinkWork }: {
   taskId: string; taskRevision: number; value: Task; snapshot: Snapshot; dirty: boolean; saved: boolean; blocked: boolean;
   openOrigin?: (origin: NonNullable<Task['origin']>) => void;
   onTaskConfirmed: (task: Entity<Task>, captured: Entity<Task>) => boolean;
   onPendingChange: (pending: boolean) => void;
   onReview: (attemptId: string) => void;
+  onLinkWork?: (plan: { id: string; revision: number }) => void;
 }) {
   const scope = useMemo(() => ({ taskId, deviceId: snapshot.deviceId, epoch: snapshot.epoch }), [taskId, snapshot.deviceId, snapshot.epoch]);
   const key = `e3:task-assistant-launch:${scope.deviceId}:${scope.epoch}:${taskId}`;
@@ -40,7 +41,8 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
   const [runState, setRunState] = useState<AssignmentState>(), [readError, setReadError] = useState('');
   const flight = useRef(false), alive = useRef(true), reader = useRef<RefreshReader<AssignmentState> | undefined>(undefined);
   const callbacks = useRef({ onTaskConfirmed, onPendingChange }); callbacks.current = { onTaskConfirmed, onPendingChange };
-  const origin = value.origin?.kind === 'assignment' ? value.origin : journal?.plan ? { kind: 'assignment' as const, id: journal.plan.id, revision: journal.plan.revision } : undefined;
+  const savedOrigin = taskWorkOrigin(value) ?? taskWorkOrigin(snapshot.tasks.find(task => task.id === taskId)?.value ?? value);
+  const origin = savedOrigin ?? (journal?.plan ? { kind: 'assignment' as const, id: journal.plan.id, revision: journal.plan.revision } : undefined);
   const pending = !!journal && !journal.attempt && !journal.linkRefusal;
   const taskWritesBlocked = pending && !journal?.task;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -126,15 +128,16 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
     <section className="task-assistant-work" aria-label="Assistant work">
       {origin && <div className="section-heading"><h3>Assistant work</h3><button type="button" className="quiet" onClick={() => void reader.current?.refresh()}>Refresh status</button></div>}
       {(kept.error || error) && <p className="notice warning" role="alert">{kept.error || error}</p>}
-      {journal?.linkRefusal && <p className="notice" role="status">The task changed. Its plan is kept in Agents. You can edit the task; no run started.</p>}
+      {journal?.linkRefusal && <p className="notice" role="status">The task or plan changed. Its plan is kept in Agents. You can edit the task; no run started.</p>}
       {pending && <p className="notice" role="status">{failure === 'conflict' || failure === 'rejected' ? 'The host needs review. Your original request is kept.' : 'Check the original request to continue without duplicating work.'}</p>}
       {origin && <>
-        {value.origin?.kind !== 'assignment' && <p className="metadata">Plan kept on this device; source preserved.</p>}
+        {!savedOrigin && <p className="metadata">Plan kept on this device; save its link for other devices.</p>}
         <p><strong>{plan?.value.title || 'Saved plan'}</strong></p>
         {readError && <p className="notice warning" role="status">Status unavailable. {readError} Retrying.</p>}
         {latest ? <><p role="status">{attemptLabels[latest.state]} · {latest.message}</p><p className="metadata">{new Date(latest.createdAt).toLocaleString()}{!assignmentTerminal(latest.state) && ' · updates automatically'}</p></> : <p className="metadata" role="status">{runState ? pending ? 'Checking original request.' : 'No runs yet.' : 'Loading Assistant work…'}</p>}
         {attempts.length > 1 && <details className="attempt-history"><summary>Earlier runs ({attempts.length - 1})</summary><ul>{attempts.slice(1).map(attempt => <li key={attempt.id}><span>{attemptLabels[attempt.state]} · {new Date(attempt.createdAt).toLocaleString()}</span>{attempt.result && <button type="button" className="quiet" disabled={pending || busy} onClick={() => onReview(attempt.id)}>Review</button>}</li>)}</ul></details>}
         <div className="button-row">
+          {!savedOrigin && plan && onLinkWork && <button type="button" disabled={dirty || pending || busy || blocked || !!kept.error} onClick={() => onLinkWork(plan)}>Save work link</button>}
           {openOrigin && <button type="button" disabled={busy} onClick={() => openOrigin(origin)}>Open plan in Agents</button>}
           {latest?.result && <button type="button" disabled={pending || busy || blocked} onClick={() => onReview(latest.id)}>Review result</button>}
         </div>

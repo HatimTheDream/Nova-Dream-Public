@@ -1,3 +1,15 @@
+## [2.8.0] — 2026-10-17
+
+### Added
+
+- Save Assistant work independently of a task's original Contact or Content source. Reopen the same plan and results on another device, and save links for older plans kept in this browser.
+- Browse completed team workflows in History, load older pages, and inspect their full saved handoffs. Finished history no longer consumes active-work capacity.
+
+### Fixed
+
+- Reconcile the original result-acceptance request after an interrupted response or reload, preserving task writing and confirmed source links.
+- Keep tasks editable after a confirmed linking refusal, and verify linked plans and returned result files before saving.
+
 ## [2.7.13] — 2026-10-17
 
 ### Fixed

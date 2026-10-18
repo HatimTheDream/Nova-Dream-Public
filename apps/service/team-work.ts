@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { teamCreateSchema, teamControlSchema, handoffReadSchema, type TeamWork, type TeamStep, type TeamAttempt, type TeamConversationAccess } from '../../packages/domain/team-work.js';
+import { teamCreateSchema, teamControlSchema, handoffReadSchema, type TeamWork, type TeamWorkPage, type TeamStep, type TeamAttempt, type TeamConversationAccess } from '../../packages/domain/team-work.js';
 import type { AgentDesign } from '../../packages/domain/workspace-records.js';
 import { canonical, type Draft, type Entity } from '../../packages/domain/contracts.js';
 import type { AssistantOperation } from '../../packages/domain/assistant.js';
@@ -19,6 +19,9 @@ const storedPublicTeam = ({ device, epoch, projectRevision, agents, requests, pa
 const settled = (operation: AssistantOperation) => ['completed', 'failed', 'cancelled'].includes(operation.state);
 const requests = (): Requests => ({ create: randomUUID(), draft: randomUUID(), submit: randomUUID(), cancel: randomUUID() });
 const attempt = ({ agentId, agentName, agentRevision, role, attempts, ...step }: TeamStep): TeamAttempt => ({ ...step, attempt: step.attempt ?? 1 });
+const holdsSlot = (team: TeamWork) => !['complete', 'cancelled'].includes(team.state) || team.steps.some(step => step.state === 'unknown' || step.state === 'running');
+const listSchema = z.object({ view: z.enum(['all', 'active', 'history']).default('all'), limit: z.coerce.number().int().min(1).max(100).default(100), cursor: z.string().min(1).max(512).regex(/^[\w-]+$/).optional(), id: z.uuid().optional() }).strict().refine(value => !value.id || !value.cursor, 'Choose a workflow or a list page.');
+const cursorSchema = z.object({ epoch: z.uuid(), view: z.enum(['all', 'active', 'history']), digest: z.string().regex(/^[a-f0-9]{64}$/), after: z.uuid() }).strict();
 
 /** Sequential ordinary Work sessions. Each retry has a new execution identity;
  * every prior attempt and immutable result remains attached to this workflow. */
@@ -59,7 +62,7 @@ export class TeamWorkService {
     const requestId = this.store.internalRead<string>(key) ?? this.store.internalWrite(key, randomUUID());
     this.store.mutate(team.device, { requestId, epoch: team.epoch, kind: 'draft', entityId: draft.id, expectedRevision: draft.revision, payload: { ...draft.value, text: '', attachments: [] } });
   }
-  private list() { return this.store.internalList<SavedTeam>('team:run:').filter(t => t.epoch === this.store.epoch).sort((a, b) => b.createdAt - a.createdAt); }
+  private list() { return this.store.internalList<SavedTeam>('team:run:').filter(t => t.epoch === this.store.epoch).sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id)); }
   private read(id: string) { const team = this.store.internalRead<SavedTeam>('team:run:' + id); if (!team || team.epoch !== this.store.epoch) throw new Fault(404, 'team_missing', 'This team workflow is unavailable.'); return team; }
   private save(team: SavedTeam) { return this.store.internalWrite('team:run:' + team.id, { ...team, revision: team.revision + 1, updatedAt: this.now() }); }
   private findingsSource(team: SavedTeam) {
@@ -91,7 +94,29 @@ export class TeamWorkService {
     try { this.findingsSource(team); } catch (error) { reason = error instanceof Fault ? error.message : 'The original review could not be verified. Inspect its conversation before continuing.'; }
     return { ...run, reviewOutcome, applyFindings: { available: !reason, ...(reason ? { reason } : {}), round: team.reviewRound ?? 0, limit: teamReviewRoundLimit } };
   }
-  state() { return { runs: this.list().slice(0, 100).map(team => this.publicTeam(team)) }; }
+  state(raw: unknown = {}): TeamWorkPage {
+    const input = listSchema.parse(raw);
+    if (input.id) return { runs: [this.publicTeam(this.read(input.id))], nextCursor: null };
+    const teams = this.list().filter(team => input.view === 'all' || holdsSlot(team) === (input.view === 'active'));
+    // Only this view's retained identities/revisions bind the page. Active polling
+    // cannot invalidate history; changed history requires an explicit refresh.
+    const digest = createHash('sha256').update(canonical(teams.map(team => [team.id, team.createdAt, team.revision]))).digest('hex');
+    let start = 0;
+    if (input.cursor) {
+      let cursor: z.infer<typeof cursorSchema>;
+      try { cursor = cursorSchema.parse(JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'))); }
+      catch { throw new Fault(400, 'team_cursor_invalid', 'This workflow page is invalid. Refresh the list.'); }
+      if (cursor.epoch !== this.store.epoch || cursor.view !== input.view) throw new Fault(409, 'team_cursor_scope', 'This page belongs to another workflow list. Refresh the list.');
+      if (cursor.digest !== digest) throw new Fault(409, 'team_list_changed', 'Workflows changed. Refresh the list; saved results are kept.');
+      start = teams.findIndex(team => team.id === cursor.after) + 1;
+      if (!start) throw new Fault(400, 'team_cursor_invalid', 'This workflow page is invalid. Refresh the list.');
+    }
+    const page = teams.slice(start, start + input.limit), last = page.at(-1);
+    return { runs: page.map(team => this.publicTeam(team)), nextCursor: last && start + page.length < teams.length ? Buffer.from(JSON.stringify({ epoch: this.store.epoch, view: input.view, digest, after: last.id })).toString('base64url') : null };
+  }
+  private assertSlot() {
+    if (this.list().filter(holdsSlot).length >= 100) throw new Fault(409, 'team_limit', 'This workspace has 100 active workflows. Finish or reconcile one before starting more; history is kept.');
+  }
   handoff(teamId: unknown, raw: unknown) {
     const team = this.read(z.uuid().parse(teamId)), input = handoffReadSchema.parse(raw);
     if (!team.steps.some(s => s.handoff?.id === input.id || s.attempts?.some(a => a.handoff?.id === input.id))) throw new Fault(404, 'team_handoff_missing', 'This result is not part of the saved workflow.');
@@ -120,7 +145,7 @@ export class TeamWorkService {
     if (this.closing) throw new Fault(503, 'team_closing', 'Team work is restarting.');
     const input = teamCreateSchema.parse(raw);
     const receipt = this.store.admit(device, input, { type: 'team.create', ...input }, () => {
-      if (this.list().length >= 100) throw new Fault(409, 'team_limit', 'This workspace already contains 100 team workflows.');
+      this.assertSlot();
       const project = this.store.readEntity('project', input.projectId);
       if (this.store.projectIsDeleted(input.projectId)) throw new Fault(409, 'project_deleted', 'Restore this Project from Deleted before starting a new team workflow.');
       if (!project?.value.workspace?.folder || project.value.space !== 'work' || project.value.workspace.environment !== 'local') throw new Fault(409, 'team_project', 'Choose a Work Project with one host checkout. GitHub projects are prepared this way automatically.');
@@ -140,6 +165,7 @@ export class TeamWorkService {
       if (team.revision !== input.revision) throw new Fault(409, 'team_changed', 'The workflow advanced. Review its current stage.');
       if (input.action === 'apply_findings') {
         const source = this.findingsSource(team), round = (team.reviewRound ?? 0) + 1, next = team.steps.length;
+        this.assertSlot();
         const followUp = [source.builder, source.reviewer].map(index => {
           const original = team.steps[index];
           return { agentId: original.agentId, agentName: original.agentName, agentRevision: original.agentRevision, role: original.role, state: 'waiting' as const, attempt: 1, reviewRound: round, fixReviewId: source.review.operationId };

@@ -160,7 +160,10 @@ import assert from 'node:assert/strict';
 // largest deferred79,719. Existing Zod/Markdown/icon assets are byte-identical;
 // growth is approved UI/artwork, with no new heavy dependency or duplicate art.
 // Bound this capability tranche at690KB; startup/chunk ceilings remain fixed.
-export const clientLimits = { startup: 180000, total: 690000, deferredChunk: 80000 };
+// 2.8 adds durable task/work links and paged team history without dependencies.
+// Measured total690810 (+940 /0.14% over2.7.13), startup179871 and largest
+// deferred79901. Bound the capability tranche at692KB; retain startup/chunk limits.
+export const clientLimits = { startup: 180000, total: 692000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

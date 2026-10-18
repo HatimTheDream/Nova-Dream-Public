@@ -13,11 +13,11 @@ import type { AgentDesign } from '../packages/domain/workspace-records.js';
 import type { Draft,Entity,Project } from '../packages/domain/contracts.js';
 import type { AssistantService } from '../apps/service/assistant.js';
 import type { AssistantOperation,Conversation } from '../packages/domain/assistant.js';
-import type { TeamConversationAccess } from '../packages/domain/team-work.js';
+import type { TeamConversationAccess,TeamWork } from '../packages/domain/team-work.js';
 import { teamReviewRoundLimit, type TeamReviewInput } from '../packages/domain/team-review.js';
 
 function fixture(t:any){
-  const directory=mkdtempSync(join(tmpdir(),'nova-team-')),store=new Store(directory),device=store.session().deviceId;
+  const directory=mkdtempSync(join(tmpdir(),'nova-team-'));let store=new Store(directory);const device=store.session().deviceId;
   let time=1_800_000_000_000;const now=()=>time,generation=randomUUID();
   const agents=['Researcher','Builder','Reviewer'].map(name=>store.mutate(device,{requestId:randomUUID(),epoch:store.epoch,kind:'agent',entityId:'agent:'+randomUUID(),expectedRevision:0,payload:{...blankRecord('agent','UTC'),name,position:name,instructions:'Use actual evidence',access:{projects:'read',browser:'read'}}}) as Entity<AgentDesign>);
   const folder=join(directory,'checkout');mkdirSync(folder);
@@ -36,14 +36,101 @@ function fixture(t:any){
     async cancel(_device:string,raw:any){calls.push({type:'cancel',raw});const op=worker.operations().find(o=>o.id===raw.operationId)!;return store.internalWrite('assistant:operation:'+op.id,{...op,cancelRequested:true,state:'cancelled'});},
     async reconcile(){return {} as any;},
   };
-  const service=new TeamWorkService(store,worker as unknown as AssistantService,now);t.after(async()=>{await service.close();store.close();rmSync(directory,{recursive:true,force:true});});
+  let service=new TeamWorkService(store,worker as unknown as AssistantService,now);t.after(async()=>{await service.close();store.close();rmSync(directory,{recursive:true,force:true});});
   const input={requestId:randomUUID(),epoch:store.epoch,projectId:project.id,title:'Make the change',brief:'Implement and verify the requested behavior',maxMinutes:10,steps:agents.map((agent,i)=>({agentId:agent.id,role:['research','build','review'][i]}))};
   const current=()=>service.state().runs[0],finish=(text:string,state:AssistantOperation['state']='completed')=>{const op=worker.operations().find(o=>o.state==='running')!;assert(op,'Fixture has an active operation');store.internalWrite('assistant:operation:'+op.id,{...op,state,text,updatedAt:new Date(time).toISOString(),...(state==='failed'?{error:'Fixture execution failed'}:{})});};
   const control=(action:string)=>service.control(device,{requestId:randomUUID(),epoch:store.epoch,id:current().id,revision:current().revision,action});
-  return {store,device,agents,project,worker,service,calls,input,current,finish,control,folder,now,elapse:(milliseconds:number)=>{time+=milliseconds;}};
+  return {get store(){return store;},device,agents,project,worker,get service(){return service;},calls,input,current,finish,control,folder,now,elapse:(milliseconds:number)=>{time+=milliseconds;},restart:async()=>{await service.close();store.close();store=new Store(directory);service=new TeamWorkService(store,worker as unknown as AssistantService,now);return {store,service};}};
 }
 
 function deferred(){let resolve!:()=>void,reject!:(reason:unknown)=>void;const promise=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+
+function retainTeam(f:ReturnType<typeof fixture>,state:TeamWork['state']='complete',createdAt=f.now(),unknown=false){
+  const id=randomUUID(),terminal=['complete','cancelled'].includes(state);
+  return f.store.internalWrite('team:run:'+id,{
+    id,revision:1,device:f.device,epoch:f.store.epoch,projectId:f.project.id,projectName:f.project.value.name,projectRevision:f.project.revision,
+    title:'Retained '+id,brief:'Keep the original results',folder:f.folder+'/'+id,maxMinutes:10,state,message:'Retained evidence',createdAt,updatedAt:createdAt,next:terminal?2:0,
+    agents:f.agents.slice(0,2),steps:f.agents.slice(0,2).map((agent,index)=>({agentId:agent.id,agentName:agent.value.name,agentRevision:agent.revision,role:index?'build' as const:'research' as const,state:unknown&&index===0?'unknown' as const:terminal?'complete' as const:'waiting' as const,attempt:1,...(terminal?{result:'Saved result '+id}:{})})),
+    requests:[0,1].map(()=>({create:randomUUID(),draft:randomUUID(),submit:randomUUID(),cancel:randomUUID()})),
+  });
+}
+
+test('100 completed or cancelled workflows permit new admission and preserve history and request replay',async t=>{
+  const f=fixture(t),saved=Array.from({length:100},(_,i)=>retainTeam(f,i%2?'complete':'cancelled',i));
+  const admitted=f.service.create(f.device,f.input);await f.service.reconcile();
+  assert.equal(f.service.state({view:'active'}).runs.length,1);
+  assert.equal(f.service.create(f.device,f.input).id,admitted.id);
+  assert.equal(f.calls.filter(call=>call.type==='submit').length,1);
+  for(const team of saved)assert.deepEqual(f.store.internalRead('team:run:'+team.id),team);
+  assert.equal(f.service.state({view:'history'}).runs.length,100);
+});
+
+test('100 paused, attention, stopping and uncertain workflows still block new admission',async t=>{
+  const f=fixture(t),states:TeamWork['state'][]=['paused','attention','stopping','complete'];
+  const saved=Array.from({length:100},(_,i)=>retainTeam(f,states[i%4],i,i%4===3));
+  assert.equal(f.service.state({view:'active'}).runs.length,100);
+  assert.equal(f.service.state({view:'history'}).runs.length,0);
+  assert.throws(()=>f.service.create(f.device,f.input),{code:'team_limit'});
+  assert.equal(f.calls.length,0);
+  assert.deepEqual(f.store.internalList('team:run:').sort((a:any,b:any)=>a.id.localeCompare(b.id)),saved.sort((a,b)=>a.id.localeCompare(b.id)));
+});
+
+test('active polling and worker advancement are not hidden behind newer retained history',async t=>{
+  const f=fixture(t),admitted=f.service.create(f.device,f.input);await f.service.reconcile();
+  for(let i=0;i<120;i++)retainTeam(f,'complete',f.now()+i+1);
+  assert.equal(f.service.state().runs.some(team=>team.id===admitted.id),false);
+  assert.deepEqual(f.service.state({view:'active'}).runs.map(team=>team.id),[admitted.id]);
+  f.finish('Complete original research');await f.service.reconcile();await f.service.reconcile();
+  assert.equal(f.service.state({id:admitted.id}).runs[0].steps[1].state,'running');
+  assert.equal(f.calls.filter(call=>call.type==='submit').length,2);
+});
+
+test('history paging has stable tie ordering, no omissions and ignores unrelated active revisions',t=>{
+  const f=fixture(t),saved=Array.from({length:57},(_,i)=>retainTeam(f,i%2?'cancelled':'complete',Math.floor(i/3)));
+  const active=retainTeam(f,'paused',100),seen:string[]=[];let cursor:string|null=null;
+  do{
+    const page=f.service.state({view:'history',limit:7,...(cursor?{cursor}:{})});
+    assert(page.runs.length<=7);seen.push(...page.runs.map(team=>team.id));cursor=page.nextCursor;
+    active.revision++;f.store.internalWrite('team:run:'+active.id,active);
+  }while(cursor);
+  assert.deepEqual(seen,saved.sort((a,b)=>b.createdAt-a.createdAt||a.id.localeCompare(b.id)).map(team=>team.id));
+  assert.equal(new Set(seen).size,57);
+  const old=saved.at(-1)!;assert.equal(f.service.state({id:old.id}).runs[0].steps[0].result,'Saved result '+old.id);
+});
+
+test('changed, cross-view, cross-epoch and malformed history cursors refuse without deleting results',t=>{
+  const f=fixture(t);for(let i=0;i<4;i++)retainTeam(f,'complete',i);
+  const first=f.service.state({view:'history',limit:2}),cursor=first.nextCursor!;
+  assert.throws(()=>f.service.state({view:'active',cursor}),{code:'team_cursor_scope'});
+  const foreign=JSON.parse(Buffer.from(cursor,'base64url').toString());foreign.epoch=randomUUID();
+  assert.throws(()=>f.service.state({view:'history',cursor:Buffer.from(JSON.stringify(foreign)).toString('base64url')}),{code:'team_cursor_scope'});
+  assert.throws(()=>f.service.state({view:'history',cursor:'not-json'}),{code:'team_cursor_invalid'});
+  retainTeam(f,'cancelled',5);const retained=f.store.internalList('team:run:');
+  assert.throws(()=>f.service.state({view:'history',cursor}),{code:'team_list_changed'});
+  assert.deepEqual(f.store.internalList('team:run:'),retained);
+  for(const team of first.runs)assert.equal(f.service.state({id:team.id}).runs[0].steps[0].result,team.steps[0].result);
+  assert.throws(()=>f.service.state({limit:101}));assert.throws(()=>f.service.state({id:randomUUID()}),{code:'team_missing'});
+});
+
+test('completed workflow, full results, cursor and original create receipt survive a closed-store restart',async t=>{
+  const f=await reviewedTeam(t),original=f.current(),full=fullHandoff(f.service,original.id,original.steps[2].handoff!.id);
+  for(let i=0;i<105;i++)retainTeam(f,'complete',f.now()+i+1);
+  const page=f.service.state({view:'history',limit:25}),next=f.service.state({view:'history',limit:25,cursor:page.nextCursor!});
+  const before=f.store.internalRead('team:run:'+original.id),calls=f.calls.length;
+  const restarted=await f.restart();
+  assert.deepEqual(restarted.service.state({view:'history',limit:25,cursor:page.nextCursor!}),next);
+  assert.equal(restarted.service.state({id:original.id}).runs[0].steps[2].handoff!.id,original.steps[2].handoff!.id);
+  assert.equal(fullHandoff(restarted.service,original.id,original.steps[2].handoff!.id),full);
+  assert.equal(restarted.service.create(f.device,f.input).id,original.id);await restarted.service.reconcile();
+  assert.equal(f.calls.length,calls);assert.deepEqual(restarted.store.internalRead('team:run:'+original.id),before);
+});
+
+test('applying findings cannot reactivate a completed workflow beyond the active limit',async t=>{
+  const f=await reviewedTeam(t),original=f.current(),saved=f.store.internalRead('team:run:'+original.id),calls=f.calls.length;
+  for(let i=0;i<100;i++)retainTeam(f,'paused',i);
+  assert.throws(()=>f.service.control(f.device,{requestId:randomUUID(),epoch:f.store.epoch,id:original.id,revision:original.revision,action:'apply_findings'}),{code:'team_limit'});
+  assert.deepEqual(f.store.internalRead('team:run:'+original.id),saved);assert.equal(f.calls.length,calls);
+});
 
 test('Project removal blocks new teams while an admitted workflow and its request survive unchanged', async t => {
   const f = fixture(t), project = f.store.readEntity('project', f.project.id), team = f.service.create(f.device, f.input);

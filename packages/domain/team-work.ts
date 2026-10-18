@@ -12,4 +12,6 @@ export type TeamHandoffPage=TeamHandoff&{text:string;offset:number;nextOffset:nu
 export type TeamAttempt={review?:TeamReviewReport;attempt:number;state:'waiting'|'running'|'complete'|'failed'|'cancelled'|'unknown'|'skipped';conversationId?:string;operationId?:string;result?:string;handoff?:TeamHandoff;startedAt?:number;finishedAt?:number;message?:string};
 export type TeamStep=Omit<TeamAttempt,'attempt'>&{agentId:string;agentName:string;agentRevision:number;role:typeof teamRoles[number];attempt?:number;attempts?:TeamAttempt[];reviewRound?:number;fixReviewId?:string};
 export type TeamWork={reviewRound?:number;reviewOutcome?:'needs_changes'|'ready_for_review'|'unreported';applyFindings?:{available:boolean;reason?:string;round:number;limit:number};id:string;revision:number;projectId:string;projectName:string;title:string;brief:string;folder:string;maxMinutes:number;state:'running'|'paused'|'stopping'|'complete'|'cancelled'|'attention';message:string;steps:TeamStep[];next:number;createdAt:number;updatedAt:number};
+export type TeamWorkView='all'|'active'|'history';
+export type TeamWorkPage={runs:TeamWork[];nextCursor:string|null};
 export type TeamConversationAccess={epoch:string;teamId:string;agentId:string;agentRevision:number;access:AgentAccess;role:TeamStep['role'];handoffIds?:string[];review?:TeamReviewScope};

@@ -80,7 +80,7 @@ for (const stage of ['assignment', 'task', 'start'] as const) {
     assert.equal(host.entities.size, 2, 'one plan and one linked task');
     assert.equal(host.attempts.size, 1, 'one execution admission');
     assert.equal(result.task?.revision, 5);
-    assert.equal(result.task?.value.origin?.id, result.plan?.id);
+    assert.equal(result.task?.value.workLink?.assignmentId, result.plan?.id);
     const repeated = stage === 'start' ? host.starts : host.commits.filter(command => command.kind === stage);
     assert.equal(repeated.length, 2);
     assert.deepEqual(repeated[0], repeated[1], 'the whole original request is replayed');
@@ -170,7 +170,7 @@ test('malformed or inconsistent retained stages fail closed', async () => {
   const { scope, journal } = fixture(), host = service(journal);
   const complete = await resumeTaskAssistantLaunch(journal, scope, host.io);
   const bad = [
-    {}, { ...journal, version: 2 }, { ...journal, capturedTask: { ...journal.capturedTask, id: 'task:another' } },
+    {}, { ...journal, version: 3 }, { ...journal, capturedTask: { ...journal.capturedTask, id: 'task:another' } },
     { ...complete, plan: { ...complete.plan!, id: 'assignment:another' } },
     { ...complete, linkCommand: { ...complete.linkCommand!, expectedRevision: 99 } },
     { ...complete, task: { ...complete.task!, revision: 99 } },

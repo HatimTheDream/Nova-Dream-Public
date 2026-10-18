@@ -2,6 +2,12 @@ import type { Entity, Project, Task } from './contracts.js';
 import type { Assignment, AgentDesign } from './workspace-records.js';
 import type { AssignmentAttempt } from './assignments.js';
 
+/** Work is independent of the task's original source. Legacy assignment sources remain readable. */
+export function taskWorkOrigin(task: Task): { kind: 'assignment'; id: string; revision: number } | undefined {
+  return task.workLink ? { kind: 'assignment', id: task.workLink.assignmentId, revision: task.workLink.assignmentRevision }
+    : task.origin?.kind === 'assignment' ? { kind: 'assignment', id: task.origin.id, revision: task.origin.revision } : undefined;
+}
+
 /** Seed the plan brief from what the task already says, so the dialog starts with real context. */
 export function briefFromTask(task: Task, project?: Entity<Project>): string {
   const title = task.title.trim();

@@ -1,10 +1,10 @@
 import { LoadingRing } from './ModuleLoading';
 import { useEffect, useState } from 'react';
-import { canAcceptAttempt, workResultPayload } from '../../../packages/domain/task-work';
-import { commit, request, ApiError } from './api';
+import { canAcceptAttempt, taskWorkOrigin } from '../../../packages/domain/task-work';
+import { request } from './api';
 import { Dialog } from './ui';
 import { AssignmentReview } from './AssignmentReview';
-import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
+import type { Task } from '../../../packages/domain/contracts';
 import type { AssignmentAttempt } from '../../../packages/domain/assignments';
 
 type Reading = { fileId: string; name: string; page: number; pages: number; view: 'text' | 'image'; truncated: boolean; at: string };
@@ -15,9 +15,9 @@ const stateLabels: Record<AssignmentAttempt['state'], string> = {
   returned: 'Returned', failed: 'Failed', cancelled: 'Stopped', unknown: 'Needs check',
 };
 
-export function TaskWorkReview({ taskId, draftValue, draftRevision, attemptId, snapshot, close, accepted }: {
-  taskId: string; draftValue: Task; draftRevision: number; attemptId: string; snapshot: Snapshot;
-  close: () => void; accepted: (entity: Entity<Task>) => void;
+export function TaskWorkReview({ draftValue, attemptId, close, onAccept, pending, saveError, acceptedAttemptId }: {
+  draftValue: Task; attemptId: string; close: () => void;
+  onAccept: (attempt: AssignmentAttempt) => Promise<boolean>; pending: boolean; saveError: string; acceptedAttemptId?: string;
 }) {
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState('');
@@ -35,25 +35,16 @@ export function TaskWorkReview({ taskId, draftValue, draftRevision, attemptId, s
   }, [attemptId]);
   if (showInputs) return <AssignmentReview id={attemptId} close={() => setShowInputs(false)} />;
   const attempt = detail?.attempt;
-  const alreadyLinked = draftValue.workResult?.attemptId === attemptId;
+  const alreadyLinked = acceptedAttemptId === attemptId;
+  const planLinked = taskWorkOrigin(draftValue)?.id === attempt?.assignmentId;
   const accept = async () => {
-    if (!attempt || busy) return;
+    if (!attempt || busy || !planLinked) return;
     setBusy(true); setAcceptError('');
     try {
-      const entity = await commit<Task>({
-        kind: 'task', entityId: taskId, requestId: crypto.randomUUID(), epoch: snapshot.epoch,
-        expectedRevision: draftRevision,
-        payload: { ...draftValue, workResult: workResultPayload(attempt, Date.now()) },
-      });
-      accepted(entity);
+      await onAccept(attempt);
     } catch (reason) {
-      if (reason instanceof ApiError && (reason.code === 'revision_conflict' || reason.code === 'epoch_changed')) {
-        setAcceptError('The task changed while reviewing. Close and try again.');
-      } else {
-        setAcceptError(reason instanceof Error ? reason.message : 'Accepting the result failed.');
-      }
-      setBusy(false);
-    }
+      setAcceptError(reason instanceof Error ? reason.message : 'Accepting the result failed.');
+    } finally { setBusy(false); }
   };
   return <Dialog title="Review assistant work" close={close}>
     {error && <p role="alert">{error}</p>}
@@ -83,14 +74,14 @@ export function TaskWorkReview({ taskId, draftValue, draftRevision, attemptId, s
         {alreadyLinked ? <>
           <span className="metadata">Result accepted · linked to this task.</span>
           <div className="button-row"><button type="button" className="quiet" onClick={close}>Done</button></div>
-        </> : canAcceptAttempt(attempt) ? <>
-          {acceptError && <p role="alert">{acceptError}</p>}
+        </> : canAcceptAttempt(attempt) && planLinked ? <>
+          {(acceptError || saveError) && <p role="alert">{acceptError || saveError}</p>}
           <div className="button-row">
-            <button type="button" className="primary" disabled={busy} onClick={() => void accept()}>{busy ? 'Accepting…' : 'Accept result'}</button>
-            <button type="button" className="quiet" disabled={busy} onClick={close}>Reject</button>
+            <button type="button" className="primary" disabled={busy} onClick={() => void accept()}>{busy ? 'Checking…' : pending ? 'Reconcile acceptance' : 'Accept result'}</button>
+            <button type="button" className="quiet" disabled={busy} onClick={close}>{pending ? 'Keep for later' : 'Reject'}</button>
           </div>
-          <p className="metadata">Reject closes without linking. The attempt stays in history.</p>
-        </> : <div className="button-row"><button type="button" onClick={close}>Done</button></div>}
+          <p className="metadata">{pending ? 'Original save kept. Reconcile it before editing the task.' : 'Reject closes without linking. The attempt stays in history.'}</p>
+        </> : <><div className="button-row"><button type="button" onClick={close}>Done</button></div>{!planLinked && <p className="metadata">Save the work link in Task details before accepting this result.</p>}</>}
       </div>
     </> : !error && <LoadingRing label="Loading attempt…" />}
   </Dialog>;

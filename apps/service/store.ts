@@ -567,10 +567,36 @@ export class Store {
         seen.add(parentId); parentId = parent.value.parentTaskId;
       }
     }
-    if (current && canonical(task.origin) !== canonical(current.value.origin)) throw new Fault(409, 'source_changed', 'Keep this task linked to its original source.');
+    if (current && canonical(task.origin) !== canonical(current.value.origin)) {
+      // Retained pre-2.8 launch requests used origin for tasks without a source.
+      // Admit only their original assignment link; never replace another source.
+      const plan = !current.value.origin && task.origin?.kind === 'assignment' ? this.get('assignment', task.origin.id) : undefined;
+      if (!plan || plan.value.archived || plan.revision !== task.origin?.revision || (current.value.workLink && current.value.workLink.assignmentId !== plan.id) || (plan.value.projectId ?? null) !== (task.projectId ?? null)) throw new Fault(409, 'source_changed', 'Keep this task linked to its original source.');
+    }
     if (!current && task.origin) {
       const source = this.get(task.origin.kind, task.origin.id);
       if (!source || source.value.archived || source.revision !== task.origin.revision) throw new Fault(409, 'source_changed', 'Review the current source before linking a new task.');
+    }
+    // A client that has not received this additive field cannot erase its link.
+    if (!task.workLink && current?.value.workLink) task.workLink = current.value.workLink;
+    if (current?.value.workLink && canonical(task.workLink) !== canonical(current.value.workLink)) throw new Fault(409, 'task_work_changed', 'Keep the saved work link. Reopen this task to review its plan.');
+    if (task.workLink && !current?.value.workLink) {
+      const plan = this.get('assignment', task.workLink.assignmentId);
+      if (!current || current.value.trashed || task.workLink.taskRevision !== current.revision || !plan || plan.value.archived || plan.revision !== task.workLink.assignmentRevision ||
+          (plan.value.projectId ?? null) !== (task.projectId ?? null) || (task.origin?.kind === 'assignment' && task.origin.id !== plan.id)) throw new Fault(409, 'task_work_changed', 'Review the current task and saved plan before linking work.');
+    }
+    if (task.workResult && canonical(task.workResult) !== canonical(current?.value.workResult)) {
+      const attempt = this.internalRead<AssignmentAttempt>(`assignments:attempt:${task.workResult.attemptId}`);
+      const assignmentId = task.workLink?.assignmentId ?? (task.origin?.kind === 'assignment' ? task.origin.id : undefined);
+      if (!attempt || attempt.epoch !== this.epoch || attempt.state !== 'returned' || attempt.terminal?.status !== 'ok' || !attempt.runId || !attempt.nativeSessionId || !attempt.result || attempt.assignmentId !== task.workResult.assignmentId ||
+          attempt.assignmentId !== assignmentId || (task.workResult.fileId !== undefined && task.workResult.fileId !== attempt.result.file.id)) throw new Fault(409, 'task_work_result_changed', 'Review a returned result from this task’s saved plan before accepting it.');
+      try {
+        const file = this.download(attempt.result.file.id);
+        if (canonical(file.metadata) !== canonical(attempt.result.file)) throw new Fault(409, 'task_work_result_changed', 'The saved result file changed. Review the original attempt.');
+      } catch (error) {
+        if (error instanceof Fault && ['attachment_missing', 'attachment_corrupt'].includes(error.code)) throw new Fault(409, 'task_work_result_changed', 'The saved result file is unavailable or changed. Review the original attempt.');
+        throw error;
+      }
     }
     if (task.trashed || current?.value.trashed) {
       if (!current) throw new Fault(409, 'task_trashed', 'Save a task before moving it to Trash.');
