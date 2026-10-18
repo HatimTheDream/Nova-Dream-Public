@@ -1,3 +1,9 @@
+## [2.8.5] — 2026-10-18
+
+### Fixed
+
+- Bind startup qualification to the exact current candidate materializer, preventing an obsolete verifier dependency from blocking deployment preparation.
+
 ## [2.8.4] — 2026-10-18
 
 ### Fixed
