@@ -1,3 +1,9 @@
+## [2.7.10] — 2026-10-17
+
+### Improved
+
+- Press / in Tasks to focus search. The shortcut leaves writing, composition, menus and dialogs alone; Escape still clears search.
+
 ## [2.7.9] — 2026-10-17
 
 ### Fixed
