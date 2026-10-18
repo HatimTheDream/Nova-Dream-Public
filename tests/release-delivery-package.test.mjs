@@ -1,16 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID, generateKeyPairSync } from 'node:crypto';
+import { randomUUID, generateKeyPairSync, sign } from 'node:crypto';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyCandidate } from '../scripts/candidate.mjs';
 import { sha256 } from '../scripts/release-plan.mjs';
 import { createRouteAdapter, createFrontendPackageAdapter, createFrontendSignAdapter } from '../scripts/release-delivery-package.mjs';
+import { withVerificationPass, verificationEffect } from '../scripts/release-verification-pass.mjs';
 
 const json = x => Buffer.from(JSON.stringify(x) + '\n');
-function fixture() {
+function fixture(t) {
   const root = fileURLToPath(new URL(`../support/fixtures/package-${randomUUID()}/`, import.meta.url)); mkdirSync(root, { recursive: true });
+  t?.after(() => { assert.equal(dirname(root), fileURLToPath(new URL('../support/fixtures', import.meta.url))); fs.rmSync(root, { recursive: true, force: true }); });
   const put = (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); const raw = Buffer.isBuffer(bytes) ? bytes : json(bytes); writeFileSync(path, raw); return { path, sha256: sha256(raw) }; };
   const source = (side, base = false) => {
     const path = join(root, `${side}-${base ? 'base' : 'target'}`), commit = (side === 'private' ? 'a' : 'b').repeat(40);
@@ -63,4 +67,78 @@ test('invalid signature and a different trusted signing key are rejected without
   f.descriptor.operation.trustedPublicKeySha256 = publicRef.sha256; await adapter.validate({ descriptor: f.descriptor, input });
   const key = randomUUID(); writeFileSync(join(f.root, `delivery-signature-${key}.sig`), Buffer.alloc(64));
   await assert.rejects(adapter.observe({ descriptor: f.descriptor, intent: { key, input }, journal: { directory: f.root } }), /signature-invalid/);
+});
+
+function countOpens(t, paths) {
+  const original = fs.openSync, counts = new Map(paths.map(path => [resolve(path), 0]));
+  fs.openSync = function(path, ...args) {
+    const key = typeof path === 'string' ? resolve(path) : null;
+    if (counts.has(key)) counts.set(key, counts.get(key) + 1);
+    return original.call(this, path, ...args);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fs.openSync = original; syncBuiltinESMExports(); });
+  return path => counts.get(resolve(path));
+}
+
+test('route validation and result verification share exact retained reads only within one pure pass', async t => {
+  const f = fixture(t), adapter = createRouteAdapter(f.bases), input = await adapter.input({ prior: f.prior });
+  const context = { descriptor: f.descriptor, input, intent: { input, key: randomUUID() }, journal: { directory: f.root } };
+  const archives = [f.targets.private.archive.path, f.targets.public.archive.path], reads = countOpens(t, archives);
+  await withVerificationPass(context, async c => {
+    await adapter.validate(c); const value = await adapter.observe(c); await adapter.verify(value, c);
+    for (const archive of archives) assert.equal(reads(archive), 1);
+    value.output.route = 'full'; await assert.rejects(adapter.verify(value, c), /route-result-changed/);
+    assert.equal((await adapter.observe(c)).output.route, 'frontend');
+    const changed = { ...c, descriptor: { ...f.descriptor, operation: { ...f.descriptor.operation, id: randomUUID() } } };
+    await adapter.validate(changed);
+    for (const archive of archives) assert.equal(reads(archive), 2, 'another operation cannot borrow verified bytes');
+  });
+  await withVerificationPass(context, async c => adapter.validate(c));
+  for (const archive of archives) assert.equal(reads(archive), 3, 'resume starts with a fresh read');
+});
+
+test('package and signature observation reuse complete verification without retaining caller mutations', async t => {
+  const f = fixture(t); f.prior.route = await route(f);
+  const pack = createFrontendPackageAdapter(f), input = await pack.input({ prior: f.prior });
+  const context = { descriptor: f.descriptor, input, intent: { input, key: randomUUID() }, journal: { directory: f.root } };
+  const packaged = await pack.execute(context);
+  const keys = generateKeyPairSync('ed25519'), publicKey = f.put(join(f.root, 'public.pem'), Buffer.from(keys.publicKey.export({ format: 'pem', type: 'spki' })));
+  f.descriptor.operation.trustedPublicKeySha256 = publicKey.sha256;
+  const signing = { privateKeyPath: 'never-opened', publicKey, previousManifest: 'initial' }, signer = createFrontendSignAdapter(signing);
+  const signInput = await signer.input({ prior: { package: packaged.output } }), key = randomUUID();
+  const signaturePath = join(f.root, `delivery-signature-${key}.sig`);
+  writeFileSync(signaturePath, sign(null, readFileSync(packaged.output.manifest.path), keys.privateKey));
+  const signContext = { descriptor: f.descriptor, input: signInput, intent: { input: signInput, key }, journal: { directory: f.root } };
+  const paths = [f.targets.private.archive.path, packaged.output.archive.path, signaturePath], reads = countOpens(t, paths);
+  await withVerificationPass(context, async c => {
+    await pack.validate(c); const value = await pack.observe(c); await pack.verify(value, c);
+    assert.equal(reads(paths[0]), 1); assert.equal(reads(paths[1]), 1);
+    value.output.archive.sha256 = '0'.repeat(64); await assert.rejects(pack.verify(value, c), /package-result-changed/);
+    assert.equal((await pack.observe(c)).output.archive.sha256, packaged.output.archive.sha256);
+  });
+  await withVerificationPass(signContext, async c => {
+    await signer.validate(c); const value = await signer.observe(c); await signer.verify(value, c);
+    assert.equal(reads(signaturePath), 1);
+    value.output.signature.sha256 = '0'.repeat(64); await assert.rejects(signer.verify(value, c), /signature-result-changed/);
+    assert.notEqual((await signer.observe(c)).output.signature.sha256, '0'.repeat(64));
+  });
+  await withVerificationPass(signContext, async c => signer.observe(c)); assert.equal(reads(signaturePath), 2);
+  writeFileSync(signaturePath, Buffer.alloc(64));
+  await assert.rejects(withVerificationPass(signContext, c => signer.observe(c)), /signature-invalid/);
+});
+
+test('lost effect responses invalidate package verification and a resumed operation rejects changed artifacts', async t => {
+  const f = fixture(t); f.prior.route = await route(f);
+  const adapter = createFrontendPackageAdapter(f), input = await adapter.input({ prior: f.prior });
+  const context = { descriptor: f.descriptor, input, intent: { input, key: randomUUID() }, journal: { directory: f.root } };
+  const packaged = await adapter.execute(context);
+  await withVerificationPass(context, async c => {
+    await adapter.observe(c);
+    await assert.rejects(verificationEffect(c, async () => {
+      writeFileSync(packaged.output.archive.path, 'corrupt'); throw Error('lost original response');
+    }), /lost original response/);
+    await assert.rejects(adapter.observe(c), /package-output-changed/);
+  });
+  await assert.rejects(withVerificationPass(context, c => adapter.observe(c)), /package-output-changed/);
 });

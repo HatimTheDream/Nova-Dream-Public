@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { frontendRegular, validateFrontendManifest } from './frontend-contract.mjs';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
+import { verificationOnce, verificationEffect } from './release-verification-pass.mjs';
 
 const need = (v, why) => { if (!v) throw Error(why); };
 const roles = ['archive', 'manifest', 'signature'];
@@ -26,7 +27,9 @@ export function frontendPublicationInput({ descriptor, prior, tools, releaseIds 
     tools, releaseIds, helperHashes: frontendPublicationHelpers() };
 }
 
-export function verifyFrontendPublicationInput(input, descriptor, { admission = false } = {}) {
+const publicationNamespace = {};
+export function verifyFrontendPublicationInput(input, descriptor, { admission = false } = {}, context = {}) {
+  const checked = verificationOnce(context, publicationNamespace, { input, descriptor, directory: context.journal?.directory ?? null }, () => {
   need(input.operationId === descriptor.operation.id && input.version === descriptor.operation.version && input.buildVersion === descriptor.operation.buildVersion
     && input.baseCandidateId === descriptor.operation.priorCandidateId && input.trustedPublicKeySha256 === descriptor.operation.trustedPublicKeySha256,
   'frontend-publication-operation-changed');
@@ -35,7 +38,7 @@ export function verifyFrontendPublicationInput(input, descriptor, { admission = 
   need(isDeepStrictEqual(input.helperHashes, frontendPublicationHelpers()), 'frontend-publication-helper-changed');
   for (const name of ['git', 'python', 'node']) readEvidenceFile(input.tools[name], { maximum: 128 * 1024 ** 2 });
   const manifestRaw = readEvidenceFile(input.signed.manifest, { maximum: 128 * 1024 });
-  const manifest = validateFrontendManifest(JSON.parse(manifestRaw), { admission });
+  const manifest = validateFrontendManifest(JSON.parse(manifestRaw), { admission: false });
   const archive = readEvidenceFile(input.signed.archive, { maximum: 128 * 1024 ** 2 });
   const signature = readEvidenceFile(input.signed.signature, { maximum: 64 });
   const key = createPublicKey(readEvidenceFile(input.signed.publicKey, { maximum: 16384 }));
@@ -46,18 +49,22 @@ export function verifyFrontendPublicationInput(input, descriptor, { admission = 
     && manifest.frontendId === input.signed.frontendId && manifest.sequence === input.signed.sequence
     && manifest.artifact.sha256 === sha256(archive) && manifest.artifact.bytes === archive.length, 'frontend-publication-contract-changed');
   need(manifest.artifact.url === `https://github.com/HatimTheDream/Nova-Dream-Public/releases/download/v${input.version}/nova-${input.version}-frontend.tgz`, 'frontend-publication-origin-changed');
-  return roles.map(role => ({ role, name: `nova-${input.version}-frontend.${extensions[role]}`, ...input.signed[role],
-    bytes: role === 'archive' ? archive.length : role === 'manifest' ? manifestRaw.length : signature.length }));
+  return { manifest, specs: roles.map(role => ({ role, name: `nova-${input.version}-frontend.${extensions[role]}`, ...input.signed[role],
+    bytes: role === 'archive' ? archive.length : role === 'manifest' ? manifestRaw.length : signature.length })) };
+  });
+  // Time-sensitive admission is always evaluated at the actual call time.
+  validateFrontendManifest(checked.manifest, { admission });
+  return structuredClone(checked.specs);
 }
 
 export function createFrontendPublicationAdapter({ tools, releaseIds, command, storeReceipt }) {
   const expected = ({ descriptor, prior }) => frontendPublicationInput({ descriptor, prior, tools, releaseIds });
   const validate = context => {
     need(isDeepStrictEqual(context.input, expected(context)), 'frontend-publication-input-changed');
-    return verifyFrontendPublicationInput(context.input, context.descriptor);
+    return verifyFrontendPublicationInput(context.input, context.descriptor, {}, context);
   };
   const run = async context => {
-    const input = context.intent.input, specs = verifyFrontendPublicationInput(input, context.descriptor), assets = [];
+    const input = context.intent.input, specs = verifyFrontendPublicationInput(input, context.descriptor, {}, context), assets = [];
     // The aggregate may be durable even when its parent observation was lost.
     // Preserve its original readback paths instead of rewriting it with new ones.
     const retained = retainedFrontendPublication(context, specs, releaseIds);
@@ -87,11 +94,14 @@ export function createFrontendPublicationAdapter({ tools, releaseIds, command, s
     const bytes = Buffer.from(JSON.stringify(output) + '\n'), receipt = storeReceipt(context.journal, context.intent.key, 'frontend-publication.json', bytes);
     return { state: 'completed', reason: 'signed-frontend-assets-published', externalId: `${releaseIds.public}:${context.intent.key}`, receipt, output };
   };
-  return { input: async context => expected(context), validate, execute: run, observe: run,
+  // Both paths can continue a never-started asset effect; no read-only cache
+  // may survive a publication write or an uncertain/lost response.
+  const advance = context => verificationEffect(context, run);
+  return { input: async context => expected(context), validate, execute: advance, observe: advance,
     verify: async (result, context) => {
       if (result.externalId) need(result.externalId === `${releaseIds.public}:${context.intent.key}`, 'frontend-publication-external-id-changed');
       if (result.state !== 'completed') return;
-      const specs = verifyFrontendPublicationInput(context.intent.input, context.descriptor);
+      const specs = verifyFrontendPublicationInput(context.intent.input, context.descriptor, {}, context);
       verifyPublicationResult(result, context, specs, releaseIds);
     } };
 }
