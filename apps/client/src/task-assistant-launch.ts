@@ -54,7 +54,7 @@ export class TaskAssistantLaunchError extends Error {
 }
 
 function invalid(): never {
-  throw new TaskAssistantLaunchError('task_launch_invalid', 'The kept Assistant request could not be verified. Keep it for recovery; no new work was started.');
+  throw new TaskAssistantLaunchError('task_launch_invalid', 'Request unverified. Keep it for recovery; further work is blocked.');
 }
 function linkedValue(journal: TaskAssistantLaunchJournal): Task {
   const origin = journal.capturedTask.value.origin;
@@ -70,7 +70,7 @@ export function readTaskAssistantLaunch(value: unknown, scope: TaskAssistantLaun
   if (!parsed.success) return invalid();
   const journal = parsed.data as TaskAssistantLaunchJournal;
   if (canonical(journal.scope) !== canonical(scope)) {
-    throw new TaskAssistantLaunchError('task_launch_scope', 'This kept request belongs to another task, device or workspace. Reopen its original task to reconcile it.');
+    throw new TaskAssistantLaunchError('task_launch_scope', 'Wrong task, device or workspace. Reopen the original task.');
   }
   const { capturedTask, planCommand, plan, linkCommand, task, startRequest, attempt } = journal;
   if (capturedTask.id !== scope.taskId || capturedTask.value.trashed || planCommand.epoch !== scope.epoch ||
@@ -112,7 +112,7 @@ export async function resumeTaskAssistantLaunch(value: TaskAssistantLaunchJourna
   let journal = readTaskAssistantLaunch(value, scope)!;
   const keep = (next: TaskAssistantLaunchJournal) => {
     const checked = readTaskAssistantLaunch(next, scope)!;
-    if (!io.save(structuredClone(checked))) throw new TaskAssistantLaunchError('task_launch_storage', 'The original Assistant request could not be kept on this device. Keep this window open and free browser storage before continuing.');
+    if (!io.save(structuredClone(checked))) throw new TaskAssistantLaunchError('task_launch_storage', 'Request not saved. Keep this window open and free browser storage.');
     journal = checked;
   };
   if (journal.attempt || journal.linkRefusal) return journal;

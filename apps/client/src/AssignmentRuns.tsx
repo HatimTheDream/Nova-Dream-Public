@@ -19,7 +19,7 @@ function AssignmentTime({ attempt }: { attempt: AssignmentAttempt }) {
   return <p className="metadata">{clock.expired ? 'The time limit has elapsed; waiting for the confirmed outcome.' : <>Time before requesting stop: <time dateTime={new Date(attempt.deadlineAt).toISOString()}>{clock.remaining}</time>. Approval waiting is included.</>}</p>;
 }
 
-const labels: Record<AssignmentAttempt['state'], string> = { prepared: 'Preparing', dispatching: 'Starting', running: 'Working', stopping: 'Stopping', returned: 'Ready for review', failed: 'Ended with an error', cancelled: 'Stopped', unknown: 'Needs reconciliation' };
+import { assignmentStatusLabels as labels } from './assignment-status';
 export function AssignmentRuns({ entity, snapshot, dirty, refresh, openContent }: { entity: Entity<Assignment>; snapshot: Snapshot; dirty: boolean; refresh: () => Promise<void>; openContent?: (id: string) => void }) {
   const key = `e3:assignment-start:${snapshot.deviceId}:${snapshot.epoch}:${entity.id}:${retainedWindowId}`;
   const [pending, setPending] = useState<AssignmentStart | undefined>(() => readLocal(key));

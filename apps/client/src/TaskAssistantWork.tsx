@@ -1,26 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { attemptsForPlan, briefFromTask } from '../../../packages/domain/task-work';
-import { assignmentTerminal, type AssignmentAttempt, type AssignmentState } from '../../../packages/domain/assignments';
+import { assignmentTerminal, type AssignmentState } from '../../../packages/domain/assignments';
 import { commit, mayPoll, request, saveLocal } from './api';
 import { pollReader } from './polling';
 import { RefreshReader } from './refresh-reader';
+import { assignmentStatusLabels as attemptLabels } from './assignment-status';
 import { createTaskAssistantLaunch, readTaskAssistantLaunch, resumeTaskAssistantLaunch, taskAssistantLaunchFailure, type TaskAssistantLaunchJournal, type TaskAssistantLaunchScope } from './task-assistant-launch';
 import { Dialog } from './ui';
 import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
 
-const attemptLabels: Record<AssignmentAttempt['state'], string> = {
-  prepared: 'Preparing', dispatching: 'Starting', running: 'Working', stopping: 'Stopping',
-  returned: 'Ready for review', failed: 'Ended with an error', cancelled: 'Stopped', unknown: 'Needs reconciliation',
-};
 const timeLimits = [1, 2, 3, 5, 10];
-const message = (reason: unknown) => reason instanceof Error ? reason.message : 'The host has not confirmed this request.';
+const message = (reason: unknown) => reason instanceof Error ? reason.message : 'Request not confirmed.';
 
 function loadLaunch(key: string, scope: TaskAssistantLaunchScope) {
   // An unreadable journal must never authorize a replacement execution.
   const raw = localStorage.getItem(key);
   if (raw === null) return undefined;
   const value: unknown = JSON.parse(raw);
-  if (value === null) throw new Error('The original request record is incomplete.');
+  if (value === null) throw new Error('Saved request is incomplete.');
   return readTaskAssistantLaunch(value, scope);
 }
 
@@ -35,7 +32,7 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
   const key = `e3:task-assistant-launch:${scope.deviceId}:${scope.epoch}:${taskId}`;
   const [kept, setKept] = useState(() => {
     try { return { journal: loadLaunch(key, scope), error: '' }; }
-    catch { return { journal: undefined as TaskAssistantLaunchJournal | undefined, error: 'The kept Assistant request could not be read. Keep this device’s saved data for recovery; a new request is blocked.' }; }
+    catch { return { journal: undefined as TaskAssistantLaunchJournal | undefined, error: 'Cannot read the saved request. Keep browser data; new work is blocked.' }; }
   });
   const journal = kept.journal;
   const [dialogOpen, setDialogOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -55,7 +52,7 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
     const changed = (event: StorageEvent) => {
       if (event.key !== key || flight.current) return;
       try { setKept({ journal: loadLaunch(key, scope), error: '' }); }
-      catch { setKept(current => ({ ...current, error: 'The original Assistant request cannot be read. No new work will be submitted.' })); }
+      catch { setKept(current => ({ ...current, error: 'Cannot read the saved request. Keep browser data; new work is blocked.' })); }
     };
     window.addEventListener('storage', changed);
     return () => window.removeEventListener('storage', changed);
@@ -78,14 +75,14 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
     if (flight.current || blocked || kept.error || !saved) return;
     flight.current = true; setBusy(true); setError(''); setFailure(undefined); callbacks.current.onPendingChange(true);
     try {
-      if (!navigator.locks) throw new Error('This browser cannot coordinate starting work across windows. Open Nova in a browser with Web Locks support.');
+      if (!navigator.locks) throw new Error('This browser cannot coordinate work across windows. Update or switch browsers.');
       await navigator.locks.request(key, { ifAvailable: true }, async lock => {
-        if (!lock) throw new Error('This task’s request is being checked in another window. Wait for that window to finish.');
+        if (!lock) throw new Error('Another window is checking this task. Please wait.');
         let current = loadLaunch(key, scope) ?? journal;
         if (!current) {
-          if (!input || dirty) throw new Error('Save the task before starting Assistant work.');
+          if (!input || dirty) throw new Error('Save this task before starting work.');
           const agent = snapshot.records?.agent.find(item => item.id === input.agentId && !item.value.archived);
-          if (!agent) throw new Error('Choose an available agent before starting.');
+          if (!agent) throw new Error('Choose an agent.');
           current = createTaskAssistantLaunch({ scope, task: { id: taskId, revision: taskRevision, value, deviceId: scope.deviceId, updatedAt: '' }, agent,
             projectRevision: snapshot.projects.find(item => item.id === value.projectId)?.revision ?? null, ...input });
         }
@@ -93,7 +90,7 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
         const save = (next: TaskAssistantLaunchJournal) => {
           if (!alive.current) return false;
           const existing = loadLaunch(key, scope);
-          if (existing && existing.planCommand.requestId !== ownRequest) throw new Error('Another original request is kept for this task. Reopen the task to review it.');
+          if (existing && existing.planCommand.requestId !== ownRequest) throw new Error('Another request is kept. Reopen this task.');
           if (!saveLocal(key, next)) return false;
           setKept({ journal: next, error: '' });
           return !next.task || callbacks.current.onTaskConfirmed(next.task, next.capturedTask);
@@ -129,13 +126,13 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
     <section className="task-assistant-work" aria-label="Assistant work">
       {origin && <div className="section-heading"><h3>Assistant work</h3><button type="button" className="quiet" onClick={() => void reader.current?.refresh()}>Refresh status</button></div>}
       {(kept.error || error) && <p className="notice warning" role="alert">{kept.error || error}</p>}
-      {journal?.linkRefusal && <p className="notice" role="status">The task changed before the plan could be linked. The original plan is kept in Agents. Your task can still be edited; no run was started by this request.</p>}
-      {pending && <p className="notice" role="status">{failure === 'conflict' ? 'The task changed before the plan could be linked. Your original plan is kept; review it in Agents.' : failure === 'rejected' ? 'The host requires review before this request can continue. The original request and plan are kept.' : 'The original request is kept on this device. Check it to confirm the outcome without creating another plan or run.'}</p>}
+      {journal?.linkRefusal && <p className="notice" role="status">The task changed. Its plan is kept in Agents. You can edit the task; no run started.</p>}
+      {pending && <p className="notice" role="status">{failure === 'conflict' || failure === 'rejected' ? 'The host needs review. Your original request is kept.' : 'Check the original request to continue without duplicating work.'}</p>}
       {origin && <>
-        {value.origin?.kind !== 'assignment' && <p className="metadata">Plan kept with this task on this device. The original source is preserved.</p>}
-        <p><strong>{plan?.value.title || 'Saved Assistant plan'}</strong></p>
-        {readError && <p className="notice warning" role="status">Status could not refresh. {readError} Retrying automatically.</p>}
-        {latest ? <><p role="status">{attemptLabels[latest.state]} · {latest.message}</p><p className="metadata">{new Date(latest.createdAt).toLocaleString()}{!assignmentTerminal(latest.state) && ' · status updates automatically'}</p></> : <p className="metadata" role="status">{runState ? pending ? 'Checking the original launch request.' : 'No runs yet.' : 'Loading Assistant work…'}</p>}
+        {value.origin?.kind !== 'assignment' && <p className="metadata">Plan kept on this device; source preserved.</p>}
+        <p><strong>{plan?.value.title || 'Saved plan'}</strong></p>
+        {readError && <p className="notice warning" role="status">Status unavailable. {readError} Retrying.</p>}
+        {latest ? <><p role="status">{attemptLabels[latest.state]} · {latest.message}</p><p className="metadata">{new Date(latest.createdAt).toLocaleString()}{!assignmentTerminal(latest.state) && ' · updates automatically'}</p></> : <p className="metadata" role="status">{runState ? pending ? 'Checking original request.' : 'No runs yet.' : 'Loading Assistant work…'}</p>}
         {attempts.length > 1 && <details className="attempt-history"><summary>Earlier runs ({attempts.length - 1})</summary><ul>{attempts.slice(1).map(attempt => <li key={attempt.id}><span>{attemptLabels[attempt.state]} · {new Date(attempt.createdAt).toLocaleString()}</span>{attempt.result && <button type="button" className="quiet" disabled={pending || busy} onClick={() => onReview(attempt.id)}>Review</button>}</li>)}</ul></details>}
         <div className="button-row">
           {openOrigin && <button type="button" disabled={busy} onClick={() => openOrigin(origin)}>Open plan in Agents</button>}
@@ -144,7 +141,7 @@ export function TaskAssistantWork({ taskId, taskRevision, value, snapshot, dirty
       </>}
       {pending ? <button type="button" disabled={busy || blocked || !!kept.error} onClick={() => void launch()}>{busy ? 'Checking original request…' : 'Check original request'}</button>
         : !origin && <button type="button" disabled={dirty || blocked || !!kept.error || busy} onClick={() => setDialogOpen(true)}>Start assistant work</button>}
-      {!origin && dirty && <p className="metadata">Save the task first, then start assistant work.</p>}
+      {!origin && dirty && <p className="metadata">Save this task before starting work.</p>}
     </section>
     {dialogOpen && <StartAssistantDialog value={value} snapshot={snapshot} busy={busy} pending={pending} error={error} close={() => { if (!flight.current) setDialogOpen(false); }} start={launch} />}
   </>;
@@ -160,8 +157,8 @@ function StartAssistantDialog({ value, snapshot, busy, pending, error, close, st
   const [expectedOutput, setExpectedOutput] = useState(''), [maxMinutes, setMaxMinutes] = useState(5);
   return <Dialog title="Start assistant work" close={close}>
     {error && <p className="notice warning" role="alert">{error}</p>}
-    {pending && <p role="status">The original request and brief are kept. Check that request to continue.</p>}
-    {!agents.length && <p className="metadata">No agents are available. Create one in Agents first.</p>}
+    {pending && <p role="status">Request and brief kept. Check original request to continue.</p>}
+    {!agents.length && <p className="metadata">Create an agent in Agents.</p>}
     <fieldset disabled={busy || pending}>
       <label>Agent<select value={agentId} onChange={event => setAgentId(event.target.value)}>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.value.name}</option>)}</select></label>
       <label>Brief<textarea rows={4} maxLength={20000} value={brief} onChange={event => setBrief(event.target.value)} /></label>
