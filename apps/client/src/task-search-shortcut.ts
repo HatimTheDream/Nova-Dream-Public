@@ -1,6 +1,17 @@
 const writing = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="dialog"], [role="menu"]';
 const overlays = 'dialog[open], [role="dialog"], [aria-modal="true"], [role="menu"], details.task-row-menu[open]';
 
+/** Escape may still belong to an IME after its composition flag clears. */
+export function handleTaskSearchEscape(event: {
+  key: string;
+  nativeEvent: Pick<KeyboardEvent, 'isComposing' | 'keyCode'>;
+  preventDefault(): void;
+}, query: string, clear: () => void) {
+  if (event.key !== 'Escape' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || !query) return;
+  event.preventDefault();
+  clear();
+}
+
 /** Only the mounted Tasks screen owns this shortcut; never redirect writing. */
 export function bindTaskSearchShortcut(search: () => HTMLInputElement | null, owner: Window = window) {
   const document = owner.document;

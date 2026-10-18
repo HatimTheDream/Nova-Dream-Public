@@ -1,6 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindTaskSearchShortcut } from '../apps/client/src/task-search-shortcut';
+import { bindTaskSearchShortcut, handleTaskSearchEscape } from '../apps/client/src/task-search-shortcut';
+
+test('search Escape clears normally but preserves query and selection while IME consumes the key', () => {
+  for (const { composing, preserved } of [
+    { composing: { isComposing: true, keyCode: 27 }, preserved: true },
+    { composing: { isComposing: false, keyCode: 229 }, preserved: true },
+    { composing: { isComposing: false, keyCode: 27 }, preserved: false },
+  ]) {
+    let query = 'unfinished search', selected = ['saved-task'], prevented = false;
+    handleTaskSearchEscape({ key: 'Escape', nativeEvent: composing, preventDefault() { prevented = true; } },
+      query, () => { query = ''; selected = []; });
+    assert.equal(query, preserved ? 'unfinished search' : '');
+    assert.deepEqual(selected, preserved ? ['saved-task'] : []);
+    assert.equal(prevented, !preserved);
+  }
+});
+
+test('empty search and unrelated keys do not reset selection or consume the key', () => {
+  for (const [key, query] of [['Escape', ''], ['Enter', 'kept query']]) {
+    let cleared = false, prevented = false;
+    handleTaskSearchEscape({ key, nativeEvent: { isComposing: false, keyCode: 27 },
+      preventDefault() { prevented = true; } }, query, () => { cleared = true; });
+    assert.equal(cleared, false);
+    assert.equal(prevented, false);
+  }
+});
 
 function fixture() {
   class Element {

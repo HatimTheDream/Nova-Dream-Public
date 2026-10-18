@@ -1,3 +1,9 @@
+## [2.7.12] — 2026-10-17
+
+### Fixed
+
+- Preserve task search text and selection when Escape is used during IME text composition, including browsers that clear the composition flag before processing the key.
+
 ## [2.7.11] — 2026-10-17
 
 ### Fixed
