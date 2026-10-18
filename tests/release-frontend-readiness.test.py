@@ -6,6 +6,7 @@ import json
 import pathlib
 import os
 import sys
+import subprocess
 import tempfile
 import types
 import unittest
@@ -47,6 +48,7 @@ class FakeIO:
         self.begin_loss = self.end_loss = self.remove_loss = None
         self.process_drift = False
         self.inode = 19
+        self.mtime_ns, self.ctime_ns = 1792235677990480036, 1792235677990480037
         self.locked = False
         self.fresh_after = self.time
         self.operator_held = False
@@ -73,7 +75,7 @@ class FakeIO:
 
     def stat(self, path):
         return types.SimpleNamespace(st_dev=2049, st_ino=self.inode, st_mode=0o100644, st_uid=0,
-            st_nlink=1, st_size=len(self.files[str(path)]), st_mtime_ns=100, st_ctime_ns=100)
+            st_nlink=1, st_size=len(self.files[str(path)]), st_mtime_ns=self.mtime_ns, st_ctime_ns=self.ctime_ns)
 
     @contextlib.contextmanager
     def lock(self, path):
@@ -178,7 +180,7 @@ class RetirementTests(unittest.TestCase):
                         'workspaceEpoch': self.io.epoch, 'baseVersion': '2.7.5',
                         'worker': {'path': m.WORKER_PATH, 'sha256': m.WORKER_SHA},
                         'config': {'path': m.CONFIG_PATH, 'sha256': m.CONFIG_SHA}}
-        self.adapter = m.Retirement(w, self.binding, 'e' * 64, self.io, lambda: self.io.time,
+        self.adapter = m.Retirement(w, self.binding, m.sha((HERE / 'scripts/release-frontend-readiness.py').read_bytes()), self.io, lambda: self.io.time,
                                    wait_clock=lambda: self.io.time / 1000, sleeper=self.io.sleep)
         m.REPAIR_ID = self.adapter.repair_id
         m.RECORD = self.adapter.record_path
@@ -203,6 +205,40 @@ class RetirementTests(unittest.TestCase):
 
     def count(self, action):
         return sum(1 for name, _ in self.io.events if name == action)
+
+    def prepare_via_javascript(self):
+        plan = m.encoded(self.adapter.plan())
+        # Exercise the real Python stdout -> JS parse/stringify -> Python input boundary.
+        result = subprocess.run([os.environ.get('NODE_BINARY', 'node'), '-e',
+            'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",v=>s+=v);'
+            'process.stdin.on("end",()=>process.stdout.write(JSON.stringify(JSON.parse(s))));'],
+            input=plan, capture_output=True, timeout=10, check=True)
+        returned = m.encoded(json.loads(result.stdout))
+        self.assertEqual(returned, plan)
+        intent = m.encoded({'format': 1, 'kind': 'frontend-retirement-intent',
+            'operationId': m.REPAIR_ID, 'planSha256': m.sha(returned),
+            'adapterSha256': self.adapter.source_sha, 'execute': True})
+        return returned, intent
+
+    def test_real_js_roundtrip_preserves_large_stat_integers_and_completes_once(self):
+        self.io.inode = 18446744073709551613
+        plan, intent = self.prepare_via_javascript()
+        identity = json.loads(plan)['selectorIdentity']
+        self.assertEqual(identity[1], '18446744073709551613')
+        self.assertEqual(identity[-2:], ['1792235677990480036', '1792235677990480037'])
+        self.assertTrue(all(isinstance(value, str) for value in identity))
+        self.assertEqual(self.adapter.run(plan, intent)['phase'], 'completed')
+        self.assertEqual(self.adapter.run(plan, intent, resume=True)['phase'], 'completed')
+        self.assertEqual((self.count('begin'), self.count('end')), (1, 1))
+
+    def test_one_nanosecond_drift_refuses_before_any_write_or_lease(self):
+        plan, intent = self.prepare_via_javascript()
+        original = dict(self.io.files)
+        self.io.mtime_ns += 1
+        with self.assertRaisesRegex(RuntimeError, 'readonly-retirement-plan-changed-or-expired'):
+            self.adapter.run(plan, intent)
+        self.assertEqual(self.io.files, original)
+        self.assertEqual((self.count('write'), self.count('begin'), self.count('end')), (0, 0, 0))
 
     def test_readonly_plan_and_complete_retirement_preserve_all_original_bytes(self):
         original = dict(self.io.files)

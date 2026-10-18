@@ -18,10 +18,28 @@ function fixture(t){
  const selector=Buffer.from('retained signed selector');
  const plan={format:1,kind:'frontend-retirement-plan',operationId:randomUUID(),blockedDeliveryOperationId:binding.operationId,binding,readOnly:true,retirementRequired:true,
    sources:{worker:binding.worker,config:binding.config,adapterSha256:frontendReadinessIdentity()},health:{base,epoch:binding.workspaceEpoch,frontend:{source:'bundled',blocked:true}},
+   selectorIdentity:['2049','18446744073709551613','33188','0','1',String(selector.length),'1792235677990480036','1792235677990480037'],
    observedAtMilliseconds:Date.now(),validForMilliseconds:120000,workerTimeoutSeconds:120,realHeartbeatWaitMaximumSeconds:35,originalSelectorBase64:selector.toString('base64'),proof:{selectorSha256:sha256(selector)}};
  return {root,binding,ready,plan,context,packet:binding,transport,storeReceipt:(_j,key,name,raw)=>put('delivery-evidence/'+key+'-'+name,raw)};
 }
 function data(program){return JSON.parse(Buffer.from(program.match(/b64decode\('([^']+)'/)[1],'base64'));}
+test('retirement stat identity is lossless in the actual program envelope',t=>{
+ const f=fixture(t);verifyFrontendReadinessPlan(f.plan,f.binding);
+ const wire=data(buildFrontendReadinessProgram({mode:'readiness-execute',binding:f.binding,plan:f.plan}));
+ assert.deepEqual(wire.value.plan.selectorIdentity,f.plan.selectorIdentity);
+ for(const invalid of [undefined,[],f.plan.selectorIdentity.slice(1),f.plan.selectorIdentity.map(Number),
+   ...['01','+1','-0','1e18','1.0','9'.repeat(21),null,{}].map(value=>f.plan.selectorIdentity.with(6,value))]){
+   assert.throws(()=>verifyFrontendReadinessPlan({...f.plan,selectorIdentity:invalid},f.binding),/selector-identity-not-lossless/);
+ }
+});
+test('legacy numeric stat identity is rejected before retaining or dispatching a plan',async t=>{
+ const f=fixture(t);f.plan.selectorIdentity=f.plan.selectorIdentity.map(Number);const modes=[];
+ f.context.beforeNewEffect=()=>assert.fail('No effect allowed');
+ const run=async(_target,program)=>{modes.push(data(program).value.mode);return {exitCode:0,stdout:JSON.stringify(f.plan)};};
+ await assert.rejects(ensureFrontendReadiness({...f,run}),/selector-identity-not-lossless/);
+ assert.deepEqual(modes,['readiness-plan']);
+ assert.equal(existsSync(join(f.root,'delivery-evidence',f.binding.runId+'-frontend-readiness-dispatch.json')),false);
+});
 test('readiness transport binds fixed reviewed source and rejects foreign modes',t=>{
  const f=fixture(t);assert.deepEqual(frontendReadinessBinding({...f.binding,ignored:'never passed'}),f.binding);
  const wire=data(buildFrontendReadinessProgram({mode:'readiness-plan',binding:f.binding}));assert.equal(sha256(Buffer.from(wire.sourceBase64,'base64')),frontendReadinessIdentity());

@@ -1,3 +1,9 @@
+## [2.7.11] — 2026-10-17
+
+### Fixed
+
+- Preserve exact file timestamps when preparing interface updates, so a valid obsolete selection can be retired without a false readiness failure. Keep exact identity checks and interrupted-operation protection.
+
 ## [2.7.10] — 2026-10-17
 
 ### Improved

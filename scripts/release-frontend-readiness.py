@@ -166,8 +166,11 @@ class Retirement:
 
     def pointer_identity(self):
         value = self.io.stat(SELECTOR) if hasattr(self.io, 'stat') else os.lstat(SELECTOR)
-        return [value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_nlink,
-                value.st_size, value.st_mtime_ns, value.st_ctime_ns]
+        # Plans cross JavaScript JSON before returning for exact comparison.
+        # Real nanosecond timestamps (and potentially inode IDs) exceed 2**53.
+        return [str(part) for part in (value.st_dev, value.st_ino, value.st_mode,
+                value.st_uid, value.st_nlink, value.st_size, value.st_mtime_ns,
+                value.st_ctime_ns)]
 
     def retained_proof(self, raw, *, obsolete=True):
         selector = self.worker.strict_json(raw)

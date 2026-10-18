@@ -21,6 +21,9 @@ export function verifyFrontendReadinessPlan(plan,binding){
   if(plan.retirementRequired===false){
     need(plan.kind==='frontend-readiness-plan'&&plan.ready===true&&plan.operationId===binding.operationId&&plan.runId===binding.runId&&plan.sourceSha256===frontendReadinessIdentity()&&plan.health.frontend?.blocked!==true,'frontend-ready-proof-changed');
   }else{
+    need(Array.isArray(plan.selectorIdentity)&&plan.selectorIdentity.length===8
+      &&plan.selectorIdentity.every(value=>typeof value==='string'&&/^(?:0|-?[1-9]\d{0,19})$/.test(value)),
+      'frontend-retirement-selector-identity-not-lossless');
     need(plan.retirementRequired===true&&plan.kind==='frontend-retirement-plan'&&plan.blockedDeliveryOperationId===binding.operationId
       &&plan.sources?.adapterSha256===frontendReadinessIdentity()&&isDeepStrictEqual(plan.sources.worker,binding.worker)&&isDeepStrictEqual(plan.sources.config,binding.config)
       &&plan.health.frontend?.blocked===true&&Number.isSafeInteger(plan.observedAtMilliseconds)&&plan.observedAtMilliseconds>=0&&plan.validForMilliseconds===120000&&plan.workerTimeoutSeconds===120&&plan.realHeartbeatWaitMaximumSeconds===35
