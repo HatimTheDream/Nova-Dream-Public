@@ -70,6 +70,7 @@ const exits = {
   Escape: (nodes: any[]) => nodes[0].props.onCancel({ preventDefault() {} }),
   backdrop: (nodes: any[]) => { const backdrop = {}; nodes[0].props.onClick({ target: backdrop, currentTarget: backdrop }); },
   'Open source': (nodes: any[]) => button(nodes, 'Open source').props.onClick(),
+  'Open Assistant plan': (nodes: any[]) => nodes.find(node => node.type?.name === 'TaskAssistantWork').props.openOrigin({ kind: 'assignment', id: 'assignment:fixture', revision: 1 }),
   'Open related task': (nodes: any[]) => nodes.find(node => node.type?.name === 'TaskFamily').props.openTask({}),
   'Add child task': (nodes: any[]) => nodes.find(node => node.type?.name === 'TaskFamily').props.newTask({}),
 };

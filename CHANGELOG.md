@@ -1,3 +1,11 @@
+## [2.7.13] — 2026-10-17
+
+### Fixed
+
+- Keep the original task-to-Assistant request through interrupted replies and reloads, preventing replacement plans or duplicate starts.
+- Adopt the confirmed task revision after linking Assistant work so later edits and result acceptance save correctly.
+- Refresh task Assistant status automatically, preserve plans after task conflicts, and keep source-linked task writing intact.
+
 ## [2.7.12] — 2026-10-17
 
 ### Fixed
