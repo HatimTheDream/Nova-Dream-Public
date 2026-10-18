@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {join,dirname} from 'node:path';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {sha256} from '../scripts/release-plan.mjs';
-import {startupCommandFixture} from '../support/startup-command-fixture.mjs';
+import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
 import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
@@ -32,6 +32,18 @@ test('proof refuses missing held/closed/full-retention/rollback outcomes',t=>{
     v=>v.scenarios[1].candidateId=v.qualificationBinding.prior.candidateId,v=>delete v.references['pristine-prior-restoration/bootstrap'],
     v=>v.workerIdentity.controlGroup='/system.slice/another.service',v=>v.sourceHashes['contracts.py']='0'.repeat(64)]){
     const value=structuredClone(f.proof);change(value);assert.throws(()=>verifyStartupRetainedProjection(value,f.proof.request,f.sources));
+  }
+});
+
+
+test('persisted qualification cannot omit or damage any coherent HOME reference',t=>{
+  const f=startupCommandFixture(t);
+  assert.equal(HOME_CAPTURE_ROLES.length,15);
+  for(const role of HOME_CAPTURE_ROLES){
+    const key='homeCapture/'+role,missing=structuredClone(f.proof),damaged=structuredClone(f.proof);
+    delete missing.references[key];damaged.references[key].sha256='invalid';
+    assert.throws(()=>verifyStartupRetainedProjection(missing,f.proof.request,f.sources),/original-references-incomplete/,key);
+    assert.throws(()=>verifyStartupRetainedProjection(damaged,f.proof.request,f.sources),/original-references-incomplete/,key);
   }
 });
 

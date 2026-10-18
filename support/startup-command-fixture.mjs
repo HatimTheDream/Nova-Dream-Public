@@ -5,6 +5,7 @@ import {sha256} from '../scripts/release-plan.mjs';
 import {verifyCandidate} from '../scripts/candidate.mjs';
 import {dependencyFixture} from './dependency-transport-fixture.mjs';
 import {STARTUP_SCENARIOS,startupRetainedRequest} from '../scripts/release-delivery-startup-retained.mjs';
+export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'plan', 'intent', 'sourceCapture', 'sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceMetadata', 'seedInventory', 'seedPhysical', 'seedMetadata', 'liveContext', 'effectiveUnit']);
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
 export function startupCommandFixture(t,{sources}={}){
@@ -27,7 +28,7 @@ export function startupCommandFixture(t,{sources}={}){
     serviceArtifacts:Object.fromEntries([...candidates.private.bytes].filter(([p])=>p.startsWith('dist/service/')).map(([p,b])=>[p,sha256(b)])),
     hostEntrypointSha256:sha256(host),dependencyGraphSha256:JSON.parse(readFileSync(f.options.selectedPair.path)).applicationDependencies.dependencyGraphSha256,
     helpers:{...helperHashes,'operator_rehearsal.py':sha256('synthetic operator')},runtime:{agentVersion:'2026.9.8',agentNodeSha256:'2'.repeat(64)},workspaceEpoch:f.descriptor.operation.workspaceEpoch};
-  const names=['producer','parent',...Object.keys(sources).map(n=>'source/'+n),'review','originalPlan','executionIntent','technicalReview','originalIntention','childResult','outsideClosure','restorationIntent','restorationCompleted','effectiveProfile','negativeVerifierSource','negativeVerifierResult',...STARTUP_SCENARIOS.flatMap(n=>['started','process','ready','closed','preservation','bootstrap','clock-attribution'].map(r=>n+'/'+r))];
+  const names=['producer','parent',...Object.keys(sources).map(n=>'source/'+n),'review','originalPlan','executionIntent','technicalReview','originalIntention','childResult','outsideClosure','restorationIntent','restorationCompleted','effectiveProfile','negativeVerifierSource','negativeVerifierResult',...HOME_CAPTURE_ROLES.map(n=>'homeCapture/'+n),...STARTUP_SCENARIOS.flatMap(n=>['started','process','ready','closed','preservation','bootstrap','clock-attribution'].map(r=>n+'/'+r))];
   const references=Object.fromEntries(names.map(n=>[n,{path:'/fixture/evidence/'+n+'.json',sha256:sha256(n),bytes:1}]));
   references.parent={...parent,bytes:1};references.producer={...producer,bytes:1};
   for(const [name,sha256]of Object.entries(sources))references['source/'+name]={path:'/fixture/sources/'+name,sha256,bytes:1};

@@ -1,3 +1,9 @@
+## [2.8.2] — 2026-10-18
+
+### Fixed
+
+- Capture and verify a complete retained HOME copy before startup qualification, so ordinary runtime cache activity does not invalidate deployment preparation.
+
 ## [2.8.1] — 2026-10-18
 
 ### Fixed

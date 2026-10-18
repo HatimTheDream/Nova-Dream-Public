@@ -2,6 +2,8 @@
 import copy
 import hashlib
 import json
+from pathlib import PurePosixPath
+import stat
 
 
 def encoded(value):
@@ -10,6 +12,85 @@ def encoded(value):
 
 def sha(value):
     return hashlib.sha256(value).hexdigest()
+
+
+# Synthetic complete capture graph; no real source paths, records or credentials.
+def emitted_capture(put, source_files, technical, op, epoch):
+    operation = '33333333-3333-4333-8333-333333333333'
+    root = PurePosixPath('/opt/nova-release-tools/qualified-startup-inputs-' + op)
+    destination = root / ('home-capture-' + operation); seed = destination / 'home-seed'
+    source_sha = source_files['produce-startup-inputs.py']['sha256']
+    base = {'operationId': op, 'inputParent': str(root), 'sourceFiles': source_files,
+            'technicalReview': technical, 'baseline': {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
+            'buildReceipt': {'path': '/build/result.json', 'sha256': '5' * 64},
+            'installedIdentity': {'path': '/installed/result.json', 'sha256': '6' * 64}}
+    value = {'format': 1, 'kind': 'coherent-home-capture-input', 'operationId': operation, 'startupInput': base}
+    roles = ['.bash_logout', '.bashrc', '.cache', '.codex', '.config', '.local', '.npm', '.profile']
+    excluded = ['backups', 'install-stage', 'qa', 'recovery', 'workspace']
+    entries = {name: {'kind': 'directory', 'uid': 999, 'gid': 986, 'mode': 448, 'mtime_ns': 10, 'xattrs': {}}
+               for name in ['.', *roles]}
+    entries['.cache/item'] = {'kind': 'file', 'uid': 999, 'gid': 986, 'mode': 384, 'mtime_ns': 11,
+                              'size': 1, 'sha256': sha(b'x'), 'xattrs': {}}
+    physical = {name: {'device': 2049, 'inode': i + 1, 'allocated': 4096} for i, name in enumerate(entries)}
+    copied = {name: {**v, 'inode': v['inode'] + 100} for name, v in physical.items()}
+    def metadata(values):
+        return {name: [v['device'], v['inode'], (stat.S_IFDIR if entries[name]['kind'] == 'directory' else stat.S_IFREG) | entries[name]['mode'],
+                       999, 986, 1, entries[name].get('size', 4096), 4096, entries[name]['mtime_ns'], 12]
+                for name, v in values.items()}
+    source_metadata, seed_metadata = metadata(physical), metadata(copied)
+    root_before = source_metadata['.'][:5] + source_metadata['.'][8:10]
+    root_seed = seed_metadata['.'][:5] + seed_metadata['.'][8:10]
+    authority = dict(zip(('device', 'inode', 'mode', 'uid', 'gid'), root_before[:5]))
+    authority.update(path='/var/lib/nova', mountId=45)
+    unit = 'nova-qa-home-capture-' + operation + '.service'
+    properties = {'Id': unit, 'InvocationID': '1' * 32, 'LoadState': 'loaded', 'Type': 'exec',
+                  'ActiveState': 'active', 'SubState': 'exited', 'Result': 'success', 'ExecMainStatus': '0', 'ExecMainCode': '1',
+                  'MainPID': '0', 'ControlPID': '0', 'Job': '', 'ControlGroup': '', 'Restart': 'no', 'KillMode': 'control-group',
+                  'RemainAfterExit': 'yes', 'RuntimeMaxUSec': '3min', 'TimeoutStopUSec': '30s'}
+    observation = {'unit': unit, 'properties': properties, 'cgroup': {'path': '/system.slice/' + unit, 'pids': [], 'groups': [], 'populated': False},
+                   'observedAtNs': 3_000_000_000}
+    worker = copy.deepcopy(observation); worker['properties'].update(SubState='running', MainPID='44')
+    input_path = root / 'capture-request.json'; plan_path = root / 'capture-plan.json'; intent_path = root / 'capture-intent.json'
+    input_ref = put('homeCapture/input', str(input_path), value)
+    live = {'health': {'processIdentity': 'original-live-process'}, 'selection': {'epoch': epoch}}
+    effective = {'mainPid': 55, 'unit': 'nova-dream.service'}
+    live_ref = put('homeCapture/liveContext', str(root / 'materialized/live-context.json'), live)
+    unit_ref = put('homeCapture/effectiveUnit', str(root / 'materialized/effective-unit.json'), effective)
+    host_config = {'path': '/etc/nova-update/config.json', 'sha256': '7' * 64}
+    context = {'sourceRootAuthority': authority, 'liveContext': live, 'effectiveUnit': effective,
+               'hostConfiguration': host_config, 'prior': {'path': '/apps/prior', 'candidateId': 'a' * 64, 'version': '2.7.11'},
+               'selectedApp': '/apps/prior'}
+    plan = {'format': 1, 'kind': 'coherent-home-capture-plan', 'operationId': operation, 'startupOperationId': op,
+            'inputSha256': input_ref['sha256'], 'producerSha256': source_sha, 'startupInputSha256': sha(encoded(base)),
+            'destination': str(destination), 'authority': context, 'sourceRoot': '/var/lib/nova',
+            'roles': roles, 'excludedRoles': excluded, 'contentIdentityChosenAtCapture': True,
+            'requiresLiveHomeUnchangedAfterCapture': False, 'maximumCaptureSeconds': 120, 'workerSeconds': 180, 'workerStopSeconds': 30}
+    plan_ref = put('homeCapture/plan', str(plan_path), plan)
+    intent = {'format': 1, 'kind': 'capture-coherent-original-home', 'operationId': operation,
+              'planSha256': plan_ref['sha256'], 'inputSha256': input_ref['sha256'], 'producerSha256': source_sha}
+    intent_ref = put('homeCapture/intent', str(intent_path), intent)
+    refmap = {str(input_path): input_ref, str(plan_path): plan_ref, str(intent_path): intent_ref}
+    ns = {'str': str, 'sum': sum, 'len': len, 'HOME': PurePosixPath('/var/lib/nova'), 'HOME_ROLES': roles, 'HOME_EXCLUDED': excluded,
+          'root_before': root_before, 'root_after': root_before, 'started': 1_000_000_000, 'ended': 2_000_000_000,
+          'input_path': input_path, 'plan_path': plan_path, 'intent_path': intent_path, 'payload': {'.cache/item': b'x'},
+          'ref': lambda p, maximum=None: refmap[str(p)], 'value': value, 'plan': plan, 'worker': worker, 'seed': seed,
+          'identity': lambda p: root_seed, 'actual_bound': 16 * 1024**2 + 8192 * len(entries) + 4096}
+    for variable, role, filename, data in (
+        ('logical_before', 'sourceBefore', 'home-source-before.json', entries), ('logical_after', 'sourceAfter', 'home-source-after.json', entries),
+        ('physical', 'sourcePhysical', 'home-source-physical.json', physical), ('full_metadata', 'sourceMetadata', 'home-source-metadata.json', source_metadata),
+        ('inventory', 'seedInventory', 'home-seed-inventory.json', entries), ('seed_physical', 'seedPhysical', 'home-seed-physical.json', copied),
+        ('seed_metadata', 'seedMetadata', 'home-seed-metadata.json', seed_metadata)):
+        ns[variable] = put('homeCapture/' + role, str(destination / filename), data)
+    ns['capture'] = {'format': 1, 'kind': 'complete-original-home-state-capture', 'sourceRoot': str(ns['HOME']), 'roles': ns['HOME_ROLES'], 'excludedRoles': ns['HOME_EXCLUDED'], 'sourceBefore': ns['logical_before'], 'sourceAfter': ns['logical_after'], 'sourceBeforeSha256': ns['logical_before']['sha256'], 'sourceAfterSha256': ns['logical_after']['sha256'], 'seedInventorySha256': ns['inventory']['sha256'], 'sourcePhysicalSha256': ns['physical']['sha256'], 'sourcePhysical': ns['physical'], 'sourceFullMetadata': ns['full_metadata'], 'sourceUid': 999, 'sourceGid': 986, 'sourceMode': 448, 'sourceUnchanged': True, 'sourceUnchangedScope': 'capture-interval-only', 'captureStartedAtNs': ns['started'], 'captureEndedAtNs': ns['ended'], 'sourceRootBefore': ns['root_before'], 'sourceRootAfter': ns['root_after'], 'completeRoleCoverage': True, 'productionMutation': False, 'sourceSqliteOpened': False, 'independentInodes': True, 'sparseVerified': True, 'flushed': True, 'boundedCapturedBytes': sum((len(item) for item in ns['payload'].values())), 'copyWorkerProcesses': 0, 'captureInput': ns['ref'](ns['input_path'], 1024 * 1024), 'capturePlan': ns['ref'](ns['plan_path'], 4 * 1024 * 1024), 'captureIntent': ns['ref'](ns['intent_path'], 1024 * 1024)}
+    ns['capture_ref'] = put('homeCapture/sourceCapture', str(destination / 'home-source-capture.json'), ns['capture'])
+    result = {'format': 1, 'kind': 'coherent-original-home-capture-result', 'operationId': ns['value']['operationId'], 'startupOperationId': ns['value']['startupInput']['operationId'], 'startupInputSha256': ns['plan']['startupInputSha256'], 'producerSha256': ns['plan']['producerSha256'], 'completed': True, 'captureInput': ns['capture']['captureInput'], 'capturePlan': ns['capture']['capturePlan'], 'captureIntent': ns['capture']['captureIntent'], 'homeSeed': {'path': str(ns['seed']), 'inventory': ns['inventory'], 'sourceCapture': ns['capture_ref']}, 'seedPhysical': ns['seed_physical'], 'seedMetadata': ns['seed_metadata'], 'seedRootIdentity': ns['identity'](ns['seed']), 'sourceRootAuthority': ns['plan']['authority']['sourceRootAuthority'], 'captureAllocationBound': ns['actual_bound'], 'worker': ns['worker'], 'sourceUnchangedScope': 'capture-interval-only', 'productionMutation': False, 'sourceSqliteOpened': False, 'actualStartupQualified': False}
+    result_ref = put('homeCapture/result', str(destination / 'result.json'), result)
+    closure = {'format': 1, 'kind': 'coherent-home-capture-worker-closure', 'operationId': operation,
+               'startupOperationId': op, 'captureResult': result_ref, 'observation': observation}
+    closure_ref = put('homeCapture/closure', str(root / 'materialized/home-capture-worker-closed.json'), closure)
+    return {'homeCapture': {'result': result_ref, 'closure': closure_ref}, 'homeSeed': result['homeSeed'],
+            'sourceFiles': source_files, 'buildReceipt': base['buildReceipt'], 'installedIdentity': base['installedIdentity'],
+            'liveContext': live_ref, 'effectiveUnit': unit_ref, 'hostConfiguration': host_config}
 
 
 def fixture(changes=None):
@@ -29,16 +110,16 @@ def fixture(changes=None):
                     ('qualified-startup.py', 'qualified-parent.py', 'produce-startup-inputs.py', 'contracts.py')}
     sources = {n: r['sha256'] for n, r in source_files.items()}; roles['producer'] = source_files['qualified-startup.py']
     runner = sources['qualified-startup.py']
-    package = put('package', target + '/package.json', {'version': '2.8.1'})
-    lock = put('lock', target + '/package-lock.json', {'version': '2.8.1'})
+    package = put('package', target + '/package.json', {'version': '2.8.2'})
+    lock = put('lock', target + '/package-lock.json', {'version': '2.8.2'})
     host = put('host', target + '/scripts/host.mjs', b'// synthetic host')
     service = {p: put(p, target + '/' + p, ('// ' + p).encode())['sha256'] for p in
         ['dist/service/apps/service/' + n for n in ('main.js', 'gateway.js', 'http.js', 'runtime.js', 'software-updates.js', 'store.js', 'update-maintenance.js', 'update-native-idle.js', 'update-native-startup.js')]}
-    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.1', 'buildVersion': '1.0.312', 'schemaVersion': 55, 'apiVersion': 1,
+    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.2', 'buildVersion': '1.0.313', 'schemaVersion': 55, 'apiVersion': 1,
         'artifacts': [{'path': p, 'sha256': v} for p, v in service.items()]})
     target_id = sha(files[package['path']] + files[manifest['path']]); prior_id = 'a' * 64
     runtime = {'agentVersion': '2026.9.8', 'agent': '/runtime/openclaw', 'agentNodeSha256': 'b' * 64}
-    target_binding = {'candidateId': target_id, 'version': '2.8.1', 'buildVersion': '1.0.312', 'archiveSha256': 'c' * 64,
+    target_binding = {'candidateId': target_id, 'version': '2.8.2', 'buildVersion': '1.0.313', 'archiveSha256': 'c' * 64,
         'archiveBytes': 123, 'ciSourceSha256': 'd' * 64, 'packageSha256': package['sha256'], 'packageLockSha256': lock['sha256'],
         'candidateManifestSha256': manifest['sha256']}
     binding = {'format': 1, 'kind': 'same-runtime-startup-candidate-binding', 'sourceCommits': {'private': 'a' * 40, 'public': 'b' * 40},
@@ -51,11 +132,12 @@ def fixture(changes=None):
     technical = put('technical', '/sources/independent-review.json', {'status': 'passed', 'sourceHashes': sources,
         'callContractsReviewed': True, 'isolationReviewed': True, 'heldBootstrapReviewed': True,
         'negativeVerifierEvidence': {'source': negative_source, 'result': negative_result}})
+    coherent = emitted_capture(put, source_files, technical, op, epoch)
     review = put('review', root + '/review.json', {'format': 1, 'kind': 'actual-retained-startup-qualification', 'operationId': op,
         'reviewReceipt': technical, 'qualificationBinding': binding, 'baseline': {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
-        'homeSeed': {'inventory': {'path': '/baseline/home-inventory.json', 'sha256': '4' * 64}}, 'runtime': runtime,
+        **coherent, 'runtime': runtime,
         'helpers': {'sha256': helpers}, 'prior': {'path': prior, 'candidateId': prior_id, 'version': '2.7.11'},
-        'target': {'path': target, 'candidateId': target_id, 'version': '2.8.1'}, 'serviceUid': 999})
+        'target': {'path': target, 'candidateId': target_id, 'version': '2.8.2'}, 'serviceUid': 999})
     names = ['target-first-start', 'target-restart', 'pristine-prior-restoration']
     parent_ns = {'mnt': 'mnt:[1]', 'net': 'net:[2]', 'pid': 'pid:[3]'}
     child_ns = {'mnt': 'mnt:[4]', 'net': 'net:[5]', 'pid': 'pid:[6]'}
@@ -99,11 +181,11 @@ def fixture(changes=None):
         child_refs.append({'path': '/qualification/evidence/attempt-' + str(i) + '/preservation.json', 'sha256': preservation['sha256']})
     restore_intent = put('restorationIntent', evidence + '/workspace-restoration-intent.json', {'operationId': op,
         'kind': 'restore-independent-pristine-private-state', 'independentOriginalRequired': True, 'productionMutation': False,
-        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': '4' * 64})
+        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256']})
     restored = put('restorationCompleted', evidence + '/workspace-restoration-result.json', {'operationId': op,
         'kind': 'independent-pristine-private-restoration-completed', 'passed': True, 'intentSha256': restore_intent['sha256'],
         'targetMutatedStateRetained': True, 'independentlyRestoredPristine': True, 'productionMutation': False,
-        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': '4' * 64, 'independentOriginalRestored': True,
+        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256'], 'independentOriginalRestored': True,
         'independentHomeRestored': True, 'fullPreStartSavedAndNativeEquality': True, 'workspaceInodesDisjoint': True, 'homeInodesDisjoint': True,
         'originalInventorySha256': '1' * 64, 'restoredInventorySha256': '1' * 64, 'originalHomeInventorySha256': '2' * 64, 'restoredHomeInventorySha256': '2' * 64})
     child = put('child', evidence + '/child-result.json', {'format': 1, 'kind': 'actual-retained-startup-result', 'operationId': op,

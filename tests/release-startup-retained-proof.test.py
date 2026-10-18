@@ -26,7 +26,42 @@ class Checks(unittest.TestCase):
         self.assertEqual([v['scenario'] for v in result['scenarios']], list(subject.SCENARIOS))
         self.assertTrue(result['actualSettledQualification']); self.assertTrue(result['heldBootstrapVerified'])
         self.assertFalse(result['productionAdmission']); self.assertTrue(result['freshFullRehearsalStillRequired'])
-        self.assertTrue(result['liveAcceptanceStillRequired']); self.assertEqual(len(result['references']), 39)
+        self.assertTrue(result['liveAcceptanceStillRequired']); self.assertEqual(len(result['references']), 54)
+        self.assertEqual(len([k for k in result['references'] if k.startswith('homeCapture/')]), 15)
+
+
+    def test_complete_capture_rejects_each_missing_control_or_metadata_reference(self):
+        cases = [('review', lambda v: v.pop('homeCapture')),
+                 ('review', lambda v: v['homeCapture'].pop('result')),
+                 ('review', lambda v: v['homeCapture'].pop('closure')),
+                 ('review', lambda v: v.pop('liveContext')),
+                 ('review', lambda v: v.pop('effectiveUnit'))]
+        cases += [('homeCapture/result', lambda v, k=k: v.pop(k))
+                  for k in ('captureInput', 'capturePlan', 'captureIntent', 'seedPhysical', 'seedMetadata')]
+        cases += [('homeCapture/result', lambda v, k=k: v['homeSeed'].pop(k)) for k in ('inventory', 'sourceCapture')]
+        cases += [('homeCapture/sourceCapture', lambda v, k=k: v.pop(k))
+                  for k in ('sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceFullMetadata')]
+        for role, change in cases:
+            with self.subTest(role=role), self.assertRaises((RuntimeError, KeyError)): self.consume(fixture({role: change}))
+
+    def test_all_original_capture_references_are_hash_checked(self):
+        roles = [role for role in fixture()['roles'] if role.startswith('homeCapture/')]
+        self.assertEqual(len(roles), 15)
+        for role in roles:
+            f = fixture(); f['files'][f['roles'][role]['path']] += b' '
+            with self.subTest(role=role), self.assertRaisesRegex(RuntimeError, 'original-reference-changed'):
+                self.consume(f)
+
+    def test_capture_metadata_origin_scope_and_worker_closure_are_not_summary_flags(self):
+        cases = [('homeCapture/sourceMetadata', lambda v: v['.cache'].__setitem__(8, 99)),
+                 ('homeCapture/sourceCapture', lambda v: v['sourceRootBefore'].__setitem__(1, 1000)),
+                 ('homeCapture/sourceCapture', lambda v: v.update(sourceUnchangedScope='whole-qualification')),
+                 ('homeCapture/liveContext', lambda v: v['health'].update(processIdentity='another-process')),
+                 ('homeCapture/closure', lambda v: v['observation']['properties'].update(InvocationID='2' * 32)),
+                 ('homeCapture/closure', lambda v: v['observation']['cgroup'].update(populated=True)),
+                 ('homeCapture/result', lambda v: v.update(startupOperationId='4' * 36))]
+        for role, change in cases:
+            with self.subTest(role=role), self.assertRaises(RuntimeError): self.consume(fixture({role: change}))
 
     def test_missing_unreviewed_or_changed_sources_refuse(self):
         f = fixture()

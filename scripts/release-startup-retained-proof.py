@@ -98,6 +98,137 @@ class ProtectedReader:
             need(file_identity(Path(path).lstat()) == original, 'startup-proof-closure-changed')
 
 
+def consume_home_capture(review, document, sources):
+    """Retain the original short capture and its closed worker; no live reads."""
+    binding = review.get('homeCapture', {})
+    need(set(binding) == {'result', 'closure'}, 'startup-proof-home-capture-required')
+    result = document('homeCapture/result', binding['result'])
+    closed = document('homeCapture/closure', binding['closure'])
+    operation = result.get('operationId', '')
+    startup = review['operationId']
+    need(isinstance(operation, str) and UUID.fullmatch(operation) and operation != startup
+         and result.get('format') == 1 and result.get('kind') == 'coherent-original-home-capture-result'
+         and result.get('completed') is True and result.get('startupOperationId') == startup
+         and result.get('producerSha256') == sources['produce-startup-inputs.py']
+         and result.get('sourceUnchangedScope') == 'capture-interval-only'
+         and result.get('productionMutation') is False and result.get('sourceSqliteOpened') is False
+         and result.get('actualStartupQualified') is False, 'startup-proof-original-home-capture-result-required')
+    root = PurePosixPath('/opt/nova-release-tools/qualified-startup-inputs-' + startup)
+    capture_root = root / ('home-capture-' + operation)
+    need(binding['result']['path'] == str(capture_root / 'result.json')
+         and binding['closure']['path'] == str(root / 'materialized/home-capture-worker-closed.json')
+         and result.get('homeSeed') == review.get('homeSeed')
+         and result['homeSeed'].get('path') == str(capture_root / 'home-seed'), 'startup-proof-sealed-home-role-changed')
+    control = {name: document('homeCapture/' + name, result[key]) for name, key in
+               (('input', 'captureInput'), ('plan', 'capturePlan'), ('intent', 'captureIntent'))}
+    request, plan, intent = (control[name] for name in ('input', 'plan', 'intent'))
+    base = request.get('startupInput', {})
+    need(request == {'format': 1, 'kind': 'coherent-home-capture-input', 'operationId': operation, 'startupInput': base}
+         and base.get('operationId') == startup and base.get('inputParent') == str(root) and 'homeCapture' not in base
+         and base.get('sourceFiles') == review.get('sourceFiles')
+         and base.get('baseline') == review.get('baseline') and base.get('technicalReview') == review.get('reviewReceipt')
+         and base.get('buildReceipt') == review.get('buildReceipt') and base.get('installedIdentity') == review.get('installedIdentity')
+         and sha(encoded(base)) == result.get('startupInputSha256'), 'startup-proof-home-capture-input-lineage-changed')
+    need(plan.get('format') == 1 and plan.get('kind') == 'coherent-home-capture-plan'
+         and plan.get('operationId') == operation and plan.get('startupOperationId') == startup
+         and plan.get('inputSha256') == result['captureInput']['sha256']
+         and plan.get('producerSha256') == result['producerSha256']
+         and plan.get('startupInputSha256') == result['startupInputSha256']
+         and plan.get('destination') == str(capture_root)
+         and plan.get('contentIdentityChosenAtCapture') is True and plan.get('requiresLiveHomeUnchangedAfterCapture') is False
+         and plan.get('maximumCaptureSeconds') == 120 and plan.get('workerSeconds') == 180 and plan.get('workerStopSeconds') == 30
+         and intent == {'format': 1, 'kind': 'capture-coherent-original-home', 'operationId': operation,
+              'planSha256': result['capturePlan']['sha256'], 'inputSha256': plan['inputSha256'],
+              'producerSha256': result['producerSha256']}, 'startup-proof-home-capture-plan-intent-changed')
+    authority = plan.get('authority', {})
+    live = document('homeCapture/liveContext', review['liveContext'])
+    unit_context = document('homeCapture/effectiveUnit', review['effectiveUnit'])
+    need(authority.get('hostConfiguration') == review.get('hostConfiguration')
+         and authority.get('prior') == review.get('prior') and authority.get('selectedApp') == review['prior']['path']
+         and authority.get('liveContext') == live and authority.get('effectiveUnit') == unit_context,
+         'startup-proof-home-capture-live-origin-changed')
+    seed = review['homeSeed']
+    capture = document('homeCapture/sourceCapture', seed['sourceCapture'])
+    maps = {name: document('homeCapture/' + name, owner[key]) for name, owner, key in (
+        ('sourceBefore', capture, 'sourceBefore'), ('sourceAfter', capture, 'sourceAfter'),
+        ('sourcePhysical', capture, 'sourcePhysical'), ('sourceMetadata', capture, 'sourceFullMetadata'),
+        ('seedInventory', seed, 'inventory'), ('seedPhysical', result, 'seedPhysical'), ('seedMetadata', result, 'seedMetadata'))}
+    names = {'sourceCapture': 'home-source-capture.json', 'sourceBefore': 'home-source-before.json',
+             'sourceAfter': 'home-source-after.json', 'sourcePhysical': 'home-source-physical.json',
+             'sourceMetadata': 'home-source-metadata.json', 'seedInventory': 'home-seed-inventory.json',
+             'seedPhysical': 'home-seed-physical.json', 'seedMetadata': 'home-seed-metadata.json'}
+    actual_refs = {'sourceCapture': seed['sourceCapture'], 'sourceBefore': capture['sourceBefore'], 'sourceAfter': capture['sourceAfter'],
+                   'sourcePhysical': capture['sourcePhysical'], 'sourceMetadata': capture['sourceFullMetadata'],
+                   'seedInventory': seed['inventory'], 'seedPhysical': result['seedPhysical'], 'seedMetadata': result['seedMetadata']}
+    need(all(actual_refs[name]['path'] == str(capture_root / filename) for name, filename in names.items()),
+         'startup-proof-home-capture-evidence-role-changed')
+    roles = ['.bash_logout', '.bashrc', '.cache', '.codex', '.config', '.local', '.npm', '.profile']
+    need(capture.get('format') == 1 and capture.get('kind') == 'complete-original-home-state-capture'
+         and capture.get('sourceRoot') == plan.get('sourceRoot') == '/var/lib/nova'
+         and capture.get('roles') == plan.get('roles') == roles
+         and capture.get('excludedRoles') == plan.get('excludedRoles') == ['backups', 'install-stage', 'qa', 'recovery', 'workspace']
+         and capture.get('sourceUnchanged') is True and capture.get('sourceUnchangedScope') == 'capture-interval-only'
+         and all(capture.get(key) is True for key in ('completeRoleCoverage', 'independentInodes', 'sparseVerified', 'flushed'))
+         and capture.get('productionMutation') is False and capture.get('sourceSqliteOpened') is False
+         and (capture.get('sourceUid'), capture.get('sourceGid'), capture.get('sourceMode')) == (999, 986, 0o700)
+         and all(capture.get(key) == result[key] for key in ('captureInput', 'capturePlan', 'captureIntent')),
+         'startup-proof-full-home-capture-contract-required')
+    start, end = capture.get('captureStartedAtNs'), capture.get('captureEndedAtNs')
+    need(type(start) is int and type(end) is int and 0 < start <= end and end - start <= 120 * 10**9,
+         'startup-proof-home-capture-interval-required')
+    inventory = maps['seedInventory']; source = maps['sourcePhysical']; copied = maps['seedPhysical']
+    need(maps['sourceBefore'] == maps['sourceAfter'] == inventory and '.' in inventory
+         and {PurePosixPath(name).parts[0] for name in inventory if name != '.'} == set(roles)
+         and all(set(value) == set(inventory) for value in maps.values())
+         and capture.get('sourceBeforeSha256') == capture['sourceBefore']['sha256']
+         and capture.get('sourceAfterSha256') == capture['sourceAfter']['sha256'] == capture['sourceBefore']['sha256']
+         and capture.get('seedInventorySha256') == seed['inventory']['sha256'] == capture['sourceBefore']['sha256']
+         and capture.get('sourcePhysicalSha256') == capture['sourcePhysical']['sha256'], 'startup-proof-full-home-capture-maps-required')
+    for name, item in inventory.items():
+        path = PurePosixPath(name)
+        need(name == '.' or not path.is_absolute() and str(path) == name and '..' not in path.parts,
+             'startup-proof-home-member-path-invalid')
+        for physical, metadata in ((source, maps['sourceMetadata']), (copied, maps['seedMetadata'])):
+            row = metadata[name]; member = physical[name]
+            need(isinstance(row, list) and len(row) == 10 and all(type(v) is int for v in row)
+                 and row[:2] == [member['device'], member['inode']] and row[7] == member['allocated']
+                 and stat.S_IMODE(row[2]) == item['mode'] and row[3:5] == [item['uid'], item['gid']]
+                 and row[8] == item['mtime_ns'] and row[5] >= 1
+                 and ((item['kind'] == 'directory' and stat.S_ISDIR(row[2]))
+                      or (item['kind'] == 'symlink' and stat.S_ISLNK(row[2]))
+                      or (item['kind'] == 'file' and stat.S_ISREG(row[2]) and row[6] == item['size'])),
+                 'startup-proof-home-metadata-identity-changed')
+    need({(v['device'], v['inode']) for v in source.values()}.isdisjoint({(v['device'], v['inode']) for v in copied.values()}),
+         'startup-proof-home-source-copy-inodes-overlap')
+    original = capture.get('sourceRootBefore'); authority = result.get('sourceRootAuthority', {})
+    root_row = maps['sourceMetadata']['.']
+    need(original == capture.get('sourceRootAfter') == root_row[:5] + root_row[8:10]
+         and authority == plan.get('authority', {}).get('sourceRootAuthority')
+         and [authority.get(k) for k in ('device', 'inode', 'mode', 'uid', 'gid')] == original[:5]
+         and authority.get('path') == '/var/lib/nova' and type(authority.get('mountId')) is int
+         and result.get('seedRootIdentity') == maps['seedMetadata']['.'][:5] + maps['seedMetadata']['.'][8:10],
+         'startup-proof-home-root-identity-changed')
+    observation = closed.get('observation', {}); properties = observation.get('properties', {}); cgroup = observation.get('cgroup', {})
+    unit = 'nova-qa-home-capture-' + operation + '.service'
+    need(closed.get('format') == 1 and closed.get('kind') == 'coherent-home-capture-worker-closure'
+         and closed.get('operationId') == operation and closed.get('startupOperationId') == startup
+         and closed.get('captureResult') == binding['result'] and observation.get('unit') == unit
+         and properties.get('Id') == unit and properties.get('InvocationID') == result.get('worker', {}).get('properties', {}).get('InvocationID')
+         and re.fullmatch('[a-f0-9]{32}', properties.get('InvocationID', ''))
+         and properties.get('LoadState') == 'loaded' and properties.get('Type') == 'exec'
+         and properties.get('ActiveState') == 'active' and properties.get('SubState') == 'exited' and properties.get('Result') == 'success'
+         and properties.get('ExecMainStatus') == '0' and properties.get('ExecMainCode') == '1'
+         and properties.get('MainPID') == '0' and properties.get('ControlPID') == '0' and not properties.get('Job')
+         and properties.get('Restart') == 'no' and properties.get('KillMode') == 'control-group' and properties.get('RemainAfterExit') == 'yes'
+         and properties.get('RuntimeMaxUSec') in ('180000000', '3min', '180s') and properties.get('TimeoutStopUSec') in ('30000000', '30s')
+         and properties.get('ControlGroup') in ('', '/system.slice/' + unit)
+         and cgroup.get('path') == '/system.slice/' + unit and cgroup.get('pids') == [] and cgroup.get('populated') is False
+         and isinstance(cgroup.get('groups'), list) and len(cgroup['groups']) <= 128
+         and all(p == '/sys/fs/cgroup/system.slice/' + unit or p.startswith('/sys/fs/cgroup/system.slice/' + unit + '/') for p in cgroup['groups'])
+         and type(observation.get('observedAtNs')) is int and observation['observedAtNs'] >= end,
+         'startup-proof-home-capture-worker-not-successfully-closed')
+
+
 def consume(request, read, sources):
     need(isinstance(sources, dict) and set(sources) == set(SOURCES)
          and all(isinstance(v, str) and HASH.fullmatch(v) and v != '0' * 64 for v in sources.values()),
@@ -174,6 +305,7 @@ def consume(request, read, sources):
     need(technical.get('status') == 'passed' and technical.get('sourceHashes') == sources
          and technical.get('callContractsReviewed') is True and technical.get('isolationReviewed') is True
          and technical.get('heldBootstrapReviewed') is True, 'startup-proof-independent-review-required')
+    consume_home_capture(review, document, sources)
     negatives = technical.get('negativeVerifierEvidence', {})
     need(set(negatives) == {'source', 'result'}, 'startup-proof-negative-verifier-evidence-required')
     document('negativeVerifierSource', negatives['source'], 2 * 1024**2, True)

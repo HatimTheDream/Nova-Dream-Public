@@ -16,10 +16,10 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'641d8255ec9dfa448bb21a552b37145089ff70953020323e232d75ab2dbbf31a',
+  'qualified-startup.py':'e2e56498ee14c17287548d14658eda931339f0a78dedd6ae673e3c402373f8b0',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
-  'produce-startup-inputs.py':'de359d6bef034f3e3146f05ab3bf7007ea7d8ef8f983c8eaf56a7a896b649c68',
-  'contracts.py':'f796acc36edeb55be0028151e38cc294ac36310334c1af0985220e699af91713',
+  'produce-startup-inputs.py':'6eb40a2c222da8f1c85fc3c4510a099462b9443b213977bbbbde54d9f0a9875e',
+  'contracts.py':'bd04e00b5ae4f7482c7aae0ef7b05a6f4a0372f02b9e6fa257fe8eeb817cba3e',
 });
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
@@ -77,6 +77,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
       &&x.closedAtSeconds-x.startedAtSeconds<=3600),'startup-retained-scenarios-incomplete');
   const required=['producer','parent',...Object.keys(sources).map(k=>'source/'+k),'review','originalPlan','executionIntent',
     'technicalReview','originalIntention','childResult','outsideClosure','restorationIntent','restorationCompleted','effectiveProfile','negativeVerifierSource','negativeVerifierResult',
+    ...['result','closure','input','plan','intent','sourceCapture','sourceBefore','sourceAfter','sourcePhysical','sourceMetadata','seedInventory','seedPhysical','seedMetadata','liveContext','effectiveUnit'].map(role=>'homeCapture/'+role),
     ...STARTUP_SCENARIOS.flatMap(x=>['started','process','ready','closed','preservation','bootstrap','clock-attribution'].map(y=>x+'/'+y))];
   need(v.references&&required.every(k=>hostRef.safeParse({path:v.references[k]?.path,sha256:v.references[k]?.sha256}).success
     &&Number.isSafeInteger(v.references[k]?.bytes)&&v.references[k].bytes>=0),'startup-retained-original-references-incomplete');
