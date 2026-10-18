@@ -1,3 +1,9 @@
+## [2.8.4] — 2026-10-18
+
+### Fixed
+
+- Verify a fresh, coherent maintenance hold during startup qualification, so a temporary native lease renewal does not incorrectly reject a healthy restart.
+
 ## [2.8.3] — 2026-10-18
 
 ### Fixed
