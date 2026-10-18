@@ -1,0 +1,199 @@
+name: Two-runner CI measurement
+# Measurement only: the existing canonical release workflow stays unchanged.
+# A narrow branch trigger lets the exact candidate run before any main merge.
+on:
+  workflow_dispatch:
+  push:
+    branches: [perf/frontend-verification-pass]
+    paths:
+      - '**'
+      - '.github/workflows/ci-two-runner-measurement.yml'
+permissions:
+  contents: read
+concurrency:
+  group: ci-two-runner-measurement-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  measure:
+    name: Measure shard ${{ matrix.shard }} of 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Record runner identity and capacity
+        run: |
+          mkdir -p "$RUNNER_TEMP/nova-ci-measurement"
+          node --input-type=module - <<'JS' > "$RUNNER_TEMP/nova-ci-measurement/environment.json"
+          import os from 'node:os';
+          console.log(JSON.stringify({measurementOnly:true, repository:process.env.GITHUB_REPOSITORY,
+            sourceCommit:process.env.GITHUB_SHA, runId:process.env.GITHUB_RUN_ID,
+            runAttempt:process.env.GITHUB_RUN_ATTEMPT, recordedAt:new Date().toISOString(),
+            platform:process.platform, arch:process.arch, node:process.version,
+            logicalCpus:os.cpus().length, availableParallelism:os.availableParallelism(),
+            totalMemoryBytes:os.totalmem()}, null, 2));
+          JS
+          cat "$RUNNER_TEMP/nova-ci-measurement/environment.json"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Install application dependencies
+        id: install
+        run: npm ci
+      - name: Install gateway audit dependencies
+        id: gateway
+        if: matrix.shard == 1
+        run: npm ci --prefix deploy/vercel
+      - name: Run assigned tests and required quality lanes
+        id: quality
+        timeout-minutes: 15
+        run: |
+          quality_args=()
+          if [ "${{ matrix.shard }}" = "1" ]; then quality_args+=(--with-quality); fi
+          npm_execpath="$(readlink -f "$(command -v npm)")" node scripts/ci-test-shard.mjs --shard=${{ matrix.shard }}/2 --output-dir="$RUNNER_TEMP/nova-ci-measurement" "${quality_args[@]}"
+      - name: Verify Linux update recovery
+        id: recovery
+        if: matrix.shard == 1
+        timeout-minutes: 30
+        run: |
+          exec > >(tee "$RUNNER_TEMP/nova-ci-measurement/recovery.log") 2>&1
+          # BEGIN exact maintained Linux recovery commands
+          python3 -B tests/release-install-request.test.py -v
+          python3 -B tests/update-runner.test.py -v
+          python3 -B tests/update-runtime-profile.test.py -v
+          python3 -B tests/recovery-native98.test.py -v
+          python3 -B tests/recovery-event-retention.test.py -v
+          python3 -B tests/recovery-allocation.test.py -v
+          python3 -B tests/update-snapshot-admission.test.py -v
+          python3 -B tests/recovery-managed-generation.test.py -v
+          python3 -B tests/update-closed-readers.test.py -v
+          python3 -B tests/update-log-retention.test.py -v
+          python3 -B tests/update-startup-window.test.py -v
+          python3 -B tests/update-startup-lifecycle.test.py -v
+          python3 -B tests/update-log-retention-integration.test.py -v
+          NODE_BINARY="$(command -v node)"
+          env "NODE_BINARY=$NODE_BINARY" python3 -B tests/test_frontend.py -v
+          python3 -B tests/update-app-archive.test.py -v
+          # Hosted runners may allow the runner user to write /opt. Keep the real
+          # production ownership checks and put privileged fixtures under /root.
+          QA_PROTECTED_PARENT="$(sudo mktemp -d /root/nova-recovery-ci.XXXXXX)"
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B - <<'PY'
+          import json, os, pathlib, stat
+          fixture = pathlib.Path(os.environ['QA_PROTECTED_PARENT'])
+          if fixture.parent != pathlib.Path('/root') or not fixture.name.startswith('nova-recovery-ci.'):
+              raise SystemExit('Unexpected recovery fixture parent.')
+          paths = [pathlib.Path('/opt'), *reversed((fixture, *fixture.parents))]
+          for path in paths:
+              info = path.lstat()
+              mode = stat.S_IMODE(info.st_mode)
+              print(json.dumps({'path': str(path), 'uid': info.st_uid, 'mode': oct(mode)}), flush=True)
+              if path != pathlib.Path('/opt') and (info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or mode & 0o022):
+                  raise SystemExit(f'Unprotected recovery fixture ancestor: {path}')
+          PY
+          # Execute every physical package/admission positive and semantic
+          # refusal under the same root-protected authority used in production.
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-native98.test.py CopiedCodexAdmissionsTests PackageBuildProjectionTests -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-startup-exec.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-derived-state.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-catalog-files.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/workspace-key-reader.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-app-dependencies.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/operator-rehearsal.test.py -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/protected-config-files.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/test_frontend.py ProtectedFilesystemTests -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" "NODE_BINARY=$NODE_BINARY" "$NODE_BINARY" node_modules/tsx/dist/cli.mjs --test tests/frontend-http.test.ts
+          # Resumable release producers: portable fixtures; no external effects.
+          python3 -B tests/release-delivery-ci.test.py -v
+          python3 -B tests/release-delivery-artifacts.test.py -v
+          python3 -B tests/release-github-transport.test.py -v
+          python3 -B tests/release-delivery-frontend.test.py -v
+          python3 -B tests/release-frontend-stage.test.py -v
+          python3 -B tests/release-frontend-plan.test.py -v
+          python3 -B tests/release-frontend-executor.test.py -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/release-frontend-readiness.test.py -v
+          python3 -B tests/test_release_delivery_browser_remote.py -v
+          python3 -B tests/release-assistant-transport.test.py -v
+          python3 -B tests/release-assistant-runtime-stream.test.py -v
+          python3 -B tests/release-installed-identity.test.py -v
+          python3 -B tests/test_dependency_local_worker.py -v
+          python3 -B tests/test_dependency_metadata_policy.py -v
+          python3 -I -B tests/test_retained_feed_dependencies.py -v
+          python3 -B tests/release-delivery-full-publication.test.py -v
+          python3 -B tests/release-delivery-full-prestage.test.py -v
+          python3 -B tests/release-prestage-plan-precision.test.py -v
+          python3 -B tests/release-runtime-publication.test.py -v
+          python3 -B tests/test_runtime_qualification.py -v
+          python3 -B tests/release-full-runtime-capacity.test.py -v
+          python3 -B tests/release-runtime-retained-proof.test.py -v
+          python3 -B tests/release-host-preflight.test.py -v
+          # END exact maintained Linux recovery commands
+      - name: Retain the measured hosted build
+        id: retain
+        if: matrix.shard == 1
+        run: |
+          python3 -B scripts/retain-ci-candidate.py
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'nova-hosted-candidate'
+          receipt = {'schemaVersion': 1, 'kind': 'nova-ci-measurement-build',
+              'measurementOnly': True, 'canonicalCi': False, 'deliveryQualification': False,
+              'repository': os.environ['GITHUB_REPOSITORY'], 'sourceCommit': os.environ['GITHUB_SHA'],
+              'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'workflow': os.environ['GITHUB_WORKFLOW'],
+              'files': {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
+                  for name in ('app.tgz', 'ci-source.json')}}
+          (output / 'measurement-only.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
+          PY
+      - name: Upload the measurement application archive
+        if: matrix.shard == 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nova-ci-measurement-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nova-hosted-candidate/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Record measurement phase outcomes
+        if: always()
+        env:
+          SHARD: ${{ matrix.shard }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          GATEWAY_OUTCOME: ${{ steps.gateway.outcome }}
+          QUALITY_OUTCOME: ${{ steps.quality.outcome }}
+          RECOVERY_OUTCOME: ${{ steps.recovery.outcome }}
+          RETAIN_OUTCOME: ${{ steps.retain.outcome }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, pathlib
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'nova-ci-measurement'
+          output.mkdir(exist_ok=True)
+          receipt = {'schemaVersion': 1, 'kind': 'nova-ci-measurement-phases',
+              'measurementOnly': True, 'canonicalCi': False, 'deliveryQualification': False,
+              'repository': os.environ['GITHUB_REPOSITORY'], 'sourceCommit': os.environ['GITHUB_SHA'],
+              'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'shard': int(os.environ['SHARD']), 'finishedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'outcomes': {name.lower(): os.environ[name + '_OUTCOME'] for name in
+                  ('INSTALL', 'GATEWAY', 'QUALITY', 'RECOVERY', 'RETAIN')}}
+          (output / 'phases.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
+          PY
+      - name: Preserve measurement receipts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nova-ci-measurement-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nova-ci-measurement/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
