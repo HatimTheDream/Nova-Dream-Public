@@ -14,7 +14,7 @@ const reference=path=>({path,sha256:sha256(readFileSync(path))});
 const schema=readFileSync(new URL('../scripts/release-coordinate.mjs',import.meta.url),'utf8').match(/this\.db\.exec\(`(PRAGMA journal_mode=WAL;[\s\S]+?PRAGMA user_version=1; COMMIT;)`\);/)[1].replace('${APPLICATION_ID}',String(0x4e56524c));
 const startup=['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(x=>'dist/service/apps/service/'+x);
 const helpers=['install.py','recovery.py','codex_log_retention.py','app_dependencies.py','workspace_key.py','verify-session-bindings.mjs'];
-export function dependencyFixture(t,{format=1,change,runHook}={}){
+export function dependencyFixture(t,{format=1,change,runHook,includeHost=false}={}){
  const root=mkdtempSync(join(tmpdir(),'nova-dependency-portable-')),journal=Object.create(ReleaseJournal.prototype);journal.directory=root;journal.readOnly=false;journal.db=new DatabaseSync(join(root,'journal.sqlite'));journal.db.exec(schema);
  t.after(()=>{journal.close();if(dirname(root)!==resolve(tmpdir()))throw Error('fixture-cleanup-scope');rmSync(root,{recursive:true,force:true});});
  const put=(path,bytes)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,Buffer.isBuffer(bytes)?bytes:raw(bytes));return reference(path);};
@@ -33,6 +33,7 @@ export function dependencyFixture(t,{format=1,change,runHook}={}){
   const verified=verifyCandidate(directory),archive=put(join(root,side+(base?'-base':'')+'.tgz'),Buffer.from('synthetic application archive '+side+(base?' base':''))),repository='fixture/'+side;
   const metadata={candidateId:verified.id,archiveSha256:archive.sha256},frozenSourceDirectory=join(directory,'frozen-source'),sourceHashes={};
   for(const [n,b]of Object.entries(helperBytes))sourceHashes['deploy/update-runner/'+n]=put(join(frozenSourceDirectory,'deploy/update-runner',n),b);
+  if(includeHost){const host=Buffer.from('// synthetic host.mjs');sourceHashes['scripts/host.mjs']=put(join(frozenSourceDirectory,'scripts/host.mjs'),host);put(join(directory,'scripts/host.mjs'),host);}
   if(!base&&[2,4].includes(format))sourceHashes['scripts/release-deliver.mjs']=put(join(frozenSourceDirectory,'scripts/release-deliver.mjs'),readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));
   if(!base&&format===4)sourceHashes['scripts/quality.mjs']=put(join(frozenSourceDirectory,'scripts/quality.mjs'),readFileSync(new URL('../scripts/quality.mjs',import.meta.url)));
   return{directory,applicationDirectory:directory,candidateId:verified.id,manifest,sourceCommit:commit,repository,archive,metadata:put(join(directory,'metadata.json'),metadata),ciSourceReceipt:put(join(directory,'ci.json'),{sourceCommit:commit,repository,application:{...metadata,packageLockSha256:lockRef.sha256}}),frozenSourceDirectory,sourceHashes,pkg,lock};
@@ -49,5 +50,5 @@ export function dependencyFixture(t,{format=1,change,runHook}={}){
  const storeReceipt=(j,key,name,bytes)=>{const path=join(j.directory,'delivery-evidence',key+'-'+name);if(existsSync(path)){if(!readFileSync(path).equals(bytes))throw Error('immutable-fixture-receipt-changed');return reference(path);}return put(path,bytes);};
  const run=async(...args)=>{calls.push(args);if(runHook)return runHook(...args);throw Error('Synthetic admission must not run a command');};
  const transport=createMaintainedDependencyTransport({options,base,storeReceipt,run}),context={journal,descriptor,intent,beforeNewEffect:async()=>{}};
- return{root,put,journal,descriptor,intent,route,context,options,base,publicBase,artifacts,calls,transport,producer:createDependencyPairProducer({maintained:transport})};
+ return{root,put,storeReceipt,journal,descriptor,intent,route,context,options,base,publicBase,artifacts,calls,transport,producer:createDependencyPairProducer({maintained:transport})};
 }

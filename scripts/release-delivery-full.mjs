@@ -102,7 +102,7 @@ export function createFullBundleAdapter({ options, pairProducer = null, pack = p
     return response('completed', 'maintained-full-bundle-packaged', context.intent.key, { route: 'full', candidateId: output.candidateId,
       publicCandidateId: output.publicCandidateId, priorCandidateId: output.priorCandidateId, sourceCommits: output.sourceCommits,
       bundle: { path: bundlePath, sha256: sha256(raw) }, bundleMetadata: ref(metadataPath, 65536), dependencies: output.dependencies,
-      runtime: output.runtime ?? null, release, preparation: output.preparation });
+      runtime: output.runtime ?? null, ...(output.startupQualification?{startupQualification:output.startupQualification}:{}), release, preparation: output.preparation });
   });
   return { input: async ({ prior }) => ({ route: prior.route, artifacts: prior.artifacts.repositories, options }),
     validate: context => withVerificationPass(context, async context => { need(isDeepStrictEqual(context.input.options, options), 'full-package-options-changed');

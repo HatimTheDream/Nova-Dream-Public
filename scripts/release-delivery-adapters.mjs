@@ -29,6 +29,7 @@ import { createFullPublicationAdapter } from './release-delivery-full-publicatio
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
 import {createRuntimeRetainedCollector} from './release-delivery-runtime-retained.mjs';
+import {createStartupRetainedCollector} from './release-delivery-startup-retained.mjs';
 import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
 import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter} from './release-delivery-browser.mjs';
 
@@ -97,6 +98,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
     'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',
+    'release-delivery-startup-retained.mjs', 'release-startup-retained-proof.py', 'release-delivery-capability-disposition.mjs',
     'release-deliver.mjs', 'release-storage-default.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
   return files;
 }
@@ -199,7 +201,8 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
   };
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
-    ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}) });
+    ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}),
+    ...(target.full.dependencyTransport.format===5?{startupCollector:createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})}: {}) });
   // This command currently has the maintained schema55/API1 host closure.
   // Actual candidate schema/runtime comparisons still run after authenticated
   // artifact retrieval; declared operation fields cannot override those bytes.

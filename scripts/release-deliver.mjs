@@ -7,6 +7,7 @@ import { ReleaseJournal } from './release-coordinate.mjs';
 import { DELIVERY_PHASES, deliveryDescriptorSchema } from './release-delivery-journal.mjs';
 import { readEvidenceFile, readReleaseInputFile, sha256 } from './release-plan.mjs';
 import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
+import { reconcileCapabilityGap } from './release-delivery-capability-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 import { routeStorageDelivery } from './release-storage-default.mjs';
 
@@ -130,11 +131,12 @@ export async function deliveryMain(args) {
   const storage = await routeStorageDelivery(args, fileURLToPath(import.meta.url));
   if (storage.handled) return storage.result;
   const [mode, directory, value, extra] = args;
-  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure'].includes(mode) && (mode === 'checkpoint' ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
+  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability'].includes(mode) && (['checkpoint','reconcile-capability'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
   const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' });
   try {
     if (mode === 'status') return journal.deliveryStatus(value);
     if (mode === 'checkpoint') return journal.checkpointDelivery(value, JSON.parse(readReleaseInputFile(resolve(extra))));
+    if (mode === 'reconcile-capability') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileCapabilityGap(journal,value,{path,sha256:sha256(bytes)}); }
     const { createDeliveryRegistry } = await import('./release-delivery-adapters.mjs');
     if (mode === 'reconcile-failure') return await reconcileFailedDelivery(journal,value,createDeliveryRegistry());
     let id = value;

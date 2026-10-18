@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
+import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), commit = z.string().regex(/^[a-f0-9]{40}$/);
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
@@ -11,9 +12,11 @@ const source = z.object({ root: z.string().min(1).max(4096), repository: z.strin
 export const DELIVERY_PHASES = Object.freeze(['private-source', 'public-source', 'private-ci', 'public-ci', 'artifacts', 'route', 'package', 'sign', 'capacity', 'recovery', 'publication', 'installation', 'assistant', 'browser']);
 export const PACKAGE_SUBSTEPS = Object.freeze(['dependency-stage', 'dependency-plan', 'dependency-intent', 'dependency-execute', 'dependency-retrieval', 'pair', 'bundle']);
 export const ASSISTANT_SUBSTEPS = Object.freeze(['session', 'create', 'draft', 'submit', 'saved-reply']);
+export const closedDeliveryState = state => ['reconciled-failed','reconciled-gap'].includes(state);
+const dispositionSchema = z.discriminatedUnion('kind',[failedDispositionSchema,capabilityDispositionSchema]);
 export const deliveryDescriptorSchema = z.object({ format: z.literal(1), operation: releaseOperationSchema,
   sources: z.object({ private: source, public: source }).strict(), target: reference, targetIdentity: hash,
-  timeline: releaseTimelineSchema, adapterIdentity: hash, observationBudgetMs: z.number().int().min(60000).max(86400000).default(14400000) }).strict().superRefine((v, ctx) => {
+  timeline: releaseTimelineSchema, adapterIdentity: hash, predecessorRecovery:predecessorRecoverySchema.optional(), observationBudgetMs: z.number().int().min(60000).max(86400000).default(14400000) }).strict().superRefine((v, ctx) => {
   if (v.sources.private.repository === v.sources.public.repository || v.sources.private.root === v.sources.public.root)
     ctx.addIssue({ code: 'custom', message: 'Independent source histories required.' });
   for (const side of ['private', 'public']) if (v.operation.sourceCommits[side] !== v.sources[side].commit)
@@ -44,13 +47,18 @@ function rejectedClaim(raw) {
 export function ensureDeliverySchema(journal) {
   const present = journal.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deliveries'").get();
   const dispositions = journal.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_dispositions'").get();
-  if (present && dispositions) return;
+  if (present && dispositions) {
+    if(journal.readOnly)return;
+    const index=journal.db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='delivery_active_target'").get();
+    if(index?.sql.includes("'reconciled-gap'"))return;
+    journal.transaction(()=>journal.db.exec("DROP INDEX IF EXISTS delivery_active_target; CREATE UNIQUE INDEX delivery_active_target ON deliveries(target_identity) WHERE state NOT IN ('completed','reconciled-failed','reconciled-gap');"));return;
+  }
   if (present && journal.readOnly) return;
   need(!journal.readOnly, 'delivery-schema-not-initialized');
   journal.transaction(() => journal.db.exec(`
     CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, descriptor_json TEXT NOT NULL, descriptor_hash TEXT NOT NULL, target_identity TEXT NOT NULL, created_at INTEGER NOT NULL, state TEXT NOT NULL);
     DROP INDEX IF EXISTS delivery_active_target;
-    CREATE UNIQUE INDEX delivery_active_target ON deliveries(target_identity) WHERE state NOT IN ('completed','reconciled-failed');
+    CREATE UNIQUE INDEX delivery_active_target ON deliveries(target_identity) WHERE state NOT IN ('completed','reconciled-failed','reconciled-gap');
     CREATE TABLE IF NOT EXISTS delivery_dispositions(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id), at_ms INTEGER NOT NULL, proof_json TEXT NOT NULL, proof_hash TEXT NOT NULL);
     CREATE TRIGGER IF NOT EXISTS delivery_dispositions_no_update BEFORE UPDATE ON delivery_dispositions BEGIN SELECT RAISE(ABORT,'immutable-delivery-disposition'); END;
     CREATE TRIGGER IF NOT EXISTS delivery_dispositions_no_delete BEFORE DELETE ON delivery_dispositions BEGIN SELECT RAISE(ABORT,'immutable-delivery-disposition'); END;
@@ -94,7 +102,7 @@ export const deliveryJournalMethods = {
     if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_dispositions'").get()) return null;
     const row = this.db.prepare('SELECT * FROM delivery_dispositions WHERE operation_id=?').get(id);
     if (!row) return null;
-    const proof = failedDispositionSchema.parse(decoded(row.proof_json,row.proof_hash));
+    const proof = dispositionSchema.parse(decoded(row.proof_json,row.proof_hash));
     need(proof.operationId === id, 'stored-disposition-operation-changed');
     return { recordedAtMs:row.at_ms, proof, sha256:row.proof_hash };
   },
@@ -109,6 +117,19 @@ export const deliveryJournalMethods = {
       this.db.prepare('INSERT INTO delivery_dispositions VALUES(?,?,?,?)').run(id,now,value.text,value.hash);
       this.db.prepare("UPDATE deliveries SET state='reconciled-failed' WHERE id=? AND state='active'").run(id);
       event(this,id,'failed-operation-reconciled',{policy:proof.policy,proofSha256:value.hash,phaseKey:proof.phaseKey,automaticReplayPermitted:false},now);
+      return this.deliveryStatus(id,now);
+    });
+  },
+  recordCapabilityDisposition(id,raw,now=Date.now(),{assertAbsent}={}) {
+    ensureDeliverySchema(this);const proof=capabilityDispositionSchema.parse(raw);
+    return this.transaction(()=>{
+      const old=this.deliveryDisposition(id);
+      if(old){need(canonical(old.proof)===canonical(proof),'existing-disposition-changed');return this.deliveryStatus(id,now);}
+      need(proof.operationId===id&&time(now)>=proof.reviewedAtMs&&now-proof.reviewedAtMs<=60000,'disposition-stale-or-wrong-operation');
+      need(canonical(proof)===canonical(deriveCapabilityDisposition(this,id,proof.request,proof.reviewedAtMs,{assertAbsent})),'disposition-evidence-changed');
+      const value=encoded(proof);this.db.prepare('INSERT INTO delivery_dispositions VALUES(?,?,?,?)').run(id,now,value.text,value.hash);
+      this.db.prepare("UPDATE deliveries SET state='reconciled-gap' WHERE id=? AND state='active'").run(id);
+      event(this,id,'capability-gap-reconciled',{policy:proof.policy,proofSha256:value.hash,phase:'package',reserved:false,automaticReplayPermitted:false},now);
       return this.deliveryStatus(id,now);
     });
   },
@@ -134,7 +155,7 @@ export const deliveryJournalMethods = {
     const assistantStep = phase.startsWith('assistant/') ? phase.slice(10) : null;
     need(DELIVERY_PHASES.includes(phase) || PACKAGE_SUBSTEPS.includes(substep) || ASSISTANT_SUBSTEPS.includes(assistantStep), 'unsupported-delivery-phase'); const v = encoded(input);
     return this.transaction(() => {
-      need(this.loadDelivery(id).state !== 'reconciled-failed', 'delivery-operation-reconciled'); const old = this.deliveryPhase(id, phase);
+      need(!closedDeliveryState(this.loadDelivery(id).state), 'delivery-operation-reconciled'); const old = this.deliveryPhase(id, phase);
       if (old) { need(old.inputSha256 === v.hash, 'phase-input-changed'); return { newlyReserved: false, intent: old }; }
       if (substep) {
         const parent = this.deliveryPhase(id, 'package');
@@ -169,7 +190,7 @@ export const deliveryJournalMethods = {
     const value = deliveryObservationSchema.parse(raw); if (value.receipt) readEvidenceFile(value.receipt);
     need(value.state !== 'completed' || value.output !== null, 'completed-phase-output-required');
     return this.transaction(() => {
-      need(this.loadDelivery(id).state !== 'reconciled-failed', 'delivery-operation-reconciled');
+      need(!closedDeliveryState(this.loadDelivery(id).state), 'delivery-operation-reconciled');
       const old = this.deliveryPhase(id, phase); need(old && value.key === old.key, 'phase-intent-mismatch');
       need(!old.externalId || !value.externalId || old.externalId === value.externalId, 'external-job-identity-changed');
       need(time(now) >= (old.current?.observedAtMs ?? old.createdAtMs), 'journal-clock-moved-backwards');
@@ -186,12 +207,12 @@ export const deliveryJournalMethods = {
   },
   recordDeliveryRevalidation(id, phase, validation, now = Date.now()) {
     const value = z.object({ state: z.enum(['passed', 'failed']), reason: z.string().regex(/^[a-z][a-z0-9-]{0,99}$/) }).strict().parse(validation);
-    return this.transaction(() => { need(this.loadDelivery(id).state !== 'reconciled-failed', 'delivery-operation-reconciled');
+    return this.transaction(() => { need(!closedDeliveryState(this.loadDelivery(id).state), 'delivery-operation-reconciled');
       need(this.deliveryPhase(id, phase)?.state === 'completed', 'revalidation-requires-completed-phase');
       event(this, id, 'phase-revalidated', { phase, ...value }, now); return this.deliveryPhase(id, phase); });
   },
   attachDeliveryCoordinator(id, descriptor, description, now = Date.now()) {
-    const retained = this.loadDelivery(id); need(retained.state !== 'reconciled-failed', 'delivery-operation-reconciled');
+    const retained = this.loadDelivery(id); need(!closedDeliveryState(retained.state), 'delivery-operation-reconciled');
     const d = retained.descriptor;
     validateOperationContinuation(descriptor.input.operation, d.operation);
     need(descriptor.input.operation.id === id, 'coordinator-operation-changed');
@@ -216,15 +237,15 @@ export const deliveryJournalMethods = {
     return { timeline, eta: assessTimeline(timeline, { nowMs: now, previous: previous?.timeline ?? descriptor.timeline, previousAssessments: previous?.eta.deadlineAssessments ?? [], phases, operationCompletedAtMs: completedAt }) };
   },
   checkpointDelivery(id, timeline, now = Date.now()) {
-    return this.transaction(() => { need(this.loadDelivery(id).state !== 'reconciled-failed', 'delivery-operation-reconciled');
+    return this.transaction(() => { need(!closedDeliveryState(this.loadDelivery(id).state), 'delivery-operation-reconciled');
       const value = this.deliveryTimeline(id, now, timeline); event(this, id, 'timeline', value, now); return value; });
   },
   deliveryStatus(id, now = Date.now()) {
     const d = this.loadDelivery(id), phases = DELIVERY_PHASES.map(phase => this.deliveryPhase(id, phase));
     const complete = phases.every(p => p?.state === 'completed' && p.validation?.state !== 'failed');
     const disposition = this.deliveryDisposition(id);
-    need(d.state !== 'reconciled-failed' || disposition, 'delivery-disposition-missing');
-    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, closed: d.state === 'reconciled-failed', disposition,
+    need(!closedDeliveryState(d.state) || disposition, 'delivery-disposition-missing');
+    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, closed: closedDeliveryState(d.state), disposition,
       createdAtMs: d.created_at, elapsedMs: Math.max(0, now - d.created_at),
       originalEstimate: d.descriptor.timeline.original, originalDeadlineAtMs: d.descriptor.timeline.original.remainingMs === null ? null : d.descriptor.timeline.original.issuedAtMs + d.descriptor.timeline.original.remainingMs[1], eta: this.deliveryTimeline(id, now).eta,
       packageSubsteps: PACKAGE_SUBSTEPS.map(name => { const row = this.deliveryPhase(id, 'package/' + name); return { name,

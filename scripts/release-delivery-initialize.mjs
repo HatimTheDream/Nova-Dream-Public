@@ -21,6 +21,7 @@ import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-deli
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
 import {FULL_HELPERS} from './release-delivery-full-host.mjs';
+import {predecessorRecoverySchema,verifyRecoveryPredecessor} from './release-delivery-capability-disposition.mjs';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/);
 const path=z.string().min(1).max(4096).refine(v=>isAbsolute(v)&&!v.includes('\0'));
@@ -28,7 +29,7 @@ const ref=z.object({path,sha256:hash}).strict();
 const source=z.object({root:path,repository:z.string(),branch:z.literal('main')}).strict();
 export const deliveryStartInputSchema=z.object({format:z.literal(1),operationId:z.uuid(),profile:ref,
  sourceCommits:z.object({private:commit,public:commit}).strict(),outputRoot:path,timeline:releaseTimelineSchema,
- observationBudgetMs:z.number().int().min(60000).max(86400000)}).strict();
+ predecessorRecovery:predecessorRecoverySchema.optional(),observationBudgetMs:z.number().int().min(60000).max(86400000)}).strict();
 export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targetIdentity:hash,
  sources:z.object({private:source,public:source}).strict(),
  accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref,feedDependencies:z.object({archive:ref,metadata:ref}).strict().optional()}).strict(),
@@ -191,7 +192,8 @@ export async function initializeDeliveryInput(inputPath,{clock=Date.now,protect=
    &&input.timeline.revisions.length===0&&input.timeline.reviews.length===0&&clock()>=input.timeline.startedAtMs-5000&&clock()-input.timeline.startedAtMs<=300000,'actual-original-start-required');assessTimeline(input.timeline,{nowMs:clock()});
   const prepared=await derive(input,profile,{clock});assessTimeline(input.timeline,{nowMs:clock()});
   const targetRaw=encoded(prepared.target),target=reference(join(directory,'target.json'),targetRaw);
-  const descriptor=deliveryDescriptorSchema.parse({format:1,operation:prepared.operation,sources:prepared.sources,target,targetIdentity:prepared.targetIdentity,adapterIdentity:prepared.adapterIdentity,timeline:input.timeline,observationBudgetMs:input.observationBudgetMs});
+  if(input.predecessorRecovery)await verifyRecoveryPredecessor(input.predecessorRecovery,prepared.operation,{targetIdentity:prepared.targetIdentity});
+  const descriptor=deliveryDescriptorSchema.parse({format:1,operation:prepared.operation,sources:prepared.sources,target,targetIdentity:prepared.targetIdentity,adapterIdentity:prepared.adapterIdentity,timeline:input.timeline,observationBudgetMs:input.observationBudgetMs,...(input.predecessorRecovery?{predecessorRecovery:input.predecessorRecovery}:{})});
   record={format:1,kind:'nova-delivery-initialization',input,inputSha256,profile:input.profile,adapterIdentity:prepared.adapterIdentity,directory,journalDirectory,
    target:{reference:target,value:prepared.target},descriptor:{reference:reference(join(directory,'descriptor.json'),encoded(descriptor)),value:descriptor}};
   exactFile(recordPath,encoded(record));afterWrite('initialization');
@@ -200,6 +202,8 @@ export async function initializeDeliveryInput(inputPath,{clock=Date.now,protect=
  need(parsed.operation.id===input.operationId&&same(parsed.operation.sourceCommits,input.sourceCommits)&&same(parsed.timeline,input.timeline)
   &&same(parsed.target,record.target.reference)&&record.target.reference.path===join(directory,'target.json')&&record.descriptor.reference.path===join(directory,'descriptor.json')
   &&sha256(encoded(record.target.value))===record.target.reference.sha256&&sha256(encoded(parsed))===record.descriptor.reference.sha256,'original-initialization-record-changed');
+ need(same(parsed.predecessorRecovery,input.predecessorRecovery),'original-predecessor-lineage-changed');
+ if(input.predecessorRecovery)await verifyRecoveryPredecessor(input.predecessorRecovery,parsed.operation,{targetIdentity:parsed.targetIdentity});
  exactFile(record.target.reference.path,encoded(record.target.value));afterWrite('target');
  need(deliveryTargetIdentity(parsed)===parsed.targetIdentity&&parsed.targetIdentity===profile.targetIdentity,'configured-target-identity-changed');
  exactFile(record.descriptor.reference.path,encoded(parsed));afterWrite('descriptor');
