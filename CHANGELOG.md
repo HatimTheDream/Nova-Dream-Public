@@ -1,3 +1,9 @@
+## [2.8.3] — 2026-10-18
+
+### Fixed
+
+- Validate startup preservation receipts against their original byte counts, so complete verified qualification can proceed to deployment.
+
 ## [2.8.2] — 2026-10-18
 
 ### Fixed

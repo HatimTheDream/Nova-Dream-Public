@@ -30,6 +30,30 @@ class Checks(unittest.TestCase):
         self.assertEqual(len([k for k in result['references'] if k.startswith('homeCapture/')]), 15)
 
 
+    def test_child_receipts_keep_the_producer_byte_count_and_canonical_namespace(self):
+        f = fixture(); child = subject.parse(f['files'][f['roles']['child']['path']])
+        result = self.consume(f)
+        for index, scenario in enumerate(subject.SCENARIOS, 1):
+            original = f['files'][f['roles'][scenario + '/preservation']['path']]
+            self.assertEqual(child['scenarios'][index - 1], {
+                'path': '/qualification/evidence/attempt-' + str(index) + '/preservation.json',
+                'sha256': subject.sha(original), 'bytes': len(original)})
+            self.assertEqual(result['references'][scenario + '/preservation']['bytes'], len(original))
+
+    def test_rehashed_child_receipt_shape_or_content_disagreement_refuses(self):
+        changes = [lambda ref: ref.pop('bytes'), lambda ref: ref.update(bytes=True),
+                   lambda ref: ref.update(bytes=0), lambda ref: ref.update(bytes=-1),
+                   lambda ref: ref.update(bytes=float(ref['bytes'])),
+                   lambda ref: ref.update(bytes=ref['bytes'] + 1),
+                   lambda ref: ref.update(unexpected=True),
+                   lambda ref: ref.update(path=ref['path'].replace('/qualification/', '/other/')),
+                   lambda ref: ref.update(sha256='0' * 64)]
+        for index in range(3):
+            for change in changes:
+                with self.subTest(attempt=index + 1, change=change), self.assertRaisesRegex(
+                        RuntimeError, 'startup-proof-child-canonical-receipt-changed'):
+                    self.consume(fixture({'child': lambda value, i=index, edit=change: edit(value['scenarios'][i])}))
+
     def test_complete_capture_rejects_each_missing_control_or_metadata_reference(self):
         cases = [('review', lambda v: v.pop('homeCapture')),
                  ('review', lambda v: v['homeCapture'].pop('result')),

@@ -429,8 +429,11 @@ def consume(request, read, sources):
              and guard.get('candidateId') == app['candidateId'] and guard.get('epoch') == binding['workspaceEpoch']
              and guard.get('heldFor') == started['leaseId'] and guard.get('maintenanceHeld') is True
              and guard.get('nativeSuspended') is True and guard.get('blockers') == [], 'startup-proof-held-bootstrap-required')
-        need(child['scenarios'][index - 1] == {'path': '/qualification/evidence/attempt-' + str(index) + '/preservation.json',
-             'sha256': refs[scenario + '/preservation']['sha256']}, 'startup-proof-child-canonical-receipt-changed')
+        child_ref = child['scenarios'][index - 1]
+        need(type(child_ref) is dict and type(child_ref.get('bytes')) is int and child_ref['bytes'] > 0
+             and child_ref == {'path': '/qualification/evidence/attempt-' + str(index) + '/preservation.json',
+                 'sha256': refs[scenario + '/preservation']['sha256'],
+                 'bytes': refs[scenario + '/preservation']['bytes']}, 'startup-proof-child-canonical-receipt-changed')
         summaries.append({'scenario': scenario, 'candidateId': app['candidateId'], 'preservation': item['preservation'],
                           'startedAtSeconds': started['startedAtSeconds'], 'closedAtSeconds': closed['closedAtSeconds']})
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')

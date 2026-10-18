@@ -178,7 +178,8 @@ def fixture(changes=None):
             'eventHistoryWindow': [100, 130] if i == 2 else [i * 100, i * 100 + 30], 'eventClockAttribution': 'selected-shared-only',
             'windowWidened': False, 'incrementalRestartQualified': False})
         scenario_refs.append({'scenario': name, 'started': started, 'process': process, 'ready': ready, 'closed': closed, 'preservation': preservation, 'bootstrap': bootstrap, 'clock-attribution': clock})
-        child_refs.append({'path': '/qualification/evidence/attempt-' + str(i) + '/preservation.json', 'sha256': preservation['sha256']})
+        child_refs.append({'path': '/qualification/evidence/attempt-' + str(i) + '/preservation.json',
+                           'sha256': preservation['sha256'], 'bytes': len(files[preservation['path']])})
     restore_intent = put('restorationIntent', evidence + '/workspace-restoration-intent.json', {'operationId': op,
         'kind': 'restore-independent-pristine-private-state', 'independentOriginalRequired': True, 'productionMutation': False,
         'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256']})
