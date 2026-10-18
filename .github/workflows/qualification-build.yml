@@ -1,7 +1,7 @@
 name: Qualification build (no release)
 on:
   push:
-    branches: [codex/frontend-qualification-2-3-0]
+    branches: [codex/frontend-qualification-2-3-0, fix/startup-qualified-delivery]
 permissions:
   contents: read
 concurrency:

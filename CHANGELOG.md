@@ -1,3 +1,11 @@
+## [2.8.1] — 2026-10-18
+
+### Fixed
+
+- Require verified startup, restart, and independent restoration evidence before packaging updates that change the service startup files.
+- Preserve stopped deployment history when preparing a separately qualified successor after an unsupported startup transition.
+- Enforce the same backup disk-space reserve in both application editions.
+
 ## [2.8.0] — 2026-10-17
 
 ### Added
