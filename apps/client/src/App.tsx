@@ -200,7 +200,7 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
     } else if (link.kind === 'content') {
       if (!open('content')) return; setRecordTarget({ kind: 'content', id: link.id, nonce: crypto.randomUUID() });
     } else if (link.kind === 'assignment') {
-      if (!open('agents')) return; setRecordTarget({ kind: 'assignment', id: link.id, nonce: crypto.randomUUID() });
+      if (!open('agents')) return; setRecordTarget({ kind: 'assignment', id: link.id, attemptId: link.attemptId, nonce: crypto.randomUUID() });
     } else {
       const indexKey = `e3:agent-routines:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`;
       const viewKey = `e3:agent-view:${snapshot.deviceId}:${retainedWindowId}`;

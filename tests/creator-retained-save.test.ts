@@ -4,6 +4,7 @@ import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { Entity, Snapshot } from '../packages/domain/contracts';
 import type { PersonalProfile, RecordValue } from '../packages/domain/workspace-records';
+import { blankRecord } from '../packages/domain/workspace-records';
 import { createMascotAppearance, defaultMascotAppearance } from '../packages/domain/mascot-appearance';
 const key=Symbol.for('nova.test.creator-retained');
 const react=pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
@@ -91,4 +92,33 @@ test('reconciling a lost appearance-only acknowledgement through Save Changes up
  nodes(render()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await new Promise(resolve=>setTimeout(resolve,0));
  assert.deepEqual(calls[1],calls[0],'reconciliation uses the original appearance receipt');assert.equal(closed,0);assert.deepEqual(fields().appearanceControls.savedValue,changed);
  fields().appearanceControls.onCancelLook();assert.deepEqual(fields().value.appearance,changed);assert.equal(fields().value.name,'Kept unsaved name');
+});
+
+test('opening an exact assignment attempt preserves plan writing and the original pending save', async t => {
+ const f = fixture(t), id = 'assignment:kept-plan';
+ const value = { ...blankRecord('assignment', 'UTC'), title: 'Saved plan', brief: 'Original saved brief' };
+ const entity = { id, revision: 7, value, updatedAt: '2026-10-19T00:00:00Z' } as Entity<RecordValue>;
+ const writing = { ...value, brief: 'Keep this unfinished brief' };
+ const pending = { kind: 'assignment', entityId: id, requestId: 'original-save', epoch: 'epoch', expectedRevision: 7, payload: writing };
+ const journalKey = `e3:journal:device:${id}:${retainedWindowId}`;
+ const journal = JSON.stringify({ value: writing, revision: 7, epoch: 'epoch', dirty: true, pending });
+ f.storage.set(journalKey, journal);
+ let mutations = 0, cleared = 0;
+ t.mock.method(globalThis, 'fetch', async () => { mutations++; throw Error('No request should run while opening a target'); });
+ const render = (attemptId: string) => { f.state.index = 0; return RecordEditor({ kind: 'assignment', id, entity, snapshot: f.snapshot, refresh: async () => {}, editTask: () => {}, targetAttempt: { id: attemptId, epoch: 'epoch' }, clearTargetAttempt: () => { cleared++; } }); };
+ for (const attemptId of ['older-attempt', 'another-attempt']) {
+  const tree = render(attemptId), fields = nodes(tree).find(n => n.type?.name === 'RecordFields'), runs = nodes(tree).find(n => n.type?.name === 'AssignmentRuns');
+  assert.equal(fields.props.value.brief, writing.brief);
+  assert.deepEqual(runs.props.targetAttempt, { id: attemptId, epoch: 'epoch' });
+  assert.equal(runs.props.dirty, true, 'a retained save continues to block a new start');
+  assert.equal(runs.props.entity.id, id);
+  assert.equal(f.storage.get(journalKey), journal);
+ }
+ f.state.values = [];
+ const restored = render('another-attempt');
+ assert.equal(nodes(restored).find(n => n.type?.name === 'RecordFields').props.value.brief, writing.brief);
+ nodes(restored).find(n => n.type?.name === 'AssignmentRuns').props.clearTarget();
+ assert.equal(cleared, 1);
+ assert.equal(f.storage.get(journalKey), journal);
+ assert.equal(mutations, 0);
 });

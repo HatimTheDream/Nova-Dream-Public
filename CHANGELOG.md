@@ -1,3 +1,10 @@
+## [2.9.2] — 2026-10-19
+
+### Fixed
+
+- Open the exact assignment attempt linked from Feed, including older results outside recent history, while keeping unfinished plan writing and the selected attempt when returning.
+- Show clear loading, unavailable and retry states for a linked attempt without substituting another run or starting work.
+
 ## [2.9.1] — 2026-10-19
 
 ### Improved
