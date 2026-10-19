@@ -8,7 +8,7 @@ import { contactEmails, contactMergeSchema, contactRestoreSchema, mergedContactV
 import { imagePreviewType } from './image-preview.js';
 import { syncTaskSubtasks } from '../../packages/domain/task-subtasks.js';
 import { invalidTaskParents } from '../../packages/domain/task-family.js';
-import { inTaskDestination } from '../../packages/domain/task-presentation.js';
+import { inTaskDestination, taskPresentationContext, taskPresentationProjection } from '../../packages/domain/task-presentation.js';
 import { reminderActionSchema, reminderDeliverySchema, reminderInstant, reminderWindowMs, type NotificationAttempt, type Reminder } from '../../packages/domain/reminders.js';
 import { DatabaseSync } from 'node:sqlite';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -714,8 +714,9 @@ export class Store {
     }).value;
   }
   private taskState(): TaskState {
-    const events = this.internalList<TaskEvent>('tasks:event:');
-    return { occurrences: this.internalList<Occurrence>('tasks:occurrence:'), events: events.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 500), routineEvents: this.internalList<RoutineEvent>('tasks:routine-event:').sort((a, b) => b.at.localeCompare(a.at)).slice(0, 200), focus: this.internalList<Focus>('tasks:focus:'), earnedXp: events.reduce((total, event) => total + event.xpDelta, 0), orders: this.internalList<DailyOrder>('tasks:order:'), reminders: this.reminders(), reminderAttempts: this.internalList<NotificationAttempt>('reminders:attempt:').sort((a, b) => b.at - a.at) };
+    const events = this.internalList<TaskEvent>('tasks:event:'), occurrences = this.internalList<Occurrence>('tasks:occurrence:');
+    const presentation = taskPresentationProjection(occurrences, events, (id, revision) => this.readEntityVersion('routine', id, revision));
+    return { occurrences, presentation, events: events.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 500), routineEvents: this.internalList<RoutineEvent>('tasks:routine-event:').sort((a, b) => b.at.localeCompare(a.at)).slice(0, 200), focus: this.internalList<Focus>('tasks:focus:'), earnedXp: events.reduce((total, event) => total + event.xpDelta, 0), orders: this.internalList<DailyOrder>('tasks:order:'), reminders: this.reminders(), reminderAttempts: this.internalList<NotificationAttempt>('reminders:attempt:').sort((a, b) => b.at - a.at) };
   }
   orderTasks(device: string, raw: unknown): DailyOrder {
     const cmd = dailyOrderSchema.parse(raw);
@@ -723,7 +724,8 @@ export class Store {
       const key = `tasks:order:${JSON.stringify([cmd.date, cmd.timezone])}`;
       const current = this.internalRead<DailyOrder>(key);
       if ((current?.revision ?? 0) !== cmd.expectedRevision) throw new Fault(409, 'order_changed', 'Another window changed this day’s order. Your proposal is kept.', current);
-      const eligible = this.list('task').filter(t => inTaskDestination(t, 'Today', cmd.date, cmd.timezone)).map(t => t.id);
+      const context = taskPresentationContext(this.taskState(), this.list('routine'), this.now());
+      const eligible = this.list('task').filter(t => inTaskDestination(t, 'Today', cmd.date, cmd.timezone, context)).map(t => t.id);
       if (eligible.length !== cmd.taskIds.length || eligible.some(id => !cmd.taskIds.includes(id))) throw new Fault(409, 'order_membership', 'The day’s tasks changed. Review the kept order with the current tasks.');
       return this.internalWrite(key, { date: cmd.date, timezone: cmd.timezone, revision: (current?.revision ?? 0) + 1, taskIds: cmd.taskIds });
     }).value;

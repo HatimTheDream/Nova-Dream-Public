@@ -1,17 +1,17 @@
 import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
 import type { HomeWidget } from '../../../packages/domain/home-widgets';
-import { cadenceGroup, taskBlockers } from '../../../packages/domain/task-presentation';
+import { isDailyOccurrence, taskBlockers, taskPlanningDay, taskPresentationContext } from '../../../packages/domain/task-presentation';
 import { dayInZone, sortTasks } from '../../../packages/domain/tasks';
 
 export function dailyRoutineTasks(snapshot: Pick<Snapshot, 'tasks' | 'routines' | 'taskState' | 'layout'>, now: number): Entity<Task>[] {
-  const dailyIds = new Set((snapshot.routines ?? []).filter(routine => cadenceGroup(routine.value) === 'Daily').map(routine => routine.id));
+  const context = taskPresentationContext(snapshot.taskState, snapshot.routines, now);
   const todayOccurrences = new Map((snapshot.taskState?.occurrences ?? [])
-    .filter(occurrence => dailyIds.has(occurrence.routineId) && occurrence.date === dayInZone(occurrence.timezone, now))
+    .filter(occurrence => occurrence.date === dayInZone(occurrence.timezone, now))
     .map(occurrence => [occurrence.taskId, occurrence]));
   const eligible = snapshot.tasks.filter(task => {
     const occurrence = todayOccurrences.get(task.id);
-    if (!occurrence || task.value.trashed || !['open', 'active'].includes(task.value.status)) return false;
-    if (task.value.planned > dayInZone(task.value.timezone ?? occurrence.timezone, now)) return false;
+    if (!occurrence || !isDailyOccurrence(task, context) || task.value.trashed || !['open', 'active'].includes(task.value.status)) return false;
+    if (task.value.planned > taskPlanningDay(task, dayInZone(snapshot.layout.value.timezone, now), context)) return false;
     return taskBlockers(task.value, snapshot.tasks).length === 0;
   });
   const timezone = snapshot.layout.value.timezone, date = dayInZone(timezone, now);

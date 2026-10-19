@@ -24,8 +24,10 @@ export type Routine = z.infer<typeof routineSchema>;
 export type Occurrence = { taskId: string; routineId: string; templateRevision: number; date: string; timezone: string; kind: Routine['kind'] };
 export type TaskEvent = { id: string; taskId: string; at: string; from: Task['status'] | null; to: Task['status']; xpDelta: number; action?: 'trash' | 'restore' };
 export type RoutineEvent = { id: string; routineId: string; at: string; state: Routine['state']; revision: number };
+/** Read-only presentation facts, derived from original revisions and full events. */
+export type TaskPresentation = { recurrence?: Pick<Routine, 'cadence'> & { interval: number }; completedAt?: string; skippedAt?: string };
 export type Focus = { taskId: string; revision: number; deviceId: string; clientId: string; running: boolean; elapsedMs: number; lastPulse: number };
-export type TaskState = { occurrences: Occurrence[]; events: TaskEvent[]; routineEvents: RoutineEvent[]; focus: Focus[]; earnedXp: number; orders?: DailyOrder[]; reminders?: Reminder[]; reminderAttempts?: NotificationAttempt[] };
+export type TaskState = { occurrences: Occurrence[]; events: TaskEvent[]; routineEvents: RoutineEvent[]; focus: Focus[]; earnedXp: number; presentation?: Record<string, TaskPresentation>; orders?: DailyOrder[]; reminders?: Reminder[]; reminderAttempts?: NotificationAttempt[] };
 export const focusSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), taskId: z.string().max(100), expectedRevision: z.number().int().nonnegative(), clientId: z.string().uuid(), action: z.enum(['start', 'pulse', 'pause']) }).strict())();
 export type FocusCommand = z.infer<typeof focusSchema>;
 export const focusLeaseMs = 30_000;

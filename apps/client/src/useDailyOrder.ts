@@ -1,17 +1,17 @@
-import { inTaskDestination } from '../../../packages/domain/task-presentation';
+import { inTaskDestination, taskPresentationContext, type TaskPresentationContext } from '../../../packages/domain/task-presentation';
 import { useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { sortTasks, type DailyOrderCommand } from '../../../packages/domain/tasks';
 import { ApiError, readLocal, request, saveLocal } from './api';
 type Kept = { command: DailyOrderCommand; conflict?: boolean; reviewed?: boolean };
-export function useDailyOrder(snapshot: Snapshot, date: string, refresh: () => Promise<void>) {
+export function useDailyOrder(snapshot: Snapshot, date: string, refresh: () => Promise<void>, context: TaskPresentationContext = taskPresentationContext(snapshot.taskState, snapshot.routines)) {
   const [windowId] = useState(() => sessionStorage.getItem('e3:tab') ?? crypto.randomUUID());
   const timezone = snapshot.layout.value.timezone, key = `e3:daily-order:${snapshot.deviceId}:${windowId}:${date}:${timezone}`;
   const [state, setState] = useState<{ key: string; kept?: Kept }>(() => ({ key, kept: readLocal<Kept>(key) }));
   const [busy, setBusy] = useState(false), [error, setError] = useState(''); const currentKey = useRef(key); currentKey.current = key;
   useEffect(() => { setState({ key, kept: readLocal<Kept>(key) }); setError(''); setBusy(false); }, [key]);
   const kept = state.key === key ? state.kept : undefined, host = snapshot.taskState?.orders?.find(o => o.date === date && o.timezone === timezone);
-  const tasks = snapshot.tasks.filter(t => inTaskDestination(t, 'Today', date, timezone));
+  const tasks = snapshot.tasks.filter(t => inTaskDestination(t, 'Today', date, timezone, context));
   const ids = sortTasks(tasks, kept?.command.taskIds ?? host?.taskIds).map(t => t.id);
   const persist = (value: Kept) => { if (!saveLocal(key, value)) { setError('Free browser storage before changing the order.'); return false; } setState({ key, kept: value }); return true; };
   const run = async (order?: string[]) => {

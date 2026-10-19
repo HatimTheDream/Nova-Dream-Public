@@ -1,5 +1,6 @@
 import type { Snapshot } from '../../../packages/domain/contracts';
 import { addDays } from '../../../packages/domain/calendar';
+import { isHistoricalDailyOccurrence, taskPresentationContext } from '../../../packages/domain/task-presentation';
 
 /**
  * Proactive home briefing: "Here's what deserves your attention, and why."
@@ -75,6 +76,7 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
   const todayKey = dayKey(now, timezone);
   const tomorrowKey = addDays(todayKey, 1);
   const freshnessLine = 'From saved tasks and drafts';
+  const taskContext = taskPresentationContext(snapshot.taskState, snapshot.routines, now);
 
   const isDismissed = (occurrenceKey: string): boolean => {
     const stableKey = occurrenceKey.replace(/:\d{4}-\d{2}-\d{2}$/, '');
@@ -91,6 +93,7 @@ export function buildBriefing(snapshot: Snapshot, now: number, dismissals: Dismi
     const value = task.value;
     if (['done', 'skipped'].includes(value.status)) continue;
     if (value.trashed) continue;
+    if (isHistoricalDailyOccurrence(task, taskContext)) continue;
 
     const occurrenceKey = `task:${task.id}:${todayKey}`;
     if (isDismissed(occurrenceKey)) continue;

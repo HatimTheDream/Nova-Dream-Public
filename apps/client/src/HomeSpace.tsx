@@ -1,5 +1,5 @@
 import { projectIsDeleted } from '../../../packages/domain/project-organization';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 import { Clock3, Copy, EyeOff, GripVertical, MoreHorizontal, Plus, Settings2, Trash2, X } from './icons';
 import { type Draft, type Entity, type Layout, type ModuleId, type Snapshot, type Task } from '../../../packages/domain/contracts';
 import { createHomeWidget, resolveWidgetType, widgetTitle, homeWidgetNames, type HomeWidget } from '../../../packages/domain/home-widgets';
@@ -9,6 +9,7 @@ import { Dialog } from './ui';
 import { LoadingRing } from './ModuleLoading';
 const HomeWidgetDialog = lazy(() => import('./HomeWidgetDialog').then(module => ({ default: module.HomeWidgetDialog })));
 import { homeTaskState } from './home-task-state';
+import { usePlanningClock } from './usePlanningClock';
 import { retainedWindowId } from './useWorkspace';
 
 export const widgetNames = homeWidgetNames;
@@ -30,8 +31,7 @@ export function HomeSpace({ snapshot, layout, saveLayout, open, openSettings, ne
   const [notice, setNotice] = useState('');
   const [removing, setRemoving] = useState<HomeWidget | null>(null);
   const [removed, setRemoved] = useState<{ widget: HomeWidget; index: number } | null>(null);
-  const [clock, setClock] = useState(Date.now());
-  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(timer); }, []);
+  const clock = usePlanningClock();
   const persist = (next: Layout) => {
     if (saveLayout(next) === false) throw Error('Browser storage is full. Keep this page open until your changes can be saved.');
   };

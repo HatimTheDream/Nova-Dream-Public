@@ -4,6 +4,7 @@ import { addDays } from '../../../packages/domain/calendar';
 import { dayInZone } from '../../../packages/domain/tasks';
 import { reminderInstant } from '../../../packages/domain/reminders';
 import { buildBriefing, emptyDismissals, type BriefingItem, type DismissalState } from './briefing';
+import { usePlanningClock } from './usePlanningClock';
 import { NovaAppMark } from './AppIcon';
 import { CheckSquare2, FileText, MoreHorizontal } from './icons';
 
@@ -51,8 +52,7 @@ function BriefingRow({ item, primary, onAction }: { item: BriefingItem; primary:
 }
 
 export function BriefingCard({ snapshot, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone, appIcon = 'red', editTask, openAssistant, openDraft, openTasks, children }: Props) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60000); return () => window.clearInterval(timer); }, []);
+  const now = usePlanningClock();
   const key = `nova:briefing:dismissals:${snapshot.epoch}:${snapshot.deviceId}`;
   const [dismissals, setDismissals] = useState<DismissalState>(() => loadDismissals(key));
   const [notice, setNotice] = useState('');

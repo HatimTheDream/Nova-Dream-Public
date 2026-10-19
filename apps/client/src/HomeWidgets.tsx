@@ -33,6 +33,7 @@ const emptyCopy = {
   future: { title: 'Your next tasks are planned for later', detail: 'Open Tasks to see what is coming up.', action: 'Add A Task' },
   finished: { title: 'No unfinished tasks', detail: 'Show completed tasks to review them, or add your next task.', action: 'Add A Task' },
   'not-ready': { title: 'No tasks are ready right now', detail: 'Your tasks are planned for later, waiting, or blocked. Open Tasks to review them.', action: 'Add A Task' },
+  'routine-history': { title: 'No Current Tasks', detail: 'Missed daily routines are kept in Daily History in Tasks. They do not carry forward into today.', action: 'Add A Task' },
 };
 
 /** Widget content stays separate from layout, menus and reorder persistence. */
@@ -42,7 +43,7 @@ export function HomeWidgetContent({ flow = false, id, snapshot, state, draft, di
   const taskCapacity = flow ? 12 : { compact: 1, square: 2, wide: 3, large: 8 }[size];
   const attentionCapacity = flow ? 12 : compact ? 0 : size === 'large' ? 6 : size === 'square' && dirty ? 1 : 2;
   const view = widget?.settings?.view;
-  const allTasks = view === 'all' ? state.ordered : view === 'ready' ? state.ready : view === 'attention' ? state.ordered.filter(task => attention.some(item => item.task.id === task.id)) : view === 'upcoming' ? state.ordered.filter(task => !['done', 'skipped'].includes(task.value.status) && task.value.planned > dayInZone(timezone, now)) : state.tasks;
+  const allTasks = view === 'all' ? state.ordered : view === 'ready' ? state.ready : view === 'attention' ? state.ordered.filter(task => attention.some(item => item.task.id === task.id)) : view === 'upcoming' ? state.upcoming : state.tasks;
   const limit = Math.min(widget?.settings?.limit ?? (id === 'attention' ? 3 : 5), id === 'attention' ? attentionCapacity : taskCapacity);
   const tasks = allTasks.slice(0, limit);
   const hasDraft = Boolean(draft.text.trim() || draft.attachments.length);

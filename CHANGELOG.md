@@ -1,3 +1,11 @@
+## [2.9.7] — 2026-10-19
+
+### Fixed
+
+- Keep missed daily routine occurrences in accessible Daily History without adding them to Today, Home or briefing counts. Ordinary unfinished tasks and other recurrence schedules continue carrying forward.
+- Classify each recurring task by its original saved schedule and timezone, preserving its dates, status and identity when a future schedule changes.
+- Keep tasks completed today in place using their real completion history, with consistent open/done counts and refresh after midnight or device resume. Later note edits do not invent a new completion.
+
 ## [2.9.6] — 2026-10-19
 
 ### Fixed

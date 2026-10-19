@@ -28,6 +28,17 @@
 .tasks-workspace .task-group .empty h3, .tasks-workspace .task-group .empty p { margin: 0; font-size: 13px; }
 .tasks-workspace .task-group-heading h2, .tasks-workspace .task-group > details > summary h2 { font-size: 14px; }
 .task-content-main .task-calendar-range { margin-top: 12px; flex-wrap: wrap; }
+.task-today-groups { display: grid; grid-template-columns: minmax(0, 1fr); }
+.task-today-groups > .task-group { min-width: 0; container: task-list / inline-size; }
+.tasks-workspace .task-group-heading { flex-wrap: wrap; gap: 6px 10px; }
+.tasks-workspace .task-group-heading .count { color: var(--muted); font-size: 11px; font-weight: 400; white-space: normal; }
+.task-occurrence-details { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.5; text-decoration: none; }
+.task-occurrence-details span + span::before { content: '·'; margin-inline-end: 8px; }
+.task-history-description { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+@container tasks-workspace (min-width: 1100px) {
+ .task-today-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+ .task-today-groups > .task-group + .task-group { border-top: 0; border-inline-start: 1px solid var(--line); padding-inline-start: 24px; }
+}
 @container tasks-workspace (max-width: 780px) {
  .task-content-layout { grid-template-columns: minmax(0, 1fr); gap: 10px; }
  .task-project-context { display: flex; gap: 10px; align-items: center; border-inline-end: 0; padding: 0; }

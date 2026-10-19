@@ -59,7 +59,7 @@ test('compact Home never presents incomplete or failed calendar reads as a confi
 
 test('Tasks explains each empty destination, preserves calendar uncertainty, and wires filter recovery', () => {
   const base = { searching: false, filtered: false, calendarStatus: 'ready' as const, clearFilters() {} };
-  for (const [destination, message] of [['Trash', 'Trash is empty.'], ['Completed', 'No completed tasks yet.'], ['Daily', 'No daily tasks for today.'], ['To-dos', 'No to-dos for today.']]) {
+  for (const [destination, message] of [['Trash', 'Trash is empty.'], ['Completed Tasks', 'No completed tasks yet.'], ['Daily Routines', 'No daily tasks for today.'], ['To-Do', 'No to-dos for today.'], ['Daily History', 'No past daily occurrences yet.']]) {
     const markup = renderToStaticMarkup(createElement(TaskEmptyState, { ...base, destination }));
     assert.ok(markup.includes(message));
     assert.equal(nodes(markup).some(node => node.tag === 'button'), false);

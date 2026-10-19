@@ -9,7 +9,7 @@ import { CalendarService } from '../apps/service/calendar';
 import type { Entity, Task } from '../packages/domain/contracts';
 import type { Routine } from '../packages/domain/tasks';
 import type { CalendarState, LocalEventInput } from '../packages/domain/calendar';
-import { cadenceGroup, inTaskDestination } from '../packages/domain/task-presentation';
+import { cadenceGroup, inTaskDestination, taskPresentationContext } from '../packages/domain/task-presentation';
 import { calendarTaskRows, calendarSeriesKey } from '../apps/client/src/task-calendar-rows';
 import { projectCalendarEvent } from '../apps/client/src/dreamclaw/calendar-projection';
 const now = Date.parse('2026-09-12T19:00:00Z'), range = { from: '2026-09-01', to: '2026-11-01', timezone: 'America/Los_Angeles' };
@@ -23,7 +23,9 @@ function fixture() {
 test('three destinations retain today completion, carry unfinished work, and keep tomorrow distinct',()=>{
  const task:Entity<Task>={id:'task:test',revision:1,deviceId:'a',updatedAt:new Date(now).toISOString(),value:{title:'Carry forward',notes:'',status:'open',planned:'2026-09-10',due:''}};
  assert.ok(inTaskDestination(task,'Today','2026-09-12',range.timezone));
- task.value.status='done';assert.ok(inTaskDestination(task,'Today','2026-09-12',range.timezone));assert.ok(inTaskDestination(task,'Completed','2026-09-12',range.timezone));assert.equal(inTaskDestination(task,'Today','2026-09-13',range.timezone),false);
+ const context=taskPresentationContext({occurrences:[],events:[{id:task.id+':2',taskId:task.id,at:new Date(now).toISOString(),from:'open',to:'done',xpDelta:10}],routineEvents:[],focus:[],earnedXp:10},[],now);
+ task.value.status='done';assert.ok(inTaskDestination(task,'Today','2026-09-12',range.timezone,context));assert.ok(inTaskDestination(task,'Completed','2026-09-12',range.timezone,context));assert.equal(inTaskDestination(task,'Today','2026-09-13',range.timezone,context),false);
+ task.value.status='open';
  task.value.planned='2026-09-13';assert.ok(inTaskDestination(task,'Scheduled','2026-09-12',range.timezone));assert.equal(inTaskDestination(task,'Today','2026-09-12',range.timezone),false);
  task.value.trashed=true;assert.equal(inTaskDestination(task,'Completed','2026-09-12',range.timezone),false);
  assert.equal(cadenceGroup({...routine,cadence:'weekly',interval:2}),'Every two weeks');assert.equal(cadenceGroup({...routine,cadence:'daily',interval:2}),'Custom');assert.equal(cadenceGroup(routine),'Monthly');
