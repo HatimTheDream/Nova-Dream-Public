@@ -16,10 +16,10 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'0a9c576ace38ec404603e3db0e7105e227c89690aabf74bbfe01de7f142e93f2',
+  'qualified-startup.py':'a63d8fde3828a41fabdc5948dd9023d326c8790314e5527e2e90a2ccb97ae5ce',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
   'produce-startup-inputs.py':'6eb40a2c222da8f1c85fc3c4510a099462b9443b213977bbbbde54d9f0a9875e',
-  'contracts.py':'b340035fee91e85f47514e413fd34a7b686231c1816f23bd9f8ce205309ba95c',
+  'contracts.py':'dd74e4e8d34207320777e93c6e2f74f1de20cb64563d296dc91197eee9acedff',
 });
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));

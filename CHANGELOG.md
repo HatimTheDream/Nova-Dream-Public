@@ -1,3 +1,9 @@
+## [2.8.7] — 2026-10-19
+
+### Fixed
+
+- Bind startup qualification to the versions in both verified release packages, so new releases retain the same restart and recovery checks without relying on a previous release number.
+
 ## [2.8.6] — 2026-10-19
 
 ### Fixed
