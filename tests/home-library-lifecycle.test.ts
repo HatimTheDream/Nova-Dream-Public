@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { createElement, Suspense } from 'react';
+import { createModuleRegistry } from '../apps/client/src/preload-lazy';
 import { registerHooks, createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { Snapshot } from '../packages/domain/contracts.js';
@@ -9,10 +11,14 @@ import type { HomeLibraryCommand, HomeLibraryState, HomeLibraryReceipt, HomeColl
 const symbol = Symbol.for('nova.test.home-library-lifecycle'), react = pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
 const loader = registerHooks({
  resolve(specifier, context, next) {
-  if (context.parentURL?.includes('/apps/client/src/HomeLibrary')) {
+  if (/\/apps\/client\/src\/(?:HomeLibrary|Home)\./.test(context.parentURL ?? '')) {
    if (specifier === 'react') return { url: 'nova-home-test:react', shortCircuit: true };
    if (specifier === './api') return { url: 'nova-home-test:api', shortCircuit: true };
    if (specifier === './useWorkspace') return { url: 'nova-home-test:workspace', shortCircuit: true };
+   if (/\/Home\./.test(context.parentURL ?? '')) {
+    if (['./HomeSpace', './HomeIdeas', './HomeFeed', './BriefingCard', './HomeAppointmentWidget'].includes(specifier)) return { url: 'nova-home-test:child:' + specifier.slice(2), shortCircuit: true };
+    if (specifier.endsWith('.css')) return { url: 'nova-home-test:css', shortCircuit: true };
+   }
   }
   return next(specifier, context);
  },
@@ -29,6 +35,8 @@ const loader = registerHooks({
    export const saveLocal=(key,value)=>{if(fixture().failSave?.(key,value))return false;if(value===null)fixture().storage.delete(key);else fixture().storage.set(key,structuredClone(value));return true;};
    export const request=(path,data)=>fixture().request(path,data);` };
   if (url === 'nova-home-test:workspace') return { format: 'module', shortCircuit: true, source: `export const retainedWindowId='lifecycle-window';` };
+  if (url.startsWith('nova-home-test:child:')) return { format: 'module', shortCircuit: true, source: `import {createElement} from ${JSON.stringify(react)};export const ${url.split(':').at(-1)}=()=>createElement('p',null,'Other Home view');` };
+  if (url === 'nova-home-test:css') return { format: 'module', shortCircuit: true, source: '' };
   return next(url, context);
  },
 });
@@ -52,6 +60,26 @@ class Hooks {
 const snapshot = (name: string) => ({ deviceId: `device:${name}`, epoch: name === 'a' ? '11111111-1111-4111-8111-111111111111' : '22222222-2222-4222-8222-222222222222', tasks: [], projects: [], layout: { value: { timezone: 'UTC' } } }) as unknown as Snapshot;
 const state = (value: Snapshot): HomeLibraryState => ({ epoch: value.epoch, collections: [], items: [], resources: [], organization: { revision: 0, collectionIds: [] }, ideaPreferences: { revision: 0, saved: [], hidden: [] } });
 const settle = async () => { for (let n = 0; n < 4; n++) await Promise.resolve(); };
+test('cold Home download and failed preparation preserve original saves and reopen Library writing after retry', async () => {
+ const s = snapshot('a'), f = new Hooks(), reopened = new Hooks(), registry = createModuleRegistry();let release!: () => void, attempts = 0;
+ const gate = new Promise<void>(resolve => { release = resolve; }), previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+ Object.defineProperty(globalThis, 'window', { configurable: true, value: { setInterval: () => 1, clearInterval() {} } });
+ const key = `e3:home-library-command:${s.deviceId}:${s.epoch}:lifecycle-window`, writerKey = `e3:home-library-writer:${s.deviceId}:${s.epoch}:lifecycle-window:item`;
+ const command: Extract<HomeLibraryCommand, {type:'item-save'}> = { type:'item-save', requestId:crypto.randomUUID(), epoch:s.epoch, id:'library:lazy-kept', expectedRevision:0, value:{kind:'note',title:'Kept note',body:'Original submitted words',archived:false} };
+ const journal = {format:1,deviceId:s.deviceId,epoch:s.epoch,windowId:'lifecycle-window',command,uncertain:true}, draft = {id:command.id,revision:0,value:{...command.value,body:'Newer writing survives Home loading'}};
+ f.storage.set(key,journal);f.storage.set(writerKey,draft);reopened.storage=f.storage;
+ const Home = registry.lazy(async () => { await gate;if(++attempts===1)throw Error('Interrupted Home download');const module=await import('../apps/client/src/Home.js');return {default:module.Home}; });
+ const props = {snapshot:s,layout:{timezone:'UTC',appIcon:'lynx'},open(){}} as any;
+ const render = (owner:Hooks) => owner.render(()=>renderToStaticMarkup(createElement(Suspense,{fallback:'Home is loading'},createElement(Home,props))));
+ try {
+  assert.match(render(f),/Home is loading/);assert.equal(f.reads.length,0);assert.equal(f.writes.length,0);
+  const preparation=registry.prepare();release();await assert.rejects(preparation,/Interrupted Home download/);
+  assert.deepEqual(f.storage.get(key),journal);assert.deepEqual(f.storage.get(writerKey),draft);
+  await registry.prepare();
+  for(const owner of [f,reopened]) {render(owner);owner.reads.shift()!.resolve(state(s));await settle();const html=render(owner);assert.match(html,/Newer writing survives Home loading/);assert.match(html,/Check original save/);assert.doesNotMatch(html,/Home is loading/);assert.equal(owner.writes.length,0);owner.dispose();}
+  assert.deepEqual(f.storage.get(key),journal);assert.deepEqual(f.storage.get(writerKey),draft);assert.equal(attempts,2);
+ } finally {release();f.dispose();reopened.dispose();if(previousWindow)Object.defineProperty(globalThis,'window',previousWindow);else delete (globalThis as any).window;}
+});
 test('late acknowledgement cannot replace a new Library owner or clear either owner’s pending receipt', async () => {
  const f = new Hooks(), a = snapshot('a'), b = snapshot('b'), render = (scope: Snapshot) => f.render(() => useHomeLibrary(scope));
  try {

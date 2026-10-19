@@ -10,6 +10,7 @@
 
 - Keep drafts and original unconfirmed saves through reloads; later acknowledgements preserve newer writing. Changed and missing references remain explicit.
 - Simplify focused collection headers, align source rows, and keep forms readable on narrow and touch layouts while preserving font and size preferences.
+- Load Home through the existing module loader with clear loading and recovery states, keeping the startup download within its existing size limit.
 
 ## [2.8.5] — 2026-10-18
 

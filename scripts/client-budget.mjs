@@ -163,7 +163,13 @@ import assert from 'node:assert/strict';
 // 2.8 adds durable task/work links and paged team history without dependencies.
 // Measured total690810 (+940 /0.14% over2.7.13), startup179871 and largest
 // deferred79901. Bound the capability tranche at692KB; retain startup/chunk limits.
-export const clientLimits = { startup: 180000, total: 692000, deferredChunk: 80000 };
+// 2.9 adds atomic Library capture, organization and scoped Undo without dependencies.
+// Home uses the existing preloaded module registry; unused Library/Search request
+// validators can be removed from browser imports without changing their expressions.
+// Measured total705605 (+14795 /2.14% over the recorded2.8 measurement), startup158868
+// and largest deferred79925. Bound this tranche at707KB (1395 bytes headroom);
+// keep the180KB startup and80KB individual deferred-chunk ceilings unchanged.
+export const clientLimits = { startup: 180000, total: 707000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);
