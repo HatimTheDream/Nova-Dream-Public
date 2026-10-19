@@ -21,6 +21,43 @@ fixture = load('startup_fixture', ROOT / 'support/startup-retained-fixture.py').
 class Checks(unittest.TestCase):
     def consume(self, f): return subject.consume(f['request'], f['read'], f['sources'])
 
+    def replica_fixture(self, changes=None):
+        changes = dict(changes or {})
+        review_change = changes.get('review', lambda value: None)
+        root = '/mnt/nova-data/qualified-startup-inputs-11111111-1111-4111-8111-111111111111'
+        def add_replica_provenance(value):
+            # Private producer fields remain opaque to this collector. Its
+            # original capture and restoration authorities must still bind.
+            value['fixtureStorage'] = {'externalRoot': root, 'anchor': '/mnt/nova-data'}
+            value['seedReplicas'] = {'path': root + '/replica-verified.json', 'sha256': '7' * 64}
+            review_change(value)
+        changes['review'] = add_replica_provenance
+        return fixture(changes, fixture_parent=root + '/fixtures')
+
+    def test_external_fixture_provenance_retains_original_capture_and_restoration(self):
+        f = self.replica_fixture(); result = self.consume(f)
+        review = subject.parse(f['files'][f['roles']['review']['path']])
+        self.assertTrue(result['references']['parent']['path'].startswith('/mnt/nova-data/'))
+        self.assertTrue(result['references']['restorationCompleted']['path'].startswith('/mnt/nova-data/'))
+        self.assertTrue(result['references']['homeCapture/result']['path'].startswith('/opt/nova-release-tools/'))
+        self.assertTrue(review['homeSeed']['path'].startswith('/opt/nova-release-tools/'))
+        self.assertEqual(review['baseline']['manifest']['path'], '/baseline/manifest.json')
+        self.assertEqual([item['scenario'] for item in result['scenarios']], list(subject.SCENARIOS))
+        self.assertTrue(result['independentOriginalRestored'])
+        self.assertFalse(result['productionAdmission'])
+
+    def test_rehashed_replica_home_cannot_replace_original_capture_role(self):
+        replacement = '/mnt/nova-data/replicas/home'
+        def replace_home(value): value['homeSeed']['path'] = replacement
+        with self.assertRaisesRegex(RuntimeError, 'sealed-home-role-changed'):
+            self.consume(self.replica_fixture({'review': replace_home, 'homeCapture/result': replace_home}))
+
+    def test_rehashed_restore_pair_cannot_substitute_replica_authority(self):
+        for field in ('sourceManifestSha256', 'sourceHomeInventorySha256'):
+            change = lambda value, key=field: value.update({key: '8' * 64})
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'independent-pristine-restoration-required'):
+                self.consume(self.replica_fixture({'restorationIntent': change, 'restorationCompleted': change}))
+
     def test_complete_original_chain_keeps_qualification_separate_from_delivery(self):
         result = self.consume(fixture())
         self.assertEqual([v['scenario'] for v in result['scenarios']], list(subject.SCENARIOS))

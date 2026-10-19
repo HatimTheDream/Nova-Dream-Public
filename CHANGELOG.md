@@ -1,3 +1,9 @@
+## [2.9.3] — 2026-10-19
+
+### Fixed
+
+- Allow release startup and recovery checks to use verified independent copies on additional storage while preserving the original saved-data authority and all restart and restoration checks.
+
 ## [2.9.2] — 2026-10-19
 
 ### Fixed

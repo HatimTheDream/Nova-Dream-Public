@@ -93,10 +93,10 @@ def emitted_capture(put, source_files, technical, op, epoch):
             'liveContext': live_ref, 'effectiveUnit': unit_ref, 'hostConfiguration': host_config}
 
 
-def fixture(changes=None):
+def fixture(changes=None, *, fixture_parent='/fixture'):
     changes = changes or {}; files = {}; roles = {}
     op = '11111111-1111-4111-8111-111111111111'; epoch = '22222222-2222-4222-8222-222222222222'
-    root = '/fixture/' + op; evidence = root + '/evidence'; target = '/apps/target'; prior = '/apps/prior'
+    root = fixture_parent + '/' + op; evidence = root + '/evidence'; target = '/apps/target'; prior = '/apps/prior'
     scope = 'retained-same-runtime-startup-restart-restoration'
     helpers = {n: sha(n.encode()) for n in ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py', 'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')}
     def put(role, path, value):
