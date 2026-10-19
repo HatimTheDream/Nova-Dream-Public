@@ -1,3 +1,9 @@
+## [2.9.4] — 2026-10-19
+
+### Fixed
+
+- Qualify release startup and recovery on additional storage with the host's canonical copy program and private standard-device bindings, preserving saved-data checks and the storage mount's security settings.
+
 ## [2.9.3] — 2026-10-19
 
 ### Fixed
