@@ -60,7 +60,7 @@ class Hooks {
 const snapshot = (name: string) => ({ deviceId: `device:${name}`, epoch: name === 'a' ? '11111111-1111-4111-8111-111111111111' : '22222222-2222-4222-8222-222222222222', tasks: [], projects: [], layout: { value: { timezone: 'UTC' } } }) as unknown as Snapshot;
 const state = (value: Snapshot): HomeLibraryState => ({ epoch: value.epoch, collections: [], items: [], resources: [], organization: { revision: 0, collectionIds: [] }, ideaPreferences: { revision: 0, saved: [], hidden: [] } });
 const settle = async () => { for (let n = 0; n < 4; n++) await Promise.resolve(); };
-test('cold Home download and failed preparation preserve original saves and reopen Library writing after retry', async () => {
+test('a retryable Home loader preserves original saves and reopens Library writing after preparation retry', async () => {
  const s = snapshot('a'), f = new Hooks(), reopened = new Hooks(), registry = createModuleRegistry();let release!: () => void, attempts = 0;
  const gate = new Promise<void>(resolve => { release = resolve; }), previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
  Object.defineProperty(globalThis, 'window', { configurable: true, value: { setInterval: () => 1, clearInterval() {} } });
@@ -79,6 +79,32 @@ test('cold Home download and failed preparation preserve original saves and reop
   for(const owner of [f,reopened]) {render(owner);owner.reads.shift()!.resolve(state(s));await settle();const html=render(owner);assert.match(html,/Newer writing survives Home loading/);assert.match(html,/Check original save/);assert.doesNotMatch(html,/Home is loading/);assert.equal(owner.writes.length,0);owner.dispose();}
   assert.deepEqual(f.storage.get(key),journal);assert.deepEqual(f.storage.get(writerKey),draft);assert.equal(attempts,2);
  } finally {release();f.dispose();reopened.dispose();if(previousWindow)Object.defineProperty(globalThis,'window',previousWindow);else delete (globalThis as any).window;}
+});
+
+test('a document-cached Home import failure needs a new document and keeps original Library writing and requests', async () => {
+ const s = snapshot('a'), reopened = new Hooks(), failedRegistry = createModuleRegistry();
+ const key = `e3:home-library-command:${s.deviceId}:${s.epoch}:lifecycle-window`, writerKey = `e3:home-library-writer:${s.deviceId}:${s.epoch}:lifecycle-window:item`;
+ const command: Extract<HomeLibraryCommand, {type:'item-save'}> = { type:'item-save', requestId:crypto.randomUUID(), epoch:s.epoch, id:'library:document-kept', expectedRevision:0, value:{kind:'note',title:'Kept note',body:'Original submitted words',archived:false} };
+ const journal = {format:1,deviceId:s.deviceId,epoch:s.epoch,windowId:'lifecycle-window',command,uncertain:true}, draft = {id:command.id,revision:0,value:{...command.value,body:'Newer writing survives a document reload'}};
+ reopened.storage.set(key,journal);reopened.storage.set(writerKey,draft);
+ // Native import failures remain rejected for the document even when the
+ // registry clears its own pending Promise. Model that browser boundary.
+ const cachedFailure = Promise.reject(new TypeError('Failed to fetch dynamically imported module'));
+ failedRegistry.lazy(() => cachedFailure);
+ const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+ Object.defineProperty(globalThis, 'window', { configurable: true, value: { setInterval: () => 1, clearInterval() {} } });
+ try {
+  await assert.rejects(failedRegistry.prepare(), /Failed to fetch/);
+  await assert.rejects(failedRegistry.prepare(), /Failed to fetch/);
+  const nextDocument = createModuleRegistry();
+  const Home = nextDocument.lazy(async () => { const module=await import('../apps/client/src/Home.js');return {default:module.Home}; });
+  await nextDocument.prepare();
+  const props = {snapshot:s,layout:{timezone:'UTC',appIcon:'lynx'},open(){}} as any;
+  const render = () => reopened.render(()=>renderToStaticMarkup(createElement(Suspense,{fallback:'Home is loading'},createElement(Home,props))));
+  render();reopened.reads.shift()!.resolve(state(s));await settle();const html=render();
+  assert.match(html,/Newer writing survives a document reload/);assert.match(html,/Check original save/);assert.doesNotMatch(html,/Home is loading/);
+  assert.deepEqual(reopened.storage.get(key),journal);assert.deepEqual(reopened.storage.get(writerKey),draft);assert.equal(reopened.writes.length,0);
+ } finally {reopened.dispose();if(previousWindow)Object.defineProperty(globalThis,'window',previousWindow);else delete (globalThis as any).window;}
 });
 test('late acknowledgement cannot replace a new Library owner or clear either owner’s pending receipt', async () => {
  const f = new Hooks(), a = snapshot('a'), b = snapshot('b'), render = (scope: Snapshot) => f.render(() => useHomeLibrary(scope));

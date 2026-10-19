@@ -7,7 +7,7 @@ import { playfulStartupSubtitle, workspaceLoadingPercent } from './loading-progr
 import { LoadingProgress } from './LoadingProgress';
 import { useStartupEstimate } from './useStartupEstimate';
 
-export function StartupScreen({ appIcon = readCachedAppIcon(), download, complete = false, preparation, error, reconnect, timingKey, rememberTiming = true, leaving = false }: { appIcon?: AppIconChoice; phase?: 'connecting' | 'session' | 'workspace'; download?: DownloadProgress; complete?: boolean; preparation?: number; error?: string; reconnect?: () => void; timingKey?: string; rememberTiming?: boolean; leaving?: boolean }) {
+export function StartupScreen({ appIcon = readCachedAppIcon(), download, complete = false, preparation, error, reconnect, reconnectLabel = 'Reconnect', timingKey, rememberTiming = true, leaving = false }: { appIcon?: AppIconChoice; phase?: 'connecting' | 'session' | 'workspace'; download?: DownloadProgress; complete?: boolean; preparation?: number; error?: string; reconnect?: () => void; reconnectLabel?: string; timingKey?: string; rememberTiming?: boolean; leaving?: boolean }) {
   const choice = useAppIcon(appIcon);
   const percent = workspaceLoadingPercent(download, complete, preparation);
   const reached = useRef(0);
@@ -20,6 +20,6 @@ export function StartupScreen({ appIcon = readCachedAppIcon(), download, complet
       <LoadingProgress percent={percent} label="Nova Dream loading" paused={!!error} timingKey={timingKey} complete={complete}/>
       {!error && <p className="startup-estimate" aria-label="Estimated time remaining">{estimate}</p>}
     </div>
-    {error && reconnect && <button className="primary" onClick={reconnect}>Reconnect</button>}
+    {error && reconnect && <button className="primary" onClick={reconnect}>{reconnectLabel}</button>}
   </main>;
 }

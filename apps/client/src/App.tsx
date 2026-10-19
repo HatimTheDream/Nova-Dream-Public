@@ -100,7 +100,7 @@ export function App() {
       if (!active) return;
       setPreparation(100);
       first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { if (active) setHandoff('finishing'); }); });
-    })().catch(() => { if (active) setStartupError('A few things could not get ready. Reconnect and try again.'); });
+    })().catch(() => { if (active) setStartupError('A few things could not get ready. Reload the app to try again. Your saved work and kept writing remain available.'); });
     return () => { active = false; cancelAnimationFrame(first); cancelAnimationFrame(second); };
   }, [workspace.snapshot?.epoch, workspace.snapshot?.deviceId, workspace.access?.requiresPairing, attempt]);
   // The handoff runs in sequence so the finish is unmissable: the bar eases
@@ -124,7 +124,9 @@ export function App() {
   if (workspace.access?.requiresPairing) return <Suspense fallback={<ModuleLoading module="Phone pairing"/>}><PhonePairingScreen paired={workspace.reconnect}/></Suspense>;
   if (!workspace.snapshot && workspace.updateRequired) return <main className="startup"><AppUpdate initial/></main>;
   if (!workspace.snapshot || !startupComplete) {
-    const screen = <StartupScreen appIcon={startupAppIcon(workspace.snapshot, workspace.snapshot ? readLocal<StartupIconJournal>(`e3:journal:${workspace.snapshot.deviceId}:layout:${retainedWindowId}`) : undefined, readCachedAppIcon())} timingKey={workspace.snapshot ? `nova:startup-timings:v2:${__E3_VERSION__}:${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}` : undefined} rememberTiming={workspace.online && !workspace.access?.recovery && !workspace.access?.recoveryLocal} complete={preparation === 100} preparation={preparation} phase={workspace.startupPhase} download={workspace.download} error={startupError || workspace.error} reconnect={() => { if (workspace.snapshot) setAttempt(value => value + 1); else void workspace.reconnect(); }} leaving={handoff === 'leaving'}/>;
+    // Browsers retain failed native imports for this document; a new preparation
+    // attempt alone cannot recover a restored module download.
+    const screen = <StartupScreen appIcon={startupAppIcon(workspace.snapshot, workspace.snapshot ? readLocal<StartupIconJournal>(`e3:journal:${workspace.snapshot.deviceId}:layout:${retainedWindowId}`) : undefined, readCachedAppIcon())} timingKey={workspace.snapshot ? `nova:startup-timings:v2:${__E3_VERSION__}:${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}` : undefined} rememberTiming={workspace.online && !workspace.access?.recovery && !workspace.access?.recoveryLocal} complete={preparation === 100} preparation={preparation} phase={workspace.startupPhase} download={workspace.download} error={startupError || workspace.error} reconnectLabel={startupError ? 'Reload app' : 'Reconnect'} reconnect={() => { if (startupError) location.reload(); else if (workspace.snapshot) setAttempt(value => value + 1); else void workspace.reconnect(); }} leaving={handoff === 'leaving'}/>;
     if (handoff === 'leaving' && workspace.snapshot) {
       return <div className="startup-handoff">
         <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>
