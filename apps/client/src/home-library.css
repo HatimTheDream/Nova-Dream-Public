@@ -144,3 +144,6 @@
  .home-library-items.compact .home-library-resource-open { flex-basis:190px; }
  .home-library-items.compact .home-library-resource-actions { margin-inline-start:auto; }
 }
+
+.home-source-selection > label { display:grid; gap:7px; margin-block:12px; }
+.home-source-selection > details > summary { cursor:pointer; padding-block:12px; min-height:44px; }

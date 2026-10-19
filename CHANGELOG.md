@@ -1,3 +1,10 @@
+## [2.9.1] — 2026-10-19
+
+### Improved
+
+- Find older Library sources in Ideas with search and Show more, keeping selections and directions through reopening and reload.
+- Review selected sources even when filtered out. Changed or missing versions stay explicit, and choosing a current version replaces the old selection only after your action.
+
 ## [2.9.0] — 2026-10-19
 
 ### Added
