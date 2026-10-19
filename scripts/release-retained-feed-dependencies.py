@@ -171,6 +171,41 @@ def inspect_tree(root, files, directories, partial=False):
     if not partial:
         need(seen == set(files) and seen_directories == directories, 'feed-dependency-output-incomplete')
 
+def completed_output_reuse(request, prior, root, work, snapshot, files, directories, *, checkpoint=lambda _: None):
+    # A relocated operator checkout may name the same pinned parser elsewhere.
+    # Only an already complete output can be reused; never adopt partial work.
+    try:
+        owner = json.loads(prior)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('feed-dependency-operation-conflict') from None
+    need(isinstance(owner, dict) and set(owner) == set(request) and encode(owner) == prior,
+         'feed-dependency-operation-conflict')
+    need({k: v for k, v in owner.items() if k != 'helper'} ==
+         {k: v for k, v in request.items() if k != 'helper'}, 'feed-dependency-operation-conflict')
+    for helper in (owner['helper'], request['helper']):
+        need(isinstance(helper, dict) and set(helper) == {'path', 'sha256'}
+             and helper['sha256'] == PARSER_SHA, 'feed-dependency-maintained-parser-changed')
+        read(helper, 2 * 1024**2)
+    modules = canonical(root / 'node_modules'); destination = canonical(modules / 'zod')
+    need(not os.path.lexists(work / 'zod-staging'), 'feed-dependency-reuse-staging-present')
+    need(set(p.name for p in modules.iterdir()) == {'zod'}, 'feed-dependency-other-modules-present')
+    paths = (root, work, modules, destination)
+    identities = [identity(p.stat()) for p in paths]
+    inspect_tree(destination, files, directories)
+    checkpoint('completed-output-verified')
+    need(read_file(work / 'owner.json', 65536) == prior, 'feed-dependency-owner-corrupt')
+    for helper in (owner['helper'], request['helper']):
+        read(helper, 2 * 1024**2)
+    need(candidate_snapshot(request['base'])[0] == snapshot, 'feed-dependency-candidate-mutated')
+    inspect_tree(destination, files, directories)
+    need(not os.path.lexists(work / 'zod-staging'), 'feed-dependency-reuse-staging-present')
+    need(set(p.name for p in modules.iterdir()) == {'zod'}, 'feed-dependency-other-modules-present')
+    need(identities == [identity(canonical(p).stat()) for p in paths], 'feed-dependency-reuse-directory-changed')
+    return {'format': 1, 'candidateId': request['base']['candidateId'], 'archiveSha256': request['archive']['sha256'],
+            'destination': str(destination), 'version': VERSION, 'files': len(files),
+            'bytes': sum(map(len, files.values())), 'materialized': True, 'candidateUnchanged': True,
+            'completedOutputReused': True, 'retainedOwnerSha256': sha(prior)}
+
 def materialize(request, *, checkpoint=lambda _: None):
     root, work, snapshot, files, directories = prepare(request)
     with owned_lock(work):
@@ -178,7 +213,9 @@ def materialize(request, *, checkpoint=lambda _: None):
         marker = work / 'owner.json'; expected = encode(request)
         if marker.exists():
             prior = read_file(marker, 65536)
-            need(expected.startswith(prior), 'feed-dependency-operation-conflict')
+            if not expected.startswith(prior):
+                return completed_output_reuse(request, prior, root, work, snapshot, files, directories,
+                                              checkpoint=checkpoint)
         else: prior = b''
         if prior != expected:
             with marker.open('ab' if marker.exists() else 'xb') as stream:
@@ -226,6 +263,12 @@ if __name__ == '__main__':
     need(base64.b64encode(raw).decode() == args.request_base64 and sha(raw) == args.request_sha, 'feed-dependency-request-changed')
     value = json.loads(raw)
     if args.plan:
-        prepare(value); print(json.dumps({'passed': True, 'readOnly': True}))
+        root, work, snapshot, files, directories = prepare(value)
+        marker = work / 'owner.json'
+        if marker.exists():
+            prior = read_file(marker, 65536)
+            if not encode(value).startswith(prior):
+                completed_output_reuse(value, prior, root, work, snapshot, files, directories)
+        print(json.dumps({'passed': True, 'readOnly': True}))
     else:
         print(json.dumps(materialize(value)))

@@ -1,3 +1,10 @@
+## [2.8.6] — 2026-10-19
+
+### Fixed
+
+- Reuse a fully verified retained dependency tree after relocating the deployment checkout, preserving its original ownership record and refusing incomplete or changed files.
+- Check the exact source branch, commit and tracked changes before deployment preparation so an incompatible checkout is caught before browser verification begins.
+
 ## [2.8.5] — 2026-10-18
 
 ### Fixed
