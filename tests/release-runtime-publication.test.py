@@ -44,6 +44,16 @@ class SignedRuntimeBinding(unittest.TestCase):
     with self.assertRaises(RuntimeError):A.verify_signed(request)
 
 class RuntimeStreams(unittest.TestCase):
+ def test_binary_controls_survive_real_descriptor_stream(self):
+  # Real os.open/os.read, including on Windows: Ctrl-Z must not signal EOF,
+  # and CRLF must remain two bytes across a multi-chunk binary archive.
+  with tempfile.TemporaryDirectory() as d:
+   path=P(d).resolve()/'binary-fixture.tgz'
+   data=(b'PK\x03\x04binary\r\n\x1a\x00\xff'+bytes(range(256)))*8193
+   path.write_bytes(data)
+   actual=b''.join(F.stream_chunks(path,len(data),F.sha(data)))
+   self.assertEqual(actual,data)
+   self.assertEqual(F.sha(actual),F.sha(data))
  def test_real_129_mib_archive_is_read_only_in_bounded_chunks(self):
   with tempfile.TemporaryDirectory() as d:
    path=P(d).resolve()/'runtime.tgz';block=b'x'*(1024**2);h=hashlib.sha256()

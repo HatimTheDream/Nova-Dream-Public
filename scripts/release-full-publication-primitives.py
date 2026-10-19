@@ -30,7 +30,7 @@ def stream_chunks(path,expected_bytes,expected_sha,maximum=RUNTIME_MAXIMUM,deadl
  before=p.lstat();need(stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_size==expected_bytes,'runtime-stream-size-or-link-changed')
  identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
  shared=lambda s:identity(s)[:-1]
- fd=os.open(p,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0));end=deadline if deadline is not None else time.monotonic()+30
+ fd=os.open(p,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_BINARY',0));end=deadline if deadline is not None else time.monotonic()+30
  try:
   opened=os.fstat(fd);need(shared(opened)==shared(before),'runtime-stream-open-identity-changed')
   digest=hashlib.sha256();count=0

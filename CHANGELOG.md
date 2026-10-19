@@ -1,3 +1,9 @@
+## [2.9.5] — 2026-10-19
+
+### Fixed
+
+- Preserve binary release archives when publishing from Windows, including control bytes and line endings, while retaining complete size, hash and file-identity checks.
+
 ## [2.9.4] — 2026-10-19
 
 ### Fixed
