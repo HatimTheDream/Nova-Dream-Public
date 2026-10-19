@@ -89,15 +89,46 @@ admission or makes an old observation fresh.
 
 ## Canonical CI application archive
 
-After the Linux quality and recovery checks pass, the quality workflow packages
-that existing build with `scripts/update-app-archive.py` and retains the archive,
-archive metadata and `ci-source.json` for seven days. It does not run another
-build or quality gate. `scripts/retain-ci-candidate.py` requires the exact CI
-commit, unchanged tracked source and qualified Linux Node toolchain. The receipt
-binds the candidate, package lock, archive, source, run attempt and packaging
-helpers. Only candidate-listed application files and reviewed host entrypoints
-enter the archive; local workspaces, keys, operational records and dependencies
-are excluded by the maintained archive contract.
+The public quality workflow packages its existing verified Linux build with
+`scripts/update-app-archive.py` and retains only the archive, archive metadata
+and `ci-source.json` as an Actions artifact for one day. Collection must finish
+before expiry. The private workflow keeps quality and recovery read-only, then
+uses its existing trusted main-push release job to build and package the exact
+commit and dependency lock with the qualified Linux Node toolchain. It does not
+repeat the quality or recovery gate. That job publishes the three-file ZIP and
+separate transport provenance to the private version release; it does not upload
+the application to Actions artifact storage.
+
+`scripts/retain-ci-candidate.py` requires the exact CI commit and unchanged
+tracked source. Its receipt binds the candidate, package lock, archive, source,
+run attempt and packaging helpers. The private transport additionally binds the
+successful quality prerequisite, distinct release producer job, workflow and
+publisher Git bytes, private repository identity, release tag and authenticated
+asset digest. The collector verifies the complete downloaded bytes and refuses
+foreign, failed or mismatched runs. A durable publication reservation prevents
+blind POST retries or overwriting assets after an uncertain response.
+The reservation POST can itself have an uncertain result. Any such uncertainty
+stops publication: preserve the original run, logs and intent, then reconcile
+read-only. An empty asset listing, new output directory or another run attempt
+does not authorize a repeated POST. Rerun attempts permit observation only.
+
+Only candidate-listed application files and reviewed host entrypoints enter
+the archive; local workspaces, keys, operational records and dependencies are
+excluded by the maintained archive contract. Private candidate ZIPs are limited
+to 16 MiB. Remaining Actions uploads also pass
+`scripts/ci-artifact-budget.py` before upload, with a 16 MiB selected-file budget,
+a finite file count, symlink refusal and one-day retention. Actions ZIP metadata
+adds bounded overhead; the private publisher separately caps its actual ZIP.
+Oversized manual
+runtime, dependency or installer uploads fail closed; this does not qualify an
+alternative distribution route for those large artifacts. Keep required
+release and recovery copies in their existing verified durable destination.
+
+These limits apply to newly produced artifacts. They do not delete existing
+evidence, refund accrued monthly storage usage or certify account upload
+eligibility. Do not repeat blocked CI or infer restored allowance from elapsed
+time. Release storage does not remove CI compute limits or any paid-plan
+boundary.
 
 Download the artifact from the exact authenticated repository/workflow/run and
 verify that run's source and successful checks independently. Recheck the receipt,

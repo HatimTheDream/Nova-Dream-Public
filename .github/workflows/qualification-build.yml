@@ -28,11 +28,18 @@ jobs:
         run: npm run build
       - name: Retain the qualification build
         run: python3 -B scripts/retain-ci-candidate.py
+      - name: Check temporary artifact storage budget
+        id: actions_storage_budget_1
+        run: >-
+          python "${{ github.workspace }}/scripts/ci-artifact-budget.py"
+          --path "${{ runner.temp }}/nova-hosted-candidate/"
+          --maximum-bytes 16777216 --maximum-files 4096
       - name: Upload the qualification application archive
+        if: ${{ steps.actions_storage_budget_1.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nova-qualification-${{ github.sha }}
           path: ${{ runner.temp }}/nova-hosted-candidate/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
           compression-level: 0

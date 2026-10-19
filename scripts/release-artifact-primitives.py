@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import time
 import types
 import urllib.error
 import urllib.parse
@@ -35,6 +36,12 @@ REPOS = {
 REQUIRED_STEPS = ('Run npm run quality', 'Verify Linux update recovery',
                   'Retain the canonical hosted build', 'Upload the verified application archive')
 FILES = {'app.tgz': MAXIMUM, 'app.tgz.metadata.json': 1024 ** 2, 'ci-source.json': 1024 ** 2}
+PRIVATE_ZIP_MAXIMUM = 16 * 1024 ** 2
+PRIVATE_TRANSPORT_MAXIMUM = 64 * 1024
+PRIVATE_PRODUCER = 'scripts/publish-ci-release-artifact.py'
+PRIVATE_PRIMITIVES = 'scripts/release-full-publication-primitives.py'
+PRIVATE_PRODUCER_STEPS = ('Build the exact delivery candidate', 'Retain the canonical hosted build',
+                          'Record this numbered Nova Dream update', 'Publish the verified application archive')
 
 
 def require(condition, message):
@@ -91,7 +98,7 @@ def api_headers(token):
 
 
 def api(path, token):
-    require(any(path.startswith('/repos/HatimTheDream/' + name + '/') for name in REPOS)
+    require(any(path == '/repos/HatimTheDream/' + name or path.startswith('/repos/HatimTheDream/' + name + '/') for name in REPOS)
             and not urllib.parse.urlsplit(path).scheme and not urllib.parse.urlsplit(path).netloc,
             'Unexpected GitHub API origin.')
     request = urllib.request.Request('https://api.github.com' + path, headers=api_headers(token), method='GET')
@@ -130,7 +137,7 @@ def download_zip(prefix, artifact_id, token):
         raise RuntimeError('Unauthenticated artifact byte download failed.') from None
 
 
-def frozen_source(repo, commit, git, *, checkout=None, output_root=None, committed_only=False):
+def frozen_source(repo, commit, git, *, checkout=None, output_root=None, committed_only=False, private_release=False):
     folder, prefix, workflow, _ = REPOS[repo]
     checkout = pathlib.Path(checkout) if checkout is not None else WORKSPACE / '.local-development' / folder
     require(checkout.resolve(strict=True) == checkout, 'Frozen checkout was redirected.')
@@ -161,6 +168,9 @@ def frozen_source(repo, commit, git, *, checkout=None, output_root=None, committ
         paths.append('scripts/release-deliver.mjs')
     if package.get('scripts', {}).get('quality') == 'node scripts/quality.mjs':
         paths.append('scripts/quality.mjs')
+    if private_release:
+        require(repo == 'Nova-Dream', 'private-release-source-repository')
+        paths.extend((PRIVATE_PRODUCER, PRIVATE_PRIMITIVES))
     bound, blobs = {}, {}
     for relative in paths:
         name = prefix + '/' + relative if prefix else relative
@@ -231,18 +241,169 @@ def exact_run(repo, selected, token):
     return prefix, run, job, steps, artifact
 
 
-def extract_zip(raw, output):
+def successful_steps(job, names):
+    require(isinstance(job.get('steps'), list) and len(job['steps']) <= 100, 'private-ci-step-list')
+    result = []
+    for name in names:
+        rows = [step for step in job['steps'] if step.get('name') == name]
+        require(len(rows) == 1 and rows[0].get('status') == 'completed'
+                and rows[0].get('conclusion') == 'success', 'private-ci-required-step')
+        result.append({key: rows[0][key] for key in ('number', 'name', 'status', 'conclusion')})
+    return result
+
+
+def private_asset(asset, name, prefix, maximum, producer):
+    require(isinstance(asset, dict) and positive(asset.get('id')) and asset.get('name') == name
+            and type(asset.get('size')) is int and 0 < asset['size'] <= maximum
+            and asset.get('state') == 'uploaded' and re.fullmatch(r'sha256:[a-f0-9]{64}', asset.get('digest') or '')
+            and asset.get('url') == 'https://api.github.com' + prefix + '/releases/assets/' + str(asset['id'])
+            and asset.get('uploader', {}).get('login') == 'github-actions[bot]'
+            and asset.get('uploader', {}).get('type') == 'Bot', 'private-ci-asset-identity')
+    try:
+        times = [datetime.datetime.fromisoformat(value.replace('Z', '+00:00')) for value in
+                 (producer['started_at'], asset['created_at'], asset['updated_at'], producer['completed_at'])]
+        require(all(value.tzinfo is not None for value in times) and times == sorted(times), 'private-ci-asset-job-time')
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError('private-ci-asset-job-time') from None
+    return {key: asset[key] for key in ('id', 'name', 'size', 'state', 'digest', 'url', 'created_at', 'updated_at', 'uploader')}
+
+
+def exact_private_release(selected, version, token):
+    """Explicit private transport. A failed Actions run never falls back here."""
+    prefix = '/repos/HatimTheDream/Nova-Dream'
+    commit, run_id, attempt = (selected[key] for key in ('sourceCommit', 'runId', 'runAttempt'))
+    repository = api(prefix, token)
+    require(positive(repository.get('id')) and repository.get('full_name') == 'HatimTheDream/Nova-Dream'
+            and repository.get('private') is True, 'private-ci-repository')
+    run = api(prefix + f'/actions/runs/{run_id}/attempts/{attempt}', token)
+    require(run.get('id') == run_id and run.get('run_attempt') == attempt and run.get('head_sha') == commit
+            and run.get('event') == 'push' and run.get('head_branch') == 'main'
+            and run.get('status') == 'completed' and run.get('conclusion') == 'success'
+            and run.get('name') == REPOS['Nova-Dream'][3]
+            and all(run.get(key, {}).get('full_name') == repository['full_name']
+                    and run[key].get('id') == repository['id'] for key in ('repository', 'head_repository')),
+            'private-ci-run-not-successful')
+    require(positive(run.get('workflow_id')), 'private-ci-workflow')
+    workflow = api(prefix + '/actions/workflows/' + str(run['workflow_id']), token)
+    require(workflow.get('id') == run['workflow_id'] and workflow.get('path') == REPOS['Nova-Dream'][2]
+            and workflow.get('name') == REPOS['Nova-Dream'][3], 'private-ci-workflow')
+    jobs = api(prefix + f'/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100', token)
+    require(isinstance(jobs.get('jobs'), list) and type(jobs.get('total_count')) is int
+            and jobs['total_count'] == len(jobs['jobs']) <= 100
+            and all(positive(job.get('id')) and job.get('run_id') == run_id and job.get('head_sha') == commit
+                    and job.get('status') == 'completed' and job.get('conclusion') == 'success' for job in jobs['jobs']),
+            'private-ci-jobs-not-successful')
+    chosen = {}
+    for name in ('quality', 'release'):
+        rows = [job for job in jobs['jobs'] if job.get('name') == name]
+        require(len(rows) == 1, 'private-ci-job-ambiguous')
+        chosen[name] = rows[0]
+    quality, producer = chosen['quality'], chosen['release']
+    require(quality['id'] != producer['id'], 'private-ci-job-identity')
+    quality_steps = successful_steps(quality, REQUIRED_STEPS[:2])
+    producer_steps = successful_steps(producer, PRIVATE_PRODUCER_STEPS)
+    tag = 'nova-v' + version
+    release = api(prefix + '/releases/tags/' + tag, token)
+    require(positive(release.get('id')) and release.get('tag_name') == tag
+            and release.get('target_commitish') == commit and release.get('draft') is False
+            and release.get('prerelease') is False, 'private-ci-release-identity')
+    gitref = api(prefix + '/git/ref/tags/' + tag, token)
+    require(gitref.get('object', {}).get('type') == 'commit' and gitref['object'].get('sha') == commit,
+            'private-ci-tag-identity')
+    assets = api(prefix + '/releases/' + str(release['id']) + '/assets?per_page=100', token)
+    require(isinstance(assets, list) and len(assets) < 100, 'private-ci-assets-incomplete')
+    stem = f'nova-ci-{commit}-run-{run_id}-attempt-{attempt}'
+    resolved = {}
+    for role, suffix, maximum in (('archive', '.zip', PRIVATE_ZIP_MAXIMUM),
+                                  ('transport', '.transport.json', PRIVATE_TRANSPORT_MAXIMUM)):
+        rows = [asset for asset in assets if asset.get('name') == stem + suffix]
+        require(len(rows) == 1, 'private-ci-asset-ambiguous')
+        resolved[role] = private_asset(rows[0], stem + suffix, prefix, maximum, producer)
+    require(resolved['archive']['id'] != resolved['transport']['id'], 'private-ci-asset-identity')
+    return {'repository': {'id': repository['id'], 'fullName': repository['full_name'], 'private': True},
+            'run': {'id': run_id, 'attempt': attempt, 'workflowId': run['workflow_id'],
+                    'workflowPath': workflow['path'], 'event': 'push', 'branch': 'main'},
+            'qualityJob': {'id': quality['id'], 'name': 'quality'},
+            'producerJob': {'id': producer['id'], 'name': 'release'},
+            'qualitySteps': quality_steps, 'producerSteps': producer_steps,
+            'release': {'id': release['id'], 'tag': tag, 'targetCommitish': commit}, 'assets': resolved}
+
+
+def download_release_asset(asset, token, maximum):
+    """Same authenticated API -> credential-free release CDN boundary as publication readback."""
+    require(type(asset.get('size')) is int and 0 < asset['size'] <= maximum, 'private-ci-download-size')
+    headers = api_headers(token); headers['Accept'] = 'application/octet-stream'
+    request = urllib.request.Request(asset['url'], headers=headers, method='GET')
+    try:
+        try:
+            response = urllib.request.build_opener(CaptureRedirect()).open(request, timeout=30)
+        except urllib.error.HTTPError as error:
+            try:
+                require(error.code == 302, 'private-ci-download-unavailable')
+                location = error.headers.get('Location', '')
+            finally:
+                error.close()
+            parsed = urllib.parse.urlsplit(location)
+            require(parsed.scheme == 'https' and parsed.hostname == 'release-assets.githubusercontent.com'
+                    and not parsed.username and not parsed.password and not parsed.fragment
+                    and parsed.port in (None, 443), 'private-ci-download-origin')
+            response = urllib.request.build_opener(NoRedirect()).open(
+                urllib.request.Request(location, headers={'User-Agent': 'Nova-Release-Verification'}), timeout=30)
+        deadline = time.monotonic() + 120
+        chunks, count = [], 0
+        with response:
+            require(response.status == 200, 'private-ci-download-unavailable')
+            while True:
+                require(time.monotonic() < deadline, 'private-ci-download-deadline')
+                block = response.read1(min(1024 ** 2, asset['size'] + 1 - count))
+                require(time.monotonic() < deadline, 'private-ci-download-deadline')
+                if not block:
+                    break
+                count += len(block)
+                require(count <= asset['size'], 'private-ci-download-oversize')
+                chunks.append(block)
+        raw = b''.join(chunks)
+        require(count == asset['size'] and 'sha256:' + sha(raw) == asset['digest'], 'private-ci-download-corrupt')
+        return raw
+    except (urllib.error.HTTPError, urllib.error.URLError):
+        raise RuntimeError('private-ci-download-unavailable') from None
+
+
+def validate_private_transport(raw, snapshot, bound, selected, version, ci_source=None):
+    require(0 < len(raw) <= PRIVATE_TRANSPORT_MAXIMUM, 'private-ci-transport-size')
+    manifest = json.loads(raw)
+    archive = snapshot['assets']['archive']
+    expected = {'format': 1, 'kind': 'private-ci-release-artifact', 'repository': snapshot['repository'],
+                'sourceCommit': selected['sourceCommit'], 'version': version, 'run': snapshot['run'],
+                'qualityJob': snapshot['qualityJob'], 'producerJob': snapshot['producerJob'],
+                'producer': {'path': PRIVATE_PRODUCER, 'sha256': bound[PRIVATE_PRODUCER]['sha256'],
+                             'primitivesSha256': bound[PRIVATE_PRIMITIVES]['sha256'],
+                             'retainerSha256': bound['scripts/retain-ci-candidate.py']['sha256'],
+                             'workflowSha256': bound['workflow']['sha256']},
+                'release': snapshot['release'], 'archive': {'name': archive['name'], 'bytes': archive['size'],
+                                                         'sha256': archive['digest'][7:]},
+                'ciSourceSha256': manifest.get('ciSourceSha256'), 'buildOrigin': 'same-run-release-job',
+                'deliveryQualification': False}
+    require(json.dumps(manifest, sort_keys=True) == json.dumps(expected, sort_keys=True)
+            and hex_digest(manifest['ciSourceSha256']), 'private-ci-transport-binding')
+    if ci_source is not None:
+        require(sha(ci_source) == manifest['ciSourceSha256'], 'private-ci-producer-receipt-changed')
+    return manifest
+
+
+def extract_zip(raw, output, *, maximum=MAXIMUM):
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         items = archive.infolist()
         require(len(items) == 3 and {item.filename for item in items} == set(FILES), 'ZIP must contain exactly the three retained files.')
         require(len({item.filename for item in items}) == len(items), 'Duplicate ZIP member.')
         for item in items:
             mode = item.external_attr >> 16
+            limit = min(FILES[item.filename], maximum) if item.filename == 'app.tgz' else FILES[item.filename]
             require(not item.is_dir() and not item.flag_bits & 1 and not stat.S_ISLNK(mode)
-                    and stat.S_IFMT(mode) in (0, stat.S_IFREG) and 0 < item.file_size <= FILES[item.filename]
+                    and stat.S_IFMT(mode) in (0, stat.S_IFREG) and 0 < item.file_size <= limit
                     and item.compress_size <= MAX_ZIP, 'Unsafe or oversized ZIP member.')
             with archive.open(item) as stream:
-                content = stream.read(FILES[item.filename] + 1)
+                content = stream.read(limit + 1)
             require(len(content) == item.file_size, 'ZIP member expansion changed.')
             write_private(output / item.filename, content)
 

@@ -16,7 +16,7 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'212d5cf68ab125c1cd854d3ba64b99deaa1231a9d954aac414ca95fd96db08dc',
+  'qualified-startup.py':'972c8a639bd20dd38c67dc2ba2280673bfa898b66e4b1acb1266c95b3de8d363',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
   'produce-startup-inputs.py':'9d8052a91ac5d0f810635125b8de35942ba5b66a85361e53d6c18e791369f269',
   'contracts.py':'dd74e4e8d34207320777e93c6e2f74f1de20cb64563d296dc91197eee9acedff',

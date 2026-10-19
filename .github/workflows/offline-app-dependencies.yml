@@ -38,8 +38,16 @@ jobs:
           python3 -B deploy/update-runner/app_dependencies.py pack \
             "$RUNNER_TEMP/nova-offline-dependency-source" \
             "$artifact_dir/app-dependencies.tgz" --node "$(command -v node)"
-      - name: Retain private review artifacts for one day
+      - name: Check temporary artifact storage budget
+        id: actions_storage_budget_1
         if: github.event.repository.private == true
+        run: >-
+          python "${{ github.workspace }}/scripts/ci-artifact-budget.py"
+          --path "${{ runner.temp }}/nova-offline-dependency-artifact/app-dependencies.tgz"
+          --path "${{ runner.temp }}/nova-offline-dependency-artifact/app-dependencies.tgz.metadata.json"
+          --maximum-bytes 16777216 --maximum-files 4096
+      - name: Retain private review artifacts for one day
+        if: ${{ github.event.repository.private == true && steps.actions_storage_budget_1.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-dependencies-${{ github.sha }}

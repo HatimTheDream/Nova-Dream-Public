@@ -70,6 +70,9 @@ jobs:
           # Resumable release producers: portable fixtures; no external effects.
           python3 -B tests/release-delivery-ci.test.py -v
           python3 -B tests/release-delivery-artifacts.test.py -v
+          python3 -B tests/release-ci-publication.test.py -v
+          python3 -B tests/release-private-ci-transport.test.py -v
+          python3 -B tests/ci-artifact-budget.test.py -v
           python3 -B tests/release-github-transport.test.py -v
           python3 -B tests/release-delivery-frontend.test.py -v
           python3 -B tests/release-frontend-stage.test.py -v
@@ -93,14 +96,21 @@ jobs:
           sudo -n "$(command -v python3)" -I -B tests/release-startup-retained-proof.test.py -v
           python3 -B tests/release-host-preflight.test.py -v
       - name: Retain the canonical hosted build
+        if: github.repository == 'HatimTheDream/Nova-Dream-Public' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: python3 -B scripts/retain-ci-candidate.py
+      - name: Check bounded public candidate storage
+        if: github.repository == 'HatimTheDream/Nova-Dream-Public' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 -B scripts/publish-ci-release-artifact.py --check-only --directory "$RUNNER_TEMP/nova-hosted-candidate"
+          python3 -B scripts/ci-artifact-budget.py --path "$RUNNER_TEMP/nova-hosted-candidate" --maximum-bytes 16777216 --maximum-files 3
       - name: Upload the verified application archive
+        if: github.repository == 'HatimTheDream/Nova-Dream-Public' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nova-hosted-${{ github.sha }}
           path: ${{ runner.temp }}/nova-hosted-candidate/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
           compression-level: 0
 
   release:

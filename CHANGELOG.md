@@ -1,3 +1,10 @@
+## [2.9.6] — 2026-10-19
+
+### Fixed
+
+- Deliver private builds through authenticated Release storage after the canonical Linux checks, with exact source and run verification, so exhausted temporary artifact storage does not block the release handoff.
+- Limit temporary CI file payloads to 16 MiB and one-day retention; reject oversized or redirected files before upload and preserve uncertain publication results for reconciliation.
+
 ## [2.9.5] — 2026-10-19
 
 ### Fixed

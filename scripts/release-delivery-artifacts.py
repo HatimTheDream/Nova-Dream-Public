@@ -112,19 +112,42 @@ def collect(request, *, observe=False, token_provider=credentials):
         source_input, ci = request['sources'][side], request['ci'][side]
         need(source_input['repository'] == 'HatimTheDream/' + repo and ci['sourceCommit'] == source_input['commit']
              and C.positive(ci['runId']) and C.positive(ci['runAttempt']), 'ci-source-binding-changed')
+        need(ci.get('transport', 'actions-artifact') in ('actions-artifact', 'private-release-asset')
+             and (ci.get('transport') != 'private-release-asset' or side == 'private'), 'artifact-transport-selection')
+        need(ci.get('transport') != 'private-release-asset' or C.positive(ci.get('releaseId')), 'artifact-ci-release-binding')
     token = None if observe else token_provider(git)
 
     def prepare_repository(side, repo):
         source_input, ci = request['sources'][side], request['ci'][side]
         selected = {k: ci[k] for k in ('sourceCommit', 'runId', 'runAttempt')}
+        private_release = ci.get('transport') == 'private-release-asset'
         if observe:
             need((root / ('frozen-source-' + repo + '-' + source_input['commit'])).is_dir(), 'original-frozen-source-unavailable')
-        source, bound = C.frozen_source(repo, source_input['commit'], git, checkout=P(source_input['root']), output_root=root, committed_only=True)
+        source, bound = C.frozen_source(repo, source_input['commit'], git, checkout=P(source_input['root']), output_root=root,
+                                       committed_only=True, private_release=private_release)
         output = root / side
+        snapshot = None
         if observe:
             intent, _ = C.read_json(output / 'collection-intent.json')
             need(intent['selected'] == selected and intent['key'] == request['key'], 'original-artifact-intent-changed')
-            artifact = intent['artifact']; raw = (output / 'artifact.zip').read_bytes()
+            need(intent.get('transport', 'actions-artifact') == ci.get('transport', 'actions-artifact'), 'original-artifact-transport-changed')
+            if private_release:
+                snapshot = intent['releaseTransport']; artifact = snapshot['assets']['archive']
+            else:
+                artifact = intent['artifact']
+            raw = (output / 'artifact.zip').read_bytes()
+        elif private_release:
+            snapshot = C.exact_private_release(selected, request['version'], token)
+            need(snapshot['release']['id'] == ci['releaseId'], 'artifact-ci-release-changed')
+            artifact = snapshot['assets']['archive']
+            output.mkdir(mode=0o700)
+            C.write_json(output / 'collection-intent.json', {'format': 1, 'key': request['key'], 'selected': selected,
+                          'transport': 'private-release-asset', 'releaseTransport': snapshot})
+            transport_raw = C.download_release_asset(snapshot['assets']['transport'], token, C.PRIVATE_TRANSPORT_MAXIMUM)
+            C.write_private(output / 'transport.json', transport_raw)
+            C.validate_private_transport(transport_raw, snapshot, bound, selected, request['version'])
+            raw = C.download_release_asset(artifact, token, C.PRIVATE_ZIP_MAXIMUM)
+            C.write_private(output / 'artifact.zip', raw); C.extract_zip(raw, output, maximum=C.PRIVATE_ZIP_MAXIMUM)
         else:
             prefix, run, job, steps, artifact = C.exact_run(repo, selected, token)
             output.mkdir(mode=0o700)
@@ -133,12 +156,29 @@ def collect(request, *, observe=False, token_provider=credentials):
             raw = C.download_zip(prefix, artifact['id'], token)
             need(len(raw) == artifact['size_in_bytes'] and (artifact.get('digest') is None or artifact['digest'] == 'sha256:' + C.sha(raw)), 'artifact-download-corrupt')
             C.write_private(output / 'artifact.zip', raw); C.extract_zip(raw, output)
-        need(len(raw) == artifact['size_in_bytes'] and (artifact.get('digest') is None or artifact['digest'] == 'sha256:' + C.sha(raw)), 'artifact-retained-zip-corrupt')
+        need(len(raw) == artifact['size' if private_release else 'size_in_bytes']
+             and (artifact.get('digest') is None or artifact['digest'] == 'sha256:' + C.sha(raw)), 'artifact-retained-zip-corrupt')
+        if private_release:
+            need(snapshot['release']['id'] == ci['releaseId'], 'artifact-ci-release-changed')
+            need(len(raw) <= C.PRIVATE_ZIP_MAXIMUM and (output / 'app.tgz').stat().st_size <= C.PRIVATE_ZIP_MAXIMUM,
+                 'private-ci-retained-size')
+            transport_raw = (output / 'transport.json').read_bytes()
+            transport_asset = snapshot['assets']['transport']
+            need(len(transport_raw) == transport_asset['size'] and 'sha256:' + C.sha(transport_raw) == transport_asset['digest'],
+                 'private-ci-retained-transport-corrupt')
+            C.validate_private_transport(transport_raw, snapshot, bound, selected, request['version'], (output / 'ci-source.json').read_bytes())
         receipt, metadata = validate_receipts(request, side, bound, output)
         candidate = C.verify_application(source, bound, output, metadata, node, verify_existing=observe)
+        transport = ({'kind': 'private-release-asset', 'releaseId': snapshot['release']['id'], 'releaseAssetId': artifact['id'],
+                      'assetName': artifact['name'], 'assetApiDigest': artifact['digest'], 'zipBytes': len(raw),
+                      'transportAssetId': snapshot['assets']['transport']['id'], 'receipt': reference(output / 'transport.json'),
+                      'qualityJobId': snapshot['qualityJob']['id'], 'producerJobId': snapshot['producerJob']['id'],
+                      'authenticatedDownloadVerified': True, 'buildOrigin': 'same-run-release-job'}
+                     if private_release else {'kind': 'actions-artifact', 'artifactId': artifact['id']})
         return {'repository': source_input['repository'], **selected, 'candidateId': candidate['id'], 'applicationDirectory': str(output / 'verified-application'),
                 'archive': reference(output / 'app.tgz'), 'metadata': reference(output / 'app.tgz.metadata.json'), 'ciSourceReceipt': reference(output / 'ci-source.json'),
-                'zip': reference(output / 'artifact.zip'), 'artifactId': artifact['id'], 'sourceHashes': bound, 'frozenSourceDirectory': str(source)}
+                'zip': reference(output / 'artifact.zip'), **({'transport': transport, 'releaseAssetId': artifact['id']} if private_release else {'artifactId': artifact['id']}),
+                'sourceHashes': bound, 'frozenSourceDirectory': str(source)}
 
     # Each worker owns distinct frozen-source and repository output directories.
     # All primitive subprocesses use explicit cwd; HTTP clients and verification
@@ -167,7 +207,8 @@ def collect(request, *, observe=False, token_provider=credentials):
 def failure_result(error):
     reason = str(error)
     verified_failure = isinstance(error, RuntimeError) and re.fullmatch('[a-z][a-z0-9-]{0,99}', reason) and reason not in {
-        'credential-provider-unavailable', 'original-artifact-worker-output-unavailable', 'original-frozen-source-unavailable'}
+        'credential-provider-unavailable', 'original-artifact-worker-output-unavailable', 'original-frozen-source-unavailable',
+        'private-ci-download-unavailable', 'private-ci-download-deadline'}
     return {'state': 'failed' if verified_failure else 'uncertain', 'reason': reason if verified_failure else 'original-artifact-collection-unverified',
             'externalId': None, 'receipt': None, 'output': {'verificationFailed': True} if verified_failure else None}
 

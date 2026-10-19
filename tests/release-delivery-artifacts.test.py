@@ -27,7 +27,9 @@ class ArtifactProducerTests(unittest.TestCase):
         request = {'format': 1, 'operationId': str(uuid.uuid4()), 'key': key, 'inputSha256': 'a' * 64, 'version': '2.3.1', 'buildVersion': '1.0.288',
                    'sources': {}, 'ci': {}, 'outputDirectory': str(root), 'helperHashes': {n: D.C.sha((ROOT / 'scripts' / n).read_bytes()) for n in ('release-delivery-artifacts.py', 'release-artifact-primitives.py')},
                    'tools': {'git': tool, 'node': tool, 'python': tool, 'ciNodeSha256': 'f' * 64, 'nodeToolchain': {'nodeVersion': '22.23.2', 'platform': 'win32', 'arch': 'x64'}}}
-        bound = {'scripts/update-app-archive.py': {'sha256': 'b' * 64}, 'scripts/candidate.mjs': {'sha256': 'c' * 64}}
+        bound = {'scripts/update-app-archive.py': {'sha256': 'b' * 64}, 'scripts/candidate.mjs': {'sha256': 'c' * 64},
+                 D.C.PRIVATE_PRODUCER: {'sha256': '1' * 64}, D.C.PRIVATE_PRIMITIVES: {'sha256': '2' * 64},
+                 'scripts/retain-ci-candidate.py': {'sha256': '3' * 64}, 'workflow': {'sha256': '4' * 64}}
         zips = {}
         for side, repo, commit in [('private', 'Nova-Dream', 'd' * 40), ('public', 'Nova-Dream-Public', 'e' * 40)]:
             request['sources'][side] = {'repository': 'HatimTheDream/' + repo, 'commit': commit, 'root': str(ROOT)}
@@ -56,6 +58,80 @@ class ArtifactProducerTests(unittest.TestCase):
             if not kwargs['verify_existing']: path.mkdir()
             return {'id': metadata['candidateId']}
         return request, zips, frozen, exact, verify
+
+    def private_fixture(self):
+        request, zips, frozen, exact, verify = self.fixture()
+        request['ci']['private'].update(transport='private-release-asset', releaseId=80)
+        selected = request['ci']['private']; commit = selected['sourceCommit']
+        stem = f'nova-ci-{commit}-run-{selected["runId"]}-attempt-1'
+        raw = zips['Nova-Dream']
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            source_hash = D.C.sha(archive.read('ci-source.json'))
+        snapshot = {'repository': {'id': 42, 'fullName': 'HatimTheDream/Nova-Dream', 'private': True},
+                    'run': {'id': selected['runId'], 'attempt': 1, 'workflowId': 7,
+                            'workflowPath': '.github/workflows/nova-release.yml', 'event': 'push', 'branch': 'main'},
+                    'qualityJob': {'id': 10, 'name': 'quality'}, 'producerJob': {'id': 11, 'name': 'release'},
+                    'release': {'id': 80, 'tag': 'nova-v2.3.1', 'targetCommitish': commit}, 'assets': {}}
+        manifest = {'format': 1, 'kind': 'private-ci-release-artifact', 'repository': snapshot['repository'],
+                    'sourceCommit': commit, 'version': '2.3.1', 'run': snapshot['run'],
+                    'qualityJob': snapshot['qualityJob'], 'producerJob': snapshot['producerJob'],
+                    'producer': {'path': D.C.PRIVATE_PRODUCER, 'sha256': '1' * 64, 'primitivesSha256': '2' * 64,
+                                 'retainerSha256': '3' * 64, 'workflowSha256': '4' * 64}, 'release': snapshot['release'],
+                    'archive': {'name': stem + '.zip', 'bytes': len(raw), 'sha256': D.C.sha(raw)},
+                    'ciSourceSha256': source_hash, 'buildOrigin': 'same-run-release-job', 'deliveryQualification': False}
+        transport_raw = json.dumps(manifest).encode()
+        for role, identity, name, content in [('archive', 81, stem + '.zip', raw), ('transport', 82, stem + '.transport.json', transport_raw)]:
+            snapshot['assets'][role] = {'id': identity, 'name': name, 'size': len(content), 'digest': 'sha256:' + D.C.sha(content)}
+        return request, zips, frozen, exact, verify, snapshot, transport_raw
+
+    def test_private_release_collection_and_observe_preserve_true_ids_and_three_member_receipt(self):
+        request, zips, frozen, exact, verify, snapshot, transport_raw = self.private_fixture()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen) as source, \
+             patch.object(D.C, 'exact_run', side_effect=exact) as actions_api, patch.object(D.C, 'exact_private_release', return_value=snapshot) as release_api, \
+             patch.object(D.C, 'download_release_asset', side_effect=lambda asset, *_: transport_raw if asset['id'] == 82 else zips['Nova-Dream']) as release_download, \
+             patch.object(D.C, 'download_zip', return_value=zips['Nova-Dream-Public']) as actions_download, patch.object(D.C, 'verify_application', side_effect=verify):
+            first = D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+            second = D.collect(request, observe=True, token_provider=lambda _: self.fail('No observation credentials'))
+            self.assertEqual(first, second)
+            private = first['output']['repositories']['private']
+            self.assertNotIn('artifactId', private); self.assertEqual(private['releaseAssetId'], 81)
+            self.assertEqual(private['transport']['releaseId'], 80)
+            self.assertEqual(private['transport']['buildOrigin'], 'same-run-release-job')
+            self.assertEqual(first['output']['repositories']['public']['artifactId'], 124)
+            self.assertEqual(actions_api.call_count, 1); self.assertEqual(actions_download.call_count, 1)
+            self.assertEqual(release_api.call_count, 1); self.assertEqual(release_download.call_count, 2)
+            self.assertEqual([call.kwargs['private_release'] for call in source.call_args_list].count(True), 2)
+            transport = pathlib.Path(private['transport']['receipt']['path']); transport.write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError, 'private-ci-retained-transport-corrupt'):
+                D.collect(request, observe=True, token_provider=lambda _: self.fail('No observation credentials'))
+            self.assertEqual(release_download.call_count, 2)
+
+    def test_wrong_private_manifest_preserves_partial_and_never_fetches_archive_or_replays(self):
+        request, zips, frozen, exact, verify, snapshot, transport_raw = self.private_fixture()
+        manifest = json.loads(transport_raw); manifest['producer']['sha256'] = '0' * 64
+        changed = json.dumps(manifest).encode()
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        with patch.object(D.subprocess, 'run', return_value=runtime), patch.object(D.C, 'frozen_source', side_effect=frozen), \
+             patch.object(D.C, 'exact_run', side_effect=exact), patch.object(D.C, 'exact_private_release', return_value=snapshot), \
+             patch.object(D.C, 'download_release_asset', return_value=changed) as release_download, \
+             patch.object(D.C, 'download_zip', return_value=zips['Nova-Dream-Public']), patch.object(D.C, 'verify_application', side_effect=verify):
+            with self.assertRaisesRegex(RuntimeError, 'private-ci-transport-binding'):
+                D.collect(request, token_provider=lambda _: 'synthetic-token-never-external')
+            self.assertEqual(release_download.call_count, 1)
+            output = pathlib.Path(request['outputDirectory'])
+            self.assertTrue((output / 'private/transport.json').is_file())
+            self.assertFalse((output / 'private/artifact.zip').exists())
+            self.assertFalse((output / 'result.json').exists())
+            with self.assertRaises(FileExistsError):
+                D.collect(request, token_provider=lambda _: self.fail('No replay credential'))
+            self.assertEqual(release_download.call_count, 1)
+
+    def test_public_cannot_select_private_transport(self):
+        request, *_ = self.fixture(); request['ci']['public']['transport'] = 'private-release-asset'
+        runtime = types.SimpleNamespace(returncode=0, stdout=json.dumps(request['tools']['nodeToolchain']).encode())
+        with patch.object(D.subprocess, 'run', return_value=runtime), self.assertRaisesRegex(RuntimeError, 'artifact-transport-selection'):
+            D.collect(request, token_provider=lambda _: self.fail('No credential for wrong route'))
 
     def test_original_complete_collection_observes_without_redownload_or_credentials(self):
         request, zips, frozen, exact, verify = self.fixture()
