@@ -1,0 +1,33 @@
+/* Opt-in actions only: record rows, navigation and editor fields keep their geometry. */
+:root button.compact-action {
+ --button-compact-depth:0px; --button-shadow-depth:0px;
+ display:inline-flex; align-items:center; justify-content:center; gap:6px;
+ flex:0 0 auto; align-self:flex-start; justify-self:start;
+ width:fit-content; max-width:100%; min-width:0; min-height:36px;
+ padding:6px 10px; font-size:13px; line-height:1.35;
+ white-space:normal; overflow-wrap:anywhere;
+}
+:root button.compact-action:not(.primary):not([aria-pressed=true]):not([aria-checked=true]) { --button-fill:var(--raised); }
+:root button.compact-action[aria-checked=true] { --button-fill:var(--soft-gold); --button-edge:var(--selection-edge); }
+:root button.compact-action.compact-utility { min-height:32px; padding:4px 8px; }
+:root button.compact-action.compact-icon { width:32px; min-width:32px; height:32px; padding:0; flex:none; align-self:auto; }
+.compact-action > svg { flex:none; }
+.compact-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:8px; min-width:0; }
+.compact-actions > button { flex:0 0 auto; width:fit-content; max-width:100%; align-self:flex-start; }
+.compact-choice-menu { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:0; max-width:280px; }
+.compact-choice-menu > .metadata { margin:2px 4px; max-width:250px; line-height:1.5; }
+.composer-popover:has(>.compact-choice-menu) { position:fixed; z-index:65; width:max-content; max-width:calc(100vw - 16px); max-height:calc(100dvh - 16px); overflow:auto; overscroll-behavior:contain; padding:8px; border:1px solid var(--line); border-radius:14px; background:var(--raised); box-shadow:0 8px 24px #0002; }
+:root dialog.dialog.dialog-choice { width:max-content; max-width:min(480px,calc(100vw - 24px)); min-width:min(260px,calc(100vw - 24px)); }
+:root .dialog-choice > .dialog-inner { padding:18px; }
+:root .dialog-choice .dialog-inner > .dialog-header { gap:12px; margin-bottom:16px; padding-bottom:12px; }
+:root .dialog-choice .dialog-header > h2 { font-size:18px; }
+.dialog-choice .dialog-inner > .metadata { max-width:44ch; line-height:1.5; }
+@media (pointer:coarse), (max-width:800px) {
+ :root button.compact-action, :root button.compact-action.compact-utility { min-height:44px; padding-block:8px; }
+ :root button.compact-action.compact-icon { width:44px; min-width:44px; height:44px; padding:0; }
+ .compact-choice-menu { gap:8px; }
+}
+@media (max-width:480px) {
+ .dialog-choice .compact-actions { align-items:flex-start; }
+ .dialog-choice .home-add-options { flex-direction:column; }
+}

@@ -147,3 +147,35 @@
 
 .home-source-selection > label { display:grid; gap:7px; margin-block:12px; }
 .home-source-selection > details > summary { cursor:pointer; padding-block:12px; min-height:44px; }
+
+/* Compact Library controls reuse intrinsic actions without narrowing saved-source rows. */
+.home-library-heading { align-items:flex-start; margin-bottom:14px; }
+.home-library-heading-copy { flex:1; min-width:0; }
+.home-library-title { display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; min-width:0; }
+.home-library-title h1 { min-width:0; max-width:100%; }
+.home-library-title .home-library-count { margin:0; white-space:nowrap; }
+.home-library-heading-copy > .compact-action { margin-bottom:8px; }
+.home-library-heading-copy > p { margin-top:6px; }
+.home-library-tools { flex:none; margin-top:2px; gap:6px; }
+.home-library-scope { min-width:0; max-width:100%; }
+:root .home-library-scope > .composer-control-button { display:inline-flex; align-items:center; justify-content:flex-start; flex-direction:row-reverse; gap:8px; min-width:0; max-width:100%; min-height:36px; width:fit-content; padding:0; border:0; background:transparent; box-shadow:none; font:inherit; text-align:start; }
+.home-library-scope .composer-control-label { display:block; min-width:0; overflow-wrap:anywhere; }
+.home-library-scope > button > svg { flex:none; }
+:root .home-library-view-options > .composer-control-button { --button-compact-depth:0px; --button-shadow-depth:0px; --button-fill:var(--raised); display:inline-flex; align-items:center; justify-content:center; flex:none; width:32px; min-width:32px; height:32px; min-height:32px; padding:0; font-size:13px; }
+.home-library-search-disclosure { display:flex; align-items:center; gap:6px; max-width:400px; margin-bottom:14px; }
+.home-library-search-disclosure .search-input { flex:1; min-width:0; width:auto; }
+.home-library-search-disclosure input { min-width:0; width:100%; }
+.home-library-active-search { margin-bottom:14px; }
+.home-library-active-search > button:first-child { min-width:0; }
+.home-library-active-search > button:first-child > span { overflow-wrap:anywhere; text-align:start; }
+@media (pointer:coarse), (max-width:800px) {
+ :root .home-library-scope > .composer-control-button { min-height:44px; }
+ :root .home-library-view-options > .composer-control-button { width:44px; min-width:44px; height:44px; min-height:44px; }
+ .home-library-search-disclosure input { font-size:max(16px,var(--type-control)); min-height:44px; }
+}
+@container nova-home (max-width:540px) {
+ .home-library-heading { flex-wrap:wrap; gap:10px; }
+ .home-library-heading-copy { flex:1 1 auto; }
+ .home-library-tools { margin-left:auto; }
+ .home-library-search-disclosure { max-width:100%; }
+}

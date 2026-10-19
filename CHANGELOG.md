@@ -1,3 +1,11 @@
+## [2.9.8] — 2026-10-19
+
+### Improved
+
+- Keep Library actions compact and sized to their labels, with collection counts beside the current heading and Search and View Options available on demand.
+- Preserve active searches, saved collections, notes and exact source references while switching views, closing temporary controls or returning to Library.
+- Fit simple choice dialogs to their contents while retaining full-size editors, accessible phone controls and keyboard return paths.
+
 ## [2.9.7] — 2026-10-19
 
 ### Fixed
