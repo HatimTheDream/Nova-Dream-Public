@@ -73,7 +73,7 @@ function host(route: ModuleId | 'settings' = 'home', initialWidth = 390, directi
     returnToWideNavigation: () => { wideFocus++; doc.activeElement = null; },
   };
   const reorder: NonNullable<typeof props.reorder> = {
-    order: [...order], dragging: null, announcement: '', containerRef: { current: null }, suppressClick: { current: false },
+    order: [...order], dragging: null, saving: false, announcement: '', containerRef: { current: null }, suppressClick: { current: false },
     bind: id => ({ onPointerDown: () => { holds.push(id); } }),
     bindSurface: () => ({ onPointerDown: () => {}, onContextMenu: () => {} }),
     move: (id, to) => { reorder.order = moveItem(reorder.order, reorder.order.indexOf(id), to); moves.push([...reorder.order]); dirty = true; },

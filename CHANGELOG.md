@@ -1,3 +1,16 @@
+## [2.9.0] — 2026-10-18
+
+### Added
+
+- Organize Library collections in Cards or Compact view, search within a collection, and open saved links directly while keeping their exact saved versions available to inspect.
+- Review and capture up to 20 links in one batch, with invalid addresses and duplicates explained. Save a new note or link into a collection in one operation.
+- Reorder collections and their sources with pointer or keyboard controls. Move or copy selected sources between collections, and undo eligible organization changes without deleting the saved sources.
+
+### Improved
+
+- Keep drafts and original unconfirmed saves through reloads; later acknowledgements preserve newer writing. Changed and missing references remain explicit.
+- Simplify focused collection headers, align source rows, and keep forms readable on narrow and touch layouts while preserving font and size preferences.
+
 ## [2.8.5] — 2026-10-18
 
 ### Fixed

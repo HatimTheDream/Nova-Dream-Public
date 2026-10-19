@@ -12,7 +12,7 @@ const box = (element: HTMLElement): ReorderBox => {
 };
 
 /** Opt-in motion adds a move handle and a surface hold; Alt+arrows stay equivalent. */
-export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void, group: string, options: { motion?: boolean; touchHold?: boolean; hold?: boolean; axis?: 'vertical' | 'horizontal' } = {}) {
+export function useReorder<T extends string>(items: T[], save: (items: T[]) => boolean | void | Promise<boolean | void>, group: string, options: { motion?: boolean; touchHold?: boolean; hold?: boolean; axis?: 'vertical' | 'horizontal'; disabled?: boolean } = {}) {
   const motion = Boolean(options.motion);
   const touchHold = Boolean(options.touchHold);
   const hold = Boolean(options.hold);
@@ -20,6 +20,8 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
   const [preview, setPreview] = useState<T[] | null>(null);
   const [dragging, setDragging] = useState<T | null>(null);
   const [announcement, announce] = useState('');
+  const [saving, setSaving] = useState(false);
+  const persistence = useRef({ active: true, pending: false });
   const state = useRef<Drag<T> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const positions = useRef<Map<string, ReorderBox>>(new Map());
@@ -29,7 +31,20 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
   const focusAfterMove = useRef<HTMLElement | null>(null);
   const suppressClick = useRef(false);
   const clickGuard = useRef<{ surface: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const latest = useRef({ items, save }); latest.current = { items, save };
+  const latest = useRef({ items, save, disabled: options.disabled }); latest.current = { items, save, disabled: options.disabled };
+  const persist = (next: T[], id: T) => {
+    if (latest.current.disabled || persistence.current.pending) return;
+    const owner = persistence.current;
+    try {
+      const result = latest.current.save(next);
+      if (result && typeof result === 'object' && typeof result.then === 'function') {
+        owner.pending = true; setSaving(true); announce('Saving move…');
+        void result.then(value => { if (owner.active) announce(value === false ? 'Move unconfirmed. Check the original save.' : `Moved to position ${next.indexOf(id) + 1} of ${next.length}.`); },
+          () => { if (owner.active) announce('Move unconfirmed. Check the original save.'); }).finally(() => { owner.pending = false; if (owner.active) setSaving(false); });
+      } else announce(result === false ? 'Move could not be saved.' : `Moved to position ${next.indexOf(id) + 1} of ${next.length}.`);
+    } catch { announce('Move could not be saved.'); }
+  };
+  useEffect(() => { const owner = { active: true, pending: false }; persistence.current = owner; return () => { owner.active = false; }; }, []);
   const nodes = () => [...(containerRef.current?.children ?? [])].filter((node): node is HTMLElement => node instanceof HTMLElement && node.dataset.reorderGroup === group && Boolean(node.dataset.reorderItem));
   const layoutBox = (node: HTMLElement) => {
     const rect = box(node);
@@ -79,8 +94,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
       else setTimeout(() => { suppressClick.current = false; }, 0);
       const next = motion ? reorderCommit(drag.initial, latest.current.items, drag.order, commit) : commit && !sameOrder(drag.order, latest.current.items) ? drag.order : null;
       if (next) {
-        try { if (latest.current.save(next) === false) announce('Move could not be saved.'); else announce(`Moved to position ${next.indexOf(drag.id) + 1} of ${next.length}.`); }
-        catch { announce('Move could not be saved.'); }
+        persist(next, drag.id);
       } else announce(commit && sameOrder(drag.initial, drag.order) ? 'Position unchanged.' : 'Move cancelled.');
     }
     if (drag.capture.hasPointerCapture(drag.pointer)) drag.capture.releasePointerCapture(drag.pointer);
@@ -233,7 +247,7 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
   }, []);
   const bind = (id: T, surface = false) => ({
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
-      if (event.button !== 0 || !event.isPrimary || state.current) return;
+      if (event.button !== 0 || !event.isPrimary || state.current || latest.current.disabled || persistence.current.pending) return;
       if (surface) {
         if (!motion || !(event.target instanceof Element)) return;
         const interactive = event.target.closest(interactiveSurface);
@@ -251,14 +265,13 @@ export function useReorder<T extends string>(items: T[], save: (items: T[]) => b
     onContextMenu: (event: ReactMouseEvent<HTMLElement>) => { if (state.current?.id === id && state.current.active) event.preventDefault(); },
   });
   const move = (id: T, to: number) => {
-    if (state.current || items.indexOf(id) < 0) return;
+    if (state.current || latest.current.disabled || persistence.current.pending || items.indexOf(id) < 0) return;
     const next = moveItem(items, items.indexOf(id), to);
     if (sameOrder(next, items)) return;
     captureBefore();
     if (motion && document.activeElement instanceof HTMLElement && containerRef.current?.contains(document.activeElement)) focusAfterMove.current = document.activeElement;
-    try { if (save(next) === false) announce('Move could not be saved.'); else announce(`Moved to position ${next.indexOf(id) + 1} of ${next.length}.`); }
-    catch { announce('Move could not be saved.'); }
+    persist(next, id);
   };
   const order = motion && state.current && !sameOrder(state.current.initial, items) ? items : preview ?? items;
-  return { order, dragging, announcement, bind, bindSurface, move, cancel: () => finish(false), suppressClick, containerRef };
+  return { order, dragging, announcement, saving, bind, bindSurface, move, cancel: () => finish(false), suppressClick, containerRef };
 }

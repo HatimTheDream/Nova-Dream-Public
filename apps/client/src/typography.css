@@ -15,6 +15,8 @@
   --text-secondary: calc(14px * var(--interface-text-scale));
   --leading-secondary: calc(20px * var(--interface-text-scale));
   --text-heading-lg: calc(20px * var(--interface-text-scale));
+  --text-page-title: calc(32px * var(--interface-text-scale));
+  --text-page-title-mobile: calc(27px * var(--interface-text-scale));
   --leading-heading-lg: calc(28px * var(--interface-text-scale));
   --text-heading-md: calc(18px * var(--interface-text-scale));
   --leading-heading-md: calc(26px * var(--interface-text-scale));
@@ -33,6 +35,7 @@
 :root[data-message-text-size="large"] { --assistant-text-size: 17px; }
 :root[data-message-text-size="extra-large"] { --assistant-text-size: 20px; }
 body { font-size:var(--text-body); line-height:1.5; }
+.page-title { font-size:var(--text-page-title); line-height:1.2; letter-spacing:-.02em; }
 
 /* Only reading content uses message preferences; surrounding controls do not. */
 :root :is(.assistant-workspace, .conversation-reader, .research-report-body, .nova-plan-body) .message-text,
@@ -77,5 +80,9 @@ body { font-size:var(--text-body); line-height:1.5; }
 
 /* iOS magnifies focused inputs below 16px. Keep writing comfortable on touch screens. */
 @media (max-width: 650px) {
+  :root .page-title { font-size:var(--text-page-title-mobile); }
+}
+@media (max-width: 650px), (pointer: coarse) {
+  :root :is(input:not([type=checkbox],[type=radio],[type=range],[type=color],[type=button],[type=submit],[type=hidden]),select,textarea) { font-size:max(16px, calc(16px * var(--interface-text-scale))); }
   :root .assistant-workspace .composer > textarea { font-size: max(16px, calc(15px * var(--interface-text-scale))); }
 }

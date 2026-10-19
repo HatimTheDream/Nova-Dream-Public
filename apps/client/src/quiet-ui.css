@@ -77,6 +77,12 @@
 :root .empty { min-width:0; gap:var(--space-3); }
 :root .empty > :is(h3,p) { max-width:60ch; overflow-wrap:anywhere; }
 
+/* Local choices stay flat; they do not replace page tabs or saved navigation. */
+.segmented-choice { display:flex; flex-wrap:wrap; padding:4px; gap:4px; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+:root .segmented-choice > button { --button-depth:0px; background:transparent; box-shadow:none; border:0; border-radius:8px; }
+:root .segmented-choice > button[aria-pressed=true] { background:var(--gold-soft, #f6c45333); color:var(--text); }
+:root :is(input,select,textarea)[aria-invalid=true] { border-color:var(--danger, #b43e48); }
+
 /* Keep the agenda action intact when larger type narrows the date heading. */
 :root .calendar-module section[aria-labelledby=selected-day-heading] > div:first-child { flex-wrap:wrap; }
 :root .calendar-module .dc-calendar-agenda-add { flex:none; white-space:nowrap; }

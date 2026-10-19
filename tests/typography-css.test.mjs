@@ -59,3 +59,15 @@ test('Message preferences and third-party font assets stay outside interface sca
   assert.equal((await transform(external, externalFile)).css, external);
   assert.equal((await transform('.message{font-size:var(--assistant-text-size)}')).css, '.message{font-size:var(--assistant-text-size)}');
 });
+
+
+test('Library page titles use separate responsive tokens while mobile editing keeps its zoom-safe floor', async () => {
+ const file=fileURLToPath(new URL('../apps/client/src/typography.css',import.meta.url)),css=await readFile(file,'utf8'),result=await transform(css,file),values=declarations(result);
+ assert.equal(values[':root:--text-heading-lg'],'calc(20px * var(--interface-text-scale))','Existing section headings retain their scale');
+ assert.equal(values[':root:--text-page-title'],'calc(32px * var(--interface-text-scale))');
+ assert.equal(values[':root:--text-page-title-mobile'],'calc(27px * var(--interface-text-scale))');
+ const mobile=[];result.root.walkAtRules('media',rule=>{if(rule.params==='(max-width: 650px), (pointer: coarse)')rule.walkDecls('font-size',declaration=>mobile.push(declaration.value));});
+ const titles=[];result.root.walkAtRules('media',rule=>{rule.walkRules(':root .page-title',()=>titles.push(rule.params));});assert.deepEqual(titles,['(max-width: 650px)'],'Coarse pointers keep desktop titles at wide widths; only editing has the additional floor');
+ assert.ok(mobile.includes('max(16px, calc(16px * var(--interface-text-scale)))'));assert.ok(mobile.includes('max(16px, calc(15px * var(--interface-text-scale)))'));
+ assert.equal(values[':root:--app-font'],'var(--system-font)');assert.equal(values[':root:--message-font'],'var(--system-font)');assert.equal(result.css,css,'Preference tokens are not scaled a second time by the build');
+});

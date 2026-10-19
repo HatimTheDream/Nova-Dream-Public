@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-2.8.5-blue)
+![Version](https://img.shields.io/badge/Version-2.9.0-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 
@@ -11,6 +11,8 @@ The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles
 A self-hosted, single-owner workspace for your Assistant, agents and everyday work.
 
 The **Mascot Creator** is shared by Profile's identity editor and each agent's Appearance step. Use the previous/next arrows to cycle through faces, markings, outfits and glasses while the character preview updates. Color swatches open individual pickers; **More options** contains starter looks, palettes and secondary actions. Locks, shuffle, Undo and Redo make it easy to compare options. Use the record's **Save changes** button to apply a look throughout Nova. Existing saved square lynx avatars retain their original artwork until edited.
+
+**Library** brings useful material into collections. Open **Home → Library** to keep notes, links and saved work in Cards or Compact view. Review up to 20 pasted links per batch, including invalid addresses and duplicates. Reorder collections and sources with pointer or keyboard controls, move or copy a selection, and undo eligible organization changes. Inspect exact saved versions and explicit missing references; drafts and original unconfirmed saves stay available after reload.
 
 Nova brings together a customizable Home board, Tasks and Projects, Google/Microsoft Calendar and Inbox, Contacts, a writing workspace, Profile quests and XP, voice conversations, and a modular pixel-art agent office.
 
