@@ -116,7 +116,21 @@ test('generic committed versions, independent bases, signed sequence and current
  const f=initializeFixture(t),v=await deriveDeliveryConfiguration(f.input,f.profile,f.options);
  assert.equal(v.operation.version,'3.2.0');assert.equal(v.operation.buildVersion,'1.0.400');assert.equal(v.sources.private.baseCommit,'a'.repeat(40));assert.equal(v.sources.public.baseCommit,'b'.repeat(40));assert.equal(v.target.full.feed.sequence,13);
  assert.equal(v.target.full.bundleUrl,'https://github.com/HatimTheDream/Nova-Dream/releases/download/nova-v3.2.0/nova-3.2.0-operator-bundle.json');assert.equal(v.operation.priorAgentVersion,'2026.9.8');assert.equal(v.operation.agentVersion,'2026.9.8');
- assert.equal(v.adapterIdentity,deliveryAdapterIdentity());assert.ok(f.calls.every(a=>['rev-parse','merge-base','remote','ls-tree','show'].includes(a[2])));assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+ assert.equal(v.adapterIdentity,deliveryAdapterIdentity());assert.ok(f.calls.every(a=>['rev-parse','branch','status','merge-base','remote','ls-tree','show'].includes(a[2])));assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+});
+
+test('wrong branch, changed HEAD and tracked edits refuse before dependency preparation or feed import',async t=>{
+ for(const [kind,expected] of [['branch','configured-source-branch-changed'],['head','configured-source-head-changed'],['index','configured-source-index-not-clean']]){
+  const f=initializeFixture(t);const command=async(tool,args,options)=>{
+   const a=args.slice(2);
+   if(kind==='branch'&&a[0]==='branch')return 'preparation\n';
+   if(kind==='head'&&a[0]==='rev-parse'&&a[1]==='HEAD')return 'f'.repeat(40)+'\n';
+   if(kind==='index'&&a[0]==='status')return ' M package.json\n';
+   return f.command(tool,args,options);
+  };
+  await assert.rejects(deriveDeliveryConfiguration(f.input,f.profile,{...f.options,command}),new RegExp(expected));
+  assert.deepEqual(f.feedEvents,[]);
+ }
 });
 test('another release version is input data only',async t=>{const f=initializeFixture(t,{version:'4.7.3',buildVersion:'2.0.11'}),v=await deriveDeliveryConfiguration(f.input,f.profile,f.options);assert.equal(v.operation.version,'4.7.3');assert.match(v.target.full.dependenciesUrl,/nova-4\.7\.3-app-dependencies/);});
 test('actual paired committed package mismatch refuses',async t=>{const f=initializeFixture(t);f.packages.public.version='3.2.1';f.locks.public.version='3.2.1';f.locks.public.packages[''].version='3.2.1';await assert.rejects(deriveDeliveryConfiguration(f.input,f.profile,f.options),/paired-committed-package/);});

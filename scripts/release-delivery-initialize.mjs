@@ -110,6 +110,11 @@ export async function qualifyDeliverySources(input,profile,target,accepted,{comm
   const git=args=>command(target.sourceTools.git.path,['-C',value.root,...args],{gitExecPath:target.sourceTools.gitExecPath});
   need((await git(['rev-parse','--show-object-format'])).trim()==='sha1','unsupported-source-object-format');
   need((await git(['rev-parse','--verify',value.commit+'^{commit}'])).trim()===value.commit,'exact-committed-source-required');
+  // Publication needs this exact checkout on main. Refuse before preparing
+  // dependencies or opening the old-document browser; publication rechecks it.
+  need((await git(['branch','--show-current'])).trim()===value.branch,'configured-source-branch-changed');
+  need((await git(['rev-parse','HEAD'])).trim()===value.commit,'configured-source-head-changed');
+  need((await git(['status','--porcelain','--untracked-files=no'])).trim()==='','configured-source-index-not-clean');
   await git(['merge-base','--is-ancestor',baseCommit,value.commit]);
   need([`https://github.com/${repository}.git`,`https://github.com/${repository}`,`git@github.com:${repository}.git`].includes((await git(['remote','get-url','--push','origin'])).trim()),'configured-source-remote-changed');
   const expected=new Map(names.map(name=>[posix.normalize(prefix+'scripts/'+name),gitBlob(readAdapter(name))]));

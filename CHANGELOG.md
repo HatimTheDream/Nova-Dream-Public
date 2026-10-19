@@ -1,4 +1,4 @@
-## [2.9.0] — 2026-10-18
+## [2.9.0] — 2026-10-19
 
 ### Added
 
@@ -11,6 +11,23 @@
 - Keep drafts and original unconfirmed saves through reloads; later acknowledgements preserve newer writing. Changed and missing references remain explicit.
 - Simplify focused collection headers, align source rows, and keep forms readable on narrow and touch layouts while preserving font and size preferences.
 - Load Home through the existing module loader with clear loading and recovery states, keeping the startup download within its existing size limit.
+
+### Fixed
+
+- Recover an interrupted startup module download with an explicit Reload app action, preserving retained writing and original unconfirmed saves.
+
+## [2.8.7] — 2026-10-19
+
+### Fixed
+
+- Bind startup qualification to the versions in both verified release packages, so new releases retain the same restart and recovery checks without relying on a previous release number.
+
+## [2.8.6] — 2026-10-19
+
+### Fixed
+
+- Reuse a fully verified retained dependency tree after relocating the deployment checkout, preserving its original ownership record and refusing incomplete or changed files.
+- Check the exact source branch, commit and tracked changes before deployment preparation so an incompatible checkout is caught before browser verification begins.
 
 ## [2.8.5] — 2026-10-18
 

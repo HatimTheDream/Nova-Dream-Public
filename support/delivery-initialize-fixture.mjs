@@ -48,6 +48,8 @@ export function initializeFixture(t,{version='3.2.0',buildVersion='1.0.400'}={})
   calls.push(args);assert.equal(executable,target.sourceTools.git.path);assert.equal(args[0],'-C');const side=args[1]===profile.sources.private.root?'private':'public',a=args.slice(2),prefix=side==='private'?'edition3/':'';
   if(a[0]==='rev-parse')return a[1]==='--show-object-format'?'sha1\n':input.sourceCommits[side]+'\n';
   if(a[0]==='merge-base')return '';
+  if(a[0]==='branch')return 'main\n';
+  if(a[0]==='status')return '';
   if(a[0]==='remote')return `https://github.com/${profile.sources[side].repository}.git\n`;
   if(a[0]==='ls-tree')return deliveryAdapterSourceFiles().map(name=>{const raw=readFileSync(new URL('../scripts/'+name,import.meta.url)),oid=createHash('sha1').update(Buffer.from(`blob ${raw.length}\0`)).update(raw).digest('hex');return`${corruptSource?'0'.repeat(40):oid}\t${prefix}scripts/${name}`.replace(/scripts\/\.\.\//,'');}).join('\n')+'\n';
   if(a[0]==='show')return JSON.stringify(a[1].endsWith('package-lock.json')?locks[side]:packages[side]);

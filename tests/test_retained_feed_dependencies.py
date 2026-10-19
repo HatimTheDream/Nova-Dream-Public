@@ -76,6 +76,78 @@ class MaterializationTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run(command,capture_output=True,timeout=15).returncode,0)
         worker.materialize(f.request)
         run=subprocess.run(command,capture_output=True,timeout=15);self.assertEqual(run.returncode,0,run.stderr.decode())
+    def alias_request(self, f):
+        alias=self.root/'relocated-parser.py';alias.write_bytes(P(f.request['helper']['path']).read_bytes())
+        request=copy.deepcopy(f.request);request['helper']=ref(alias)
+        return request
+    def test_relocated_parser_reuses_only_complete_output_and_preserves_owner(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f)
+        owner=(f.work/'owner.json').read_bytes();before=worker.candidate_snapshot(f.request['base'])[0]
+        target=f.base/'node_modules/zod/index.mjs';original=(target.read_bytes(),target.stat().st_ino,target.stat().st_mtime_ns)
+        result=worker.materialize(request)
+        self.assertTrue(result['completedOutputReused']);self.assertEqual(result['retainedOwnerSha256'],worker.sha(owner))
+        self.assertEqual((f.work/'owner.json').read_bytes(),owner)
+        self.assertEqual((target.read_bytes(),target.stat().st_ino,target.stat().st_mtime_ns),original)
+        self.assertEqual(worker.candidate_snapshot(f.request['base'])[0],before)
+        self.assertEqual(worker.materialize(request),result)
+    def test_relocated_parser_requires_unchanged_old_parser_and_pinned_new_parser(self):
+        f=Fixture(self.root);old=self.root/'old-parser.py';old.write_bytes(P(f.request['helper']['path']).read_bytes())
+        f.request['helper']=ref(old);worker.materialize(f.request);request=self.alias_request(f);owner=(f.work/'owner.json').read_bytes()
+        old.write_bytes(old.read_bytes()+b'\n# changed\n')
+        with self.assertRaisesRegex(RuntimeError,'reference-changed'):worker.materialize(request)
+        old.write_bytes(P(request['helper']['path']).read_bytes())
+        P(request['helper']['path']).write_bytes(old.read_bytes()+b'\n# changed\n');request['helper']=ref(P(request['helper']['path']))
+        with self.assertRaisesRegex(RuntimeError,'maintained-parser-changed'):worker.materialize(request)
+        self.assertEqual((f.work/'owner.json').read_bytes(),owner)
+    def test_relocated_parser_refuses_other_owner_fields_partial_owner_and_staging(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f);marker=f.work/'owner.json';original=marker.read_bytes()
+        for field in ('format','base','pair','archive','metadata','workDirectory'):
+            with self.subTest(field=field):
+                owner=copy.deepcopy(f.request);owner[field]='different';raw=worker.encode(owner);marker.write_bytes(raw)
+                with self.assertRaisesRegex(RuntimeError,'operation-conflict'):worker.materialize(request)
+                self.assertEqual(marker.read_bytes(),raw)
+        marker.write_bytes(original[:-7])
+        with self.assertRaisesRegex(RuntimeError,'operation-conflict'):worker.materialize(request)
+        marker.write_bytes(original);(f.work/'zod-staging').mkdir()
+        with self.assertRaisesRegex(RuntimeError,'reuse-staging-present'):worker.materialize(request)
+        self.assertEqual(marker.read_bytes(),original)
+    def test_relocated_parser_does_not_repair_changed_or_incomplete_output(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f);target=f.base/'node_modules/zod/index.mjs'
+        target.write_bytes(b'corrupt')
+        with self.assertRaisesRegex(RuntimeError,'output-corrupt'):worker.materialize(request)
+        self.assertEqual(target.read_bytes(),b'corrupt');target.unlink()
+        with self.assertRaisesRegex(RuntimeError,'output-incomplete'):worker.materialize(request)
+        self.assertFalse(target.exists())
+    def test_relocated_parser_refuses_concurrent_writer_and_candidate_mutation(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f)
+        with worker.owned_lock(f.work):
+            with self.assertRaises(OSError):worker.materialize(request)
+        def change(phase):
+            if phase=='completed-output-verified':(f.base/'dist/client/index.html').write_bytes(b'changed')
+        with self.assertRaisesRegex(RuntimeError,'candidate-artifact-changed'):worker.materialize(request,checkpoint=change)
+    def test_relocated_parser_refuses_linked_helper_and_late_staging(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f)
+        alias=P(request['helper']['path']);link=self.root/'second-link.py';os.link(alias,link)
+        with self.assertRaisesRegex(RuntimeError,'file-not-independent'):worker.materialize(request)
+        link.unlink()
+        def change(phase):
+            if phase=='completed-output-verified':(f.work/'zod-staging').mkdir()
+        with self.assertRaisesRegex(RuntimeError,'reuse-staging-present'):worker.materialize(request,checkpoint=change)
+        (f.work/'zod-staging').rmdir()
+        def add_sibling(phase):
+            if phase=='completed-output-verified':(f.base/'node_modules/extra').mkdir()
+        with self.assertRaisesRegex(RuntimeError,'other-modules-present'):worker.materialize(request,checkpoint=add_sibling)
+    def test_relocated_parser_plan_verifies_complete_output_without_writes(self):
+        f=Fixture(self.root);worker.materialize(f.request);request=self.alias_request(f);raw=worker.encode(request)
+        before={p.relative_to(self.root):(p.read_bytes(),p.stat().st_mtime_ns) for p in self.root.rglob('*') if p.is_file()}
+        command=[sys.executable,'-I','-B',str(ROOT/'scripts/release-retained-feed-dependencies.py'),
+            '--request-base64',base64.b64encode(raw).decode(),'--request-sha',worker.sha(raw),'--plan']
+        result=subprocess.run(command,capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr);self.assertTrue(json.loads(result.stdout)['readOnly'])
+        self.assertEqual(before,{p.relative_to(self.root):(p.read_bytes(),p.stat().st_mtime_ns) for p in self.root.rglob('*') if p.is_file()})
+        (f.base/'node_modules/zod/index.mjs').write_bytes(b'bad')
+        failed=subprocess.run(command,capture_output=True,text=True,timeout=20)
+        self.assertNotEqual(failed.returncode,0);self.assertIn('output-corrupt',failed.stderr)
     def test_wrong_version_refused(self):
         f=Fixture(self.root,version='9.9.9')
         with self.assertRaisesRegex(RuntimeError,'version-unsupported'):worker.materialize(f.request)
