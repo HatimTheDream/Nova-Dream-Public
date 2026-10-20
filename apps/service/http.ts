@@ -728,6 +728,16 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/conversation-cleanup' && request.method === 'GET') return json(200, url.searchParams.has('id') ? conversationCleanup.get(url.searchParams.get('id')!) : conversationCleanup.list(Number(url.searchParams.get('offset') ?? 0), Number(url.searchParams.get('limit') ?? 20)));
         if (url.pathname === '/api/assistant/conversation-cleanup/prepare' && request.method === 'POST') return json(200, conversationCleanup.prepare(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversation-cleanup/decide' && request.method === 'POST') return json(200, await conversationCleanup.decide(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/conversation-cleanup/permanent' && request.method === 'GET') return json(200, url.searchParams.has('id') ? conversationCleanup.permanent.get(url.searchParams.get('id')!) : conversationCleanup.listPermanent(Number(url.searchParams.get('offset') ?? 0), Number(url.searchParams.get('limit') ?? 20)));
+        if (url.pathname === '/api/assistant/conversation-cleanup/permanent/prepare' && request.method === 'POST') return json(200, conversationCleanup.permanent.prepare(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/conversation-cleanup/permanent/decide' && request.method === 'POST') {
+          const input = await commandBody(request), authorize = reauthorize.get(request)!;
+          const result = conversationCleanup.permanent.decide(device, input, () => {
+            if (closing) throw new Fault(503, 'service_closing', 'Check the original result after the workspace restarts.');
+            authorize();
+          });
+          return json(result.running ? 202 : 200, result);
+        }
         if (url.pathname === '/api/assistant/state' && request.method === 'GET') {
           const current = observations.withHints(assistant.state()), ids = new Set(current.conversations.map(conversation => conversation.id)), state = approvals.state();
           // Assignments have their own review surface. Their IDs cannot be

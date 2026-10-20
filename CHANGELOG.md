@@ -1,3 +1,42 @@
+## [2.9.26] — 2026-10-20
+
+### Added
+
+- Explore Your Week with a selected week and timezone, showing current earned credit separately from actual completion activity.
+- Read complete Earned History, including reopened and completed-again Tasks, and return to your original week and position.
+
+### Improved
+
+- Keep confirmed history pages through failed reads and refuse stale responses or unavailable original Task links.
+
+## [2.9.25] — 2026-10-20
+
+### Added
+
+- Make My Studio your personal starting point, with up to two selected quests and the exact next Task ready to open.
+
+### Improved
+
+- Keep your selected quest, Profile view and unfinished quest writing across navigation and reload.
+- Preserve original saves and Task links through storage failures, interrupted replies and conflicts between devices.
+- Keep quest curation separate from earned XP, scheduling and original Task progress.
+
+## [2.9.24] — 2026-10-20
+
+### Improved
+
+- Review the exact conversations selected for permanent cleanup, with clear blocked and unconfirmed outcomes.
+- Keep cleanup tied to its original request across interrupted replies, navigation and reload, and check the saved outcome before continuing.
+- Preserve restorable project groups, unrelated saved work and retained conversation writing.
+
+## [2.9.23] — 2026-10-20
+
+### Improved
+
+- Keep Work, Team, Routines and Skills close together with compact search and filters.
+- Reopen the same Team, Headquarters, room draft and discussion view without losing unfinished writing.
+- Open the exact assignment attempt from an agent, retaining the original destination and safe retries when browser storage is unavailable.
+
 ## [2.9.22] — 2026-10-19
 
 ### Added

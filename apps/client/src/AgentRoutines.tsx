@@ -11,6 +11,7 @@ import { routineScheduleFields, routineCron } from './agent-routine-schedule';
 import { dayInZone } from '../../../packages/domain/tasks';
 import './agent-routines.css';
 import { RetainedLocalDrafts } from './retained-local-drafts';
+import { agentDraftScope, registerAgentDraftNavigation } from './agent-workspace-navigation';
 
 const dateLabel = (at: number, zone: string) => new Intl.DateTimeFormat(undefined, { timeZone: zone, dateStyle: 'medium', timeStyle: 'short' }).format(at);
 type Index = { selected: string | null; drafts: string[] };
@@ -21,13 +22,14 @@ const routineDrafts = new RetainedLocalDrafts<Draft>({ read: readLocal, write: s
   if (unsaved) window.addEventListener('beforeunload', warnBeforeLeaving);
   else window.removeEventListener('beforeunload', warnBeforeLeaving);
 });
-export function AgentRoutines({ snapshot, openPlan }: { snapshot: Snapshot; openPlan: (id: string) => void }) {
+export function AgentRoutines({ snapshot, openPlan }: { snapshot: Snapshot; openPlan: (id: string, attemptId?: string) => void }) {
   const indexKey = `e3:agent-routines:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`;
   const [index, setIndex] = useState<Index>(() => readLocal(indexKey) ?? { selected: null, drafts: [] });
   const [state, setState] = useState<AgentRoutineState>(), [error, setError] = useState(''), [archived, setArchived] = useState(false), [detail, setDetail] = useState<string>();
   const [older, setOlder] = useState<AgentRoutineState['history']>([]), [cursor, setCursor] = useState<string | null>();
   const mounted = useRef(true), sequence = useRef(0), selection = useRef(index.selected); selection.current = index.selected;
   const beforeLeave = useRef<(() => boolean) | null>(null);
+  useEffect(() => registerAgentDraftNavigation(agentDraftScope(snapshot.epoch, snapshot.deviceId, retainedWindowId), () => !beforeLeave.current || beforeLeave.current()), [indexKey]);
   const load = async () => {
     const id = ++sequence.current, selected = selection.current, next = await request<AgentRoutineState>(`agent-routines/state${selected ? `?routineId=${selected}` : ''}`);
     if (mounted.current && id === sequence.current && selected === selection.current) { setState(next); setError(''); } return next;
@@ -56,12 +58,12 @@ export function AgentRoutines({ snapshot, openPlan }: { snapshot: Snapshot; open
       {state && !state.routines.some(r => r.value.archived === archived) && !drafts.length && <div className="card"><Empty title={archived ? 'No archived routines.' : 'Give useful work a rhythm.'}>Choose a saved assignment and a schedule. Each result stays available for review.</Empty></div>}
     </section>{index.selected && state && (entity || drafts.includes(index.selected)) && <RoutineEditor key={`${indexKey}:${index.selected}`} id={index.selected} entity={entity} snapshot={snapshot} reload={load} close={() => keep({ ...index, selected: null })} openPlan={openPlan} beforeLeave={beforeLeave}/>}</div>
     <section className="card routine-history"><div className="section-heading"><h2>{index.selected ? 'Routine history' : 'Recent routine activity'}</h2>{index.selected && <button onClick={() => keep({ ...index, selected: null })}>All activity</button>}</div>
-      {history.length ? history.map(item => <article key={item.id}><div><strong>{state?.routines.find(r => r.id === item.routineId)?.value.name ?? 'Saved routine'}</strong><p className="metadata">{new Date(item.scheduledAt).toLocaleString()} · schedule version {item.routineRevision}{item.throughAt && item.throughAt > item.scheduledAt ? ` · elapsed window through ${new Date(item.throughAt).toLocaleString()}` : ''}</p><p>{item.attempt ? item.attempt.state === 'returned' ? 'Result ready for review' : item.attempt.message : item.message}</p></div>{item.attempt && <div className="button-row"><button onClick={() => { if (!beforeLeave.current || beforeLeave.current()) openPlan(item.attempt!.assignmentId); }}>Open assignment & result</button><button onClick={() => setDetail(item.attemptId)}>Saved inputs</button>{item.attempt.result && <a className="output-download" href={`/api/attachments/${item.attempt.result.file.id}`}>Download full result</a>}</div>}</article>) : !state ? <p className="metadata" role="status">{error ? 'Routine history is unavailable. Reconnecting…' : 'Loading routine history…'}</p> : <Empty title="No scheduled runs yet.">Starts, skipped times, and outcomes will appear here.</Empty>}
+      {history.length ? history.map(item => <article key={item.id}><div><strong>{state?.routines.find(r => r.id === item.routineId)?.value.name ?? 'Saved routine'}</strong><p className="metadata">{new Date(item.scheduledAt).toLocaleString()} · schedule version {item.routineRevision}{item.throughAt && item.throughAt > item.scheduledAt ? ` · elapsed window through ${new Date(item.throughAt).toLocaleString()}` : ''}</p><p>{item.attempt ? item.attempt.state === 'returned' ? 'Result ready for review' : item.attempt.message : item.message}</p></div>{item.attempt && <div className="button-row"><button onClick={() => { if (!beforeLeave.current || beforeLeave.current()) openPlan(item.attempt!.assignmentId, item.attemptId); }}>Open assignment & result</button><button onClick={() => setDetail(item.attemptId)}>Saved inputs</button>{item.attempt.result && <a className="output-download" href={`/api/attachments/${item.attempt.result.file.id}`}>Download full result</a>}</div>}</article>) : !state ? <p className="metadata" role="status">{error ? 'Routine history is unavailable. Reconnecting…' : 'Loading routine history…'}</p> : <Empty title="No scheduled runs yet.">Starts, skipped times, and outcomes will appear here.</Empty>}
       {nextCursor && <button onClick={() => void olderHistory()}>Earlier activity</button>}
     </section>{detail && <AssignmentReview id={detail} close={() => setDetail(undefined)}/>}</>;
 }
 
-function RoutineEditor({ id, entity, snapshot, reload, close, openPlan, beforeLeave }: { id: string; entity?: AgentRoutine; snapshot: Snapshot; reload: () => Promise<unknown>; close: () => void; openPlan: (id: string) => void; beforeLeave: { current: (() => boolean) | null } }) {
+function RoutineEditor({ id, entity, snapshot, reload, close, openPlan, beforeLeave }: { id: string; entity?: AgentRoutine; snapshot: Snapshot; reload: () => Promise<unknown>; close: () => void; openPlan: (id: string, attemptId?: string) => void; beforeLeave: { current: (() => boolean) | null } }) {
   const key = `e3:agent-routine-draft:${snapshot.deviceId}:${snapshot.epoch}:${id}:${retainedWindowId}`;
   const [draft, setDraft] = useState<Draft>(() => { const initial: AgentRoutineValue = entity?.value ?? { name: '', assignmentId: '', assignmentRevision: 1, projectRevision: null, schedule: { kind: 'cron', expression: '0 9 * * *' }, timezone: snapshot.layout?.value.timezone ?? 'UTC', missed: 'skip', enabled: false, archived: false }; return routineDrafts.read(key) ?? { value: initial, base: initial, revision: entity?.revision ?? 0 }; });
   const draftRef = useRef(draft); draftRef.current = draft;

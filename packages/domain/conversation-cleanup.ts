@@ -48,6 +48,37 @@ export type ConversationCleanupBatch = {
 };
 export type ConversationCleanupSummary = Pick<ConversationCleanupBatch, 'id' | 'epoch' | 'revision' | 'action' | 'scope' | 'mode' | 'createdAt' | 'updatedAt' | 'state' | 'counts' | 'running'> & { count: number };
 
+// Permanent removal has a separate, explicit review/decision contract. The
+// reversible client must never interpret it as another visibility edit.
+export const preparePermanentConversationCleanupSchema = prepareConversationCleanupSchema.extend({
+  action: z.literal('remove'),
+  scope: conversationCleanupScopeSchema.extend({ folder: z.literal('deleted') }),
+});
+export const decidePermanentConversationCleanupSchema = decideConversationCleanupSchema.extend({
+  decision: z.enum(['start', 'continue_remaining', 'cancel']),
+});
+export type PreparePermanentConversationCleanup = z.infer<typeof preparePermanentConversationCleanupSchema>;
+export type DecidePermanentConversationCleanup = z.infer<typeof decidePermanentConversationCleanupSchema>;
+export type PermanentConversationCleanupOutcome = {
+  id: string; state: 'pending' | 'applied' | 'blocked' | 'unconfirmed'; code?: string;
+  chunkId?: string; removalId?: string;
+};
+export type PermanentConversationCleanupChunk = {
+  id: string; decision: 'start' | 'continue_remaining'; startedAt: string; settledAt?: string;
+  state: 'running' | 'closed' | 'unconfirmed'; itemIds: string[]; stopReason?: string;
+};
+export type PermanentConversationCleanupBatch = {
+  format: 2; id: string; epoch: string; revision: number; digest: string; action: 'remove';
+  scope: ConversationCleanupScope & { folder: 'deleted' }; mode: 'selected' | 'matching';
+  createdAt: string; updatedAt: string;
+  state: 'review' | 'applying' | 'complete' | 'partial' | 'unconfirmed' | 'cancelled';
+  targets: ConversationCleanupTarget[]; outcomes: PermanentConversationCleanupOutcome[];
+  chunks: PermanentConversationCleanupChunk[];
+  counts: { pending: number; applied: number; blocked: number; unconfirmed: number };
+  remainder: ConversationCleanupRemainder; running: boolean;
+};
+export type PermanentConversationCleanupSummary = Omit<PermanentConversationCleanupBatch, 'targets' | 'outcomes' | 'remainder' | 'digest' | 'chunks'> & { count: number };
+
 /** Metadata scope only. Message-search pages do not establish batch coverage. */
 export function conversationMatchesScope(chat: Conversation, scope: {
   space: 'chat' | 'work' | 'all'; folder: ConversationCleanupScope['folder'] | 'all';

@@ -1,26 +1,36 @@
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { lazy } from './preload-lazy';
 import type { HubMember } from '../../../packages/domain/agent-hub';
 import type { HubMeeting, HubMeetingState } from '../../../packages/domain/hub-meetings';
 import type { HubLayout } from '../../../packages/domain/hub-layout';
-import { readLocal, request, saveLocal } from './api';
+import { request } from './api';
+import { agentLocalSlot, registerAgentDraftNavigation } from './agent-workspace-navigation';
 import { Dialog } from './ui';
 import { useHubMeetingControls, type HubMeetingControls } from './nova/hub/useHubMeetingControls';
 const MeetingMarkdown=lazy(()=>import('./dreamclaw/components/Chat/ReplyMarkdown').then(m=>({default:m.ReplyMarkdown})));
 
-export function HubMeetingPanel({state,roster,layout,epoch,draftKey,refresh,close,unavailable,controls,initialMeetingId,onSelection}:{unavailable?:string;state?:HubMeetingState;roster:HubMember[];layout:HubLayout;epoch:string;draftKey:string;refresh:()=>void;close:()=>void;controls?:HubMeetingControls;initialMeetingId?:string;onSelection?:(id?:string)=>void}){
-  const [draft,setDraft]=useState(()=>readLocal<{title:string;agenda:string;ids:string[]}>(draftKey)??{title:'Team discussion',agenda:'',ids:roster.slice(0,12).map(a=>a.id)});
+export function HubMeetingPanel({state,roster,layout,epoch,draftKey,refresh,close,unavailable,controls,initialMeetingId,onSelection,navigationScope}:{navigationScope?:string;unavailable?:string;state?:HubMeetingState;roster:HubMember[];layout:HubLayout;epoch:string;draftKey:string;refresh:()=>void;close:()=>void;controls?:HubMeetingControls;initialMeetingId?:string;onSelection?:(id?:string)=>void}){
+  type DiscussionDraft = { title: string; agenda: string; ids: string[] };
+  const [kept] = useState(() => agentLocalSlot({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) }, draftKey,
+    (value: unknown): value is DiscussionDraft => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => ['title', 'agenda', 'ids'].includes(key)) && typeof (value as DiscussionDraft).title === 'string' && typeof (value as DiscussionDraft).agenda === 'string' && Array.isArray((value as DiscussionDraft).ids) && (value as DiscussionDraft).ids.every(id => typeof id === 'string'),
+    { title: 'Team discussion', agenda: '', ids: roster.slice(0, 12).map(a => a.id) }));
+  const [draft, setDraft] = useState(kept.initial), [storageError, setStorageError] = useState(kept.error);
+  const writing = useRef(draft); writing.current = draft;
+  const retain = () => { const saved = kept.keep(writing.current); setStorageError(saved ? kept.error : 'Your discussion writing is kept in this window. Retry keeping it before leaving.'); return saved; };
+  const leave = () => { if (retain()) close(); };
+  useEffect(() => navigationScope ? registerAgentDraftNavigation(navigationScope, retain) : undefined, [navigationScope, draftKey]);
   useEffect(()=>{setDraft(d=>{const ids=d.ids.filter(id=>roster.some(a=>a.id===id));return ids.length===d.ids.length?d:{...d,ids};});},[roster.map(a=>a.id).join(',')]);
   const ownControls=useHubMeetingControls(epoch,draftKey,refresh),{busy,error,pending,command}=controls??ownControls;
   const [history,setHistory]=useState<HubMeeting|null>(null),[historyError,setHistoryError]=useState('');
   useEffect(()=>{if(!initialMeetingId||initialMeetingId===state?.current?.id)return;const saved=state?.history.find(m=>m.id===initialMeetingId);if(saved){setHistory(saved);setHistoryError('');return;}let live=true;void request<HubMeeting>('agents/meetings?meetingId='+encodeURIComponent(initialMeetingId)).then(value=>{if(live){setHistory(value);setHistoryError('');}}).catch(reason=>{if(live)setHistoryError(reason instanceof Error?reason.message:'The original discussion could not load.');});return()=>{live=false;};},[initialMeetingId,state]);
-  useEffect(()=>{saveLocal(draftKey,draft);},[draft,draftKey]);
+  useEffect(()=>{retain();},[draft,draftKey]);
   const chooseHistory=(meeting:HubMeeting|null)=>{setHistory(meeting);setHistoryError('');onSelection?.(meeting?.id);};
   const selectingHistory=!!initialMeetingId&&initialMeetingId!==state?.current?.id;
   const selectedHistory=history&&(!initialMeetingId||history.id===initialMeetingId)?(state?.history.find(m=>m.id===history.id)??history):undefined;
   const current=selectedHistory??(selectingHistory?undefined:state?.current),boardroom=layout.rooms.find(r=>r.template==='boardroom');
-  return <Dialog title={current?current.title:'Meet In The Boardroom'} close={close}>
+  return <Dialog title={current?current.title:'Meet In The Boardroom'} close={leave}>
     <div className="hub-meeting-panel">
+      {storageError && <div className="notice" role="alert"><span>{storageError}</span><button onClick={retain}>Retry Keeping Writing</button></div>}
       {unavailable&&<p className="field-error" role="status">{unavailable}</p>}
       {error&&<p className="field-error" role="alert">{error}</p>}
       {historyError&&<p className="field-error" role="alert">{historyError}</p>}
@@ -32,7 +42,7 @@ export function HubMeetingPanel({state,roster,layout,epoch,draftKey,refresh,clos
           {['gathered','paused'].includes(current.state)&&current.next<current.turns.length&&<button className="primary" disabled={busy||!!pending||!!unavailable} onClick={()=>void command({type:'start',meetingId:current.id,expectedRevision:current.revision})}>{current.state==='paused'?'Continue Discussion':'Start Discussion'}</button>}
           {current.state==='running'&&<button disabled={busy||!!pending||!!unavailable} onClick={()=>void command({type:'pause',meetingId:current.id,expectedRevision:current.revision})}>Pause Discussion</button>}
           <button disabled={busy||!!pending||!!unavailable} onClick={()=>void command({type:'end',meetingId:current.id,expectedRevision:current.revision})}>{current.state==='complete'?'Finish Meeting':'End Gathering'}</button>
-          <button onClick={close}>Watch In Hub</button>
+          <button onClick={leave}>Watch In Hub</button>
         </div>}
         {!history&&current.state==='gathered'&&<p className="metadata">Starting uses the connected AI worker. Each person contributes in turn; the first participant brings the discussion together in a final summary. Discussion can read context. Assign follow-up actions separately.</p>}
         <div className="hub-meeting-turns">{current.turns.filter(t=>t.attemptId).map((t,i)=><article key={t.planId}>
@@ -44,7 +54,7 @@ export function HubMeetingPanel({state,roster,layout,epoch,draftKey,refresh,clos
         <label>Meeting Title<input maxLength={160} required value={draft.title} onChange={e=>setDraft({...draft,title:e.target.value})}/></label>
         <label>What should the team discuss?<textarea rows={4} maxLength={4000} required value={draft.agenda} placeholder="A decision, question, or piece of work to discuss together…" onChange={e=>setDraft({...draft,agenda:e.target.value})}/></label>
         <fieldset><legend>Invite The Team · Choose 2–12</legend><div className="hub-meeting-invites">{roster.map(a=><label key={a.id}><input type="checkbox" checked={draft.ids.includes(a.id)} disabled={a.status==='working'||!draft.ids.includes(a.id)&&draft.ids.length>=12} onChange={e=>setDraft({...draft,ids:e.target.checked?[...draft.ids,a.id]:draft.ids.filter(id=>id!==a.id)})}/><span>{a.name}<small>{a.position}</small></span></label>)}</div></fieldset>
-        <div className="button-row"><button className="primary" disabled={busy||!!pending||!!unavailable||!boardroom||draft.ids.length<2||!draft.title.trim()||!draft.agenda.trim()}>{busy?'Gathering…':'Gather At The Table'}</button><button type="button" onClick={close}>Close</button></div>
+        <div className="button-row"><button className="primary" disabled={busy||!!pending||!!unavailable||!boardroom||draft.ids.length<2||!draft.title.trim()||!draft.agenda.trim()}>{busy?'Gathering…':'Gather At The Table'}</button><button type="button" onClick={leave}>Close</button></div>
         <p className="metadata">Gathering moves the team to their chairs. You start the AI discussion separately.</p>
       </form>}
       {!history&&!!state?.history.length&&<details><summary>Past Discussions</summary>{state.history.map(m=><button className="hub-work-link" key={m.id} onClick={()=>chooseHistory(m)}>{m.title}<small>{new Date(m.createdAt).toLocaleDateString()}</small></button>)}</details>}
