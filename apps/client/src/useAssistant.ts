@@ -11,6 +11,7 @@ import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from '
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
 import { pollReader } from './polling';
+import { mayLeaveRecordDrafts } from './record-draft-navigation';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 import { editConversation } from './conversation-edit';
 
@@ -68,7 +69,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
     const nextSpace = hint ?? (conversation ? assistantSpace(conversation) : spaceRef.current);
-    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && !mayLeaveAssistantDraft()) return false;
+    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && (!mayLeaveAssistantDraft() || !mayLeaveRecordDrafts())) return false;
     if (nextSpace !== spaceRef.current) { setSpace(nextSpace); spaceRef.current = nextSpace; saveLocal(spaceKey, nextSpace); }
     saveLocal(selectionKey(nextSpace), id);
     if (id === selectedRef.current) return true;

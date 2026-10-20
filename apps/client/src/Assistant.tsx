@@ -6,6 +6,9 @@ import type { AppDestination } from '../../../packages/domain/app-actions';
 import { withQuestionReceipts } from './question-transcript';
 import { QuestionReceipts } from './QuestionReceipts';
 import { activeProjects, projectIsDeleted } from '../../../packages/domain/project-organization';
+import { ProjectManager } from './ProjectManager';
+import { mayLeaveRecordDrafts } from './record-draft-navigation';
+import type { ProjectManagerRequest } from './project-manager-view';
 import { ProjectOptions } from './ProjectOptions';
 import { ProjectOrganizationDialog } from './ProjectOrganizationDialog';
 import { releaseRejectedProjectRequest } from './project-admission';
@@ -67,7 +70,7 @@ import { ConversationSources } from './ConversationSources';
 import { ConversationFiles, type ConversationSource } from './ConversationSummary';
 import { ConversationProjectControl } from './ConversationProjectControl';
 import { useWorkspaceTabs } from './useWorkspaceTabs';
-import { type WorkspaceView } from './workspace-tabs';
+import { type WorkspaceView, type WorkspaceAction } from './workspace-tabs';
 import { AssistantSidePanel } from './AssistantSidePanel';
 import { AssistantRunHistory, focusConversationQuestion } from './AssistantRunHistory';
 import { transcriptCacheKey, transcriptPositionKey } from './transcript-position';
@@ -141,7 +144,7 @@ function ConversationDraft(props: Props & { controller: AssistantController; con
   if (copy) return <main className="page-scroll"><Empty title="Your draft copy is kept." action={<button onClick={() => void restoreCopy()}>Reconcile draft copy</button>}>{copyError || 'Confirming the saved copy before opening this conversation.'}</Empty><pre className="conflict-copy">{(copy.payload as Draft).text}</pre><button onClick={() => props.controller.select(null)}>Return to original draft</button></main>;
   return <Editor {...props} journal={journal} draftId={id}/>;
 }
-function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpenApp, openSettings, newProject, editProject, initialPreview, refreshWorkspace, rail, contentActions, sourceRequest, searchRequest, searchPreview, onSearchDraft }: Props & { journal: Journal; controller: AssistantController; draftId: string; rail: AssistantRailState }) {
+function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpenApp, openSettings, initialPreview, refreshWorkspace, rail, contentActions, sourceRequest, searchRequest, searchPreview, onSearchDraft }: Props & { journal: Journal; controller: AssistantController; draftId: string; rail: AssistantRailState }) {
   const [organizingProject, setOrganizingProject] = useState<string>();
   const visibleProjects = activeProjects(snapshot);
   const removedProjects = snapshot.projects.filter(item => projectIsDeleted(snapshot, item.id) && assistantSpace(item.value) === controller.space);
@@ -160,7 +163,20 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
   const panelVisible = workspace.visible && (selectedView.kind !== 'plan' || planPanelWide);
   const sidePanel = panelVisible ? selectedView : null;
   const activityOpen = sidePanel?.kind === 'live';
-  const setSidePanel = (view: WorkspaceView | null) => { if (view?.kind === 'plan' && !matchMedia('(min-width: 1101px)').matches) return; workspace.dispatch(view ? { type: 'open', view } : { type: 'visibility', visible: false }); if (view?.kind === 'plan') workspace.dispatch({ type: 'expand', expanded: false }); if (view) rail.closeMobile(); };
+  const dispatchWorkspace = (action: WorkspaceAction) => {
+    if (selectedView.kind === 'projects' && !mayLeaveRecordDrafts()) return false;
+    workspace.dispatch(action); return true;
+  };
+  const setSidePanel = (view: WorkspaceView | null) => {
+    if (view?.kind === 'plan' && !matchMedia('(min-width: 1101px)').matches) return false;
+    if (view?.kind === 'projects' && !journal.retainForNavigation()) return false;
+    if (!dispatchWorkspace(view ? { type: 'open', view } : { type: 'visibility', visible: false })) return false;
+    if (view?.kind === 'plan') workspace.dispatch({ type: 'expand', expanded: false });
+    if (view) rail.closeMobile(); return true;
+  };
+  const manageProjects = (target?: ProjectManagerRequest['target']) => setSidePanel({ kind: 'projects', ...(target ? { request: { requestId: crypto.randomUUID(), target } } : {}) });
+  const newProject = () => manageProjects({ kind: 'create', space: controller.space });
+  const editProject = (id: string) => manageProjects({ kind: 'project', id, tab: 'settings' });
   useEffect(() => { if (!planPanelWide && selectedView.kind === 'plan' && workspace.visible) workspace.dispatch({ type: 'visibility', visible: false }); }, [planPanelWide, selectedView.kind, workspace.visible]);
   const [activityContainer, setActivityContainer] = useState<HTMLDivElement | null>(null);
   const [contextDialog, setContextDialog] = useState<{ kind: 'memory' | 'technical' } | null>(null);
@@ -186,10 +202,10 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
   const [managedId, setManagedId] = useState<string | null>(null);
   const readingKey = `e3:reading:${snapshot.deviceId}${controller.space === 'work' ? ':work' : ''}`;
   const [reading, setReadingState] = useState<BrowseTarget | null>(() => readLocal<BrowseTarget>(readingKey) ?? null);
-  const setReading = (target: BrowseTarget | null) => { if (target) aloud.stop(); setReadingState(target); if (target) saveLocal(readingKey, { ...target, offset: undefined }); else localStorage.removeItem(readingKey); };
+  const setReading = (target: BrowseTarget | null) => { if (!mayLeaveRecordDrafts()) return false; if (target) aloud.stop(); setReadingState(target); if (target) saveLocal(readingKey, { ...target, offset: undefined }); else localStorage.removeItem(readingKey); return true; };
   useEffect(() => {
     if (sourceRequest && readLocal<string>(`e3:reading:${snapshot.deviceId}:source-request`) !== sourceRequest.nonce) {
-      setReading(sourceRequest.target); saveLocal(`e3:reading:${snapshot.deviceId}:source-request`, sourceRequest.nonce);
+      if (!setReading(sourceRequest.target)) return; saveLocal(`e3:reading:${snapshot.deviceId}:source-request`, sourceRequest.nonce);
     }
   }, [sourceRequest?.nonce]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -215,7 +231,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
   // This temporary collapse never rewrites the user's rail preference.
   const panelRoomForRail = useMediaQuery('(min-width: 1601px)');
   const organizationOpen = rail.open && (!(sidePanel || activityOpen) || panelRoomForRail);
-  const showOrganization = () => { setSidePanel(null); rail.setOpen(true); };
+  const showOrganization = () => { if (setSidePanel(null)) rail.setOpen(true); };
   const toggleOrganization = () => { if (organizationOpen) rail.setOpen(false); else showOrganization(); };
   const openNewDraft = () => { if (!controller.select(null)) return; setFolder('active'); setReading(null); setPreview(null); rail.closeMobile(); };
   const [dialog, setDialog] = useState<'settings' | null>(null);
@@ -294,10 +310,10 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
   ].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt));
   const recentRows = allRows.filter(row => row.folder === folder && (folder !== 'active' || !visibleProjects.some(p => p.id === row.projectId)));
   const renderRow = (row: typeof allRows[number]) => {
-    if (row.kind === 'draft') return <SavedDraftRow key={`draft:${row.item.id}`} item={row.item} snapshot={snapshot} refresh={refreshWorkspace} open={() => { setReading(null); setPreview(row.item); rail.closeMobile(); }}/>;
+    if (row.kind === 'draft') return <SavedDraftRow key={`draft:${row.item.id}`} item={row.item} snapshot={snapshot} refresh={refreshWorkspace} open={() => { if (!setReading(null)) return; setPreview(row.item); rail.closeMobile(); }}/>;
     const item = row.item;
     const hasDraft = snapshot.drafts.some(d => d.deviceId === snapshot.deviceId && d.id === `draft:${snapshot.deviceId}:${item.id}` && (d.value.text || d.value.attachments.length));
-    return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); setSidePanel(null); } else { if (!controller.select(item.id)) return; setReading(null); } rail.closeMobile(); }}/>;
+    return <ConversationRow refreshWorkspace={refreshWorkspace} key={item.id} conversation={item} controller={controller} snapshot={snapshot} hasDraft={!!hasDraft} updatedAt={row.updatedAt} selected={item.id === (reading?.conversationId ?? conversation?.id)} open={() => { if (item.archived && item.nativeId) { if (!setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId })) return; setSidePanel(null); } else { if (!controller.select(item.id)) return; setReading(null); } rail.closeMobile(); }}/>;
   };
   const ready = controller.statusRead === 'ready' && controller.connection.state === 'ready' && controller.connection.grantedScopes.includes('operator.write');
   const planReviewController = usePlanReview({ item: planReview?.kind === 'research' ? undefined : planReview, epoch: snapshot.epoch, ready: ready && !active && !busy && !callingHere && !conversationWritePending(conversation) && conversation?.state === 'ready', readOnly: !!conversation?.archived || !!reading, refresh: async () => { await controller.refresh(); if (conversation) await controller.loadHistory(conversation.id); } });
@@ -477,7 +493,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     } catch (e) { keepError(e); }
     finally { setBusy(false); }
   };
-  const openVersion = (item: Conversation) => { if (item.archived && item.nativeId) setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId }); else { if (!controller.select(item.id)) return; setReading(null); } setPreview(null); rail.closeMobile(); };
+  const openVersion = (item: Conversation) => { if (item.archived && item.nativeId) { if (!setReading({ epoch: snapshot.epoch, conversationId: item.id, nativeId: item.nativeId })) return; } else { if (!controller.select(item.id)) return; setReading(null); } setPreview(null); rail.closeMobile(); };
   const pins = (controller.pins ?? []).filter(p => p.pinned && p.conversationId === conversation?.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const conversationFiles = controller.outputs.filter(output => output.conversationId === conversation?.id && output.state === 'ready' && output.file);
   const sourceFiles: ConversationSource[] = [...new Map([
@@ -525,8 +541,8 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     {organizingProject && snapshot.projects.find(item => item.id === organizingProject) && <ProjectOrganizationDialog snapshot={snapshot} project={snapshot.projects.find(item => item.id === organizingProject)!} close={() => setOrganizingProject(undefined)} refresh={refreshWorkspace}/>}
     <AssistantOrganizationRailFrame spaceSwitch={<AssistantSpaceSwitch value={controller.space} disabled={spaceSwitchDisabled} change={switchSpace}/>} newDraftLabel={controller.space === 'work' ? 'New work' : 'New chat'} open={organizationOpen} width={rail.width} setWidth={rail.setWidth} onToggle={toggleOrganization} onNewDraft={openNewDraft} onSearch={() => setSearchOpen(value => !value)}>
       <div className="organization original-organization-body">
-      {searchOpen && <ConversationSearch seed={querySeed} seedAccepted={nonce => setQuerySeed(current => current?.nonce === nonce ? undefined : current)} snapshot={snapshot} controller={controller} open={target => { setReading(target); rail.closeMobile(); setSidePanel(null); }}/>}
-      {folder === 'active' && <div className="section-heading organization-heading"><span>Projects</span><button className="icon-button" aria-label="Create Project" onClick={newProject}><Plus size={16}/></button></div>}
+      {searchOpen && <ConversationSearch seed={querySeed} seedAccepted={nonce => setQuerySeed(current => current?.nonce === nonce ? undefined : current)} snapshot={snapshot} controller={controller} open={target => { if (!setReading(target)) return; rail.closeMobile(); setSidePanel(null); }}/>}
+      {folder === 'active' && <div className="section-heading organization-heading"><span>Projects</span><div className="button-row"><button className="text-button" onClick={() => manageProjects()}>Manage</button><button className="icon-button" aria-label="Create Project" onClick={newProject}><Plus size={16}/></button></div></div>}
       {folder === 'active' && visibleProjects.filter(item => assistantSpace(item.value) === controller.space).map(item => {
         const expanded = expandedProjects.includes(item.id), rows = allRows.filter(row => row.folder === 'active' && row.projectId === item.id);
         return <div className="assistant-project-group" key={item.id}>
@@ -545,7 +561,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     </AssistantOrganizationRailFrame>
     {reading && <ConversationReader refreshWorkspace={refreshWorkspace} target={reading} snapshot={snapshot} controller={controller} close={() => setReading(null)} change={setReading} navigationCovered={organizationOpen && !rail.desktop} sidebarControls={<ChatTabs newDraftLabel={controller.space === 'work' ? 'New work' : 'New chat'} organizationOpen={organizationOpen} onToggleOrganization={toggleOrganization} onCreateConversation={openNewDraft}/>}/>}
     <div className={`conversation ${reading ? 'writing-kept' : ''}`} inert={organizationOpen && !rail.desktop}>
-      <div className="conversation-header"><ChatTabs newDraftLabel={controller.space === 'work' ? 'New work' : 'New chat'} organizationOpen={organizationOpen} onToggleOrganization={toggleOrganization} onCreateConversation={openNewDraft} shortcutOwner={!reading}/><div className="conversation-title">{conversation ? <strong title={conversation.title}>{conversation.title}</strong> : <input aria-label="Conversation draft title" value={draft.title} onChange={e => journal.change(v => ({ ...v, title: e.target.value }))} maxLength={150}/>}<ConversationProjectControl snapshot={snapshot} draft={draft} conversation={conversation} blocked={!!journal.pending || !!journal.conflict || busy || !!active || conversationWritePending(conversation)} choose={id => { journal.change(value => ({ ...value, projectId: id })); }} edit={editProject} settings={() => setDialog('settings')}/></div><ConversationHeaderTools visibilityBlocked={hiding => !conversation || conversationVisibilityBlocked(conversation, controller.operations, controller.removals, busy || hiding && callingHere, hiding)} blocked={!!active || busy || callingHere || conversationWritePending(conversation) || conversation?.state !== 'ready' || !conversation?.nativeId} edit={changes => controller.edit(conversation!, changes)} projects={visibleProjects} copyMessages={controller.history?.messages.length ? () => navigator.clipboard.writeText(controller.history!.messages.map(message => `${message.role}: ${message.authoredText ?? message.text}`).join('\n\n')) : undefined} conversation={conversation} conversations={controller.conversations} pins={pins} openVersion={openVersion} openPin={pin => { setReading({ epoch: snapshot.epoch, conversationId: pin.conversationId, nativeId: pin.nativeId, messageId: pin.messageId, messageHash: pin.messageHash, role: pin.role }); rail.closeMobile(); setSidePanel(null); }} removePin={pin => controller.pinMessage(conversation!, { id: pin.messageId, role: pin.role, textHash: pin.messageHash, source: { nativeId: pin.nativeId } }, false).then(() => undefined)} settings={() => setDialog('settings')} sources={sourceCount || project || controller.memory?.entries.length ? () => setSidePanel({ kind: 'sources' }) : undefined} memory={() => setContextDialog({ kind: 'memory' })} exportDraft={exportDraft} runs={operations.length ? () => setSidePanel({ kind: 'history' }) : undefined} technical={conversation ? () => setContextDialog({ kind: 'technical' }) : undefined} queue={conversation && controller.queue?.some(q => q.conversationId === conversation.id) ? () => setQueueExpanded(true) : undefined} summary={{ space: controller.space, conversation, outputs: conversationFiles, sourceFiles, openFile, openFiles, addFiles, changes: openChanges, projectSettings: project ? () => editProject(project.id) : undefined, projectFolder: project?.value.workspace?.folder }} panelOpen={!!sidePanel || activityOpen} togglePanel={() => { if (sidePanel || activityOpen) closePanel(); else { workspace.dispatch({ type: 'visibility', visible: true }); rail.closeMobile(); } }}/></div>
+      <div className="conversation-header"><ChatTabs newDraftLabel={controller.space === 'work' ? 'New work' : 'New chat'} organizationOpen={organizationOpen} onToggleOrganization={toggleOrganization} onCreateConversation={openNewDraft} shortcutOwner={!reading}/><div className="conversation-title">{conversation ? <strong title={conversation.title}>{conversation.title}</strong> : <input aria-label="Conversation draft title" value={draft.title} onChange={e => journal.change(v => ({ ...v, title: e.target.value }))} maxLength={150}/>}<ConversationProjectControl snapshot={snapshot} draft={draft} conversation={conversation} blocked={!!journal.pending || !!journal.conflict || busy || !!active || conversationWritePending(conversation)} choose={id => { journal.change(value => ({ ...value, projectId: id })); }} edit={editProject} settings={() => setDialog('settings')}/></div><ConversationHeaderTools visibilityBlocked={hiding => !conversation || conversationVisibilityBlocked(conversation, controller.operations, controller.removals, busy || hiding && callingHere, hiding)} blocked={!!active || busy || callingHere || conversationWritePending(conversation) || conversation?.state !== 'ready' || !conversation?.nativeId} edit={changes => controller.edit(conversation!, changes)} projects={visibleProjects} copyMessages={controller.history?.messages.length ? () => navigator.clipboard.writeText(controller.history!.messages.map(message => `${message.role}: ${message.authoredText ?? message.text}`).join('\n\n')) : undefined} conversation={conversation} conversations={controller.conversations} pins={pins} openVersion={openVersion} openPin={pin => { if (!setReading({ epoch: snapshot.epoch, conversationId: pin.conversationId, nativeId: pin.nativeId, messageId: pin.messageId, messageHash: pin.messageHash, role: pin.role })) return; rail.closeMobile(); setSidePanel(null); }} removePin={pin => controller.pinMessage(conversation!, { id: pin.messageId, role: pin.role, textHash: pin.messageHash, source: { nativeId: pin.nativeId } }, false).then(() => undefined)} settings={() => setDialog('settings')} sources={sourceCount || project || controller.memory?.entries.length ? () => setSidePanel({ kind: 'sources' }) : undefined} memory={() => setContextDialog({ kind: 'memory' })} exportDraft={exportDraft} runs={operations.length ? () => setSidePanel({ kind: 'history' }) : undefined} technical={conversation ? () => setContextDialog({ kind: 'technical' }) : undefined} queue={conversation && controller.queue?.some(q => q.conversationId === conversation.id) ? () => setQueueExpanded(true) : undefined} summary={{ space: controller.space, conversation, outputs: conversationFiles, sourceFiles, openFile, openFiles, addFiles, changes: openChanges, projectSettings: project ? () => editProject(project.id) : undefined, projectFolder: project?.value.workspace?.folder }} panelOpen={!!sidePanel || activityOpen} togglePanel={() => { if (sidePanel || activityOpen) closePanel(); else { workspace.dispatch({ type: 'visibility', visible: true }); rail.closeMobile(); } }}/></div>
 <div className="conversation-scroll-region"><div className="conversation-reading" ref={setReadingParent} tabIndex={0} aria-label="Conversation history">
 
         {!conversation && project && projectIsDeleted(snapshot, project.id) && <div className="notice warning" role="status"><span>This draft uses a deleted project. Restore it or choose another project before starting new work. Your writing is kept.</span><button onClick={() => setOrganizingProject(project.id)}>Restore project</button></div>}
@@ -605,10 +621,11 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     {memorySeed && <Suspense fallback={<LoadingRing label="Opening memory…"/>}><MemoryEditor key={`${snapshot.epoch}:${memorySeed.source.messageId}`} snapshot={snapshot} seed={memorySeed} refresh={controller.refresh} close={() => setMemorySeed(null)}/></Suspense>}
     {continueSaved && conversation && <Suspense fallback={<LoadingRing label="Opening saved transcript…"/>}><ContinueSavedConversation conversationId={conversation.id} snapshot={snapshot} controller={controller} refreshWorkspace={refreshWorkspace} close={() => setContinueSaved(false)}/></Suspense>}
     {!reading && <AssistantActivityPanel key={conversation?.id ?? controller.space} operation={planOperation} open={activityOpen} container={activityContainer} available={setHasLiveView} show={() => setSidePanel({ kind: 'live' })} close={closePanel} stop={() => cancel(true)}/>}
-    {!reading && workspace.opened && <AssistantSidePanel tabs={workspace.tabs} active={workspace.active} visible={panelVisible} expanded={workspace.expanded} backLabel={controller.space === 'work' ? 'Back To Work' : 'Back To Chat'} select={id => workspace.dispatch({ type: 'select', id })} closeTab={id => workspace.dispatch({ type: 'close', id })} addTab={() => setSidePanel({ kind: 'home' })} expand={() => workspace.dispatch({ type: 'expand', expanded: !workspace.expanded })} close={closePanel} fallbackFocus={panelFocusFallback}>
+    {!reading && workspace.opened && <AssistantSidePanel tabs={workspace.tabs} active={workspace.active} visible={panelVisible} expanded={workspace.expanded} backLabel={controller.space === 'work' ? 'Back To Work' : 'Back To Chat'} select={id => dispatchWorkspace({ type: 'select', id })} closeTab={id => dispatchWorkspace({ type: 'close', id })} addTab={() => setSidePanel({ kind: 'home' })} expand={() => workspace.dispatch({ type: 'expand', expanded: !workspace.expanded })} close={closePanel} fallbackFocus={panelFocusFallback}>
       {workspace.tabs.map(tab => { const view = tab.view; const output = view.kind === 'file' ? conversationFiles.find(item => item.id === view.outputId && item.version === view.outputVersion) : undefined; return <section key={tab.id} className="workspace-tab-content" role="tabpanel" id={`workspace-view-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={workspace.active !== tab.id}>
-        {view.kind === 'home' && <div className="assistant-workspace-launcher"><button onClick={openTeam}><Folder size={20}/>Team work</button><button onClick={()=>setSidePanel({kind:"browser"})}><Device size={20}/>Browser</button>{openChanges && <button onClick={openChanges}><List size={20}/>Review</button>}{hasLiveView && <button onClick={() => setSidePanel({ kind: 'live' })}><Device size={20}/>Live tool view</button>}<button onClick={openFiles}><Folder size={20}/>Files</button></div>}
-        {view.kind === 'sources' && <ConversationSources operationId={view.operationId} openFile={openFile} memory={controller.memory} operations={operations} conversation={conversation} snapshot={snapshot} draft={draft} editProject={id => { closePanel(); editProject(id); }}/>}
+        {view.kind === 'projects' && panelVisible && workspace.active === tab.id && <ProjectManager snapshot={snapshot} conversations={controller.conversations} draftId={draftId} conversationId={conversation?.id ?? null} space={controller.space} request={view.request} refresh={refreshWorkspace} close={closePanel}/>}
+        {view.kind === 'home' && <div className="assistant-workspace-launcher"><button onClick={() => manageProjects()}><Folder size={20}/>Projects</button><button onClick={openTeam}><Folder size={20}/>Team work</button><button onClick={()=>setSidePanel({kind:"browser"})}><Device size={20}/>Browser</button>{openChanges && <button onClick={openChanges}><List size={20}/>Review</button>}{hasLiveView && <button onClick={() => setSidePanel({ kind: 'live' })}><Device size={20}/>Live tool view</button>}<button onClick={openFiles}><Folder size={20}/>Files</button></div>}
+        {view.kind === 'sources' && <ConversationSources operationId={view.operationId} openFile={openFile} memory={controller.memory} operations={operations} conversation={conversation} snapshot={snapshot} draft={draft} editProject={editProject}/>}
         {view.kind === 'cleanup' && <ConversationCleanupPanel epoch={snapshot.epoch} deviceId={snapshot.deviceId} conversations={controller.conversations} currentScope={{ space: controller.space, folder: folder === 'archive' ? 'archived' : folder, query: '' }} active={workspace.visible && workspace.active === tab.id} refresh={() => controller.refresh()}/>}
         {view.kind === 'history' && <AssistantRunHistory operations={operations} controller={controller} conversation={conversation} epoch={snapshot.epoch} openSources={operationId => setSidePanel({ kind: 'sources', operationId })} returnToQuestion={returnToQuestion}/>}
         {view.kind === 'files' && <ConversationFiles outputs={conversationFiles} sourceFiles={sourceFiles} openFile={openFile} addFiles={addFiles}/>}
@@ -621,7 +638,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
       </section>; })}
     </AssistantSidePanel>}
     {contextDialog && <Dialog title={contextDialog.kind === 'memory' ? 'Saved memories' : 'Technical details'} close={() => setContextDialog(null)}>
-      {contextDialog.kind === 'memory' && <Suspense fallback={<LoadingRing label="Opening memories…"/>}><MemoryPanel memory={controller.memory} snapshot={snapshot} refresh={controller.refresh} openSource={target => { setContextDialog(null); setReading(target); }}/></Suspense>}
+      {contextDialog.kind === 'memory' && <Suspense fallback={<LoadingRing label="Opening memories…"/>}><MemoryPanel memory={controller.memory} snapshot={snapshot} refresh={controller.refresh} openSource={target => { if (setReading(target)) setContextDialog(null); }}/></Suspense>}
       {contextDialog.kind === 'technical' && conversation && <><p>Conversation: {conversation.id}</p><p>Native session: {conversation.nativeId ?? 'Unconfirmed'}</p><p>Revision: {conversation.revision}</p><p>Model: {operations.find(op => op.effectiveModel)?.effectiveModel ?? conversation.model ?? 'Host default'}</p></>}
     </Dialog>}
     {dialog === 'settings' && (managedId ? controller.conversations.find(c => c.id === managedId) : conversation) && <ConversationSettings snapshot={snapshot} controller={controller} conversation={(managedId ? controller.conversations.find(c => c.id === managedId) : conversation)!} close={() => { setManagedId(null); setDialog(null); }}/>}

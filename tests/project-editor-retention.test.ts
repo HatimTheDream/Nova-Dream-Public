@@ -26,8 +26,10 @@ const loader = registerHooks({
   },
 });
 const { ProjectEditor, RetainedProjectEditor } = await import('../apps/client/src/ProjectEditor');
+const { ProjectManager } = await import('../apps/client/src/ProjectManager');
+const { readProjectManager, keepProjectManager, requestProjectManager } = await import('../apps/client/src/project-manager-view');
 const { retainedWindowId } = await import('../apps/client/src/useWorkspace');
-const { mayLeaveRecordDrafts } = await import('../apps/client/src/record-draft-navigation');
+const { mayLeaveRecordDrafts, registerRecordDraftNavigation } = await import('../apps/client/src/record-draft-navigation');
 loader.deregister();
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
 const text = (node: any): string => Array.isArray(node) ? node.map(text).join('') : node?.props ? text(node.props.children) : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
@@ -38,8 +40,8 @@ function host(component: (props: any) => any, initialProps: any, respond: (body:
   let props=initialProps,cursor=0,dirty=true,tree:any;
   const cells:any[]=[],effects:(()=>void)[]=[],storage=new Map<string,string>(),calls:any[]=[],listeners=new Map<string,Set<Function>>();
   const uploads={pending:[] as any[],staging:false,errors:{},notice:'',add:async()=>{},retry:async()=>{},remove:async()=>{}};
-  const faults={read:false,readKey:'',write:false,remove:false,drop:false};
-  const io={getItem:(k:string)=>{if(faults.read || faults.readKey===k)throw Error('Synthetic denied storage');return storage.get(k)??null;},setItem:(k:string,v:string)=>{if(faults.write)throw Error('Synthetic full storage');if(!faults.drop)storage.set(k,v);},removeItem:(k:string)=>{if(faults.remove)throw Error('Synthetic cleanup refusal');storage.delete(k);}};
+  const faults={read:false,readKey:'',write:false,remove:false,drop:false,readback:false,readbackKey:''};
+  const io={getItem:(k:string)=>{if(faults.readbackKey===k){faults.readbackKey='';throw Error('Synthetic readback refusal');}if(faults.read || faults.readKey===k)throw Error('Synthetic denied storage');return storage.get(k)??null;},setItem:(k:string,v:string)=>{if(faults.write)throw Error('Synthetic full storage');if(!faults.drop)storage.set(k,v);if(faults.readback)faults.readbackKey=k;},removeItem:(k:string)=>{if(faults.remove)throw Error('Synthetic cleanup refusal');storage.delete(k);}};
   const values:Record<PropertyKey,unknown>={
     [key]:{uploads,
       state(value:any){const i=cursor++;if(!cells[i])cells[i]={value:typeof value==='function'?value():value};return[cells[i].value,(next:any)=>{const v=typeof next==='function'?next(cells[i].value):next;if(!Object.is(v,cells[i].value)){cells[i].value=v;dirty=true;}}];},
@@ -192,4 +194,102 @@ test('an original legacy pending request is reconciled unchanged rather than rec
 });
 test('cross-window conflict does not overwrite the other journal during a guarded close',async()=>{
   const f=editorFixture();try{await f.app.flush();await writeName(f.app);const other=JSON.stringify({value:{name:'Other window',purpose:'',attachments:[]},revision:0,epoch:f.saved.epoch,dirty:true});f.app.storage.set(f.journalKey,other);for(const fn of f.app.listeners.get('storage')??[])fn({key:f.journalKey,newValue:other});await f.app.flush();button(f.app.tree,'Keep for later').props.onClick();await f.app.flush();assert.equal(f.closed,0);assert.equal(f.app.storage.get(f.journalKey),other);assert.equal(field(f.app.tree,'Project name').props.value,'Keep Project writing');}finally{f.app.close();}
+});
+
+
+test('manager view keeps only identity and refuses dropped writes, replacement owners and old epochs', () => {
+  const scope={epoch:randomUUID(),deviceId:'device',windowId:retainedWindowId,draftId:'draft:original',conversationId:null,space:'chat'as const};
+  const storage=new Map<string,string>();let dropped=false;
+  const io={getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>{if(!dropped)storage.set(k,v);}};
+  let owner=readProjectManager(scope,io);const original={...scope};
+  dropped=true;assert.throws(()=>keepProjectManager(owner,{selected:{kind:'create',space:'chat',stage:'instructions'},filter:'all'},io),/could not be kept/);assert.equal(storage.size,0);
+  dropped=false;owner=requestProjectManager(owner,{requestId:randomUUID(),target:{kind:'create',space:'chat'}},io);
+  owner=keepProjectManager(owner,{selected:{kind:'create',space:'chat',stage:'review'},filter:'chat'},io);
+  assert.deepEqual(readProjectManager(scope,io).view.selected,{kind:'create',space:'chat',stage:'review'});assert.deepEqual(scope,original);
+  const kept=storage.get(owner.key)!;assert.throws(()=>readProjectManager({...scope,epoch:randomUUID()},io),/another workspace/);assert.equal(storage.get(owner.key),kept);
+  storage.set(owner.key,'replacement');assert.throws(()=>keepProjectManager(owner,{selected:{kind:'list'},filter:'all'},io),/another window/);assert.equal(storage.get(owner.key),'replacement');
+});
+
+test('manager callbacks retain before changing view and never mutate conversation or draft identity',async()=>{
+  const saved=snapshot();saved.projects=[{id:'project:first',revision:2,deviceId:saved.deviceId,updatedAt:'',value:{name:'First Project',purpose:'Original purpose',space:'chat'}}];
+  const conversation={id:'conversation:origin',projectId:'project:first'};const conversations=[conversation];const before=structuredClone({saved,conversations});
+  const app=host(ProjectManager,{snapshot:saved,conversations,draftId:'draft:origin',conversationId:conversation.id,space:'chat',refresh:async()=>{},close(){}});
+  let retain=false,calls=0;const unregister=registerRecordDraftNavigation(()=>{calls++;return retain;});
+  try{await app.flush();button(app.tree,'New Project').props.onClick();await app.flush();assert.equal(app.storage.size,0);assert.equal(calls,1);
+    retain=true;button(app.tree,'New Project').props.onClick();await app.flush();const child=nodes(app.tree).find(n=>n.type===ProjectEditor);assert.ok(child);assert.equal(child.props.embedded,true);assert.equal(child.props.space,'chat');
+    const kept=[...app.storage];retain=false;button(app.tree,'Work').props.onClick();await app.flush();assert.deepEqual([...app.storage],kept);assert.equal(nodes(app.tree).find(n=>n.type===ProjectEditor).props.space,'chat');
+    retain=true;button(app.tree,'All Projects').props.onClick();await app.flush();assert.ok(button(app.tree,'New Project'));assert.deepEqual({saved,conversations},before);assert.deepEqual(app.calls,[]);
+  }finally{unregister();app.close();}
+});
+
+test('manager resume and a late saved callback preserve the newer selected Project view',async()=>{
+  const saved=snapshot(),request={requestId:randomUUID(),target:{kind:'create',space:'chat'}};
+  const props={snapshot:saved,conversations:[],draftId:'draft:origin',conversationId:null,space:'chat',request,refresh:async()=>{},close(){}};
+  const app=host(ProjectManager,props);let kept:[string,string][]=[];
+  try{await app.flush();const child=nodes(app.tree).find(n=>n.type===ProjectEditor);child.props.setStage('review');await app.flush();assert.equal(nodes(app.tree).find(n=>n.type===ProjectEditor).props.stage,'review');kept=[...app.storage];
+    button(app.tree,'All Projects').props.onClick();await app.flush();const newer=[...app.storage];child.props.saved('project:late');await app.flush();assert.deepEqual([...app.storage],newer);assert.ok(button(app.tree,'New Project'));assert.deepEqual(app.calls,[]);
+  }finally{app.close();}
+  const reloaded=host(ProjectManager,props);for(const[k,v]of kept)reloaded.storage.set(k,v);
+  try{await reloaded.flush();assert.equal(nodes(reloaded.tree).find(n=>n.type===ProjectEditor).props.stage,'review');assert.deepEqual(reloaded.calls,[]);}finally{reloaded.close();}
+});
+
+test('manager damaged or denied identity never mounts an empty replacement editor',async()=>{
+  for(const fault of ['denied','damaged']as const){const saved=snapshot(),props={snapshot:saved,conversations:[],draftId:'draft:origin',conversationId:null,space:'chat',refresh:async()=>{},close(){}};const app=host(ProjectManager,props);
+    const key=`e3:project-manager:${saved.deviceId}:${retainedWindowId}:chat:draft:origin`;if(fault==='denied')app.faults.read=true;else app.storage.set(key,'original damaged {');const before=[...app.storage];
+    try{await app.flush();assert.ok(button(app.tree,'Try Opening Again'));assert.equal(nodes(app.tree).some(n=>n.type===ProjectEditor),false);assert.deepEqual([...app.storage],before);}finally{app.close();}
+  }
+});
+
+test('staged Chat setup keeps the same journal and sends only on explicit final Create',async()=>{
+  const f=editorFixture();let next='details';
+  try{await f.app.update({embedded:true,stage:'details',setStage:(stage:string)=>next=stage});await writeName(f.app,'My Kept Project');
+    await submit(f.app);assert.equal(next,'instructions');assert.equal(f.app.calls.length,0);await f.app.update({stage:next});
+    field(f.app.tree,'Project instructions').props.onChange({target:{value:'Keep these shared instructions'}});await f.app.flush();await submit(f.app);assert.equal(next,'review');assert.equal(f.app.calls.length,0);await f.app.update({stage:next});
+    assert.ok(text(f.app.tree).includes('Keep these shared instructions'));await submit(f.app);assert.equal(f.app.calls.length,1);assert.equal(f.app.calls[0].payload.name,'My Kept Project');assert.equal(f.app.calls[0].payload.instructions,'Keep these shared instructions');assert.equal(f.finished,1);
+  }finally{f.app.close();}
+});
+
+test('a refused embedded close leaves the editor owner usable for keeping and saving',async()=>{
+  const f=editorFixture();try{await f.app.update({embedded:true,close:()=>false});await writeName(f.app);button(f.app.tree,'Keep for later').props.onClick();await f.app.flush();await writeName(f.app,'Newer Kept Writing');await f.app.update({stage:'review'});await submit(f.app);assert.equal(f.app.calls.length,1);assert.equal(f.app.calls[0].payload.name,'Newer Kept Writing');}finally{f.app.close();}
+});
+
+test('late host folder choice cannot replace a newer typed path or a departed editor',async()=>{
+  for(const departed of [false,true]){const saved=snapshot(),id='project:work',entity={id,revision:1,deviceId:saved.deviceId,updatedAt:'',value:{name:'Work',purpose:'',space:'work'as const,workspace:{folder:'C:/original',environment:'local'as const},attachments:[]}};saved.projects=[entity];
+    const app=host(RetainedProjectEditor,{snapshot:saved,projectId:id,space:'work',identity:{id},close(){},saved(){},refresh:async()=>{}});let resolve!:(value:string)=>void;
+    (globalThis.window as any).novaDesktop={chooseWorkingFolder:()=>new Promise<string>(done=>resolve=done)};
+    try{await app.flush();nodes(app.tree).find(n=>n.props['aria-label']==='Choose source folder').props.onClick();await app.flush();
+      if(departed)button(app.tree,'Keep for later').props.onClick();else{nodes(app.tree).find(n=>n.type==='input'&&n.props.id===`${id}:source-folder`).props.onChange({target:{value:'C:/newer'}});await app.flush();}
+      const before=[...app.storage];resolve('C:/late');await app.flush();assert.deepEqual([...app.storage],before);assert.deepEqual(app.calls,[]);
+    }finally{app.close();}
+  }
+});
+
+
+test('manager can explicitly reopen its kept view after successful writing but refused readback',async()=>{
+  const saved=snapshot(),app=host(ProjectManager,{snapshot:saved,conversations:[],draftId:'draft:origin',conversationId:null,space:'chat',refresh:async()=>{},close(){}});
+  try{await app.flush();app.faults.readback=true;button(app.tree,'New Project').props.onClick();await app.flush();const original=[...app.storage];assert.equal(original.length,1);assert.ok(button(app.tree,'Reopen Kept View'));assert.equal(nodes(app.tree).some(n=>n.type===ProjectEditor),false);
+    app.faults.readback=false;button(app.tree,'Reopen Kept View').props.onClick();await app.flush();assert.equal(nodes(app.tree).find(n=>n.type===ProjectEditor).props.space,'chat');assert.deepEqual([...app.storage],original);assert.deepEqual(app.calls,[]);
+  }finally{app.close();}
+});
+
+
+test('a refreshed deleted or missing Project keeps the same Settings writer and captured Work space mounted',async()=>{
+  for(const missing of [false,true]){const saved=snapshot(),id='project:work';saved.projects=[{id,revision:1,deviceId:saved.deviceId,updatedAt:'',value:{name:'Original Work',purpose:'',space:'work',workspace:{folder:'C:/kept',environment:'local'}}}];
+    const app=host(ProjectManager,{snapshot:saved,conversations:[],draftId:'draft:origin',conversationId:null,space:'chat',request:{requestId:randomUUID(),target:{kind:'project',id,tab:'settings'}},refresh:async()=>{},close(){}});
+    const unregister=registerRecordDraftNavigation(()=>false);
+    try{await app.flush();const before=nodes(app.tree).find(n=>n.type===ProjectEditor);assert.ok(before);assert.equal(before.props.space,'work');app.faults.write=true;
+      await app.update({snapshot:{...saved,projects:missing?[]:saved.projects,projectOrganization:[{projectId:id,revision:1,deleted:true}]}});
+      const after=nodes(app.tree).find(n=>n.type===ProjectEditor);assert.ok(after,'snapshot refresh must not drop the live writer');assert.equal(after.key,before.key);assert.equal(after.props.space,'work');assert.equal(after.props.projectId,id);assert.deepEqual(app.calls,[]);
+    }finally{unregister();app.close();}
+  }
+});
+
+test('deleted or missing Project snapshots preserve failed in-memory writing and refuse Save until restored',async()=>{
+  for(const missing of [false,true]){const saved=snapshot(),id='project:original';saved.projects=[{id,revision:1,deviceId:saved.deviceId,updatedAt:'',value:{name:'Original Project',purpose:'',space:'chat',attachments:[]}}];
+    const app=host(RetainedProjectEditor,{snapshot:saved,projectId:id,identity:{id},close(){},saved(){},refresh:async()=>{}},body=>({id,revision:2,deviceId:saved.deviceId,updatedAt:'',value:body.payload}));
+    try{await app.flush();app.faults.write=true;await writeName(app,'Writing Only In This Window');assert.equal(mayLeaveRecordDrafts(),false);
+      await app.update({snapshot:{...saved,projects:missing?[]:saved.projects,projectOrganization:[{projectId:id,revision:1,deleted:true}]}});assert.equal(field(app.tree,'Project name').props.value,'Writing Only In This Window');assert.equal(nodes(app.tree).find(n=>n.type==='fieldset').props.disabled,true);assert.equal(button(app.tree,'Save Project').props.disabled,true);
+      await submit(app);assert.equal(app.calls.length,0);assert.equal(mayLeaveRecordDrafts(),false);app.faults.write=false;await app.update({snapshot:saved});await submit(app);assert.equal(app.calls.length,1);assert.equal(app.calls[0].payload.name,'Writing Only In This Window');
+    }finally{app.close();}
+  }
 });

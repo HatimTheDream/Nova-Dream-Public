@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { emptyDraft, type Snapshot } from '../packages/domain/contracts';
+import { registerRecordDraftNavigation } from '../apps/client/src/record-draft-navigation';
 import { mayLeaveAssistantDraft, registerAssistantDraftNavigation } from '../apps/client/src/assistant-draft-navigation';
 
 const fixtureKey = Symbol.for('nova.test.draft-navigation-hooks');
@@ -181,4 +182,26 @@ test('actual Editor source preview, History and Back keep the original conversat
   assert.equal(f.renderAssistant().selectedId, 'original');
   assert.equal(JSON.parse(f.storage.get(f.journalKey)!).value.text, 'Newer unsent writing');
   assert.equal(calls, 0); assert.equal(operation.input, 'Original sent input');
+});
+
+
+test('actual Projects panel refuses archived, pin, saved-version and conversation navigation while its writer cannot retain',t=>{
+  const f=fixture(t),controller=f.renderAssistant(),time='2026-10-20T12:00:00Z';
+  const conversation={id:'original',nativeId:'native',nativeKey:'key',connectionGeneration:'generation',revision:1,title:'Original',state:'ready',projectId:null,archived:false,model:null,thinking:null,createdAt:time,updatedAt:time};
+  const archived={...conversation,id:'archived',nativeId:'native:archive',title:'Earlier Chat',archived:true};
+  let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('Navigation must not dispatch');});
+  const props={appIcon:'red',snapshot:{...f.snapshot,records:{},drafts:[{id:f.id,deviceId:'device',revision:1,value:{...emptyDraft,conversationId:'original',text:'Original writing'},updatedAt:time}]},
+    controller:{...controller,conversation,conversations:[conversation,archived],connection:{state:'ready',generation:'generation',methods:[],grantedScopes:['operator.write']},statusRead:'ready'},
+    voice:{subscribe:()=>()=>{},getSnapshot:()=>({phase:'idle',turns:[]})},contentActions:{},refreshWorkspace:async()=>{},openSettings(){},newProject(){},editProject(){},
+  } as unknown as Parameters<typeof Assistant>[0];
+  const outer=f.renderer(()=>Assistant(props))(),renderBranch=f.renderer(()=>(outer.type as any)(outer.props));let branch=renderBranch();
+  const renderEditor=f.renderer(()=>(branch.type as any)(branch.props));const nodes=(node:any):any[]=>Array.isArray(node)?node.flatMap(nodes):node?.props?[node,...nodes(node.props.children)]:[];
+  const render=()=>{branch=renderBranch();return nodes(renderEditor());};let controls=render();
+  controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  let allowed=false;const unregister=registerRecordDraftNavigation(()=>allowed);t.after(unregister);
+  const tools=controls.find(n=>n.type?.name==='ConversationHeaderTools');tools.props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));assert.equal(controls.some(n=>n.type?.name==='ConversationReader'),false);
+  tools.props.openPin({conversationId:archived.id,nativeId:archived.nativeId,messageId:'message',messageHash:'a'.repeat(64),role:'assistant'});controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  controls.find(n=>n.type?.name==='AssistantSidePanel').props.close();controls=render();assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.visible,true);
+  assert.equal(controller.select('other'),false);assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);assert.equal(f.storage.has('e3:reading:device'),false);
+  allowed=true;controls.find(n=>n.type?.name==='ConversationHeaderTools').props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ConversationReader'));assert.equal(controls.some(n=>n.type?.name==='ProjectManager'),false);assert.equal(branch.props.journal.value.text,'Original writing');assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);
 });
