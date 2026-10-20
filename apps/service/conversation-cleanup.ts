@@ -11,6 +11,7 @@ import {
 import type { AssistantService } from './assistant.js';
 import { conversationItemRequestId } from './conversation-organization.js';
 import { Store, Fault } from './store.js';
+import { PermanentConversationCleanup } from './conversation-permanent-cleanup.js';
 
 const prefix = 'assistant:cleanup:';
 const targetSchema = z.object({
@@ -38,8 +39,11 @@ const digest = (value: Pick<CleanupRecord, 'id' | 'epoch' | 'deviceId' | 'action
 export class ConversationCleanup {
   private flights = new Map<string, Promise<ConversationCleanupBatch>>();
   private closed = false;
-  constructor(private store: Store, private assistant: Pick<AssistantService, 'conversations' | 'edit' | 'assertCleanupReady'>, private clock = Date.now) {}
-  async close() { this.closed = true; await Promise.allSettled(this.flights.values()); }
+  readonly permanent: PermanentConversationCleanup;
+  constructor(private store: Store, private assistant: Pick<AssistantService, 'conversations' | 'edit' | 'assertCleanupReady' | 'removals'>, private clock = Date.now, monotonic?: () => number) {
+    this.permanent = new PermanentConversationCleanup(store, assistant, clock, monotonic);
+  }
+  async close() { this.closed = true; await Promise.all([this.permanent.close(), Promise.allSettled(this.flights.values())]); }
   private available() {
     if (this.closed) throw new Fault(503, 'service_closed', 'Conversation cleanup is closed. Reopen its original result.');
     this.store.assertUpdateAdmission();
@@ -82,16 +86,25 @@ export class ConversationCleanup {
   }
   list(offset = 0, limit = 20): { total: number; items: ConversationCleanupSummary[]; nextOffset: number | null } {
     z.number().int().nonnegative().parse(offset); z.number().int().min(1).max(50).parse(limit);
-    const records = this.store.internalList<unknown>(prefix).map(raw => {
+    const records = this.store.internalList<unknown>(prefix).flatMap(raw => {
+      if (raw && typeof raw === 'object' && 'format' in raw && raw.format === 2) {
+        this.permanent.validate(raw); return [];
+      }
       const parsed = recordSchema.safeParse(raw);
       if (!parsed.success) throw new Fault(409, 'cleanup_record_invalid', 'A saved cleanup format is unsupported. Its records are kept.');
-      return this.read(parsed.data.id);
+      return [this.read(parsed.data.id)];
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const items = records.slice(offset, offset + limit).map(record => {
       const { targets, outcomes: _outcomes, remainder: _remainder, digest: _digest, format: _format, ...summary } = this.get(record.id);
       return { ...summary, count: targets.length };
     });
     return { total: records.length, items, nextOffset: offset + limit < records.length ? offset + limit : null };
+  }
+  listPermanent(offset = 0, limit = 20) {
+    // Validate the complete shared prefix, including unknown future formats,
+    // before exposing either typed history. Never silently drop malformed work.
+    this.list(0, 1);
+    return this.permanent.list(offset, limit);
   }
   prepare(device: string, raw: unknown): ConversationCleanupBatch {
     this.available();

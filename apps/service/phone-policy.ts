@@ -53,7 +53,12 @@ GET /api/calendar/state
 GET /api/snapshot
 GET /api/content/library
 GET /api/profile/progress
+GET /api/profile/week
+GET /api/profile/week/activity
+GET /api/profile/week/history
 GET /api/profile/history
+GET /api/profile/studio
+POST /api/profile/studio
 POST /api/profile/quests
 GET /api/content/state
 GET /api/content/result
@@ -74,6 +79,9 @@ POST /api/assistant/cancel
 GET /api/assistant/conversation-cleanup
 POST /api/assistant/conversation-cleanup/prepare
 POST /api/assistant/conversation-cleanup/decide
+GET /api/assistant/conversation-cleanup/permanent
+POST /api/assistant/conversation-cleanup/permanent/prepare
+POST /api/assistant/conversation-cleanup/permanent/decide
 POST /api/assistant/conversation/edit
 POST /api/assistant/conversation/fork
 POST /api/assistant/conversation/recover-settings

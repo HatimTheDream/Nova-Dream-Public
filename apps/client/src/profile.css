@@ -1,4 +1,27 @@
 .profile-workspace { display: grid; gap: 22px; max-width: 1280px; margin-inline: auto; min-width: 0; }
+.profile-hero.studio-hero { grid-template-columns: 112px minmax(0,1fr); padding: 20px 24px; gap: 22px; }
+.studio-hero .profile-portrait > * { max-width: 112px; max-height: 112px; }
+.studio-hero .profile-identity h2 { font-size: 26px; }
+.profile-studio { display: grid; gap: 16px; min-width: 0; }
+.profile-studio .section-heading { margin: 0; }
+.studio-quest-choices { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.studio-quest-choices button { display: grid; gap: 6px; text-align: start; white-space: normal; overflow-wrap: anywhere; padding: 14px 16px; }
+.studio-quest-choices button span { color: var(--muted); font-size: 12px; }
+.studio-quest-choices button[aria-pressed=true] { border-color: var(--green); background: var(--soft-green); }
+.studio-focus { padding: 24px; min-width: 0; }
+.studio-focus h3 { margin-block: 8px; font-size: 23px; overflow-wrap: anywhere; }
+.studio-focus > p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.studio-progress { display: grid; grid-template-columns: minmax(80px,1fr) auto; align-items: center; gap: 16px; margin-top: 22px; }
+.studio-earned { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.studio-earned strong { color: var(--text); }
+.studio-curation { display: grid; gap: 16px; min-width: 0; }
+.studio-curation fieldset { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.studio-curation label { display: flex; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.studio-curation label > span { display: grid; gap: 4px; overflow-wrap: anywhere; min-width: 0; }
+.studio-curation input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; }
+.studio-curation small { color: var(--muted); }
+.profile-workspace pre,.studio-curation pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+@media(max-width:600px) { .profile-hero.studio-hero { grid-template-columns: 80px minmax(0,1fr); padding: 16px; gap: 14px; } .studio-hero .profile-portrait > * { max-width: 80px; max-height: 80px; } .studio-hero .profile-identity { text-align: start; } .studio-hero .profile-identity h2 { font-size: 22px; } .studio-quest-choices { grid-template-columns: minmax(0,1fr); } .studio-focus { padding: 18px; } .studio-progress { grid-template-columns: minmax(0,1fr); gap: 8px; } }
 .profile-workspace h2,.profile-workspace h3 { margin-top: 0; }
 .profile-workspace p { line-height: 1.55; }
 .profile-hero { display: grid; grid-template-columns: 240px minmax(160px,1fr) minmax(190px,.8fr); gap: 28px; align-items: center; padding: 28px; }
@@ -172,3 +195,25 @@
  .profile-workspace .profile-milestones { grid-template-columns: minmax(0, 1fr); }
 }
 @media (pointer: coarse) { .profile-workspace .profile-experience summary, .profile-workspace .period-quest summary { min-height: 44px; } }
+
+/* Selected-week review keeps credit, actual transitions and full earned history distinct. */
+.profile-workspace .profile-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.profile-workspace .profile-week-entry { display: grid; justify-items: start; gap: 6px; width: fit-content; max-width: 100%; text-align: start; padding: 16px; white-space: normal; }
+.profile-week-entry > span { font-weight: 400; }
+.profile-week-workspace { min-width: 0; display: grid; gap: 18px; }
+.profile-week-workspace[hidden], .profile-week-workspace [hidden] { display: none !important; }
+.profile-week-workspace > section { min-width: 0; }
+.profile-week-workspace .button-row > button { flex: 0 1 auto; width: auto; white-space: normal; }
+.profile-week-chart { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-block: 16px; }
+:root .profile-week-chart > button { display: grid; gap: 6px; justify-items: center; min-width: 0; min-height: 96px; padding: 10px 6px; white-space: normal; background: var(--button-fill); }
+.profile-week-chart strong { font-size: 24px; }
+.profile-week-chart small { font-size: 11px; font-weight: 400; color: var(--muted); }
+:root .profile-week-chart > button.active { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.profile-day-activity { border-top: 1px solid var(--line); padding-top: 16px; margin-block: 20px; }
+.profile-event-list { padding: 0; list-style: none; }
+.profile-event-list li { display: flex; gap: 16px; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); padding-block: 12px; }
+.profile-event-list li > div { min-width: 0; }
+.profile-event-list .text-button { white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.profile-event-list li > strong { flex-shrink: 0; font-size: 13px; }
+@media (max-width: 480px) { .profile-week-chart { grid-template-columns: repeat(4, minmax(0, 1fr)); } .profile-event-list li { align-items: flex-start; } }
+@media (max-width: 800px), (pointer: coarse) { :root .profile-week-workspace button, :root .profile-workspace .profile-week-entry { min-height: 44px; } }

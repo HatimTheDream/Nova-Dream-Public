@@ -67,8 +67,8 @@ export function progressHistory(tasks: Entity<Task>[], events: TaskEvent[], befo
   const page = sorted.slice(start, start + 50);
   return { entries: page.map(e => ({ ...e, title: taskMap.get(e.taskId)?.value.title ?? 'Task unavailable', trashed: !!taskMap.get(e.taskId)?.value.trashed })), next: start + page.length < sorted.length ? page.at(-1)!.id : null, total: sorted.length };
 }
-export function buildProfileProgress(tasks: Entity<Task>[], events: TaskEvent[], saved: PersonalQuest[], timezone: string, now: number, epoch: string, imported?: ImportedProgress): ProfileProgress {
-  // The server passes the full canonical ledger, never the 500-event snapshot window.
+/** The same complete-ledger credit projection serves Profile and selected weeks. */
+export function profileTaskCredits(events: TaskEvent[], timezone: string) {
   const ledger = [...new Map(events.map(e => [e.id, e])).values()];
   const balances = new Map<string, number>(), first = new Map<string, string>();
   for (const e of ledger) {
@@ -76,6 +76,11 @@ export function buildProfileProgress(tasks: Entity<Task>[], events: TaskEvent[],
     if (e.xpDelta > 0 && (!first.has(e.taskId) || e.at < first.get(e.taskId)!)) first.set(e.taskId, e.at);
   }
   const credited = [...balances].filter(([, xp]) => xp > 0).map(([id]) => ({ id, day: dayInZone(timezone, Date.parse(first.get(id)!)) }));
+  return { ledger, credited };
+}
+export function buildProfileProgress(tasks: Entity<Task>[], events: TaskEvent[], saved: PersonalQuest[], timezone: string, now: number, epoch: string, imported?: ImportedProgress): ProfileProgress {
+  // The server passes the full canonical ledger, never the 500-event snapshot window.
+  const { ledger, credited } = profileTaskCredits(events, timezone);
   const earnedXp = ledger.reduce((n, e) => n + e.xpDelta, imported?.xp ?? 0), today = dayInZone(timezone, now);
   const activeDays = new Set(credited.map(t => t.day)).size;
   const definitions = [

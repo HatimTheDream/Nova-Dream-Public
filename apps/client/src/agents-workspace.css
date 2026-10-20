@@ -1,0 +1,57 @@
+/* Agents navigation and utilities. Saved rows, editors and Headquarters retain
+   their own layout and control semantics. */
+.agents-workspace-navigation { display:flex; flex:none; align-items:center; gap:18px; border-bottom:1px solid var(--line); margin-bottom:16px; min-width:0; }
+:root .agents-workspace-navigation > button { min-height:40px; padding:8px 0; border:0; border-radius:0; box-shadow:none; background:transparent; color:var(--muted); flex:none; font-size:var(--text-body); }
+:root .agents-workspace-navigation > button[aria-current=page] { color:var(--text); border-bottom:2px solid var(--action); }
+:root .agents-workspace-navigation > button:hover { background:transparent; color:var(--text); }
+.agent-hub .hub-toolbar { gap:10px; }
+.agent-hub .hub-heading { min-width:0; }
+.agent-hub .hub-header-actions { gap:8px; margin-left:auto; }
+.agent-hub .hub-switch { padding:3px; border-radius:var(--control-radius); gap:2px; }
+:root .agent-hub .hub-switch > button { min-height:36px; height:auto; padding:6px 10px; width:auto; flex:none; }
+:root .agent-hub .hub-header-actions > button.compact-utility,
+:root .agent-hub .hub-header-actions > .composer-menu-anchor > button.composer-control-button,
+:root .agent-hub .hub-searchbar .compact-utility { min-height:32px; height:auto; width:auto; min-width:32px; padding:5px 9px; flex:none; }
+.agent-hub .hub-searchbar:empty { display:none; }
+.agent-hub .hub-searchbar { flex:none; gap:8px; flex-wrap:wrap; }
+.agent-hub .hub-searchbar .search-input { flex:0 1 360px; max-width:360px; min-width:0; width:100%; padding-block:3px; }
+.agent-hub .hub-searchbar .search-input > input { min-width:0; min-height:32px; }
+.agent-hub .hub-query-summary { display:flex; min-width:0; align-items:center; gap:6px; max-width:100%; }
+.agent-hub .hub-query-summary > button:first-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.agent-hub .hub-inspector .button-row { justify-content:flex-start; }
+.agent-hub .hub-inspector .button-row > button { flex:none; width:auto; }
+.agents-workspace-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.agents-workspace-count { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.agents-workspace-controls h2 { margin:0; font-size:var(--text-body); }
+.agents-workspace-controls .compact-actions { display:flex; flex-wrap:wrap; gap:8px; }
+:root .agents-workspace-controls .compact-utility { flex:none; width:auto; min-height:32px; padding:5px 10px; }
+.agents-workspace-summary { flex-basis:100%; margin:0; }
+.agents-workspace-search { display:flex; flex:1 0 100%; align-items:center; gap:8px; min-width:0; }
+.agents-workspace-search .search-input { flex:0 1 360px; max-width:360px; min-width:0; padding-block:3px; }
+.agents-workspace-search .search-input > input { min-width:0; min-height:32px; }
+:root .agents-workspace-search .agents-query-summary { min-width:0; max-width:calc(100% - 64px); white-space:nowrap; overflow:hidden; }
+.agents-query-summary .preserve-case { overflow:hidden; text-overflow:ellipsis; }
+:root .agents-controls-menu > button.composer-control-button,
+:root .agent-hub .hub-header-actions > .composer-menu-anchor > button.composer-control-button { --button-compact-depth:0px; --button-shadow-depth:0px; --button-fill:var(--raised); display:inline-flex; align-items:center; gap:6px; flex:none; width:fit-content; min-width:32px; min-height:32px; height:auto; padding:4px 8px; font-size:13px; line-height:1.35; background:var(--button-fill); }
+:root .agents-controls-menu > button.composer-control-button[aria-expanded=true],
+:root .agent-hub .hub-header-actions > .composer-menu-anchor > button.composer-control-button[aria-expanded=true] { --button-fill:var(--soft-gold); }
+.agents-controls-menu .composer-control-label { display:inline; font-size:inherit; white-space:normal; }
+.agents-assignment-filters { display:grid; gap:12px; width:260px; max-width:calc(100vw - 48px); }
+@media (max-width:800px), (pointer:coarse) {
+  :root .agents-workspace-navigation > button { min-height:44px; }
+  :root .agent-hub .hub-switch > button,
+  :root .agent-hub .hub-header-actions > button.compact-utility,
+  :root .agent-hub .hub-header-actions > .composer-menu-anchor > button.composer-control-button,
+  :root .agent-hub .hub-searchbar .compact-utility,
+  :root .agents-workspace-controls .compact-utility,
+  :root .agents-controls-menu > button.composer-control-button { min-height:44px; min-width:44px; height:auto; }
+  .agent-hub .hub-searchbar .search-input > input,
+  .agents-workspace-search .search-input > input { font-size:max(16px,var(--text-body)); min-height:44px; }
+}
+@media (max-width:440px) {
+  .agents-workspace-navigation { gap:14px; }
+  :root .agents-workspace-navigation > button { font-size:13px; }
+  .agent-hub .hub-heading .metadata { display:inline; }
+  .agent-hub .hub-header-actions { flex:1 1 auto; justify-content:flex-start; margin-left:0; }
+  .agent-hub .hub-header-actions .primary svg { display:block; }
+}
