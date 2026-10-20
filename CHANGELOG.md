@@ -1,3 +1,11 @@
+## [2.9.23] — 2026-10-20
+
+### Improved
+
+- Keep Work, Team, Routines and Skills close together with compact search and filters.
+- Reopen the same Team, Headquarters, room draft and discussion view without losing unfinished writing.
+- Open the exact assignment attempt from an agent, retaining the original destination and safe retries when browser storage is unavailable.
+
 ## [2.9.22] — 2026-10-19
 
 ### Added

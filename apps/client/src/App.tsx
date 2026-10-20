@@ -8,6 +8,7 @@ import { SearchWorkspace, useGlobalSearch } from './SearchWorkspace';
 import { matchesSearchReturn, searchReturn, sameSearchTarget, type SearchTarget, type SearchReturn, type SearchQueryRequest, type SearchOrigin } from './search-workspace';
 import { admitRecordTarget, recordIndexKey, readRecordIndex } from './record-target-navigation';
 import { mayLeaveRecordDrafts } from './record-draft-navigation';
+import { mayLeaveAgentDrafts } from './agent-workspace-navigation';
 import { readNavigationLocal } from './navigation-storage';
 import { admitInboxSearch, type InboxSearchRequest } from './search-query-navigation';
 import { admitLibraryTarget, libraryView, libraryViewKey, defaultLibraryView, type LibraryTarget } from './home-library-navigation';
@@ -196,7 +197,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const nav = useReorder(currentLayout.nav, order => layout.change(value => ({ ...value, nav: order })), 'navigation', { motion: true, touchHold: true });
   const dock = useReorder(currentLayout.nav, order => layout.change(value => ({ ...value, nav: order })), 'bottom-navigation', { motion: true, touchHold: true, hold: true, axis: 'horizontal' });
   useEffect(() => { if (nav.dragging) setNavMenu(null); }, [nav.dragging]);
-  const canOpen = (next: Route, retry: () => void) => { const allowed = next === route || (mayLeaveAssistantDraft() && mayLeaveRecordDrafts() && mayLeaveHomeDraft() && (route !== 'settings' || mayLeaveSettingsDraft(retry))); if (!allowed && search.shown) search.setShown(false); return allowed; };
+  const canOpen = (next: Route, retry: () => void) => { const allowed = next === route || (mayLeaveAssistantDraft() && mayLeaveRecordDrafts() && mayLeaveAgentDrafts() && mayLeaveHomeDraft() && (route !== 'settings' || mayLeaveSettingsDraft(retry))); if (!allowed && search.shown) search.setShown(false); return allowed; };
   const applyRoute = (next: Route) => { searchRouteGeneration.current++; search.setShown(false); reminderNavigation.current++; preparedReminderReturn.current = undefined; reminderRetry.current = undefined; setRoute(next); setNavMenu(null); if (next !== 'settings') setConnectionOrigin(null); };
   const open = (next: Route): boolean => { if (search.navigation.view?.open && !mayLeaveRecordDrafts()) { search.setNotice('Keep the current writing before navigating.'); search.setShown(false); return false; } if (!canOpen(next, () => open(next))) return false; applyRoute(next); return true; };
   const openSettings = (tab: SettingsTab = 'index', origin: ModuleId | null = null): boolean => { if (!canOpen('settings', () => openSettings(tab, origin))) return false; applyRoute('settings'); setSettingsTab(tab); setConnectionOrigin(origin); return true; };
@@ -303,7 +304,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const coverWithSearch = () => { if (!searchVisible) setSearchMountedRoutes(current => [...new Set([...current, route])]); search.setShown(true); };
   const exactSearch = (token: string) => !!searchActions.current && search.navigation.view?.open && search.navigation.view.token === token;
   const retainSearchOwners = () => {
-    if (mayLeaveAssistantDraft() && mayLeaveRecordDrafts() && mayLeaveHomeDraft()) return true;
+    if (mayLeaveAssistantDraft() && mayLeaveRecordDrafts() && mayLeaveAgentDrafts() && mayLeaveHomeDraft()) return true;
     search.setNotice('Your current writing could not be kept yet. Finish any upload or free browser storage before leaving.'); search.setShown(false); return false;
   };
   const beginSearch = () => {
