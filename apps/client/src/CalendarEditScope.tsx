@@ -12,7 +12,7 @@ export function ProviderCalendarEditScope({ event, close, choose }: { event: Cal
   </div></Dialog>;
 }
 
-export function CalendarEditScope({ event, epoch, close, choose }: { event: LocalCalendarOccurrence; epoch: string; close: () => void; choose: (draft: EventDraft) => void }) {
+export function CalendarEditScope({ event, epoch, close, choose, backToReminders }: { event: LocalCalendarOccurrence; epoch: string; close: () => void; choose: (draft: EventDraft) => void; backToReminders?: () => void }) {
   const [detail, setDetail] = useState<LocalCalendarDetail>(), [error, setError] = useState(''), [retry, setRetry] = useState(0);
   useEffect(() => {
     let alive = true; const controller = new AbortController(); setDetail(undefined); setError('');
@@ -20,7 +20,7 @@ export function CalendarEditScope({ event, epoch, close, choose }: { event: Loca
     return () => { alive = false; controller.abort(); };
   }, [event.eventId, event.originalDate, epoch, retry]);
   const occurrence = detail?.occurrence;
-  return <Dialog title="Edit repeating event" close={close}><div className="calendar-scope"><p><strong>{detail?.event.value.title ?? event.value.title}</strong></p>{!detail && !error && <p role="status">Checking the current series…</p>}{error && <p className="field-error" role="alert">{error}</p>}{detail && <>
+  return <Dialog title="Edit repeating event" close={close}>{backToReminders && <button onClick={backToReminders}>Back To Reminders</button>}<div className="calendar-scope"><p><strong>{detail?.event.value.title ?? event.value.title}</strong></p>{!detail && !error && <p role="status">Checking the current series…</p>}{error && <p className="field-error" role="alert">{error}</p>}{detail && <>
     <div className="calendar-scope-option"><button disabled={!occurrence || detail.event.value.state === 'cancelled'} onClick={() => choose(draftForCalendar(detail, 'occurrence'))}>This occurrence</button><p>{occurrence ? `${occurrence.value.start.date} · ${occurrence.value.allDay ? 'All day' : occurrence.value.start.time} · ${occurrence.value.timezone.replaceAll('_', ' ')}` : 'This date is no longer in the series.'}</p>{occurrence && occurrence.originalDate !== occurrence.value.start.date && <p className="metadata">Originally scheduled for {occurrence.originalDate}.</p>}{detail.event.value.state === 'cancelled' && <p className="metadata">Restore the entire series before editing an occurrence.</p>}</div>
     <div className="calendar-scope-option"><button onClick={() => choose(draftForCalendar(detail, 'series'))}>Entire series</button><p>All dates in this series, beginning {detail.event.value.start.date}.</p><p className="metadata">{detail.exceptionCount ? `${detail.exceptionCount} individually adjusted date${detail.exceptionCount === 1 ? '' : 's'}. Choose whether to keep or reset them in the editor.` : 'No individually adjusted dates.'}</p></div>
   </>}{error && <button onClick={() => setRetry(n => n + 1)}>Check again</button>}</div></Dialog>;

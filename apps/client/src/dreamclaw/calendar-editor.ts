@@ -18,6 +18,7 @@ export type CalendarEditorState = {
   begin(event?: CalendarEvent, date?: Date): void;
   choose(draft: EventDraft): void;
   close(): void;
+  closeRetained(): boolean;
   keepForm(form: OriginalCalendarForm): void;
   changeValue(patch: Partial<LocalEventInput>): void;
   chooseExceptions(policy: 'keep' | 'reset'): void;
@@ -195,6 +196,11 @@ export function createCalendarEditor(options: Options) {
       close() {
         if (get().openingProvider) { generation++; set({ busy: false }); }
         persist(get().draft, false); set({ source: undefined, scopeEvent: undefined, providerScope: undefined, openingProvider: undefined });
+      },
+      closeRetained() {
+        if (get().busy || get().openingProvider) { set({ notice: 'Wait for the current Calendar operation before returning. Your writing is kept.' }); return false; }
+        if (!persist(get().draft, false, get().keptDrafts, true)) return false;
+        set({ source: undefined, scopeEvent: undefined, providerScope: undefined }); return true;
       },
       keepForm(form) {
         const draft = get().draft;

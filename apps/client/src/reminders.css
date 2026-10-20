@@ -1,0 +1,25 @@
+:root .dialog:has(.reminders-workspace) { width:min(720px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); }
+:root .dialog-inner:has(>.reminders-workspace) { display:flex; flex-direction:column; max-height:calc(100dvh - 24px); box-sizing:border-box; padding-bottom:0; }
+.reminders-workspace { display:flex; flex-direction:column; min-height:0; gap:10px; }
+.reminders-workspace > .metadata { margin:0; }
+.reminders-device { font-size:12px; }
+.reminders-device summary { cursor:pointer; min-height:32px; }
+.reminders-tabs { display:flex; gap:6px; border-bottom:1px solid var(--line); }
+.reminders-tabs button { flex:1; min-height:44px; background:transparent; border:0; border-bottom:2px solid transparent; border-radius:4px 4px 0 0; box-shadow:none; }
+.reminders-tabs button[aria-selected=true] { border-bottom-color:currentColor; font-weight:650; background:var(--canvas); }
+.reminders-tabs span { font-size:11px; color:var(--muted); }
+.reminders-body { overflow:auto; min-height:0; overscroll-behavior:contain; padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+.reminders-workspace .reminder-item { display:grid; gap:8px; padding:16px 0; border-bottom:1px solid var(--line); }
+.reminder-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.reminder-heading strong { min-width:0; overflow-wrap:anywhere; }
+.reminder-heading button { flex:none; }
+.reminders-workspace .reminder-item p { margin:0; }
+.reminder-actions { display:grid; gap:10px; }
+.reminder-custom { display:flex; align-items:end; gap:8px; flex-wrap:wrap; }
+.reminder-custom label { flex:1; max-width:180px; font-size:12px; gap:4px; }
+.reminder-custom small { flex-basis:100%; color:var(--muted); font-size:11px; }
+.reminders-workspace button,.reminder-custom input { min-height:44px; }
+.reminders-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; margin-block:12px; }
+.reminders-scheduled,.reminders-pending { margin-top:12px; }
+.reminders-workspace h3 { font-size:14px; margin:0 0 8px; }
+@media(max-width:650px) { :root .dialog:has(.reminders-workspace) { width:100%; height:100dvh; max-height:100dvh; border-radius:0; } :root .dialog-inner:has(>.reminders-workspace) { height:100dvh; max-height:100dvh; padding-top:max(16px,env(safe-area-inset-top)); } .reminders-workspace { flex:1; } .reminders-tabs button { padding-inline:5px; } .reminder-custom input { font-size:16px; } }

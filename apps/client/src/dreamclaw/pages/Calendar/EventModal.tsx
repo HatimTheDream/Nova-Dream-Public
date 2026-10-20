@@ -28,6 +28,7 @@ import {
 
 interface EventModalProps {
   onClose: () => void;
+  backToReminders?: () => void;
   initialDate?: Date;
   editEvent?: CalendarEvent | null;
 }
@@ -77,7 +78,7 @@ const RECURRENCE_KEYS: Record<string, string> = {
   yearly: 'calendar.recurrence.yearly',
 };
 
-export function EventModal({ onClose, initialDate, editEvent }: EventModalProps) {
+export function EventModal({ onClose, initialDate, editEvent, backToReminders }: EventModalProps) {
   const { t } = useTranslation();
   const host = useCalendarHost();
   const editor = useCalendarEditor();
@@ -285,7 +286,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
             ? `Delete ${selectedSeriesIds.length} selected recurring day${selectedSeriesIds.length === 1 ? '' : 's'}`
             : t('calendar.actions.delete');
     return (
-      <Overlay onClose={onClose}>
+      <Overlay onClose={onClose}>{backToReminders && <button className="btn-secondary min-h-11 mb-3" disabled={editor.busy || !!editor.openingProvider} onClick={backToReminders}>Back To Reminders</button>}
         <div className="text-center py-4">
           <Trash2 size={42} emphasis="duotone" tone="danger" decorative className="mx-auto mb-3" />
           <h2 className="text-[16px] font-bold text-aegis-text mb-2">{t('calendar.deleteConfirm')}</h2>
@@ -354,7 +355,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
   // Reuse the original modal's mode switch. The retained form stays in its
   // journal while a provider review is shown, without repeating every field
   // above the same proposed values in a long disabled form.
-  if (providerLocked) return <Overlay onClose={onClose}>
+  if (providerLocked) return <Overlay onClose={onClose}>{backToReminders && <button className="btn-secondary min-h-11 mb-3" disabled={editor.busy || !!editor.openingProvider} onClick={backToReminders}>Back To Reminders</button>}
     <div className="flex items-center justify-between mb-4">
       <h2 className="text-[18px] font-bold text-aegis-text flex items-center gap-2"><CalendarDays size={22} emphasis="duotone" tone="gold" decorative/>Calendar change</h2>
       <button className="btn-secondary min-h-11 min-w-11" aria-label="Close event dialog" onClick={onClose}><X size={16}/></button>
@@ -366,7 +367,7 @@ export function EventModal({ onClose, initialDate, editEvent }: EventModalProps)
 
   // ── Form View ──
   return (
-    <Overlay onClose={onClose}>
+    <Overlay onClose={onClose}>{backToReminders && <button className="btn-secondary min-h-11 mb-3" disabled={editor.busy || !!editor.openingProvider} onClick={backToReminders}>Back To Reminders</button>}
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-[18px] font-bold text-aegis-text flex items-center gap-2">

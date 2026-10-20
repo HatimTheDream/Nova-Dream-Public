@@ -6,7 +6,9 @@ import type { CalendarTaskRow } from './task-calendar-rows';
 import type { CalendarState as SharedCalendarState } from '../../../packages/domain/calendar';
 import type { CalendarEvent as OriginalEvent } from './dreamclaw/pages/Calendar/calendarTypes';
 import { keepInboxTarget } from './inbox-target';
-import {calendarTargetKey,readCalendarTarget} from './calendar-target';
+import {calendarTargetKey,readCalendarTarget,resolveLocalCalendarTarget} from './calendar-target';
+import { readReminderView, reminderViewKey, type ReminderReturn } from './reminder-workspace';
+import { retainedWindowId } from './useWorkspace';
 import type {LocalCalendarDetail} from '../../../packages/domain/calendar';
 import { useEffect, useRef, useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -27,14 +29,14 @@ import './dreamclaw/styles.css';
 import './calendar-presentation.css';
 import { CalendarAccountSetup } from './AccountSetup';
 
-type Props = { snapshot: Snapshot; online: boolean; refresh(): Promise<void>; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void };
+type Props = { snapshot: Snapshot; online: boolean; refresh(): Promise<void>; editTask: (task: Entity<Task>) => void; openSettings: () => void; openInbox: () => void; openContent: (id: string) => void; editRoutine: (id: string) => void; reminderReturn?: ReminderReturn; canReturnToReminders?(origin: ReminderReturn, retry: () => void): boolean; returnToReminders?(origin: ReminderReturn): boolean };
 type View = { day: string; view: CalendarSettings['defaultView']; filter?: CalendarFilter };
 export default function OriginalCalendar(props: Props) {
   const [identity, setIdentity] = useState(preparedCalendarWindow);
   useEffect(() => { let live = true; void Promise.all([calendarWindowIdentity(), calendarI18nReady]).then(([identity]) => { if (live) setIdentity(identity); }); return () => { live = false; }; }, []);
   return identity ? <ConnectedCalendar key={`${props.snapshot.deviceId}:${identity.id}:${props.snapshot.epoch}:${props.snapshot.layout.value.timezone}`} {...props} windowId={identity.id} previousWindowId={identity.previous}/> : <main className="page-scroll"><LoadingRing label="Opening your calendar…"/></main>;
 }
-function ConnectedCalendar({ snapshot, windowId, previousWindowId, refresh, editTask, openSettings, openInbox, openContent, editRoutine }: Props & { windowId: string; previousWindowId?: string }) {
+function ConnectedCalendar({ snapshot, windowId, previousWindowId, refresh, editTask, openSettings, openInbox, openContent, editRoutine, reminderReturn, canReturnToReminders, returnToReminders }: Props & { windowId: string; previousWindowId?: string }) {
   const [eventTask, setEventTask] = useState<{ row: CalendarTaskRow; state: SharedCalendarState; original: OriginalEvent } | null>(null);
   const [confirmedCompletions, setConfirmedCompletions] = useState<CalendarCompletion[]>([]);
   useEffect(() => {
@@ -61,24 +63,27 @@ function ConnectedCalendar({ snapshot, windowId, previousWindowId, refresh, edit
   useEffect(()=>{
     const target=readCalendarTarget(snapshot.deviceId,windowId);if(!target)return;
     let active=true;const controller=new AbortController();
+    const currentTarget = () => active && readCalendarTarget(snapshot.deviceId, windowId)?.nonce === target.nonce;
     void (async () => {
       if (target.provider) {
         const p = target.provider;
         if (p.epoch !== snapshot.epoch) throw Error('Reopen the event from this workspace.');
         const date = new Date(p.date + 'T12:00:00');
         await store.getState().host.openLinkedEvent!(p, controller.signal);
-        if (!active) return;
+        if (!currentTarget()) return;
         store.getState().setSelectedDate(date);
       } else {
-        const detail = await request<LocalCalendarDetail>(`calendar/local/${encodeURIComponent(target.eventId)}${target.originalDate ? '?originalDate='+encodeURIComponent(target.originalDate) : ''}`, undefined, controller.signal);
-        if (!active) return;
-        if (detail.epoch !== snapshot.epoch || detail.event.id !== target.eventId) throw Error('Reconnect before opening this exact Calendar event.');
+        const scope = { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId };
+        const detail = await resolveLocalCalendarTarget(target, scope, currentTarget,
+          () => request<LocalCalendarDetail>(`calendar/local/${encodeURIComponent(target.eventId)}${target.originalDate ? '?originalDate='+encodeURIComponent(target.originalDate) : ''}`, undefined, controller.signal),
+          () => readReminderView(readLocal(reminderViewKey(scope)), scope));
+        if (!detail || !currentTarget()) return;
         store.getState().host.editor.getState().openSaved(detail);
         store.getState().setSelectedDate(new Date((detail.occurrence?.value.start.date ?? detail.event.value.start.date)+'T12:00:00'));
       }
       if(readCalendarTarget(snapshot.deviceId,windowId)?.nonce===target.nonce&&!saveLocal(calendarTargetKey(snapshot.deviceId,windowId),null))throw Error('Your event is open. Free browser storage to keep this navigation change.');
       setTargetError('');
-    })().catch(error=>{if(active)setTargetError(error instanceof Error?error.message:'This Calendar event could not be opened. Retry its saved identity.');});
+    })().catch(error=>{if(currentTarget())setTargetError(error instanceof Error?error.message:'This Calendar event could not be opened. Retry its saved identity.');});
     return()=>{active=false;controller.abort();};
   },[snapshot.deviceId,snapshot.epoch,windowId,store,targetAttempt]);
   useEffect(() => {
@@ -88,10 +93,14 @@ function ConnectedCalendar({ snapshot, windowId, previousWindowId, refresh, edit
     });
     return () => { stop(); void store.getState().cancelMonthLoad(); };
   }, [store]);
-  return <I18nextProvider i18n={calendarI18n}><CalendarStoreProvider store={store}><div className="dreamclaw-module calendar-module"><CalendarAccountSetup openSettings={openSettings}/>{targetError&&<div className="calendar-target-error" role="alert"><span>{targetError}</span><button onClick={()=>setTargetAttempt(value=>value+1)}>Retry opening event</button></div>}<CalendarPage/></div>{eventTask && <CalendarTaskEditor key={eventTask.row.key} row={eventTask.row} record={latestCalendarCompletion(calendarCompletionTarget(eventTask.row.event), snapshot.calendarCompletions ?? [], confirmedCompletions)} snapshot={snapshot} range={eventTask.state.range} generation={eventTask.state.sources.find(source => source.id === eventTask.row.event.sourceId)?.generation} close={() => setEventTask(null)} saved={record => { setConfirmedCompletions(current => [...current.filter(item => item.key !== record.key), record]); setEventTask(null); void refresh(); void store.getState().loadMonth(undefined, { background: true }); }} openCalendar={() => { const original = eventTask.original; setEventTask(null); store.getState().host.editor.getState().begin(original); }}/>}<ScopeChoice host={store.getState().host} epoch={snapshot.epoch}/></CalendarStoreProvider></I18nextProvider>;
+  const backToReminders = () => {
+    if (!reminderReturn || !canReturnToReminders?.(reminderReturn, backToReminders)) return;
+    if (store.getState().host.editor.getState().closeRetained()) returnToReminders?.(reminderReturn);
+  };
+  return <I18nextProvider i18n={calendarI18n}><CalendarStoreProvider store={store}><div className="dreamclaw-module calendar-module"><CalendarAccountSetup openSettings={openSettings}/>{targetError&&<div className="calendar-target-error" role="alert"><span>{targetError}</span><button onClick={()=>setTargetAttempt(value=>value+1)}>Retry opening event</button></div>}{reminderReturn && <div className="calendar-target-error"><button onClick={backToReminders}>Back To Reminders</button></div>}<CalendarPage backToReminders={reminderReturn ? backToReminders : undefined}/></div>{eventTask && <CalendarTaskEditor key={eventTask.row.key} row={eventTask.row} record={latestCalendarCompletion(calendarCompletionTarget(eventTask.row.event), snapshot.calendarCompletions ?? [], confirmedCompletions)} snapshot={snapshot} range={eventTask.state.range} generation={eventTask.state.sources.find(source => source.id === eventTask.row.event.sourceId)?.generation} close={() => setEventTask(null)} saved={record => { setConfirmedCompletions(current => [...current.filter(item => item.key !== record.key), record]); setEventTask(null); void refresh(); void store.getState().loadMonth(undefined, { background: true }); }} openCalendar={() => { const original = eventTask.original; setEventTask(null); store.getState().host.editor.getState().begin(original); }}/>}<ScopeChoice host={store.getState().host} epoch={snapshot.epoch} backToReminders={reminderReturn ? backToReminders : undefined}/></CalendarStoreProvider></I18nextProvider>;
 }
-function ScopeChoice({ host, epoch }: { host: CalendarHost; epoch: string }) {
+function ScopeChoice({ host, epoch, backToReminders }: { host: CalendarHost; epoch: string; backToReminders?: () => void }) {
   const editor = useStore(host.editor);
   if (editor.providerScope) return <ProviderCalendarEditScope event={editor.providerScope} close={editor.close} choose={scope => void editor.openProvider(editor.providerScope!, scope)}/>;
-  return editor.scopeEvent ? <CalendarEditScope event={editor.scopeEvent} epoch={epoch} close={editor.close} choose={editor.choose}/> : null;
+  return editor.scopeEvent ? <CalendarEditScope event={editor.scopeEvent} epoch={epoch} close={editor.close} choose={editor.choose} backToReminders={backToReminders}/> : null;
 }

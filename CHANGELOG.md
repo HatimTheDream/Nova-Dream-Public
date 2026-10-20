@@ -1,3 +1,12 @@
+## [2.9.13] — 2026-10-19
+
+### Improved
+
+- Organize Reminders into Due, Snoozed and complete paged History, with upcoming Scheduled reminders still easy to find.
+- Add custom snooze minutes and show the confirmed wake time; keep uncertain actions available for checking their original response.
+- Open the exact Task or Calendar original and return to the retained reminder view without losing draft writing, scroll or custom snooze text.
+- Keep the current editor open when return storage fails, and prevent late callbacks from closing a newer task.
+
 ## [2.9.12] — 2026-10-19
 
 ### Improved

@@ -18,6 +18,29 @@ function setup(t: TestContext, draft?: EventDraft) {
 }
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('Reminders return retains the exact pending Calendar draft and unrelated journal fields', t => {
+  const pending = { requestId: 'original-save', epoch: 'epoch', eventId: 'series', expectedRevision: 2, scope: 'occurrence' as const, originalDate: '2026-09-09', expectedOverrideRevision: 1, value };
+  const draft: EventDraft = { id: 'series', epoch: 'epoch', revision: 2, scope: 'occurrence', originalDate: '2026-09-09', overrideRevision: 1, value, pending };
+  const records = setup(t, draft), editor = createCalendarEditor(options);
+  assert.equal(editor.getState().closeRetained(), true); assert.equal(editor.getState().open, false);
+  const stored = JSON.parse(records.get(key)!); assert.deepEqual(stored.draft, draft); assert.deepEqual(stored.retainedRefresh, { requestId: 'old-refresh' });
+  const reopened = createCalendarEditor(options); assert.deepEqual(reopened.getState().draft?.pending, pending);
+});
+test('Reminders return refuses busy or full storage without changing editor identity, scope or provider state', t => {
+  setup(t, { id: 'event', epoch: 'epoch', revision: 1, value }); const editor = createCalendarEditor(options);
+  const original = editor.getState().draft;
+  editor.setState({ busy: true }); assert.equal(editor.getState().closeRetained(), false); assert.equal(editor.getState().open, true);
+  const source = { id: 'original-provider-event' } as NonNullable<ReturnType<typeof editor.getState>['source']>;
+  const scopeEvent = { eventId: 'original-series', originalDate: '2026-09-09' } as NonNullable<ReturnType<typeof editor.getState>['scopeEvent']>;
+  const openingProvider = { event: source, scope: 'event' as const };
+  editor.setState({ busy: false, source, scopeEvent, providerScope: source, openingProvider });
+  assert.equal(editor.getState().closeRetained(), false); assert.equal(editor.getState().openingProvider, openingProvider);
+  editor.setState({ openingProvider: undefined }); t.mock.method(localStorage, 'setItem', () => { throw Error('Full'); });
+  assert.equal(editor.getState().closeRetained(), false); assert.equal(editor.getState().open, true); assert.equal(editor.getState().draft, original);
+  assert.equal(editor.getState().source, source); assert.equal(editor.getState().scopeEvent, scopeEvent); assert.equal(editor.getState().providerScope, source);
+  assert.match(editor.getState().storageError, /storage/);
+});
+
 test('the Calendar add entry creates a new draft only when empty and otherwise resumes the saved event identity', t => {
   setup(t, { id: 'saved-event', epoch: 'epoch', revision: 7, value });
   const retained = createCalendarEditor(options);

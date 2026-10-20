@@ -28,14 +28,18 @@ export function useTaskWorkspace(snapshot: Snapshot) {
   };
 }
 
-export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin }: {
+export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin, canClose = () => true }: {
   workspace: ReturnType<typeof useTaskWorkspace>; snapshot: Snapshot; refresh(): Promise<void>;
   closed(origin: TaskOrigin): void; openOrigin(origin: NonNullable<Task['origin']>): void;
+  canClose?(origin: TaskOrigin, retry: () => void): boolean;
 }) {
   const state = workspace.state;
   if (!state?.active) return workspace.error ? <Dialog title="Open Task" close={workspace.dismissError}><p role="alert">{workspace.error}</p></Dialog> : null;
   const task = workspace.task, frame = state.frames.at(-1)!;
-  const finish = () => { if (workspace.close()) closed(state.origin); };
+  const finish = () => {
+    if (!workspace.controller.state?.active || workspace.controller.state.token !== state.token) return;
+    if (canClose(state.origin, finish) && workspace.close()) closed(state.origin);
+  };
   if (!task) return <Dialog title="Task Unavailable" close={finish}><p>The original task is unavailable in this workspace. Its draft and return path are kept.</p>{workspace.error && <p role="alert">{workspace.error}</p>}{state.frames.length > 1 && <button type="button" onClick={workspace.back}>Back To Previous Task</button>}<button type="button" onClick={finish}>Back To {state.origin.label}</button></Dialog>;
   const previous = state.frames.at(-2), parent = previous && workspace.controller.resolve(previous.taskId);
   return <TaskEditor key={task.id} task={task} snapshot={snapshot} section={frame.section} scroll={frame.scroll} sectionScroll={frame.sectionScroll} keepView={workspace.view}
@@ -44,7 +48,8 @@ export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin
     navigationError={workspace.error} close={finish} openTask={workspace.go} newTask={workspace.child}
     openOrigin={origin => { if (workspace.close()) openOrigin(origin); }}
     saved={(confirmed, clean) => {
-      const changed = workspace.acknowledge(confirmed, state.token, clean);
+      const returning = clean && workspace.controller.state?.token === state.token && state.frames.length === 1;
+      const changed = workspace.acknowledge(confirmed, state.token, clean && (!returning || canClose(state.origin, finish)));
       if (changed && !workspace.controller.state?.active) closed(state.origin);
       void refresh();
     }}/>

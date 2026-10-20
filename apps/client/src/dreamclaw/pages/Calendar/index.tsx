@@ -30,7 +30,7 @@ import { ALL_SOURCES, SOURCE_META, type CalendarEvent } from './calendarTypes';
 const ENGLISH_DATE = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', calendar: 'gregory' });
 const ENGLISH_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', calendar: 'gregory' });
 
-export default function CalendarPage() {
+export default function CalendarPage({ backToReminders }: { backToReminders?: () => void }) {
   const { i18n } = useTranslation();
   const isRtl = i18n.dir() === 'rtl';
   const {
@@ -242,7 +242,7 @@ export default function CalendarPage() {
           </aside>
         </div>
 
-        {showModal && <EventModal key={editor.draft?.id ?? editingEvent?.id ?? "new"} onClose={handleCloseModal} initialDate={modalDate} editEvent={editingEvent} />}
+        {showModal && <EventModal key={editor.draft?.id ?? editingEvent?.id ?? "new"} onClose={handleCloseModal} backToReminders={backToReminders} initialDate={modalDate} editEvent={editingEvent} />}
       </div>
     </PageTransition>
   );
