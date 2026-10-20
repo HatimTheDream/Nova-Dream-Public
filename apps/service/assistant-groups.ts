@@ -77,6 +77,10 @@ export class AssistantGroups {
     const command = groupCommandSchema.parse(raw);
     try {
       return this.store.admitAssistantGroup(device, command, bundle => {
+        // This exact code is a fresh-request rejection before any write. Existing
+        // original receipts bypass prepare and must still reconcile unchanged.
+        if ((bundle.group?.revision ?? 0) !== command.expectedRevision)
+          throw new Fault(409, 'group_revision_changed', 'This Group changed. Review its saved members before making a new change.');
         const visibility = command.action === 'set-archived' || command.action === 'set-trashed';
         const projectId = command.action === 'create' ? command.projectId : bundle.group?.projectId;
         if (!visibility && projectId && (!this.store.readEntity('project', projectId) || this.store.projectIsDeleted(projectId)))
