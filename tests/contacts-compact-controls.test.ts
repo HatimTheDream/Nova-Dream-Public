@@ -213,3 +213,15 @@ test('returning to a pending activity keeps its original text, timestamp, revisi
   assert.deepEqual(app.calls.map(call => call.body), [command]); assert.deepEqual(JSON.parse(app.storage.get(key)!), { value, revision: 0, pending: command }); await app.mount(); assert.equal(nodes(app.tree).find(node => node.type === 'textarea').props.value, value.text);
  } finally { app.close(); }
 });
+
+
+test('recovery navigation admits the exact unfinished Contact only after its index is retained', async () => {
+ const f=fixture(),app=host(Contacts,f.props),id='contact:recovered';
+ try {await app.flush();button(menu(app.tree,'Contact Options'),'Recover Writing').props.onClick();await app.flush();
+  const dialog=nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery');assert.equal(dialog.props.canOpen,true);
+  const set=app.storage.set.bind(app.storage);app.storage.set=()=>{throw Error('Index refused');};assert.equal(dialog.props.open(id),false);await app.flush();assert.equal(nodes(app.tree).some(node=>node.type?.name==='RecordEditor'),false);
+  app.storage.set=set;assert.equal(nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery').props.open(id),true);await app.flush();
+  assert.equal(JSON.parse(app.storage.get(indexKey())!).selected,id);assert.deepEqual(JSON.parse(app.storage.get(indexKey())!).drafts,[id]);assert.equal(nodes(app.tree).find(node=>node.type?.name==='RecordEditor').props.id,id);
+  assert.equal(nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery').props.canOpen,false);assert.deepEqual(app.calls,[]);
+ } finally {app.close();}
+});

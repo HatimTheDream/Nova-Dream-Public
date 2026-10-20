@@ -192,3 +192,14 @@ test('opening Brands preserves a retained template editor and reconciles the exa
   await app.mount(); assert.deepEqual(JSON.parse(app.storage.get(draftKey)!), draft); assert.deepEqual(JSON.parse(app.storage.get(pendingKey)!), original);
  } finally { app.close(); }
 });
+
+
+test('Content recovery retains its exact ID and refuses navigation when its local index cannot be written', async () => {
+ const f=fixture(),app=host(RecordsPage,f.props),id='content:recovered';
+ try {await collection(app);button(app.tree,'Recover Writing').props.onClick();await app.flush();
+  const dialog=nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery');assert.equal(dialog.props.canOpen,true);
+  const set=app.storage.set.bind(app.storage);app.storage.set=()=>{throw Error('Index refused');};assert.equal(dialog.props.open(id),false);await app.flush();assert.equal(JSON.parse(app.storage.get(indexKey())??'{}').selected??null,null);
+  app.storage.set=set;assert.equal(nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery').props.open(id),true);await app.flush();
+  assert.equal(JSON.parse(app.storage.get(indexKey())!).selected,id);assert.deepEqual(JSON.parse(app.storage.get(indexKey())!).drafts,[id]);assert.equal(nodes(app.tree).find(node=>node.type?.name==='RecordDraftRecovery').props.canOpen,false);assert.deepEqual(app.calls,[]);
+ } finally {app.close();}
+});

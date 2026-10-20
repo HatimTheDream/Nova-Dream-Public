@@ -1,3 +1,11 @@
+## [2.9.18] — 2026-10-19
+
+### Improved
+
+- Find unfinished Contact and Content writing kept by another window with Recover Writing.
+- Open an explicit kept copy without replacing current writing or sending a save; preserve original pending requests and source drafts.
+- Keep copied writing reachable when browser storage cannot finish opening it, with clear limits for changed or older workspace records.
+
 ## [2.9.17] — 2026-10-19
 
 ### Improved
