@@ -21,6 +21,7 @@ const loader = registerHooks({
     const f = `const f=()=>globalThis[Symbol.for('nova.test.profile-week-ui')];`;
     if (url === 'nova-week:react') return { format: 'module', shortCircuit: true, source: `export * from ${JSON.stringify(react)};${f}export const useState=v=>f().state(v);export const useRef=v=>f().ref(v);export const useEffect=(fn,deps)=>f().effect(fn,deps);` };
     if (url === 'nova-week:api') return { format: 'module', shortCircuit: true, source: `${f}export const request=(p,d)=>{if(d!==undefined)throw Error('No command allowed');return f().read(p);};` };
+    if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
     return next(url, context);
   },
 });
@@ -56,7 +57,7 @@ class Fixture {
   render(active = true) {
     instances.add(this); (globalThis as any)[key] = this; this.index = 0; this.effects = [];
     const available = this.available;
-    const tree = ProfileWeek({ epoch: 'epoch', progress: this.progress, revision: 121, view: this.view, active,
+    const tree = ProfileWeek({ epoch: 'epoch', deviceId: 'device', progress: this.progress, revision: 121, view: this.view, active,
       changeView: patch => { if (this.failSave) return false; this.view = { ...this.view, ...patch }; return true; },
       captureView: patch => { this.view = { ...this.view, ...patch }; }, canOpenTask: id => available && id === task.id, openTask: id => this.opened.push(id) });
     for (const node of nodes(tree)) if (node.props?.ref && typeof node.props.ref === 'object') node.props.ref.current = { closest: () => this.scroll, focus: () => this.focused.push(text(node)) };
