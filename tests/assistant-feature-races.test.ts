@@ -22,6 +22,8 @@ const loader = registerHooks({
 });
 const { ChatGoalControl } = await import('../apps/client/src/ChatGoal');
 const { QuestionCard } = await import('../apps/client/src/QuestionCard');
+const { ApprovalTray } = await import('../apps/client/src/ApprovalTray');
+const { AssistantRunHistory, questionOwnedByConversation } = await import('../apps/client/src/AssistantRunHistory');
 const { retainedWindowId } = await import('../apps/client/src/useWorkspace');
 const { GeneratedOutput } = await import('../apps/client/src/GeneratedOutput');
 const { PlanReviewCard, PlanReviewDecision, PlanReviewDocument } = await import('../apps/client/src/PlanReviewCard');
@@ -404,4 +406,59 @@ test('plan-change Enter submits only an amendment while Shift and composition ke
     find(app.tree, node => node.type === 'form').props.onSubmit(event);
     assert.equal(amended, 1); assert.equal(approved, 0); assert.equal(app.calls.length, 0);
   } finally { app.close(); }
+});
+
+
+test('retained Run History never mounts a second question writer while the original tray keeps a newer answer', async () => {
+  const item = { id: 'original-question', revision: 4, conversationId: 'chat-a', availability: 'live', snapshot: { status: 'pending', expiresAtMs: 60000, questions: [
+    { questionId: 'notes', question: 'What should stay?', options: [] },
+  ] } };
+  const controller = { questions: { state: 'ready', items: [item] }, refresh: async () => {} };
+  const tray = ApprovalTray({ controller, conversationId: 'chat-a', epoch: 'epoch', working: false } as any);
+  const card = find(tray, node => node.type === QuestionCard);
+  assert.equal(card.props.item, item);
+  const wrapper = QuestionCard(card.props), app = host(wrapper.type as any, wrapper.props);
+  const writingKey = `e3:question:epoch:${retainedWindowId}:original-question`;
+  let returned: string | undefined;
+  const history = () => AssistantRunHistory({ operations: [], controller, conversation, epoch: 'epoch', openSources() {}, returnToQuestion: (id: string) => { returned = id; } } as any);
+  app.storage.set(writingKey, JSON.stringify({ choices: {}, text: { notes: 'Older kept answer' } }));
+  try {
+    await app.flush();
+    const openedHistory = history();
+    assert.equal(find(openedHistory, node => node.type === QuestionCard), undefined);
+    // Hide History, type in the still-mounted original tray, then reopen it.
+    find(app.tree, node => node.type === 'textarea').props.onChange({ target: { value: 'The newer answer must survive' } });
+    await app.flush();
+    const reopenedHistory = history();
+    assert.equal(find(reopenedHistory, node => node.type === QuestionCard), undefined);
+    find(reopenedHistory, node => node.type === 'button' && node.props.children === 'Return To Question').props.onClick();
+    assert.equal(returned, item.id); assert.equal(app.calls.length, 0, 'returning does not submit, check or replace a request');
+    assert.equal(JSON.parse(app.storage.get(writingKey)!).text.notes, 'The newer answer must survive');
+    find(app.tree, node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await app.flush();
+    assert.equal(app.calls.length, 1);
+    const sent = JSON.parse(String(app.calls[0].init.body));
+    assert.equal(sent.id, item.id); assert.equal(sent.expectedRevision, 4);
+    assert.deepEqual(sent.answers, { notes: ['The newer answer must survive'] });
+  } finally { app.close(); }
+});
+
+test('Run History keeps missing, dismissed, unknown and archived question recovery on its existing owner', () => {
+  const original = { id: 'question', revision: 3, conversationId: 'chat-a', availability: 'live', snapshot: { status: 'pending', expiresAtMs: 60000, questions: [{ questionId: 'answer', question: 'Keep this?', options: [] }] } };
+  const unknown = { requestId: 'original-action', kind: 'answer', state: 'unknown', message: 'Answer unconfirmed' };
+  for (const item of [original, { ...original, availability: 'missing' }, { ...original, action: unknown }, { ...original, snapshot: { ...original.snapshot, status: 'answered' }, action: unknown }]) {
+    const controller = { questions: { state: 'ready', items: [item] }, refresh: async () => {} };
+    const tree = AssistantRunHistory({ operations: [], controller, conversation, epoch: 'epoch', openSources() {}, returnToQuestion() {} } as any);
+    assert.equal(questionOwnedByConversation(item as any, conversation as any), true);
+    assert.equal(find(tree, node => node.type === QuestionCard), undefined);
+    assert.ok(find(tree, node => node.props?.children === 'Return To Question'));
+    assert.ok(find(ApprovalTray({ controller, conversationId: 'chat-a', epoch: 'epoch', working: false } as any), node => node.type === QuestionCard));
+  }
+  for (const [item, current] of [[{ ...original, dismissed: true, availability: 'missing', action: unknown }, conversation], [{ ...original, snapshot: { ...original.snapshot, status: 'answered' } }, conversation], [original, { ...conversation, archived: true }]] as const) {
+    const tree = AssistantRunHistory({ operations: [], controller: { questions: { state: 'ready', items: [item] }, refresh: async () => {} }, conversation: current, epoch: 'epoch', openSources() {}, returnToQuestion() {} } as any);
+    assert.equal(questionOwnedByConversation(item as any, current as any), false);
+    const card = find(tree, node => node.type === QuestionCard);
+    assert.equal(card.props.item, item);
+    assert.equal(card.props.readOnly, !!current.archived);
+    assert.equal(find(tree, node => node.props?.children === 'Return To Question'), undefined);
+  }
 });

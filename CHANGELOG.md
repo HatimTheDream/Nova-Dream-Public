@@ -1,3 +1,11 @@
+## [2.9.14] — 2026-10-19
+
+### Improved
+
+- Keep Message Context, Captured Sources and Run History in the Assistant workspace, with exact original file previews and separate current versus captured project versions.
+- Preserve open tabs, selected sources and unsent writing when hiding the workspace or returning to the conversation; give narrow layouts an explicit Back control.
+- Keep one authoritative pending-question editor and return to its exact original question without sending or replaying an action.
+
 ## [2.9.13] — 2026-10-19
 
 ### Improved

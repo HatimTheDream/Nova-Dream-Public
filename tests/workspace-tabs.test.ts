@@ -55,3 +55,32 @@ test('optional plan tabs retain identity but reopen closed after recovery', () =
   assert.deepEqual(restored.tabs, state.tabs);
   assert.deepEqual(restoreWorkspace({ ...state, tabs: [{ id: first, view: { kind: 'plan', planId: '' } }] }), emptyWorkspace());
 });
+
+
+test('current sources, captured replies and history retain distinct identities through hide and reload', () => {
+  let state = workspaceTabs(emptyWorkspace(), { type: 'open', view: { kind: 'sources' } });
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'sources', operationId: 'reply-one' } });
+  const firstReply = state.active;
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'sources', operationId: 'reply-two' } });
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'history' } });
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'sources', operationId: 'reply-one' } });
+  assert.equal(state.active, firstReply);
+  assert.deepEqual(state.tabs.map(tab => tab.id), ['sources:next', 'sources:reply:reply-one', 'sources:reply:reply-two', 'history']);
+  const hidden = workspaceTabs(state, { type: 'visibility', visible: false });
+  const restored = restoreWorkspace(JSON.parse(JSON.stringify(hidden)));
+  assert.deepEqual(restored, hidden);
+  assert.deepEqual(workspaceTabs(restored, { type: 'visibility', visible: true }), state);
+  const closed = workspaceTabs(restored, { type: 'close', id: firstReply });
+  assert.equal(closed.tabs.some(tab => tab.id === firstReply), false);
+  assert.equal(closed.tabs.some(tab => tab.id === 'sources:next'), true);
+});
+
+test('source recovery rejects a substituted identity, empty capture or copied context instead of changing its meaning', () => {
+  const state = workspaceTabs(emptyWorkspace(), { type: 'open', view: { kind: 'sources', operationId: 'reply' } });
+  for (const tab of [
+    { id: 'sources:next', view: { kind: 'sources', operationId: 'reply' } },
+    { id: 'sources:reply:', view: { kind: 'sources', operationId: '' } },
+    { id: 'sources:next', view: { kind: 'sources', project: { revision: 4 } } },
+    { id: 'sources:next', view: { kind: 'sources', operationId: 'x'.repeat(201) } },
+  ]) assert.deepEqual(restoreWorkspace({ ...state, active: tab.id, tabs: [tab] }), emptyWorkspace());
+});

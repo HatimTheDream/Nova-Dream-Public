@@ -68,12 +68,12 @@ function workspace() {
   panel.querySelectorAll = () => [selected, editor, hide];
   opener.focus();
 
-  let cursor = 0, dirty = true, tree: any, closeCount = 0;
+  let cursor = 0, dirty = true, tree: any, closeCount = 0, tabCloseCount = 0;
   const cells: any[] = [], effects: (() => void)[] = [], layouts: (() => void)[] = [], frames: (() => void)[] = [];
   let sidebarFocusPending = false;
   const changes = new Set<() => void>();
   const media = { matches: false, addEventListener: (_name: string, change: () => void) => changes.add(change), removeEventListener: (_name: string, change: () => void) => changes.delete(change) };
-  let props = { tabs: [{ id: 'tab', view: { kind: 'home' as const } }], active: 'tab', visible: true, expanded: false, select() {}, closeTab() {}, addTab() {}, expand() {}, close() { closeCount++; props = { ...props, visible: false }; dirty = true; }, fallbackFocus: () => fallback as unknown as HTMLElement, children: null };
+  let props = { tabs: [{ id: 'tab', view: { kind: 'home' as const } }], active: 'tab', visible: true, expanded: false, select() {}, closeTab() { tabCloseCount++; }, addTab() {}, expand() {}, close() { closeCount++; props = { ...props, visible: false }; dirty = true; }, fallbackFocus: () => fallback as unknown as HTMLElement, children: null };
   const values: Record<PropertyKey, unknown> = {
     [hookKey]: {
       state(value: any) { const index = cursor++; if (!cells[index]) cells[index] = { value: typeof value === 'function' ? value() : value }; return [cells[index].value, (next: any) => { cells[index].value = typeof next === 'function' ? next(cells[index].value) : next; dirty = true; }]; },
@@ -102,8 +102,14 @@ function workspace() {
   };
   return {
     doc, composer, opener, fallback, selected, editor, hide, navigation, writing, alreadyInert,
-    get tree() { return tree; }, get closeCount() { return closeCount; },
+    get tree() { return tree; }, get closeCount() { return closeCount; }, get tabCloseCount() { return tabCloseCount; },
     flush,
+    back() {
+      const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
+      const button = nodes(tree).find(node => node.type === 'button' && node.props.className === 'workspace-back');
+      assert.ok(button, 'the focused workspace has an explicit Back control');
+      button.props.onClick(); flush();
+    },
     resize(narrow: boolean, sidebarCloses = false) { media.matches = narrow; sidebarFocusPending = sidebarCloses; for (const change of changes) change(); flush(); },
     expand() { props = { ...props, expanded: true }; dirty = true; flush(); },
     key(key: string, shiftKey = false) {
@@ -211,4 +217,20 @@ test('responsive rail closing preserves composer or modal focus, but restores fo
     for (const cell of cells) cell?.cleanup?.();
     for (const [key, descriptor] of originals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
   }
+});
+
+
+test('the focused workspace Back action hides without closing its selected tab and restores the original writing focus', () => {
+  const h = workspace();
+  try {
+    h.flush(); h.composer.focus(); h.resize(true);
+    assert.match(h.tree.props.className, /workspace-focused/);
+    h.back();
+    assert.equal(h.closeCount, 1);
+    assert.equal(h.tabCloseCount, 0, 'Back never dispatches the destructive tab-close action');
+    assert.equal(h.tree.props.hidden, true);
+    assert.equal(h.doc.activeElement, h.composer);
+    assert.equal(h.writing.inert, false);
+    assert.equal(h.alreadyInert.inert, true);
+  } finally { h.close(); }
 });

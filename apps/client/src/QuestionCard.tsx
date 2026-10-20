@@ -59,7 +59,7 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
     catch { setErrorAction('copy'); setError('The draft could not be copied. Select its text in the kept answer below.'); }
   };
   const single = item.snapshot.questions[0];
-  if (compact && live && !secret && item.snapshot.questions.length === 1 && !single.multiSelect && !uncertain && !sending && !clock.expired && !error && !readOnly) return <section className="approval-card request-card question-card compact-question" aria-label="Question from Nova">
+  if (compact && live && !secret && item.snapshot.questions.length === 1 && !single.multiSelect && !uncertain && !sending && !clock.expired && !error && !readOnly) return <section data-question-id={item.id} className="approval-card request-card question-card compact-question" aria-label="Question from Nova">
     <form onSubmit={event => { event.preventDefault(); if (complete && editable && ready) void act('resolve'); }}>
       <button type="button" className="compact-question-cancel" aria-label="Cancel question" title="Cancel question" disabled={!editable || !ready} onClick={() => void act('cancel')}><X size={16}/></button>
       <fieldset disabled={!editable}><legend>{single.question}</legend>
@@ -69,7 +69,7 @@ function QuestionForm({ item, epoch, ready, refresh, readOnly = false, compact =
       {!ready && <p className="request-context">Reconnect to submit your answer.</p>}{notSaved && <p role="alert">Your answer is not saved on this browser. Keep this view open until you submit it.</p>}
     </form>
   </section>;
-  return <section className={`approval-card request-card question-card${paged ? ' paged-question' : ''}`} aria-label={secret ? 'Secure information request' : 'Question from Nova'}>
+  return <section data-question-id={item.id} className={`approval-card request-card question-card${paged ? ' paged-question' : ''}`} aria-label={secret ? 'Secure information request' : 'Question from Nova'}>
     <form onSubmit={event => { event.preventDefault(); if (paged && !last) move(1); else if (complete && editable && ready) void act('resolve'); }} onKeyDown={event => {
       if (!paged || event.key !== 'Enter' || event.nativeEvent.isComposing || !(event.target instanceof HTMLInputElement) || !['radio', 'checkbox'].includes(event.target.type)) return;
       event.preventDefault();

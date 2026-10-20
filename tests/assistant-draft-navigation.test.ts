@@ -140,3 +140,45 @@ test('the actual Editor registers draft protection for row and New Chat controls
   f.full(true);
   assert.equal(mayLeaveAssistantDraft(), true, 'unmount removes the old editor callback');
 });
+
+
+test('actual Editor source preview, History and Back keep the original conversation draft and mounted tab contents', t => {
+  const f = fixture(t), controller = f.renderAssistant(), time = '2026-10-19T12:00:00Z';
+  const attachment = { id: 'original-file', name: 'Keep The Original Name.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' };
+  const conversation = { id: 'original', nativeId: 'native', nativeKey: 'key', connectionGeneration: 'generation', revision: 1, title: 'Original', state: 'ready', projectId: null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time };
+  const operation = { id: 'original-reply', conversationId: 'original', state: 'completed', createdAt: time, updatedAt: time, input: 'Original sent input', text: 'Saved result', context: { attachments: [attachment], project: null } };
+  let calls = 0; t.mock.method(globalThis, 'fetch', async () => { calls++; throw Error('Inspection must not dispatch'); });
+  const props = { appIcon: 'red', snapshot: { ...f.snapshot, records: {}, drafts: [{ id: f.id, deviceId: 'device', revision: 1, value: { ...emptyDraft, conversationId: 'original', text: 'Original draft', attachments: [attachment] }, updatedAt: time }] },
+    controller: { ...controller, conversation, conversations: [conversation], operations: [operation], connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, statusRead: 'ready' },
+    voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) }, contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {},
+  } as unknown as Parameters<typeof Assistant>[0];
+  const outer = f.renderer(() => Assistant(props))();
+  const renderBranch = f.renderer(() => (outer.type as any)(outer.props)); let branch = renderBranch();
+  const renderEditor = f.renderer(() => (branch.type as any)(branch.props));
+  const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
+  const render = () => { branch = renderBranch(); return nodes(renderEditor()); };
+  let controls = render();
+  controls.find(node => node.type === 'textarea').props.onChange({ target: { value: 'Newer unsent writing' } });
+  controls = render();
+  controls.find(node => node.type?.name === 'ConversationHeaderTools').props.sources();
+  controls = render();
+  let panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
+  assert.equal(panel.props.visible, true); assert.equal(panel.props.active, 'sources:next');
+  controls.find(node => node.type?.name === 'ConversationSources').props.openFile(attachment);
+  controls = render(); panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
+  assert.equal(panel.props.active, `file:${attachment.id}:${attachment.sha256}`);
+  assert.ok(controls.some(node => node.type?.name === 'ConversationSources'), 'source contents stay mounted behind the exact file preview');
+  panel.props.select('sources:next'); controls = render();
+  controls.find(node => node.type?.name === 'ConversationHeaderTools').props.runs();
+  controls = render(); panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
+  assert.equal(panel.props.active, 'history');
+  const keptTabs = panel.props.tabs;
+  panel.props.close(); controls = render(); panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
+  assert.equal(panel.props.visible, false); assert.equal(panel.props.tabs, keptTabs);
+  assert.ok(controls.some(node => node.type?.name === 'AssistantRunHistory'), 'Back hides rather than unmounts History');
+  assert.equal(controls.find(node => node.type === 'textarea').props.value, 'Newer unsent writing');
+  assert.deepEqual(branch.props.journal.value.attachments, [attachment]);
+  assert.equal(f.renderAssistant().selectedId, 'original');
+  assert.equal(JSON.parse(f.storage.get(f.journalKey)!).value.text, 'Newer unsent writing');
+  assert.equal(calls, 0); assert.equal(operation.input, 'Original sent input');
+});

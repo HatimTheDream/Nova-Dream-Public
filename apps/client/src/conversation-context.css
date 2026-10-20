@@ -79,3 +79,40 @@
   .assistant-workspace .composer .response-control .composer-labeled-button > svg { display: block; }
   .assistant-workspace .composer .response-control .composer-labeled-button > .e3-icon { display: inline-flex; }
 }
+
+/* Retained Assistant workspace: docked inspection or a focused Back view. */
+.assistant-tabbed-panel { flex-basis: 42%; max-width: 560px; }
+.assistant-tabbed-panel > .workspace-heading { display: flex; align-items: center; gap: 10px; flex: none; min-width: 0; padding: 10px 12px 6px; }
+.workspace-heading h2 { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; }
+.workspace-heading-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+:root .assistant-tabbed-panel :is(.workspace-heading-actions > .icon-button, .workspace-back, .workspace-tab > button) { --button-fill: var(--raised); --button-border: var(--line); min-height: 32px; height: 32px; box-shadow: none; border: 1px solid var(--line); background: var(--raised); color: var(--text); font-weight: 500; }
+:root .assistant-tabbed-panel .workspace-heading-actions > .icon-button { width: 32px; min-width: 32px; padding: 5px; }
+:root .assistant-tabbed-panel .workspace-back { width: auto; flex: none; gap: 6px; padding-inline: 8px; }
+.assistant-tabbed-panel > .workspace-tab-strip { min-height: 42px; padding: 4px 10px 8px; }
+.workspace-tabs { gap: 5px; }
+.workspace-tab { flex: 0 1 auto; min-width: 0; max-width: 220px; gap: 1px; background: transparent; }
+:root .assistant-tabbed-panel .workspace-tab > button[role=tab] { max-width: 180px; padding-inline: 8px; background: transparent; border-color: transparent; }
+:root .assistant-tabbed-panel .workspace-tab.selected > button[role=tab] { background: var(--selection); color: var(--selection-ink); }
+:root .assistant-tabbed-panel .workspace-tab-close { width: 32px; min-width: 32px; background: transparent; border-color: transparent; }
+:root .assistant-tabbed-panel button:hover:not(:disabled) { background: var(--canvas); }
+:root .assistant-tabbed-panel .workspace-tab.selected > button[role=tab]:hover { background: var(--selection); }
+@media (max-width: 1100px) {
+  .assistant-context-panel.workspace-focused { inset: 0; width: 100%; max-width: none; min-width: 0; box-shadow: none; border-inline-start: 0; }
+  .workspace-focused > .workspace-heading { flex-wrap: wrap; padding: 8px 12px 4px; }
+  .workspace-focused .workspace-back { order: 0; }
+  .workspace-focused .workspace-heading-actions { order: 1; margin-inline-start: auto; }
+  .workspace-focused .workspace-heading h2 { order: 2; flex-basis: 100%; padding-block: 4px; }
+  .workspace-focused .workspace-tabs { flex-wrap: wrap; max-height: min(156px, 30dvh); overflow: auto; }
+  .workspace-focused .workspace-tab { max-width: 100%; }
+  .workspace-focused .workspace-tab-content { padding: 14px; }
+}
+@media (max-width: 800px), (pointer: coarse) {
+  :root .assistant-tabbed-panel :is(.workspace-heading-actions > .icon-button, .workspace-back, .workspace-tab > button) { min-height: 44px; height: 44px; }
+  :root .assistant-tabbed-panel :is(.workspace-heading-actions > .icon-button, .workspace-tab-close) { width: 44px; min-width: 44px; }
+  .assistant-tabbed-panel :is(input, textarea, select) { font-size: 16px; }
+}
+
+.workspace-source-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace-source-row .source-link { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+:root .assistant-tabbed-panel :is(.workspace-source-row > button, .conversation-sources > button, .history-question-summary > button, .workspace-tab-content > details > button) { min-height: 32px; width: auto; flex: none; padding: 4px 10px; background: var(--raised); box-shadow: none; }
+@media (max-width: 800px), (pointer: coarse) { :root .assistant-tabbed-panel :is(.workspace-source-row > button, .conversation-sources > button, .history-question-summary > button, .workspace-tab-content > details > button) { min-height: 44px; } }
