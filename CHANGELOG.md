@@ -1,3 +1,12 @@
+## [2.9.17] — 2026-10-19
+
+### Improved
+
+- Find Settings through seven clear sections with compact section switching and truthful workspace or device scope.
+- Keep visited forms, account connection requests and unsaved writing intact when moving between Settings sections.
+- Review unsaved Appearance changes before leaving Settings, and return to the original destination only after the requested save or discard succeeds.
+- Preserve paired-phone restrictions and read-only version details while keeping owner controls out of restricted views.
+
 ## [2.9.16] — 2026-10-19
 
 ### Fixed

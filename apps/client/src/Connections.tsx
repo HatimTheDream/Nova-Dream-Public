@@ -10,7 +10,7 @@ import { pollReader } from './polling';
 import { ChatGptAccountList } from './ChatGptAccounts';
 import { accountIntentWasNotAdmitted, accountSummary, accountTime, keepSignInIntent, type AccountOrderIntent, type AccountSignInIntent } from './chatgpt-account-controls';
 
-export function Connections({ snapshot, online, openAssistant, remoteHost = false, recoveryPaused = false }: { snapshot: Snapshot; online: boolean; openAssistant: () => void; remoteHost?: boolean; recoveryPaused?: boolean }) {
+export function Connections({ snapshot, online, openAssistant, remoteHost = false, recoveryPaused = false, section = 'all', openAccounts, openSetup }: { snapshot: Snapshot; online: boolean; openAssistant: () => void; remoteHost?: boolean; recoveryPaused?: boolean; section?: 'accounts' | 'assistant' | 'all' | null; openAccounts?: () => void; openSetup?: () => void }) {
   const canConnect = online && !recoveryPaused;
   const [assistant, setAssistant] = useState<AssistantState>();
   const [runtime, setRuntime] = useState<RuntimeStatus>();
@@ -103,15 +103,32 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
   };
   const unresolvedSignIn = signIn?.state === 'interrupted' && (!accountReady || accountStale || account?.state !== 'available' || !signIn.profileId || account.accounts?.find(value => value.profileId === signIn.profileId)?.health !== 'ready');
   const showSignIn = waitingForSignIn || unresolvedSignIn || !!pendingSignIn || !accountReady;
-  return <section className="card settings-card"><h2>Assistant</h2>{recoveryPaused && <p className="notice">Connections are paused in this copy. Open Data to review recovery.</p>}
+  // Both views share this single owner. Hiding a view never recreates its readers,
+  // pending account intents or gateway secret; the parent keys the owner by workspace/device.
+  return <section className="card settings-card settings-connection-owner" hidden={section === null} inert={section === null}>
+    <h2>{section === 'accounts' ? 'ChatGPT accounts' : 'Assistant connection'}</h2>
+    {recoveryPaused && <p className="notice">Connections are paused in this copy. Open Backups & Recovery to review recovery.</p>}
+    {error && <p className="field-error" role="alert">{error}</p>}
+    <div hidden={section === 'accounts'} inert={section === 'accounts'}>
     <div className="assistant-setup"><div className="section-heading settings-connection-status"><strong>{recoveryPaused ? 'Paused for recovery' : !online ? 'Offline' : accountReady ? 'Ready to work' : !connection ? 'Checking connection…' : connecting ? 'Connecting…' : 'Connection needs attention'}</strong>
       {accountReady ? <button onClick={openAssistant}>Open Assistant</button> : <button className="primary" disabled={!canConnect || busy || !runtime || !connection || runtime.state === 'starting'} onClick={() => void perform(() => request('assistant/runtime/start', { requestId: crypto.randomUUID(), epoch: snapshot.epoch }))}>{!runtime || !connection ? 'Checking this host…' : runtime.state === 'starting' ? 'Starting OpenClaw…' : runtime.state === 'running' ? 'Reconnect this host' : 'Start on this host'}</button>}</div>
       {!ready && <p className="metadata" role="status">{connection?.message ?? 'Reading connection status…'}</p>}
       {connection?.pairingRequestId && <p className="notice">OpenClaw needs approval for this device. Request: <code>{connection.pairingRequestId}</code></p>}
       {runtime && ['starting', 'error', 'unavailable'].includes(runtime.state) && <p className={runtime.state === 'starting' ? 'metadata' : 'field-error'} role="status">{runtime.message}{runtime.state === 'starting' && runtime.elapsedSeconds !== undefined && ` · ${runtime.elapsedSeconds < 60 ? `${runtime.elapsedSeconds}s` : `${Math.floor(runtime.elapsedSeconds / 60)}m ${runtime.elapsedSeconds % 60}s`} elapsed`}</p>}
-      {error && <p className="field-error" role="alert">{error}</p>}
     </div>
-    <div className="assistant-setup voice-signin"><h3>ChatGPT accounts</h3>
+      {voice && <div className="voice-readiness"><strong>{voice.state === 'available' ? 'Voice connection available' : voice.state === 'unconfigured' ? 'Voice account needed' : voice.state === 'disconnected' ? 'Assistant disconnected' : 'Voice access not confirmed'}</strong>{voice.state !== 'available' && <p className="metadata">{voice.message}</p>}</div>}
+      {openAccounts && <p><button className="compact-action" onClick={openAccounts}>Manage ChatGPT Accounts</button></p>}
+    <details className="settings-details"><summary>Connection details</summary>
+      <p className="metadata">{connection?.message}</p>
+      <div className="connection-facts"><div><span>AI runtime</span><strong>{!connection ? 'Checking…' : ready ? 'Connected' : connecting ? 'Connecting…' : 'Not connected'}</strong></div><div><span>Model access</span><strong>{accountReady ? 'Available' : 'Not confirmed'}</strong></div></div>
+      <button aria-label="Refresh Assistant connection and accounts" disabled={busy || !canConnect} onClick={() => void perform(async () => { await request<ChatGptAccountStatus>('assistant/account?refresh=1'); if (ready) await request('assistant/models'); })}>Refresh connection</button>
+      {!!signIn?.id && (!showSignIn || signIn.state === 'completed') && <p className="metadata">Last sign-in: {signIn.message}</p>}
+      <details className="gateway-options settings-details"><summary>Advanced connection setup</summary><form onSubmit={event => { event.preventDefault(); void perform(async () => { await request('assistant/connection', { requestId: crypto.randomUUID(), epoch: snapshot.epoch, url: address, ...(token ? { token } : {}) }); setToken(''); }); }}><p className="metadata">Use the secure address and connection token from your chosen OpenClaw host.</p><label>Gateway address<input required type="url" placeholder="wss://your-private-host" value={address} onChange={event => setAddress(event.target.value)} autoComplete="off" spellCheck={false}/></label><label>Connection token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Kept only by the private service"/></label><button disabled={busy || !canConnect || !address}>Connect Gateway</button></form></details>
+
+    </details>
+    </div>
+    <div hidden={section === 'assistant'} inert={section === 'assistant'}>
+    <div className="assistant-setup voice-signin">{section === 'all' && <h3>ChatGPT accounts</h3>}
       {!account ? <p>Checking saved account…</p> : account.accounts?.length ? <ChatGptAccountList status={account} disabled={busy || waitingForSignIn || !canConnect || !runtime?.canSignIn || !!pendingSignIn || !!pendingOrder} reconnect={id => void perform(() => startSignIn('reconnect', id))} reorder={ids => void perform(() => reorder(ids))}/> : <p>{accountSummary(account)}</p>}
       {accountStale && <p className="metadata" role="status">Account Status Could Not Be Refreshed</p>}
       {account && account.state !== 'available' && <p className="metadata">{account.message}</p>}
@@ -123,15 +140,8 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
       <button disabled={busy || waitingForSignIn || !canConnect || !runtime?.canSignIn || !!pendingSignIn || !!pendingOrder} onClick={() => void perform(() => startSignIn('add'))}>Sign in to ChatGPT</button></details>
       {remoteHost && waitingForSignIn && <p className="metadata">Use this code on any device. Browser callbacks require a temporary host connection.</p>}
       {runtime && !runtime.canSignIn && !waitingForSignIn && <p className="metadata">Start the Assistant on this host to sign in here. For another host, sign in there.</p>}
-      {voice && <div className="voice-readiness"><strong>{voice.state === 'available' ? 'Voice connection available' : voice.state === 'unconfigured' ? 'Voice account needed' : voice.state === 'disconnected' ? 'Assistant disconnected' : 'Voice access not confirmed'}</strong>{voice.state !== 'available' && <p className="metadata">{voice.message}</p>}</div>}
     </div>
-    <details className="settings-details"><summary>Connection details</summary>
-      <p className="metadata">{connection?.message}</p>
-      <div className="connection-facts"><div><span>AI runtime</span><strong>{!connection ? 'Checking…' : ready ? 'Connected' : connecting ? 'Connecting…' : 'Not connected'}</strong></div><div><span>Model access</span><strong>{accountReady ? 'Available' : 'Not confirmed'}</strong></div></div>
-      <button aria-label="Refresh Assistant connection and accounts" disabled={busy || !canConnect} onClick={() => void perform(async () => { await request<ChatGptAccountStatus>('assistant/account?refresh=1'); if (ready) await request('assistant/models'); })}>Refresh connection</button>
-      {!!signIn?.id && (!showSignIn || signIn.state === 'completed') && <p className="metadata">Last sign-in: {signIn.message}</p>}
-      <details className="gateway-options settings-details"><summary>Advanced connection setup</summary><form onSubmit={event => { event.preventDefault(); void perform(async () => { await request('assistant/connection', { requestId: crypto.randomUUID(), epoch: snapshot.epoch, url: address, ...(token ? { token } : {}) }); setToken(''); }); }}><p className="metadata">Use the secure address and connection token from your chosen OpenClaw host.</p><label>Gateway address<input required type="url" placeholder="wss://your-private-host" value={address} onChange={event => setAddress(event.target.value)} autoComplete="off" spellCheck={false}/></label><label>Connection token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Kept only by the private service"/></label><button disabled={busy || !canConnect || !address}>Connect Gateway</button></form></details>
-
-    </details>
+      {openSetup && <p><button className="compact-action" onClick={openSetup}>Open Assistant Setup</button></p>}
+    </div>
   </section>;
 }

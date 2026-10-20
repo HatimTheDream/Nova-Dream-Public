@@ -7,6 +7,7 @@ import { Dialog } from './ui';
 import { fontChoices, textSizeChoices, typographyStorageKey, typographyStore, type TypographyPreferences } from './typography';
 import { acknowledgeGeneralSettingsDraft, changedGeneralSettingsFields, generalSettingsValues, mergeGeneralSettingsDraft, newGeneralSettingsDraft, restoreGeneralSettingsDraft, reviewGeneralSettingsField, syncGeneralSettingsDraft, validGeneralSettingsValues, type GeneralSettingsDraft, type GeneralSettingsField, type SharedGeneralSettings } from './general-settings-state';
 import { registerSettingsDraftNavigation } from './settings-draft-navigation';
+import type { SettingsDraftSummary } from './SettingsPage';
 import './general-settings.css';
 export type GeneralSettingsSaveContext = { epoch: string; revision: number; values: SharedGeneralSettings };
 export interface GeneralSettingsProps {
@@ -22,6 +23,8 @@ export interface GeneralSettingsProps {
  resetNavigation?: () => void;
  undoReset?: () => void;
  hasUndoReset?: boolean;
+ reveal?: () => void;
+ onDraftState?: (state: SettingsDraftSummary) => void;
 }
 const fieldLabels:Record<GeneralSettingsField,string>={theme:'Theme',appIcon:'App Icon',timezone:'Home Timezone',interfaceFont:'App Font',interfaceTextSize:'App Text Size',messageFont:'Message Font',messageTextSize:'Message Text Size'};
 const typographyFonts={system:'var(--system-font,system-ui)',sora:'var(--sora-font,system-ui)',serif:'var(--serif-font,serif)'};
@@ -29,7 +32,7 @@ const readingSizes={small:14,standard:15,large:17,'extra-large':20};
 const interfaceSizes={small:13,standard:14,large:15.4,'extra-large':16.8};
 function removeDraft(key:string):boolean {try{localStorage.removeItem(key);return true;}catch{return false;}}
 /** Stages shared appearance and device text preferences independently of their durable owners. */
-export function GeneralSettings({snapshot,online,pending=false,status,error,saveShared,resetHome,resetNavigation,undoReset,hasUndoReset}:GeneralSettingsProps) {
+export function GeneralSettings({snapshot,online,pending=false,status,error,saveShared,resetHome,resetNavigation,undoReset,hasUndoReset,reveal,onDraftState}:GeneralSettingsProps) {
  const typography=useSyncExternalStore(typographyStore.subscribe,typographyStore.getSnapshot,typographyStore.getSnapshot);
  const current=generalSettingsValues(snapshot.layout.value,typography);
  const currentKey=JSON.stringify(current);
@@ -40,16 +43,18 @@ export function GeneralSettings({snapshot,online,pending=false,status,error,save
  const snapshotRef=useRef(snapshot);snapshotRef.current=snapshot;
  const scope=useRef(key),savingRef=useRef(false),resumeLeave=useRef<(()=>void)|undefined>(undefined);
  const mounted=useRef(true);
+ const revealRef=useRef(reveal),summaryRef=useRef(onDraftState);revealRef.current=reveal;summaryRef.current=onDraftState;
+ const [resetReview,setResetReview]=useState(false);
  const [saving,setSaving]=useState(false),[leave,setLeave]=useState(false),[storageError,setStorageError]=useState(false),[deviceFailure,setDeviceFailure]=useState(false),[message,setMessage]=useState('');
  const replace=(next:GeneralSettingsDraft,persist=false)=>{ref.current=next;setDraft(next);if(persist)setStorageError(!saveLocal(key,next));};
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
  useEffect(()=>{
-  if(scope.current!==key){scope.current=key;replace(restoreGeneralSettingsDraft(readLocal(key),snapshot.epoch,current));setMessage('');setDeviceFailure(false);setStorageError(false);resumeLeave.current=undefined;setLeave(false);return;}
+  if(scope.current!==key){scope.current=key;replace(restoreGeneralSettingsDraft(readLocal(key),snapshot.epoch,current));setMessage('');setDeviceFailure(false);setStorageError(false);resumeLeave.current=undefined;setLeave(false);setResetReview(false);return;}
   if(!savingRef.current){const next=syncGeneralSettingsDraft(ref.current,current);if(JSON.stringify(next)!==JSON.stringify(ref.current))replace(next);}
  },[key,currentKey]);
  useEffect(()=>registerSettingsDraftNavigation(resume=>{
   if(!changedGeneralSettingsFields(ref.current).length&&!savingRef.current)return true;
-  resumeLeave.current=resume;setLeave(true);return false;
+  resumeLeave.current=resume;revealRef.current?.();setLeave(true);return false;
  }),[]);
  useEffect(()=>{const before=(event:BeforeUnloadEvent)=>{if(changedGeneralSettingsFields(ref.current).length||savingRef.current){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',before);return()=>window.removeEventListener('beforeunload',before);},[]);
  const change=<K extends GeneralSettingsField>(field:K,value:GeneralSettingsDraft['value'][K])=>{
@@ -67,7 +72,7 @@ export function GeneralSettings({snapshot,online,pending=false,status,error,save
  const save=async()=>{
   if(savingRef.current||pending)return false;
   const staged=ref.current,actual=currentRef.current,source=snapshotRef.current;
-  if(staged.epoch!==source.epoch){setMessage('The workspace changed. Reopen General to review its settings.');return false;}
+  if(staged.epoch!==source.epoch){setMessage('The workspace changed. Reopen Appearance to review its settings.');return false;}
   if(!validGeneralSettingsValues(staged.value)){setMessage('Choose valid settings, including a supported timezone.');return false;}
   const merged=mergeGeneralSettingsDraft(staged,actual);
   if(merged.conflicts.length){setMessage('Some settings changed elsewhere. Review each choice below, then Save Changes.');return false;}
@@ -98,11 +103,12 @@ export function GeneralSettings({snapshot,online,pending=false,status,error,save
  const keepEditing=()=>{resumeLeave.current=undefined;setLeave(false);};
  const continueLeave=()=>{const resume=resumeLeave.current;resumeLeave.current=undefined;setLeave(false);resume?.();};
  const changes=changedGeneralSettingsFields(draft),merged=mergeGeneralSettingsDraft(draft,current),value=draft.value;
+ useEffect(()=>{summaryRef.current?.({scope:`${snapshot.epoch}:${snapshot.deviceId}`,changes:changes.length,saving,retentionFailed:storageError});},[snapshot.epoch,snapshot.deviceId,changes.length,saving,storageError]);
  const review=(field:GeneralSettingsField,choice:'current'|'draft')=>{replace(reviewGeneralSettingsField(ref.current,currentRef.current,field,choice),true);setMessage('Choice reviewed. Save Changes when ready.');};
  const zones=[...new Set([value.timezone,current.timezone,Intl.DateTimeFormat().resolvedOptions().timeZone,'UTC','America/Los_Angeles','America/New_York','Europe/London','Asia/Dubai','Asia/Tokyo'])];
  return <section className="general-settings" aria-label="General Settings">
   <fieldset disabled={saving||pending}>
-   <section className="settings-card"><h2>Appearance</h2><p>Save to apply your choices. Theme, icon and timezone are shared; text preferences stay on this device.</p>
+   <section className="settings-card"><p>Save to apply your choices. Theme, icon and timezone are shared; text preferences stay on this device.</p>
     <div className="setting-row"><strong>Theme</strong><select aria-label="Color Theme" value={value.theme} onChange={event=>change('theme',event.target.value as Layout['theme'])}><option value="light">Light</option><option value="dark">Dark</option><option value="system">Follow This Device</option></select></div>
     <div className="setting-row app-icon-setting"><div><strong id="general-app-icon-label">App Icon</strong></div><div className="app-icon-options" role="group" aria-labelledby="general-app-icon-label">{(['red','cream'] as const).map(choice=><button type="button" key={choice} aria-label={`${choice==='red'?'Red':'Cream'} App Icon`} aria-pressed={value.appIcon===choice} onClick={()=>change('appIcon',choice)}><NovaAppMark choice={choice} width={32} height={32}/></button>)}</div></div>
     {(['interface','message'] as const).map(scope=>{const font=`${scope}Font` as const,size=`${scope}TextSize` as const,title=scope==='interface'?'App Interface':'Assistant Messages';return <div className="setting-row typography-setting" key={scope}><strong id={`general-${scope}-type`}>{title}</strong><div className="typography-controls" role="group" aria-labelledby={`general-${scope}-type`}><select aria-label={`${title} Font`} value={value[font]} onChange={event=>change(font,event.target.value as TypographyPreferences[typeof font])}>{fontChoices.map(choice=><option key={choice.value} value={choice.value}>{choice.label}</option>)}</select><select aria-label={`${title} Text Size`} value={value[size]} onChange={event=>change(size,event.target.value as TypographyPreferences[typeof size])}>{textSizeChoices.map(choice=><option key={choice.value} value={choice.value}>{choice.value==='extra-large'?'Extra Large':choice.label}</option>)}</select></div></div>;})}
@@ -114,8 +120,9 @@ export function GeneralSettings({snapshot,online,pending=false,status,error,save
   <div className="general-settings-footer"><span role="status">{changes.length?`${changes.length} Unsaved ${changes.length===1?'Change':'Changes'}`:'No Unsaved Changes'}</span><div className="button-row"><button type="button" disabled={saving||pending||!changes.length} onClick={discard}>Discard</button><button type="button" className="primary" disabled={saving||pending||!changes.length||merged.conflicts.length>0} onClick={()=>void save()}>{saving?'Saving…':'Save Changes'}</button></div></div>
   {(message||error||pending)&&<p className="general-settings-status" role="status">{message||error||(pending?'A shared save is awaiting confirmation. Reconcile it before changing this proposal.':status)}</p>}
   {storageError&&<p className="field-error" role="status">Browser storage could not retain this settings draft. Keep this window open until it is saved or discarded.</p>}
-  {(resetHome||resetNavigation)&&<details className="settings-details"><summary>Reset Layout</summary>{resetHome&&<div className="setting-row"><div><strong>Home Arrangement</strong><p>Reset widget positions. Custom widgets, notes, links, tasks and drafts are kept.</p></div><button type="button" disabled={saving||pending} onClick={resetHome}>Reset Arrangement</button></div>}{resetNavigation&&<div className="setting-row"><div><strong>Navigation Order</strong><p>Settings stays pinned beside the scrollable bottom modules.</p></div><button type="button" disabled={saving||pending} onClick={resetNavigation}>Reset Navigation</button></div>}</details>}
+  {(resetHome||resetNavigation)&&<details className="settings-details"><summary>Reset Layout</summary>{resetHome&&<div className="setting-row"><div><strong>Home Arrangement</strong><p>Reset widget positions. Custom widgets, notes, links, tasks and drafts are kept.</p></div><button type="button" disabled={saving||pending} onClick={resetHome}>Reset Arrangement</button></div>}{resetNavigation&&<div className="setting-row"><div><strong>Navigation Order</strong><p>Settings stays pinned beside the scrollable bottom modules.</p></div><button type="button" disabled={saving||pending} onClick={()=>setResetReview(true)}>Reset Navigation</button></div>}</details>}
   {hasUndoReset&&undoReset&&<div className="notice"><span>Previous arrangement is available.</span><button type="button" disabled={saving||pending} onClick={undoReset}>Undo Reset</button></div>}
-  {leave&&<Dialog title="Unsaved Settings" close={keepEditing}><p>{storageError ? 'Your changes are only in this window.' : 'Your changes are kept on this device.'} Save or discard them before leaving?</p>{(message||error)&&<p role="status">{message||error}</p>}<div className="button-row general-settings-leave"><button type="button" onClick={keepEditing}>Keep Editing</button><button type="button" disabled={saving||pending} onClick={()=>{if(discard())continueLeave();}}>Discard And Leave</button><button type="button" className="primary" disabled={saving||pending||merged.conflicts.length>0} onClick={()=>{void save().then(saved=>{if(saved)continueLeave();});}}>Save And Leave</button></div></Dialog>}
+  {resetReview&&<Dialog title="Reset Navigation Order?" size="choice" close={()=>setResetReview(false)}><p>Restore the default order of the main modules. Saved content and your appearance changes are kept. You can undo this reset.</p><div className="compact-actions"><button className="compact-action" type="button" onClick={()=>setResetReview(false)}>Keep Current Order</button><button className="compact-action primary" type="button" disabled={saving||pending} onClick={()=>{if(savingRef.current||pending)return;resetNavigation?.();setResetReview(false);}}>Reset Navigation</button></div></Dialog>}
+  {leave&&<Dialog title="Unsaved Settings" size="choice" close={keepEditing}><p>{storageError ? 'Your changes are only in this window.' : 'Your changes are kept on this device.'} Save or discard them before leaving?</p>{(message||error)&&<p role="status">{message||error}</p>}<div className="button-row general-settings-leave"><button type="button" onClick={keepEditing}>Keep Editing</button><button type="button" disabled={saving||pending} onClick={()=>{if(discard())continueLeave();}}>Discard And Leave</button><button type="button" className="primary" disabled={saving||pending||merged.conflicts.length>0} onClick={()=>{void save().then(saved=>{if(saved)continueLeave();});}}>Save And Leave</button></div></Dialog>}
  </section>;
 }
