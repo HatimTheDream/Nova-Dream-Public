@@ -1,9 +1,9 @@
 import { commandSchema, type Command, type Entity } from '../../../packages/domain/contracts';
-import { recordSchemas, type Contact, type Content } from '../../../packages/domain/workspace-records';
+import { recordSchemas, type Contact, type Content, type RecordKind, type RecordValues } from '../../../packages/domain/workspace-records';
 
 export type RecoveryKind = 'contact' | 'content';
 type Value = Contact | Content;
-type Journal = { value: Value; revision: number; epoch: string; dirty: boolean; pending?: Command; conflict?: { code: string; message: string; current?: Entity<Value> } };
+type Journal<T = Value> = { value: T; revision: number; epoch: string; dirty: boolean; pending?: Command; conflict?: { code: string; message: string; current?: Entity<T> } };
 export type RecoveryScope = { kind: RecoveryKind; deviceId: string; windowId: string; epoch: string; records: readonly Entity<Value>[] };
 export type RecoveryEntry = { key: string; raw: string; id: string; windowId: string; title: string; preview: string; journal?: Journal; problem?: string };
 export type RecoveryStorage = Pick<Storage, 'length' | 'key' | 'getItem' | 'setItem'>;
@@ -19,13 +19,13 @@ function writingIssue(issue: { code: string; errors?: unknown[][] }): boolean {
   if (['too_small', 'too_big', 'invalid_format', 'custom'].includes(issue.code)) return true;
   return issue.code === 'invalid_union' && !!issue.errors?.some(branch => branch.every(item => object(item) && typeof item.code === 'string' && writingIssue(item as { code: string; errors?: unknown[][] })));
 }
-function writing(kind: RecoveryKind, value: unknown): value is Value {
+function writing<K extends RecordKind>(kind: K, value: unknown): value is RecordValues[K] {
   try {
     const parsed = recordSchemas[kind].safeParse(value);
     return parsed.success || parsed.error.issues.every(issue => writingIssue(issue));
   } catch { return false; }
 }
-function journal(raw: string, kind: RecoveryKind, id: string): Journal | undefined {
+export function readRecordJournal<K extends RecordKind>(raw: string, kind: K, id: string): Journal<RecordValues[K]> | undefined {
   if (bytes(raw) > maxJournal) return;
   let v: unknown;
   try { v = JSON.parse(raw); } catch { return; }
@@ -42,8 +42,10 @@ function journal(raw: string, kind: RecoveryKind, id: string): Journal | undefin
       if (!object(e) || e.id !== id || !Number.isSafeInteger(e.revision) || (e.revision as number) < 1 || typeof e.deviceId !== 'string' || typeof e.updatedAt !== 'string' || !writing(kind, e.value)) return;
     }
   }
-  return v as Journal;
+  return v as Journal<RecordValues[K]>;
 }
+// Keep Contact/Content discovery and explicit copy on the original reader contract.
+const journal = (raw: string, kind: RecoveryKind, id: string) => readRecordJournal(raw, kind, id);
 export function recordJournalKey(scope: Pick<RecoveryScope, 'deviceId' | 'windowId'>, id: string) {
   return `e3:journal:${scope.deviceId}:${id}:${scope.windowId}`;
 }

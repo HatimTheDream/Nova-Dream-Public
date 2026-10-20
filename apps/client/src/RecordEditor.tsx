@@ -1,5 +1,6 @@
 import type { MailContactSource } from '../../../packages/domain/mail-contact';
 import { useEffect, useRef, useState } from 'react';
+import { registerRecordDraftNavigation } from './record-draft-navigation';
 import { dayInZone } from '../../../packages/domain/tasks';
 import type { Contact, Content } from '../../../packages/domain/workspace-records';
 import { canonical, type Entity, type Snapshot, type Task } from '../../../packages/domain/contracts';
@@ -35,6 +36,8 @@ export function RecordEditor({ targetAttempt, clearTargetAttempt, onSaved, compa
   const [error, setError] = useState('');
   const [lookMessage, setLookMessage] = useState('');
   const [filesPending, setFilesPending] = useState(false);
+  const navigation = useRef({ editor, filesPending }); navigation.current = { editor, filesPending };
+  useEffect(() => registerRecordDraftNavigation(() => !navigation.current.filesPending && navigation.current.editor.retainForNavigation()), []);
   const archived = 'archived' in editor.value && editor.value.archived;
   const publicationRequest = useRef<string | undefined>(undefined);
   useEffect(() => {

@@ -1,9 +1,10 @@
 import type { Command, Entity, ModuleId, Snapshot, Task } from '../../../packages/domain/contracts';
 import { adoptTaskConfirmation, type TaskEditorDraft } from './task-editor-confirmation';
 import type { ReminderReturn } from './reminder-workspace';
+import type { SearchReturn } from './search-workspace';
 
 export type TaskSection = 'details' | 'dates' | 'history';
-export type TaskOrigin = { route: ModuleId | 'settings'; label: string; reminders?: boolean; reminderReturn?: ReminderReturn };
+export type TaskOrigin = { route: ModuleId | 'settings'; label: string; reminders?: boolean; reminderReturn?: ReminderReturn; searchReturn?: SearchReturn };
 export type TaskFrame = { taskId: string; section: TaskSection; scroll: number; sectionScroll?: Partial<Record<TaskSection, number>> };
 export type TaskRoutineView = { taskId: string; routineId: string };
 export type TaskNavigation = {

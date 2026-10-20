@@ -1,5 +1,6 @@
 import { ProjectOptions } from './ProjectOptions';
 import {useEffect,useRef,useState} from 'react';
+import {registerRecordDraftNavigation} from './record-draft-navigation';
 import type {Entity,Snapshot,Task} from '../../../packages/domain/contracts';
 import {blankRecord,contentSchema,contentStages,type Content,type ContentOutputSource,type RecordValue} from '../../../packages/domain/workspace-records';
 import {dayInZone} from '../../../packages/domain/tasks';
@@ -25,6 +26,8 @@ export default function ContentEditor({id,entity,snapshot,refresh,editTask,close
  const tabKey=`e3:content-tab:${snapshot.deviceId}:${id}`, [tab,setTab]=useState<'write'|'agents'|'review'|'versions'>(()=>readLocal(tabKey)??'write'),[error,setError]=useState(''),[filesPending,setFilesPending]=useState(false),[librarySeed,setLibrarySeed]=useState<Content>(),[exporting,setExporting]=useState(false);
  const activity=useContentState(id,!!entity),library=useContentLibrary();
  const command=useContentCommand(snapshot,id,async()=>{await refresh();await activity.load();});
+ const navigation=useRef({editor,filesPending,busy:command.busy});navigation.current={editor,filesPending,busy:command.busy};
+ useEffect(()=>registerRecordDraftNavigation(()=>!navigation.current.filesPending&&!navigation.current.busy&&navigation.current.editor.retainForNavigation()),[]);
  const changed=(patch:Partial<Content>)=>editor.change(v=>({...v,...patch}));
  const isDirty=editor.dirty||!!editor.pending||!!editor.conflict||editor.saving||filesPending;
  const blocked=isDirty||command.busy||!!command.pending||!!entity?.value.archived;

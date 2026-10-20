@@ -1,3 +1,4 @@
+import { admittedInboxSearch, type InboxSearchRequest } from './search-query-navigation';
 import { initializeInboxSession, useInboxSessionStore } from './dreamclaw/services/inbox/inboxSession';
 import { AccountSetup } from './AccountSetup';
 import { MailContactDialog } from './MailContactDialog';
@@ -29,7 +30,7 @@ import { inboxLoadingPercent, prepareRecentMessages, type InboxStartupProgress }
 
 import { ModuleLoading } from './ModuleLoading';
 
-type Props = { prepare?: boolean; snapshot: Snapshot; openSettings(): void; openCalendar(): void; openContact(id: string): void; refresh(): Promise<void> };
+type Props = { searchRequest?: InboxSearchRequest; prepare?: boolean; snapshot: Snapshot; openSettings(): void; openCalendar(): void; openContact(id: string): void; refresh(): Promise<void> };
 // The original Inbox session deliberately survives leaving its route. Recheck
 // account authority before showing it again; only a changed scope invalidates it.
 let retainedScope: { key: string; dispose(): void } | undefined;
@@ -125,7 +126,7 @@ export default function OriginalInbox(props: Props) {
   }, [props.snapshot.deviceId, props.snapshot.epoch, props.prepare, attempt]);
   return ready && identity ? <ConnectedInbox key={`${props.snapshot.deviceId}:${props.snapshot.epoch}:${identity.id}`} {...props} identity={identity} initialAccounts={accounts}/> : <ModuleLoading module="Inbox" percent={inboxLoadingPercent(progress)} error={error} retry={() => setAttempt(value => value + 1)}/>;
 }
-function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, refresh, identity, initialAccounts }: Props & { identity: { id: string; previous?: string }; initialAccounts?: AccountsState }) {
+function ConnectedInbox({ snapshot, searchRequest, openSettings, openCalendar, openContact, refresh, identity, initialAccounts }: Props & { identity: { id: string; previous?: string }; initialAccounts?: AccountsState }) {
   const [contactInput, setContactInput] = useState<MailContactPrepare>();
   const [source] = useState(() => {
     const key=`${snapshot.epoch}:${snapshot.deviceId}:${identity.id}`;
@@ -176,6 +177,12 @@ function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, ref
   const deliveryStorageError = useStore(delivery.store, state => state.storageError);
   const live = useRef({ openSettings, openCalendar, snapshot, openContact, refresh }); live.current = { openSettings, openCalendar, snapshot, openContact, refresh };
   const preferencePrefix = `e3:original-inbox:${snapshot.deviceId}:${identity.id}:`;
+  const [queryHandoff, setQueryHandoff] = useState<InboxSearchRequest>();
+  const consumedQuery = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!admittedInboxSearch(snapshot, identity.id, searchRequest, { read: readLocal }) || consumedQuery.current === searchRequest!.nonce) return;
+    consumedQuery.current = searchRequest!.nonce; setQueryHandoff(searchRequest);
+  }, [searchRequest?.nonce, snapshot.epoch, snapshot.deviceId, preferencePrefix]);
   const [host] = useState<Omit<InboxHost, 'scopeVersion'>>(() => ({
     openContact(source, messageId) {
       const account = accountState.current?.accounts.find(item => item.id === source.accountId && item.provider === source.provider);
@@ -254,7 +261,7 @@ function ConnectedInbox({ snapshot, openSettings, openCalendar, openContact, ref
     void refresh(); const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 2500);
     return () => { active = false; clearInterval(timer); };
   }, [snapshot.epoch, snapshot.deviceId]);
-  return <InboxHostProvider host={{ ...host, scopeVersion }}>
+  return <InboxHostProvider host={{ ...host, scopeVersion, ...(queryHandoff ? { searchParams: new URLSearchParams({ search: queryHandoff.query }) } : {}) }}>
     {contactInput && <MailContactDialog key={JSON.stringify(contactInput)} input={contactInput} journalKey={`e3:mail-contact:${snapshot.epoch}:${snapshot.deviceId}:${identity.id}:${JSON.stringify([contactInput.source, contactInput.messageId])}`} previousJournalKey={identity.previous ? `e3:mail-contact:${snapshot.epoch}:${snapshot.deviceId}:${identity.previous}:${JSON.stringify([contactInput.source, contactInput.messageId])}` : undefined} close={() => setContactInput(undefined)} refresh={refresh} opened={id => { setContactInput(undefined); openContact(id); }}/>}
     <div className="dreamclaw-module dc-inbox-module">
     {(connectionError || storageError || deliveryStorageError || fileStorageError || triageState.storageError || followupState.storageError) && <div className="inbox-host-notice" role="alert">{connectionError || 'Browser storage is full. Keep this window open to preserve your writing and mail status.'}</div>}

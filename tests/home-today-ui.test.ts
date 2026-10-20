@@ -141,6 +141,31 @@ test('Home keeps Library mounted, writes tab selection before changing it and re
  } finally { unregister();f.close(); }
 });
 
+test('Search derives Library without changing the Home preference and clears its target only after a guarded successful tab write', () => {
+ const { f, props } = setup(), key = `e3:home-view:${props.snapshot.deviceId}`;
+ f.rows.set(key, '"today"');
+ const target: NonNullable<Parameters<typeof Home>[0]['libraryTarget']> = { epoch: props.snapshot.epoch, deviceId: props.snapshot.deviceId, windowId: 'this-window', nonce: 'original-search-target', target: { kind: 'collection', id: 'collection:kept', revision: 2 } };
+ let cleared = 0, kept = false;
+ const homeProps: Parameters<typeof Home>[0] = { snapshot: props.snapshot, layout: props.snapshot.layout.value, saveLayout() {}, open() {}, openSettings() {}, newTask() {}, editTask() {}, complete() {}, draft: structuredClone(emptyDraft), dirty: false, draftStatus: '', libraryTarget: target,
+  clearLibraryTarget() { assert.equal(f.rows.get(key), '"today"');cleared++;homeProps.libraryTarget = undefined; } };
+ const render = () => f.render(() => Home(homeProps)), tab = (tree: any, name: string) => nodes(tree).find(row => row.props?.id === `home-tab-${name}`);
+ const unregister = registerHomeDraftNavigation(() => kept);
+ try {
+  let tree = render();assert.equal(tab(tree, 'library').props['aria-selected'], true);assert.equal(f.writes.length, 0);
+  const library = nodes(tree).find(row => row.props?.id === 'home-panel-library').props.children;
+  assert.equal(library.props.libraryTarget, target);assert.equal(f.rows.get(key), '"today"');
+  tab(tree, 'today').props.onClick();tree = render();assert.equal(cleared, 0);assert.equal(f.writes.length, 0);
+  kept = true;f.failed = true;tab(tree, 'today').props.onClick();tree = render();assert.equal(cleared, 0);assert.equal(tab(tree, 'library').props['aria-selected'], true);
+  f.failed = false;
+  // The displayed Library tab, rather than the saved Today preference, owns the keyboard index.
+  nodes(tree).find(row => row.props?.role === 'tablist').props.onKeyDown({ key: 'ArrowLeft', preventDefault() {} });
+  tree = render();assert.equal(cleared, 1);assert.equal(tab(tree, 'today').props['aria-selected'], true);assert.equal(f.writes.length, 1);
+  assert.equal(nodes(tree).find(row => row.props?.id === 'home-panel-library').props.children.type, library.type);
+  homeProps.libraryTarget = { ...target, nonce: 'restored-search-view', restore: { query: 'kept', mode: 'compact', filter: 'all', collectionId: null, selection: null } };
+  tree = render();assert.equal(tab(tree, 'today').props['aria-selected'], true);assert.equal(f.writes.length, 1);
+ } finally { unregister();f.close(); }
+});
+
 test('legacy explicit null capture opens a fresh stable draft without touching storage on read', () => {
  const { f, render, quickKey } = setup();f.rows.set(quickKey, 'null');
  try { let tree = render();button(tree, 'Add').props.onClick();tree = render();assert.equal(capture(tree).props.disabled, false);assert.equal(capture(tree).props.value, '');assert.equal(f.writes.length, 0); }

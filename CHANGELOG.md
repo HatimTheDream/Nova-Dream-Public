@@ -1,3 +1,15 @@
+## [2.9.22] — 2026-10-19
+
+### Added
+
+- Search saved tasks, records, Library collections and sources, and Assistant drafts from one compact workspace.
+- Open exact saved results while keeping your original view, filters and unfinished writing.
+- Continue a query into Inbox or conversation search with clear coverage and no automatic send.
+
+### Improved
+
+- Refuse unsafe navigation when kept writing cannot be read or saved, and retain the original target for recovery.
+
 ## [2.9.21] — 2026-10-19
 
 ### Improved

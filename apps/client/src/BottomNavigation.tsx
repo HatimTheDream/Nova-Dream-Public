@@ -7,7 +7,7 @@ import type { useReorder } from './useReorder';
 type Destination = { id: ModuleId; label: string; icon: Icon };
 type Props = {
   items: Destination[];
-  route: ModuleId | 'settings';
+  route: ModuleId | 'settings' | null;
   open: (route: ModuleId | 'settings') => boolean;
   returnToWideNavigation: () => void;
   updateAvailable?: boolean;

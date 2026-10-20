@@ -15,6 +15,7 @@ import { SquareLynx } from './nova/square-lynx/SquareLynx';
 import { retainedWindowId } from './useWorkspace';
 import { RecordDraftRecovery } from './RecordDraftRecovery';
 import { currentRecordDraftTitle } from './record-draft-recovery';
+import { admittedRecordIndex, type AdmittedRecordTarget } from './record-target-navigation';
 import './records.css';
 import { AgentRoutines } from './AgentRoutines';
 import { ContentPlanning } from './ContentPlanning';
@@ -26,7 +27,7 @@ const AgentHub = lazy(() => import('./AgentHub'));
 const AgentSkills = lazy(() => import('./AgentSkills'));
 
 type Page = 'contacts' | 'content' | 'agents' | 'profile';
-export type RecordTarget = { kind: RecordKind; id: string; nonce: string; attemptId?: string };
+export type RecordTarget = { kind: RecordKind; id: string; nonce: string; attemptId?: string; admitted?: AdmittedRecordTarget };
 const headings: Record<Page, { title: string; eyebrow: string; detail: string; kind: RecordKind }> = {
   contacts: { title: 'People, kept close.', eyebrow: 'Contacts', detail: 'Keep the context. Follow through on what matters.', kind: 'contact' },
   content: { title: 'Room for your next idea.', eyebrow: 'Content', detail: 'Shape a brief, keep your drafts, and move the work forward.', kind: 'content' },
@@ -44,11 +45,13 @@ export default function RecordsPage({ page, snapshot, refresh, editTask, target,
   const [navigationError, setNavigationError] = useState('');
   const agentIndexKey = `e3:record-index:${snapshot.deviceId}:agent:${retainedWindowId}`;
   const [agentIndex, setAgentIndex] = useState<LocalIndex>(() => readLocal(agentIndexKey) ?? { drafts: [], selected: null });
-  const keepAgentIndex = (next: LocalIndex) => { if (!saveLocal(agentIndexKey, next)) { setNavigationError('Free browser storage before opening another agent. Your current writing is kept.'); return; } setAgentIndex(next); };
+  const keepAgentIndex = (next: LocalIndex) => { if (!saveLocal(agentIndexKey, next)) { setNavigationError('Free browser storage before opening another agent. Your current writing is kept.'); return false; } setAgentIndex(next); return true; };
   const openDesign = (id?: string) => { const selected = id ?? `agent:${crypto.randomUUID()}`; keepAgentIndex({ ...agentIndex, selected, drafts: id ? agentIndex.drafts : [...agentIndex.drafts, selected] }); };
   const closeDesign = () => keepAgentIndex({ ...agentIndex, selected: null });
-  const agentView = agentSelection.view;
-  const setAgentView = (view: 'agent' | 'assignment' | 'routines' | 'skills' | 'hub') => { const next = { ...agentSelection, view }; setAgentSelection(next); saveLocal(agentViewKey, next); };
+  const [dismissedTarget, setDismissedTarget] = useState<string>();
+  const admittedView = target?.admitted && ['agent', 'assignment'].includes(target.kind) && admittedRecordIndex(snapshot, retainedWindowId, target, { read: readLocal });
+  const agentView = admittedView && target!.nonce !== dismissedTarget && !target!.admitted!.restore ? target!.kind as 'agent' | 'assignment' : agentSelection.view;
+  const setAgentView = (view: 'agent' | 'assignment' | 'routines' | 'skills' | 'hub') => { const next = { ...agentSelection, view }; if (!saveLocal(agentViewKey, next)) { setNavigationError('Free browser storage before changing this view. Your current selection is kept.'); return; } setAgentSelection(next); setDismissedTarget(target?.nonce); };
   const openRecord = (kind: 'agent' | 'assignment', id?: string) => {
     const key = `e3:record-index:${snapshot.deviceId}:${kind}:${retainedWindowId}`, current = readLocal<LocalIndex>(key) ?? { drafts: [], selected: null }, selected = id ?? `${kind}:${crypto.randomUUID()}`;
     if (!saveLocal(key, { ...current, drafts: id ? current.drafts : [...current.drafts, selected], selected, attempt: undefined, seenTarget: target?.nonce })) { setNavigationError('Free browser storage before navigating. Your current writing remains open.'); return; }
@@ -63,7 +66,18 @@ export default function RecordsPage({ page, snapshot, refresh, editTask, target,
     setNavigationError(''); setAgentView('assignment');
   };
   const openRoutine = (id: string) => { const key = `e3:agent-routines:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`; if (!saveLocal(key, { ...(readLocal(key) ?? { drafts: [] }), selected: id })) { setNavigationError('Free browser storage before opening this routine.'); return; } setNavigationError(''); setAgentView('routines'); };
-  useEffect(() => { if (page === 'agents' && target && target.nonce !== agentSelection.target && ['agent', 'assignment'].includes(target.kind)) { if (target.kind === 'agent') openDesign(target.id); const next = { view: target.kind as 'agent' | 'assignment', target: target.nonce }; setAgentSelection(next); saveLocal(agentViewKey, next); } }, [target?.nonce, page]);
+  useEffect(() => {
+    if (page !== 'agents' || !target || !['agent', 'assignment'].includes(target.kind)) return;
+    if (target.admitted) {
+      const kept = admittedRecordIndex(snapshot, retainedWindowId, target, { read: readLocal });
+      if (kept && target.kind === 'agent') setAgentIndex(kept);
+      return;
+    }
+    if (target.nonce === agentSelection.target) return;
+    if (target.kind === 'agent') openDesign(target.id);
+    const next = { view: target.kind as 'agent' | 'assignment', target: target.nonce };
+    if (saveLocal(agentViewKey, next)) setAgentSelection(next);
+  }, [target?.nonce, page]);
   const heading = headings[page]; const kind = page === 'agents' ? agentView : heading.kind;
   return <main ref={scrollRef} onScroll={event => saveLocal(scrollKey, event.currentTarget.scrollTop)} className={`page-scroll records-page records-page-${page}${page === 'agents' && ['agent', 'hub'].includes(kind) ? ' records-hub' : ''}`}>
     {page !== 'agents' && page !== 'content' && <div className="page-intro"><h1>{heading.eyebrow}</h1><ComposerMenu label={`About ${heading.eyebrow}`} icon={<Help size={20}/>} placement="below" align="right">{() => <p>{heading.detail}</p>}</ComposerMenu></div>}
@@ -101,10 +115,18 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
     if (!saveLocal(key, next)) return false;
     opener.current = null; setPublicationRequest(undefined); setIndex(next); setNeedsFocus(true); return true;
   };
-  const keep = (next: LocalIndex) => { setIndex(next); if (!saveLocal(key, next)) setError('This selection is kept in this window only. Browser storage is full.'); };
+  const keep = (next: LocalIndex) => { if (!saveLocal(key, next)) { setError('Free browser storage before navigating. Your current selection and writing are kept.'); return false; } setIndex(next); return true; };
   const openRecord = (id: string, element?: HTMLElement, publication = false) => { opener.current = element ?? null; setPublicationRequest(publication ? { id, nonce: crypto.randomUUID() } : undefined); keep({ ...index, selected: id, attempt: undefined }); setNeedsFocus(true); };
   const closeRecord = () => { const id = index.selected; keep({ ...index, selected: null, attempt: undefined }); setPublicationRequest(undefined); const card = Array.from(listArea.current?.querySelectorAll<HTMLElement>('[data-content-id]') ?? []).find(node => node.dataset.contentId === id)?.querySelector<HTMLButtonElement>('button'); requestAnimationFrame(()=>(opener.current?.isConnected ? opener.current : card ?? listArea.current)?.focus()); };
-  useEffect(() => { if (target?.kind === kind && target.nonce !== index.seenTarget) { opener.current = null; setPublicationRequest(undefined); keep({ ...index, selected: target.id, seenTarget: target.nonce, attempt: kind === 'assignment' && target.attemptId ? { id: target.attemptId, epoch: snapshot.epoch } : undefined }); setNeedsFocus(true); } }, [target?.nonce, kind]);
+  useEffect(() => {
+    if (target?.kind !== kind || target.nonce === index.seenTarget) return;
+    if (target.admitted) {
+      const kept = admittedRecordIndex(snapshot, retainedWindowId, target, { read: readLocal });
+      if (!kept) { setError('The exact source selection could not be confirmed. Return to Search.'); return; }
+      setIndex(kept);
+    } else if (!keep({ ...index, selected: target.id, seenTarget: target.nonce, attempt: kind === 'assignment' && target.attemptId ? { id: target.attemptId, epoch: snapshot.epoch } : undefined })) return;
+    opener.current = null; setPublicationRequest(undefined); setNeedsFocus(true);
+  }, [target?.nonce, kind]);
   const create = (seed?: Partial<Content>) => {
     const id = `${kind}:${crypto.randomUUID()}`, next = { selected: id, drafts: [...index.drafts, id] };
     if (kind === 'content') {

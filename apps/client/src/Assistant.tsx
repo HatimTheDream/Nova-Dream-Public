@@ -1,3 +1,5 @@
+import { SavedDraftArticle } from './SavedDraftArticle';
+import { matchesSearchQuery, type SearchQueryRequest, type LocalSearchDraft } from './search-workspace';
 import { ConversationCleanupPanel } from './ConversationCleanupPanel';
 import { TranscriptIdentity, MessageWriting, messageSpeaker } from './TranscriptIdentity';
 import type { AppDestination } from '../../../packages/domain/app-actions';
@@ -114,7 +116,7 @@ const MemoryEditor = lazy(() => import('./AssistantMemory').then(module => ({ de
 const ContinueSavedConversation = lazy(() => import('./ContinueSavedConversation').then(module => ({ default: module.ContinueSavedConversation })));
 
 type Journal = ReturnType<typeof useRetained<Draft>>;
-type Props = { appIcon: AppIconChoice; contentActions: ContentOutputActions; sourceRequest?: { target: BrowseTarget; nonce: string } | null; snapshot: Snapshot; controller: AssistantController; voice: VoiceController; legacyJournal: Journal; refreshWorkspace: () => Promise<void>; onOpenApp?: (destination: AppDestination) => boolean; openSettings: () => void; newProject: () => void; editProject: (id: string) => void; initialPreview?: Entity<Draft> };
+type Props = { searchRequest?: SearchQueryRequest; searchPreview?: { id: string; nonce: string; epoch: string; revision: number }; onSearchDraft?: (owner: string, draft?: LocalSearchDraft) => void; appIcon: AppIconChoice; contentActions: ContentOutputActions; sourceRequest?: { target: BrowseTarget; nonce: string } | null; snapshot: Snapshot; controller: AssistantController; voice: VoiceController; legacyJournal: Journal; refreshWorkspace: () => Promise<void>; onOpenApp?: (destination: AppDestination) => boolean; openSettings: () => void; newProject: () => void; editProject: (id: string) => void; initialPreview?: Entity<Draft> };
 export function Assistant(props: Props) {
   const controller = props.controller;
   const rail = useAssistantRail(props.snapshot.deviceId);
@@ -139,7 +141,7 @@ function ConversationDraft(props: Props & { controller: AssistantController; con
   if (copy) return <main className="page-scroll"><Empty title="Your draft copy is kept." action={<button onClick={() => void restoreCopy()}>Reconcile draft copy</button>}>{copyError || 'Confirming the saved copy before opening this conversation.'}</Empty><pre className="conflict-copy">{(copy.payload as Draft).text}</pre><button onClick={() => props.controller.select(null)}>Return to original draft</button></main>;
   return <Editor {...props} journal={journal} draftId={id}/>;
 }
-function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpenApp, openSettings, newProject, editProject, initialPreview, refreshWorkspace, rail, contentActions, sourceRequest }: Props & { journal: Journal; controller: AssistantController; draftId: string; rail: AssistantRailState }) {
+function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpenApp, openSettings, newProject, editProject, initialPreview, refreshWorkspace, rail, contentActions, sourceRequest, searchRequest, searchPreview, onSearchDraft }: Props & { journal: Journal; controller: AssistantController; draftId: string; rail: AssistantRailState }) {
   const [organizingProject, setOrganizingProject] = useState<string>();
   const visibleProjects = activeProjects(snapshot);
   const removedProjects = snapshot.projects.filter(item => projectIsDeleted(snapshot, item.id) && assistantSpace(item.value) === controller.space);
@@ -191,6 +193,23 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     }
   }, [sourceRequest?.nonce]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOwner] = useState(() => crypto.randomUUID());
+  const consumedSearch = useRef<string | undefined>(undefined);
+  const [querySeed, setQuerySeed] = useState<SearchQueryRequest>();
+  useEffect(() => {
+    if (journal.epoch !== snapshot.epoch) { onSearchDraft?.(searchOwner); return; }
+    onSearchDraft?.(searchOwner, { token: searchOwner, id: draftId, value: journal.value, revision: journal.revision, epoch: journal.epoch, deviceId: snapshot.deviceId, pending: !!journal.pending });
+  }, [journal.value, journal.revision, journal.epoch, journal.pending, snapshot.epoch, snapshot.deviceId, draftId, searchOwner, onSearchDraft]);
+  useEffect(() => () => onSearchDraft?.(searchOwner), [onSearchDraft, searchOwner]);
+  useEffect(() => {
+    if (!matchesSearchQuery(searchRequest, snapshot) || consumedSearch.current === searchRequest!.nonce) return;
+    consumedSearch.current = searchRequest!.nonce; setQuerySeed(searchRequest); setSearchOpen(true);
+  }, [searchRequest?.nonce, snapshot.epoch, snapshot.deviceId]);
+  useEffect(() => {
+    if (!searchPreview || searchPreview.epoch !== snapshot.epoch) return;
+    const row = snapshot.drafts.find(item => item.id === searchPreview.id && item.revision === searchPreview.revision);
+    if (row && !snapshot.draftRemovals?.some(item => item.draftId === row.id && item.revision >= row.revision)) setPreview(row);
+  }, [searchPreview?.nonce]);
   const { expandedProjects, toggleProject } = rail;
   // Leave room for the saved rail width, conversation and workspace together.
   // This temporary collapse never rewrites the user's rail preference.
@@ -506,7 +525,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     {organizingProject && snapshot.projects.find(item => item.id === organizingProject) && <ProjectOrganizationDialog snapshot={snapshot} project={snapshot.projects.find(item => item.id === organizingProject)!} close={() => setOrganizingProject(undefined)} refresh={refreshWorkspace}/>}
     <AssistantOrganizationRailFrame spaceSwitch={<AssistantSpaceSwitch value={controller.space} disabled={spaceSwitchDisabled} change={switchSpace}/>} newDraftLabel={controller.space === 'work' ? 'New work' : 'New chat'} open={organizationOpen} width={rail.width} setWidth={rail.setWidth} onToggle={toggleOrganization} onNewDraft={openNewDraft} onSearch={() => setSearchOpen(value => !value)}>
       <div className="organization original-organization-body">
-      {searchOpen && <ConversationSearch snapshot={snapshot} controller={controller} open={target => { setReading(target); rail.closeMobile(); setSidePanel(null); }}/>}
+      {searchOpen && <ConversationSearch seed={querySeed} seedAccepted={nonce => setQuerySeed(current => current?.nonce === nonce ? undefined : current)} snapshot={snapshot} controller={controller} open={target => { setReading(target); rail.closeMobile(); setSidePanel(null); }}/>}
       {folder === 'active' && <div className="section-heading organization-heading"><span>Projects</span><button className="icon-button" aria-label="Create Project" onClick={newProject}><Plus size={16}/></button></div>}
       {folder === 'active' && visibleProjects.filter(item => assistantSpace(item.value) === controller.space).map(item => {
         const expanded = expandedProjects.includes(item.id), rows = allRows.filter(row => row.folder === 'active' && row.projectId === item.id);
@@ -533,7 +552,7 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
         {(notice || controller.error) && <div className="notice warning" role="alert"><span>{notice || controller.error}</span><button className="text-button" onClick={() => { setNotice(''); controller.setError(''); }}>Dismiss</button></div>}
         <ConversationRestoreStatus conversation={conversation} connected={ready} busy={busy} checkStatus={() => { setBusy(true); void controller.checkStatus().finally(() => setBusy(false)); }}/>
         {conversation?.pendingSettings && <div className="notice warning settings-recovery"><span>{conversation.pendingSettings.permissionMode ? `${accessLabels[conversation.pendingSettings.permissionMode]} hasn’t been confirmed.` : 'A settings change hasn’t been confirmed.'} Sending is paused until this is resolved.</span><div className="button-row"><button disabled={busy} onClick={async () => { setBusy(true); try { await controller.checkStatus(); } finally { setBusy(false); } }}>Check status</button>{(['retry', 'use-current'] as const).map(action => <button key={action} disabled={busy || !!active || callingHere} onClick={async () => { setBusy(true); setNotice(''); try { await controller.recoverSettings(conversation, action); } catch (e) { keepError(e); } finally { setBusy(false); } }}>{action === 'retry' ? 'Retry change' : 'Keep current settings'}</button>)}</div></div>}
-        {preview ? <article className="draft-preview"><span className="eyebrow">Saved draft · read only</span><h2>{preview.value.title}</h2><p className="preserve-lines">{preview.value.text || 'This draft contains attachments.'}</p>{preview.value.attachments.map(a => <a className="source-link" key={a.id} href={`/api/attachments/${a.id}`}><File size={16}/>{a.name}</a>)}<button onClick={() => append(preview.value)}>Append to my draft</button><button className="quiet" onClick={() => setPreview(null)}>Back to my draft</button></article> : conversation ? <div className="chat-transcript" aria-label="Conversation messages">
+        {preview ? <SavedDraftArticle draft={preview} append={append} back={() => setPreview(null)}/> : conversation ? <div className="chat-transcript" aria-label="Conversation messages">
           {controller.loading && !controller.history && <LoadingRing label="Loading your conversation…"/>}
           {conversation.state === 'failed' && !conversation.nativeId ? <div className="history-status" role="status"><div><strong>Conversation setup was rejected</strong><p>{conversation.error} Your original draft and this copy are kept.</p></div><button onClick={openNewDraft}>Return to original draft</button></div> : controller.historyError && <div className="history-status" role="status"><div><strong>{controller.history ? 'Showing the saved conversation' : 'Conversation history is unavailable'}</strong><p>{controller.history ? 'Newer messages could not be checked. Your saved messages and draft remain here.' : 'This conversation could not be loaded. Your draft is still available below.'}</p></div><button disabled={controller.loading} onClick={() => void controller.loadHistory(conversation.id)}><RotateCcw size={16}/>{controller.loading ? 'Checking…' : 'Retry'}</button></div>}
           <TranscriptCoverage history={controller.history}/>

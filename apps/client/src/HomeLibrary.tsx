@@ -12,6 +12,7 @@ import { HomeSourcePicker } from './HomeSourcePicker';
 import { ComposerMenu } from './ComposerMenu';
 import { HomeWritingRecovery } from './HomeWritingRecovery';
 import { readKeptHomeWriting, type KeptHomeWriting } from './home-writing-recovery';
+import { admittedLibraryView, defaultLibraryView, libraryView, libraryTargetPreview, type LibraryTarget, type LibraryView } from './home-library-navigation';
 
 type ConfirmedLibrarySave = { command: HomeLibraryCommand; result: HomeLibraryResult; undo: HomeLibraryUndo | null };
 const definitiveRefusals = new Set(['home_preferences_changed', 'home_library_changed', 'home_library_kind', 'home_library_limit', 'home_link_large', 'home_source_changed', 'home_reference_conflict', 'home_undo_conflict', 'home_already_undone', 'home_organization_changed']);
@@ -122,14 +123,7 @@ function acknowledgedCollection(writer: LibraryWriter<HomeCollectionValue> | und
  return JSON.stringify(writer.value) === JSON.stringify(saved.command.value) ? undefined : { ...writer, revision: saved.result.revision };
 }
 
-type LibraryView = { query: string; mode: 'cards' | 'compact'; filter: 'all' | 'pinned' | 'archived'; collectionId: string | null; selection: { collectionId: string; references: HomeReference[] } | null };
-const defaultView = (): LibraryView => ({ query: '', mode: 'cards', filter: 'all', collectionId: null, selection: null });
-function readLibraryView(key: string): LibraryView {
- const value = readLocal<LibraryView>(key);
- if (!value || !['cards', 'compact'].includes(value.mode) || !['all', 'pinned', 'archived'].includes(value.filter) || !(value.collectionId === null || typeof value.collectionId === 'string')) return defaultView();
- const selection = value.selection && typeof value.selection.collectionId === 'string' && Array.isArray(value.selection.references) && value.selection.references.length <= 200 && isHomeCollectionDraft({ ...emptyCollection(), references: value.selection.references }) ? value.selection : null;
- return { query: typeof value.query === 'string' ? value.query : '', mode: value.mode, filter: value.filter, collectionId: value.collectionId, selection };
-}
+const readLibraryView = (key: string): LibraryView => libraryView(readLocal(key)) ?? defaultLibraryView();
 const libraryUrl = (value: string) => { const url = normalizeHomeUrl(value);return url && url.length <= 2048 ? url : undefined; };
 export function previewLibraryLinks(text: string, destination: HomeCollection | undefined, resources: HomeResource[]) {
  const seen = new Set<string>();
@@ -145,7 +139,7 @@ const itemValue = (item: HomeItem): HomeItemValue => item.kind === 'note' ? { ki
 const collectionValue = (item: HomeCollection): HomeCollectionValue => ({ title: item.title, subtitle: item.subtitle, icon: item.icon, pinned: item.pinned, archived: item.archived, references: item.references });
 const resourceLabel = (item: HomeResource) => item.availability === 'missing' ? 'Source unavailable · reference kept' : item.availability === 'changed' ? 'Earlier saved version' : item.subtitle;
 
-export function HomeLibrary({ snapshot, controller, ...actions }: HomeSourceActions & { snapshot: Snapshot; controller: HomeLibraryController; openWidgets?: () => void }) {
+export function HomeLibrary({ snapshot, controller, libraryTarget, ...actions }: HomeSourceActions & { snapshot: Snapshot; controller: HomeLibraryController; openWidgets?: () => void; libraryTarget?: LibraryTarget }) {
  const { state, error, journalError, loading, busy, pending, lastSave, run, load } = controller;
  const blocked = busy || !!pending || !!journalError;
  const detailSequence = useRef(0);
@@ -183,6 +177,17 @@ export function HomeLibrary({ snapshot, controller, ...actions }: HomeSourceActi
  const view = keptView.key === viewKey ? keptView.value : readLibraryView(viewKey);
  const [searchOpen, setSearchOpen] = useState(false), [add, setAdd] = useState(false), [picking, setPicking] = useState(false), [picked, setPicked] = useState<HomeReference[]>([]), [detail, setDetail] = useState<HomeResource>(), [detailBusy, setDetailBusy] = useState(false), [notice, setNotice] = useState(''), [writerError, setWriterError] = useState('');
  const [destination, setDestination] = useState(''), [pasteOpen, setPasteOpen] = useState(false), [paste, setPaste] = useState(() => readLibraryPaste(writerKey + ':links').text), [pasteInvalid, setPasteInvalid] = useState(() => readLibraryPaste(writerKey + ':links').invalid), [reviewPaste, setReviewPaste] = useState(false), [acceptedRows, setAcceptedRows] = useState<number[]>([]), [transfer, setTransfer] = useState<'move' | 'copy'>(), [target, setTarget] = useState(''), [before, setBefore] = useState(''), [unfiledLimit, setUnfiledLimit] = useState(40);
+ const acceptedTarget = useRef<string | undefined>(undefined);
+ useEffect(() => {
+  if (!libraryTarget || acceptedTarget.current === libraryTarget.nonce) return;
+  const kept = admittedLibraryView({ epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId }, libraryTarget, { read: readLocal });
+  if (!kept) { setNotice('The exact Library selection could not be confirmed. Return to Search.'); return; }
+  if (!libraryTarget.restore && libraryTarget.target?.kind !== 'collection' && !state) return;
+  const preview = state && libraryTargetPreview(state, libraryTarget);
+  setKeptView({ key: viewKey, value: kept }); acceptedTarget.current = libraryTarget.nonce;
+  detailSequence.current++; setDetailBusy(false); setDetail(preview);
+  setNotice(!libraryTarget.restore && libraryTarget.target?.kind !== 'collection' && !preview ? 'The exact saved Library item changed or is unavailable. Return to Search to review it.' : '');
+ }, [libraryTarget?.nonce, state, snapshot.epoch, snapshot.deviceId]);
  const updateView = (patch: Partial<LibraryView>) => { const value = { ...view, ...patch };setKeptView({ key: viewKey, value });if (!saveLocal(viewKey, value)) setNotice('View preferences could not be kept on this device.'); };
  const query = view.query, setQuery = (value: string) => updateView({ query: value });
  const searchId = useId();

@@ -1,3 +1,4 @@
+import { matchesSearchQuery, type SearchQueryRequest } from './search-workspace';
 import { assistantSpace } from '../../../packages/domain/assistant-space';
 import { useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '../../../packages/domain/contracts';
@@ -6,11 +7,16 @@ import type { AssistantController } from './useAssistant';
 import { request } from './api';
 import { Search } from './icons';
 
-export function ConversationSearch({ snapshot, controller, open }: { snapshot: Snapshot; controller: AssistantController; open: (target: BrowseTarget) => void }) {
+export function ConversationSearch({ snapshot, controller, open, seed, seedAccepted }: { seed?: SearchQueryRequest; seedAccepted?: (nonce: string) => void; snapshot: Snapshot; controller: AssistantController; open: (target: BrowseTarget) => void }) {
   const [query, setQuery] = useState(''), [scope, setScope] = useState<'active' | 'archived' | 'all'>('all'), [project, setProject] = useState('all');
   const [result, setResult] = useState<ConversationSearchResult>(), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const serial = useRef(0), pending = useRef<AbortController | undefined>(undefined);
   const reset = () => { serial.current++; pending.current?.abort(); setResult(undefined); setBusy(false); setError(''); };
+  const seeded = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!matchesSearchQuery(seed, snapshot) || seeded.current === seed!.nonce) return;
+    seeded.current = seed!.nonce; reset(); setQuery(seed!.query); seedAccepted?.(seed!.nonce);
+  }, [seed?.nonce, snapshot.epoch, snapshot.deviceId]);
   useEffect(() => { reset(); return () => { serial.current++; pending.current?.abort(); }; }, [snapshot.epoch, controller.connection.generation, controller.space]);
   const search = async () => {
     if (!query.trim()) return;

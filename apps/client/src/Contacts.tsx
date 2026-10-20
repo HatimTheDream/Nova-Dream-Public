@@ -4,6 +4,7 @@ import type { Contact } from '../../../packages/domain/workspace-records';
 import type { MailContactSource } from '../../../packages/domain/mail-contact';
 import { contactDestination, contactMatches, contactOrganizations, organizationKey, sortContacts, type ContactSort } from '../../../packages/domain/contacts';
 import type { RecordTarget } from './RecordsPage';
+import { admittedRecordIndex } from './record-target-navigation';
 import { readLocal, saveLocal } from './api';
 import { retainedWindowId } from './useWorkspace';
 import { RecordDraftRecovery } from './RecordDraftRecovery';
@@ -28,8 +29,10 @@ export default function Contacts(props: ContactsProps) {
   const { snapshot, target, refresh } = props;
   const key = `e3:record-index:${snapshot.deviceId}:contact:${retainedWindowId}`;
   const [index, setIndex] = useState<ContactIndex>(() => readLocal(key) ?? { selected: null, drafts: [] });
-  const { view, prefer, error: viewError } = useContactView<ContactView>(key + ':view', { query: '', archived: false, sort: 'name', section: 'people', favorites: false, followUps: false });
-  const section = view.section;
+  const { view, prefer: keepView, error: viewError } = useContactView<ContactView>(key + ':view', { query: '', archived: false, sort: 'name', section: 'people', favorites: false, followUps: false });
+  const [dismissedTarget, setDismissedTarget] = useState<string>();
+  const section = target?.admitted && !target.admitted.restore && target.nonce !== dismissedTarget && index.seenTarget === target.nonce ? 'people' : view.section;
+  const prefer = (patch: Partial<ContactView>) => { const saved = keepView(patch); if (saved && patch.section) setDismissedTarget(target?.nonce); return saved; };
   const [createOrganization, setCreateOrganization] = useState('');
   const [books, setBooks] = useState(false), [recovering, setRecovering] = useState(false);
   const [senders, setSenders] = useState(false), [error, setError] = useState('');
@@ -44,7 +47,13 @@ export default function Contacts(props: ContactsProps) {
     const journal = readLocal<{ dirty?: boolean; pending?: unknown }>(`e3:journal:${snapshot.deviceId}:${destination}:${retainedWindowId}`);
     if (keep({ ...index, selected: destination, editing: !!journal?.dirty || !!journal?.pending, seenTarget: nonce ?? index.seenTarget })) requestAnimationFrame(() => detail.current?.focus());
   };
-  useEffect(() => { if (target?.kind === 'contact' && target.nonce !== index.seenTarget) open(target.id, true, target.nonce); }, [target?.nonce]);
+  useEffect(() => {
+    if (target?.kind !== 'contact' || target.nonce === index.seenTarget) return;
+    if (!target.admitted) { open(target.id, true, target.nonce); return; }
+    const kept = admittedRecordIndex(snapshot, retainedWindowId, target, { read: readLocal });
+    if (!kept) { setError('The exact source selection could not be confirmed. Return to Search.'); return; }
+    setIndex(kept); requestAnimationFrame(() => detail.current?.focus());
+  }, [target?.nonce]);
   const selected = contacts.find(contact => contact.id === index.selected);
   const drafts = index.drafts.filter(id => !contacts.some(contact => contact.id === id));
   const followUpContacts = useMemo(() => contactsWithOpenFollowUps(contacts, snapshot.tasks), [contacts, snapshot.tasks]);
