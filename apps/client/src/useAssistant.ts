@@ -13,21 +13,23 @@ import { RefreshReader } from './refresh-reader';
 import { pollReader } from './polling';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 import { editConversation } from './conversation-edit';
+import { directChatStorage, keepDirectChatSelection, mayLeaveDirectChat, readDirectSelection, settleDirectSelection, type PreparedDirectView } from './direct-agent-chat';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
 export function useAssistant(snapshot: Snapshot, visible = true) {
   const [state, setState] = useState<AssistantState>(initial);
   const spaceKey = `e3:assistant-space:${snapshot.epoch}:${snapshot.deviceId}`;
-  const [space, setSpace] = useState<AssistantSpace>(() => readLocal<string>(spaceKey) === 'work' ? 'work' : 'chat');
+  const [selectionRecovery] = useState(() => readDirectSelection(directChatStorage, snapshot.epoch, snapshot.deviceId));
+  const [space, setSpace] = useState<AssistantSpace>(() => selectionRecovery?.space ?? (readLocal<string>(spaceKey) === 'work' ? 'work' : 'chat'));
   const spaceRef = useRef(space); spaceRef.current = space;
   const selectionKey = (value: AssistantSpace) => `e3:conversation:${snapshot.deviceId}${value === 'work' ? ':work' : ''}`;
-  const [selectedId, setSelectedId] = useState<string | null>(() => readLocal<string>(selectionKey(space)) ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => selectionRecovery ? selectionRecovery.id : readLocal<string>(selectionKey(space)) ?? null);
   const [history, setHistory] = useState<ConversationHistory>();
   const [models, setModels] = useState<AssistantModel[]>([]);
   const [modelStatus, setModelStatus] = useState<'loading' | 'ready' | 'error' | 'offline'>('loading');
   const [outputs, setOutputs] = useState<AssistantOutput[]>([]);
   const [statusRead, setStatusRead] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(selectionRecovery?.error ?? '');
   const [historyError, setHistoryError] = useState('');
   const [historySource, setHistorySource] = useState<'live' | 'saved'>();
   const [loading, setLoading] = useState(false);
@@ -68,12 +70,25 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
     const nextSpace = hint ?? (conversation ? assistantSpace(conversation) : spaceRef.current);
-    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && !mayLeaveAssistantDraft()) return false;
+    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && (!mayLeaveAssistantDraft() || !mayLeaveDirectChat())) return false;
+    if (!settleDirectSelection(directChatStorage, snapshot.epoch, snapshot.deviceId)) { setError('The original chat selection is kept. Browser storage must be restored before another selection.'); return false; }
     if (nextSpace !== spaceRef.current) { setSpace(nextSpace); spaceRef.current = nextSpace; saveLocal(spaceKey, nextSpace); }
     saveLocal(selectionKey(nextSpace), id);
     if (id === selectedRef.current) return true;
     historyReader.current?.cancel(); generation.current++; historyRequest.current++; setSelectedId(id); selectedRef.current = id; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); setError('');
     return true;
+  };
+  const selectRetained = (id: string | null, nextSpace: AssistantSpace, view: PreparedDirectView) => {
+    const conversation = context.current.state.conversations.find(c => c.id === id);
+    if (id && (!conversation || assistantSpace(conversation) !== nextSpace) || !mayLeaveAssistantDraft() || !mayLeaveDirectChat()
+      || !keepDirectChatSelection(directChatStorage, snapshot.epoch, snapshot.deviceId, id, nextSpace, view)) { setError('The previous chat selection and writing are kept. Restore browser storage before opening or returning from this chat.'); return false; }
+    setSpace(nextSpace); spaceRef.current = nextSpace;
+    if (id !== selectedRef.current) { historyReader.current?.cancel(); generation.current++; historyRequest.current++; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); }
+    setSelectedId(id); selectedRef.current = id; setError(''); return true;
+  };
+  const selectDirect = (id: string, view: PreparedDirectView) => {
+    if (!context.current.state.conversations.some(c => c.id === id && c.directAgent)) return false;
+    return selectRetained(id, 'chat', view);
   };
   const switchSpace = (next: AssistantSpace) => {
     if (next === spaceRef.current) return true;
@@ -218,6 +233,6 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
     if (!saveLocal(key, intent)) throw new Error('Free browser storage before saving this output.');
     const output = await request<AssistantOutput>('assistant/artifact/save', intent); localStorage.removeItem(key); await refresh(); return output;
   };
-  return { ...state, space, switchSpace, statusRead, selectedId, conversation: state.conversations.find(c => c.id === selectedId), history, historyError, historySource, models, modelStatus, retryModels, outputs, remove, pinMessage, saveOutput, saveArtifact, error, setError, loading, select, selectAccount, create, edit, recoverSettings, refresh, loadHistory, checkStatus };
+  return { ...state, space, switchSpace, statusRead, selectedId, conversation: state.conversations.find(c => c.id === selectedId), history, historyError, historySource, models, modelStatus, retryModels, outputs, remove, pinMessage, saveOutput, saveArtifact, error, setError, loading, select, selectDirect, selectRetained, selectAccount, create, edit, recoverSettings, refresh, loadHistory, checkStatus };
 }
 export type AssistantController = ReturnType<typeof useAssistant>;

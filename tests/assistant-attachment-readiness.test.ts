@@ -57,7 +57,7 @@ const hooks = registerHooks({
 const { useAttachments } = await import('../apps/client/src/useAttachments');
 hooks.deregister();
 
-function fixture(t: any, assistant = true, recovered: PendingFile[] = []) {
+function fixture(t: any, assistant = true, recovered: PendingFile[] = [], uploadEnabled?: boolean) {
   const snapshot = { deviceId: 'device', epoch: 'epoch' } as Snapshot;
   const original = { id: 'original', name: 'kept.txt', size: 4, sha256: 'a'.repeat(64) };
   let draft = { attachments: [original] }, reads = 0, changes = 0;
@@ -84,7 +84,7 @@ function fixture(t: any, assistant = true, recovered: PendingFile[] = []) {
   }
   const render = () => {
     state.index = 0; state.firstRender = state.values.length === 0;
-    return useAttachments(snapshot, draft, update => { changes++; draft = update(draft); return true; }, 'draft:device', 'draft', { assistant });
+    return useAttachments(snapshot, draft, update => { changes++; draft = update(draft); return true; }, 'draft:device', 'draft', { assistant, uploadEnabled });
   };
   return { render, staged, writes, requests, state, draft: () => draft, reads: () => reads, changes: () => changes };
 }
@@ -120,3 +120,23 @@ for (const [assistant, name] of [[true, 'notes.MD'], [false, 'original.docx']] a
     assert.equal(f.staged.size, 0); assert.deepEqual(f.writes, ['put', 'delete']);
   });
 }
+
+
+test('paused direct upload recovery preserves exact rows and explicit retry/add never request, read or stage', async t => {
+  const oldFile = { id: 'kept-file', draftId: 'draft:device', epoch: 'epoch', deviceId: 'device', name: 'notes.txt', base64: 'a2VwdA==' };
+  const f = fixture(t, true, [oldFile], false), before = structuredClone(f.draft());
+  f.render(); for (const effect of f.state.effects) effect(); await settle();
+  const recovered = f.render();
+  assert.deepEqual(recovered.pending, [oldFile]); assert.match(recovered.notice, /uploads are paused/);
+  await recovered.retry(oldFile); await recovered.add(files('new.txt')); await settle();
+  assert.deepEqual(f.requests, []); assert.deepEqual(f.writes, []); assert.equal(f.reads(), 0); assert.equal(f.changes(), 0);
+  assert.deepEqual(f.staged.get(oldFile.id), oldFile); assert.deepEqual(f.draft(), before);
+  await recovered.remove(oldFile.id); assert.deepEqual(f.writes, ['delete']); assert.equal(f.staged.size, 0);
+});
+
+test('ordinary default recovery still uploads and links its exact staged file', async t => {
+  const oldFile = { id: 'ordinary-kept', draftId: 'draft:device', epoch: 'epoch', deviceId: 'device', name: 'notes.txt', base64: 'a2VwdA==' };
+  const f = fixture(t, true, [oldFile]); f.render(); for (const effect of f.state.effects) effect(); await settle();
+  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].input.requestId, oldFile.id);
+  assert.deepEqual(f.writes, ['delete']); assert.equal(f.draft().attachments[1].name, oldFile.name);
+});

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createElement, type ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Parser } from 'htmlparser2';
+import { blankRecord } from '../packages/domain/workspace-records';
 import { emptyDraft } from '../packages/domain/contracts';
 
 const attachmentFixture = Symbol.for('nova.test.composer.attachments');
@@ -32,7 +33,7 @@ const { Assistant } = await import('../apps/client/src/Assistant');
 hooks.deregister();
 
 type FileState = 'ready' | 'preparing' | 'uploading' | 'failed';
-function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean; voicePhase?: 'idle' | 'connecting' | 'connected' | 'ended'; disconnected?: boolean; dirty?: boolean; saving?: boolean; unconfirmedSave?: boolean } = {}) {
+function renderComposer(files: FileState, existing = false, active = false, text = 'Keep this draft', options: { direct?: boolean; unavailableAgent?: boolean; attachment?: boolean; cancelRequested?: boolean; noRunId?: boolean; invalidFile?: boolean; projectFile?: boolean; receipt?: boolean; voicePhase?: 'idle' | 'connecting' | 'connected' | 'ended'; disconnected?: boolean; dirty?: boolean; saving?: boolean; unconfirmedSave?: boolean } = {}) {
   const globals = [attachmentFixture, 'localStorage', 'matchMedia'] as const;
   const previous = globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const pending = files === 'uploading' || files === 'failed' ? [{ id: 'file', name: 'Fixture.txt' }] : [];
@@ -42,11 +43,13 @@ function renderComposer(files: FileState, existing = false, active = false, text
   try {
     const time = '2026-09-19T12:00:00Z';
     const conversation = existing ? { id: 'conversation', nativeId: 'native', nativeKey: 'native-key', connectionGeneration: 'generation', revision: 1, title: 'Fixture', state: 'ready', projectId: options.projectFile ? 'source-project' : null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time } : undefined;
+    const agent = { id: 'agent:one', revision: 3, value: { ...blankRecord('agent', 'UTC'), name: 'Exact Agent', position: 'Researcher', archived: !!options.unavailableAgent } };
+    if (options.direct && conversation) Object.assign(conversation, { space: 'chat', permissionMode: 'read-only', directAgent: { format: 1, recipient: { agentId: agent.id, agentRevision: 3 }, design: { ...agent.value, archived: false }, createdBy: { requestId: 'original-request', epoch: 'epoch', deviceId: 'device' } } });
     const sourceFile = { id: 'project-file', name: 'brief.docm', size: 12, sha256: 'b'.repeat(64), mimeType: 'application/octet-stream' };
     const draft = { ...emptyDraft, text, projectId: options.projectFile ? 'source-project' : null, attachments: options.attachment ? [{ id: 'kept-file', name: options.invalidFile ? 'brief.docm' : 'notes.txt', size: 12, sha256: 'a'.repeat(64), mime: 'text/plain' }] : [], ...(existing ? { conversationId: 'conversation' } : {}) };
     const props = {
       appIcon: 'red',
-      snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: {} },
+      snapshot: { epoch: 'epoch', deviceId: 'device', projects: options.projectFile ? [{ id: 'source-project', revision: 1, value: { name: 'Project', space: 'chat', purpose: '', instructions: '', attachments: [sourceFile] } }] : [], drafts: existing ? [{ id: 'draft:device:conversation', revision: 1, value: draft, updatedAt: time }] : [], records: { agent: [agent] } },
       legacyJournal: { value: draft, revision: 1, dirty: !!options.dirty, saving: !!options.saving, submitBlocked: !!options.unconfirmedSave, change() {}, flush: async () => {} },
       controller: { space: 'chat', selectedId: conversation?.id, conversation, conversations: conversation ? [conversation] : [], statusRead: 'ready', connection: { state: options.disconnected ? 'disconnected' : 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, operations: active ? [{ id: 'operation', conversationId: 'conversation', nativeId: 'native', nativeRunId: options.noRunId ? undefined : 'run', cancelRequested: options.cancelRequested, state: 'running', context: { project: null, attachments: [], draftId: 'draft:device:conversation', draftRevision: 1, digest: 'fixture-context' }, createdAt: time, updatedAt: time }] : [], models: [], outputs: [], queue: [], pins: [], removals: [], select() {}, refresh: async () => {} },
       voice: { subscribeLevels: () => () => {}, getLevelsSnapshot: () => ({input: 0, output: 0}), subscribe: () => () => {}, getSnapshot: () => ({ phase: options.voicePhase ?? 'idle', turns: [] }) },
@@ -171,4 +174,31 @@ test('Send remains available during ordinary typing saves and blocks an unconfir
   }
   const uncertain=renderComposer('ready',false,false,'Kept writing',{dirty:true,unconfirmedSave:true});
   assert.equal(uncertain.button('Send message').disabled,true);
+});
+
+
+test('direct composer is separate text-only chat and keeps unsupported controls unavailable', () => {
+  const ready = renderComposer('ready', true, false, 'Exact writing', { direct: true });
+  assert.equal(ready.button('Send message').disabled, false);
+  assert.match(ready.markup, /Exact Agent/);
+  for (const label of ['Queue message', 'Steer current reply', 'Start voice call', 'Response settings', 'Add to message'])
+    assert.equal(ready.buttons.some(button => button.label.includes(label)), false, label);
+  const active = renderComposer('ready', true, true, 'Newer writing', { direct: true });
+  assert.equal(active.button('Stop reply').disabled, false);
+  assert.equal(active.buttons.some(button => button.label === 'Queue message'), false);
+  for (const options of [{ direct: true, attachment: true }, { direct: true, unavailableAgent: true }, { direct: true, receipt: true }])
+    assert.equal(renderComposer('ready', true, false, 'Kept writing', options).button('Send message').disabled, true);
+  assert.match(renderComposer('ready', true, false, 'Kept writing', { direct: true, attachment: true }).markup, /sources stay in this draft/);
+});
+
+
+test('direct staged files remain visible and removable without an upload retry or attachment input', () => {
+  for (const state of ['uploading', 'failed'] as const) {
+    const direct = renderComposer(state, true, false, 'Kept writing', { direct: true });
+    assert.match(direct.markup, /Fixture.txt/); assert.match(direct.markup, /uploads paused/);
+    assert.equal(direct.buttons.some(button => button.label === 'Retry upload'), false);
+    assert.equal(direct.buttons.some(button => button.label === 'Remove'), true);
+    assert.doesNotMatch(direct.markup, /aria-label="Attach files"/);
+  }
+  assert.equal(renderComposer('failed', true).buttons.some(button => button.label === 'Retry upload'), true);
 });

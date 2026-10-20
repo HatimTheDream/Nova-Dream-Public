@@ -1,0 +1,16 @@
+.direct-agent-person { display:flex; align-items:center; gap:10px; min-width:0; }
+.direct-agent-person > div { min-width:0; flex:1; }
+.direct-agent-person .metadata { display:block; margin:2px 0; }
+.direct-agent-status { flex:none; padding:10px 16px; border-bottom:1px solid var(--border); }
+.direct-agent-status p { margin:6px 0 0; font-size:.82rem; }
+.direct-agent-connection { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:8px; font-size:.83rem; }
+.direct-agent-connection > span { flex:1 1 220px; }
+.direct-agent-chat-list { display:grid; gap:6px; margin:12px 0; max-height:34vh; overflow:auto; }
+.direct-agent-chat-list button { display:grid; text-align:left; gap:3px; min-height:44px; }
+.direct-agent-chat-list small { color:var(--muted); }
+.direct-agent-status button, .direct-agent-chooser button { min-height:44px; }
+@media(max-width:650px) {
+  .direct-agent-status { padding:8px 12px; }
+  .direct-agent-person { flex-wrap:wrap; }
+  .direct-agent-person > button { margin-left:auto; }
+}
