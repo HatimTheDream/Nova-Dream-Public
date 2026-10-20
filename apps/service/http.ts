@@ -8,6 +8,7 @@ import { HomeLibrary } from './home-library.js';
 import { ProfileStudio } from './profile-studio.js';
 import { ProfileWeek, profileReadQuery } from './profile-week.js';
 import { ProfileWeekNotes } from './profile-week-note.js';
+import { AssistantGroups, groupReadQuery } from './assistant-groups.js';
 import { HomeFeed } from './home-feed.js';
 import { HostBrowser } from './host-browser.js';
 import { browserInputSchema } from '../../packages/domain/host-browser.js';
@@ -147,6 +148,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const profileStudio = new ProfileStudio(store);
   const profileWeek = new ProfileWeek(store);
   const profileWeekNotes = new ProfileWeekNotes(store);
+  const assistantGroups = new AssistantGroups(store);
   const homeFeed = new HomeFeed(store);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
@@ -639,6 +641,8 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/profile/week/note' && request.method === 'GET') return json(200, profileWeekNotes.state(profileReadQuery(url.searchParams)));
         if (url.pathname === '/api/profile/week/notes' && request.method === 'GET') return json(200, profileWeekNotes.index(profileReadQuery(url.searchParams)));
         if (url.pathname === '/api/profile/week/note' && request.method === 'POST') return json(200, profileWeekNotes.save(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/groups' && request.method === 'GET') return json(200, assistantGroups.read(device, groupReadQuery(url.searchParams)));
+        if (url.pathname === '/api/assistant/groups' && request.method === 'POST') return json(200, assistantGroups.save(device, await commandBody(request)));
         if (url.pathname === '/api/profile/studio' && request.method === 'GET') return json(200, profileStudio.state());
         if (url.pathname === '/api/profile/studio' && request.method === 'POST') return json(200, profileStudio.save(device, await commandBody(request)));
         if (url.pathname === '/api/profile/history' && request.method === 'GET') return json(200, store.profileHistory(z.string().min(1).max(200).optional().parse(url.searchParams.get('before') ?? undefined)));
