@@ -1,3 +1,11 @@
+## [2.9.15] — 2026-10-19
+
+### Improved
+
+- Edit one recurring task occurrence or its future schedule explicitly, preserving separate unsaved writing when moving between them.
+- Apply future schedule changes after today in the series timezone while preserving existing task dates, completion history, reminders and original identities.
+- Keep original save requests and newer writing recoverable after reload, uncertain responses or local storage refusal.
+
 ## [2.9.14] — 2026-10-19
 
 ### Improved

@@ -122,6 +122,27 @@ test('a retained old TaskWorkspace finish cannot prepare or close a newly opened
   old.props.close();assert.equal(preparations,1);assert.equal(closes,0);assert.equal(returned,0);assert.equal(current.active,true);assert.equal(current.frames[0].taskId,newer.id);
 });
 
+test('actual future-schedule callbacks return through the same occurrence and retained Reminders token', () => {
+  const scope={epoch:randomUUID(),deviceId:'device',windowId:'window'}, original:ReminderReturn={...scope,token:randomUUID(),reminderId:randomUUID(),kind:'tasks',id:'task:original',from:'home'};
+  const task={id:original.id,revision:3,deviceId:scope.deviceId,updatedAt:'',value:{title:'Original occurrence',notes:'Saved task notes',planned:'2026-10-25',due:'',status:'open'}} as Entity<Task>;
+  const routine={id:`routine:${randomUUID()}`,revision:7,value:{title:'Current future template'}};
+  const snapshot={epoch:scope.epoch,deviceId:scope.deviceId,tasks:[task],routines:[routine],taskState:{occurrences:[{taskId:task.id,routineId:routine.id,templateRevision:1,date:'2026-10-18',timezone:'Asia/Tokyo',kind:'task'}]}} as unknown as Snapshot;
+  const records=new Map<string,unknown>();let refuse=false,returned=0;
+  const storage={read:(key:string)=>records.get(key),write(key:string,value:unknown){if(refuse)return false;records.set(key,structuredClone(value));return true;}};
+  const c=new TaskNavigationController(scope,storage,()=>snapshot);c.open(task,{route:'home',label:'Reminders',reminderReturn:original});c.view('history',137);
+  records.set(reminderViewKey(scope),{...readReminderView(undefined,scope),original,tab:'history',positions:{due:{page:0,scroll:0},history:{page:2,scroll:271}}});
+  const render=()=>TaskWorkspace({workspace:{state:c.state,task:c.selected,controller:c,close:()=>c.close(),futureSchedule:(token:string)=>c.futureSchedule(token),occurrence:(token:string)=>c.occurrence(token)} as any,snapshot,async refresh(){},openOrigin(){},
+    canClose(){try{retainReminderReturn(original,scope,4,storage);return true;}catch{return false;}},closed(origin){assert.deepEqual(origin.reminderReturn,original);returned++;}}) as any;
+  const oldTask=render();oldTask.props.openFutureSchedule();const schedule=render();
+  assert.equal(schedule.type.name,'RoutineEditor');assert.equal(schedule.props.routine,routine);assert.equal(schedule.props.occurrenceTitle,task.value.title);
+  oldTask.props.close();assert.equal(c.state?.active,true);assert.ok(c.state?.routine);
+  refuse=true;schedule.props.close();assert.ok(c.state?.routine);assert.equal(returned,0);
+  refuse=false;schedule.props.close();assert.equal(c.state?.routine,undefined);assert.equal(c.frame?.section,'history');assert.equal(c.frame?.scroll,137);
+  const occurrenceToken=c.state!.token;schedule.props.saved({...routine,revision:8},true);assert.equal(c.state?.token,occurrenceToken);
+  render().props.close();assert.equal(returned,1);assert.equal(c.state?.active,false);
+  const kept=readReminderView(records.get(reminderViewKey(scope)),scope);assert.equal(kept.tab,'history');assert.equal(kept.positions.history.scroll,271);assert.equal(kept.original?.token,original.token);
+});
+
 test('late Calendar lookup cannot open a replaced target, and exact epoch/date/return identity is required', async () => {
   const scope={epoch:randomUUID(),deviceId:'device',windowId:'window'}, origin:ReminderReturn={...scope,token:randomUUID(),reminderId:randomUUID(),kind:'calendar',id:'event:series',originalDate:'2026-10-19',from:'home'};
   const target={nonce:randomUUID(),eventId:origin.id,originalDate:origin.originalDate,reminderReturn:origin};

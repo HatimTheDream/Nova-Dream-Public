@@ -5,6 +5,7 @@ import { retainedWindowId } from './useWorkspace';
 import { TaskNavigationController, type TaskOrigin, type TaskSection } from './task-editor-navigation';
 import { TaskEditor } from './TaskEditor';
 import { Dialog } from './ui';
+import { RoutineEditor } from './RoutineEditor';
 
 export function useTaskWorkspace(snapshot: Snapshot) {
   const current = useRef(snapshot); current.current = snapshot;
@@ -23,6 +24,8 @@ export function useTaskWorkspace(snapshot: Snapshot) {
     go: (task: Entity<Task>) => run(() => controller.go(task)),
     child: (defaults: Partial<Task>) => run(() => controller.child(defaults)),
     view: (section: TaskSection, scroll: number) => run(() => controller.view(section, scroll)),
+    futureSchedule: (token: string) => run(() => controller.futureSchedule(token)),
+    occurrence: (token: string) => run(() => controller.occurrence(token)),
     back: () => run(() => controller.back()), close: () => run(() => controller.close()),
     acknowledge: (task: Entity<Task>, token: string, clean: boolean) => run(() => controller.acknowledged(task, token, clean)),
   };
@@ -41,11 +44,22 @@ export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin
     if (canClose(state.origin, finish) && workspace.close()) closed(state.origin);
   };
   if (!task) return <Dialog title="Task Unavailable" close={finish}><p>The original task is unavailable in this workspace. Its draft and return path are kept.</p>{workspace.error && <p role="alert">{workspace.error}</p>}{state.frames.length > 1 && <button type="button" onClick={workspace.back}>Back To Previous Task</button>}<button type="button" onClick={finish}>Back To {state.origin.label}</button></Dialog>;
+  if (state.routine) {
+    const pointer = state.routine;
+    const occurrence = snapshot.taskState?.occurrences.find(item => item.taskId === pointer.taskId && item.routineId === pointer.routineId);
+    const routine = occurrence && snapshot.routines?.find(item => item.id === pointer.routineId && item.revision > 0);
+    const backToOccurrence = () => { workspace.occurrence(state.token); };
+    if (!routine) return <Dialog title="Future Schedule Unavailable" close={backToOccurrence}><p>The original series is unavailable. This occurrence, its schedule draft and its return path are kept.</p>{workspace.error && <p role="alert">{workspace.error}</p>}<button type="button" onClick={backToOccurrence}>Back To This Occurrence</button></Dialog>;
+    return <RoutineEditor key={`${routine.id}:${state.token}`} routine={routine} snapshot={snapshot} occurrenceTitle={task.value.title}
+      close={backToOccurrence} navigationError={workspace.error} registerDeparture={workspace.registerDeparture}
+      saved={(confirmed, clean) => { if (clean && confirmed.id === pointer.routineId) workspace.occurrence(state.token); void refresh(); }}/>;
+  }
   const previous = state.frames.at(-2), parent = previous && workspace.controller.resolve(previous.taskId);
   return <TaskEditor key={task.id} task={task} snapshot={snapshot} section={frame.section} scroll={frame.scroll} sectionScroll={frame.sectionScroll} keepView={workspace.view}
     registerDeparture={workspace.registerDeparture}
     back={previous ? workspace.back : finish} backLabel={previous ? `Back To ${parent?.value.title || 'Previous Task'}` : `Back To ${state.origin.label}`}
     navigationError={workspace.error} close={finish} openTask={workspace.go} newTask={workspace.child}
+    openFutureSchedule={() => { workspace.futureSchedule(state.token); }}
     openOrigin={origin => { if (workspace.close()) openOrigin(origin); }}
     saved={(confirmed, clean) => {
       const returning = clean && workspace.controller.state?.token === state.token && state.frames.length === 1;

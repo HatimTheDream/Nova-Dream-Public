@@ -17,13 +17,16 @@ import { TaskDetailsShell } from './TaskDetailsShell';
 import { confirmedTaskDraft, reopenedTaskConfirmation, type TaskSection } from './task-editor-navigation';
 import type { TaskEditorDraft } from './task-editor-confirmation';
 import './task-details.css';
+import { TaskOccurrenceDetails } from './TaskOccurrenceDetails';
+import { taskPresentationContext } from '../../../packages/domain/task-presentation';
 
-export function TaskEditor({ task, snapshot, close, saved, openOrigin, openTask, newTask, section: initialSection = 'details', scroll = 0, sectionScroll, keepView, back, backLabel, navigationError, registerDeparture }: {
+export function TaskEditor({ task, snapshot, close, saved, openOrigin, openTask, newTask, openFutureSchedule, section: initialSection = 'details', scroll = 0, sectionScroll, keepView, back, backLabel, navigationError, registerDeparture }: {
   task: Entity<Task>; snapshot: Snapshot; close(): void; saved(task: Entity<Task>, clean: boolean): void;
   openTask?(task: Entity<Task>): void; newTask?(defaults: Partial<Task>): void; openOrigin?(origin: NonNullable<Task['origin']>): void;
   section?: TaskSection; scroll?: number; keepView?(section: TaskSection, scroll: number): boolean; back?(): void; backLabel?: string; navigationError?: string;
   registerDeparture?(guard: () => boolean): () => void;
   sectionScroll?: Partial<Record<TaskSection, number>>;
+  openFutureSchedule?(): void;
 }) {
   const key = `e3:task-editor:${snapshot.deviceId}:${task.id}`;
   const initial: TaskEditorDraft = task.value.trashed ? { value: task.value, revision: task.revision, epoch: snapshot.epoch } : readLocal<TaskEditorDraft>(key) ?? { value: task.value, revision: task.revision, epoch: snapshot.epoch };
@@ -104,7 +107,10 @@ export function TaskEditor({ task, snapshot, close, saved, openOrigin, openTask,
   const tabs: { id: TaskSection; label: string }[] = [{ id: 'details', label: 'Details' }, { id: 'dates', label: 'Dates & Reminders' }, { id: 'history', label: 'History' }];
   const locked = busy || launchPending || !!state.pending || !!task.value.trashed;
   const zones = (value?: string) => [...new Set([value ?? snapshot.layout.value.timezone, 'UTC', 'America/Los_Angeles', 'America/New_York', 'Europe/London', 'Asia/Tokyo'])];
-  return <TaskDetailsShell title={task.revision ? 'Task Details' : 'Add Task'} close={keepAndClose}>
+  const occurrence = snapshot.taskState?.occurrences.find(item => item.taskId === task.id);
+  const recurrence = occurrence && taskPresentationContext(snapshot.taskState, snapshot.routines).presentation[task.id]?.recurrence;
+  const futureSchedule = occurrence && snapshot.routines?.find(item => item.id === occurrence.routineId && item.revision > 0);
+  return <TaskDetailsShell title={occurrence ? 'Edit This Occurrence' : task.revision ? 'Task Details' : 'Add Task'} close={keepAndClose}>
     <div className="task-details-return">{back && <button type="button" className="quiet" onClick={() => navigate(back)}>{backLabel ?? 'Back'}</button>}<span className="metadata">{task.revision ? `Saved Version ${confirmedTask.revision}` : 'New Task Draft'}</span></div>
     <div className="task-details-tabs" role="tablist" aria-label="Task Details Sections">{tabs.map((tab, index) => <button key={tab.id} type="button" role="tab" id={`${panelId}-tab-${tab.id}`} aria-controls={`${panelId}-${tab.id}`} aria-selected={section === tab.id} tabIndex={section === tab.id ? 0 : -1}
       onClick={() => selectSection(tab.id)} onKeyDown={event => {
@@ -120,6 +126,7 @@ export function TaskEditor({ task, snapshot, close, saved, openOrigin, openTask,
       requestAnimationFrame(() => field.focus());
     }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <div className="task-details-body" ref={body}>
+        {occurrence && <section className="task-details-occurrence" aria-label="Original Occurrence"><TaskOccurrenceDetails occurrence={occurrence} status={task.value.status}/><p className="metadata">{recurrence ? `Original schedule: every ${recurrence.interval} ${{ daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[recurrence.cadence]}${recurrence.interval === 1 ? '' : 's'}. ` : 'Original cadence unavailable. '}Changes here affect only this occurrence.</p>{openFutureSchedule && futureSchedule ? <button type="button" onClick={() => navigate(openFutureSchedule)}>Edit Future Schedule</button> : <p className="metadata">The original series is unavailable. This occurrence stays editable.</p>}</section>}
         <section role="tabpanel" id={`${panelId}-details`} aria-labelledby={`${panelId}-tab-details`} data-task-section="details" hidden={section !== 'details'}>
           {task.value.origin && openOrigin && <div className="notice"><span>Linked {task.value.origin.kind} · Source Version {task.value.origin.revision}</span><button type="button" onClick={() => navigate(() => openOrigin(task.value.origin!))}>Open Source</button></div>}
           <fieldset disabled={locked}>

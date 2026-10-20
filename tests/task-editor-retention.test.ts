@@ -72,7 +72,7 @@ function fixture(t: any, trashed = false, pending?: Command, options: Partial<Pa
     for (const effect of state.effects.splice(0)) effect();
     return nodes;
   };
-  return { render, departures, task, state, setTask: (value: Entity<Task>) => { currentTask = value; snapshot.tasks = [value]; }, unmount: () => { for (const value of state.values) value?.cleanup?.(); state.values = []; }, stored: () => JSON.parse(storage.get(key)!), full: (value: boolean) => { full = value; } };
+  return { render, departures, task, snapshot, state, setTask: (value: Entity<Task>) => { currentTask = value; snapshot.tasks = [value]; }, unmount: () => { for (const value of state.values) value?.cleanup?.(); state.values = []; }, stored: () => JSON.parse(storage.get(key)!), full: (value: boolean) => { full = value; } };
 }
 const button = (nodes: any[], label: string) => nodes.find(node => node.type === 'button' && (node.props.children === label || node.props['aria-label'] === label));
 
@@ -186,4 +186,20 @@ for (const outcome of ['exact', 'later-revision', 'refresh-unavailable']) test(`
   assert.equal(updated.some(node => node.type === 'span' && node.props.children === 'Original save unconfirmed · edits paused'), false);
   assert.equal(f.stored().revision, 3); assert.equal(requests, 1);
   if (outcome === 'later-revision') assert.ok(updated.some(node => node.type === 'p' && /newer host version/.test(node.props.children)));
+});
+
+test('future schedule entry keeps occurrence writing first and displays original date rather than replanned date', t => {
+  let opened = 0, allowView = true;
+  const f = fixture(t, false, undefined, { openFutureSchedule: () => { opened++; }, keepView: () => allowView });
+  const routineId = 'routine:00000000-0000-4000-8000-000000000001';
+  f.snapshot.taskState = { occurrences: [{ taskId: f.task.id, routineId, templateRevision: 1, date: '2026-01-02', timezone: 'Asia/Tokyo', kind: 'task' }], presentation: { [f.task.id]: { recurrence: { cadence: 'daily', interval: 1 } } } } as any;
+  f.snapshot.routines = [{ id: routineId, revision: 7, value: { cadence: 'weekly' } }] as any;
+  f.task.value.planned = '2026-10-21'; f.full(true);
+  f.render().find(node => node.type === 'textarea').props.onChange({ target: { value: 'Occurrence writing only' } });
+  button(f.render(), 'Edit Future Schedule').props.onClick(); assert.equal(opened, 0);
+  f.full(false); allowView = false; button(f.render(), 'Edit Future Schedule').props.onClick(); assert.equal(opened, 0);
+  allowView = true; const nodes = f.render(); button(nodes, 'Edit Future Schedule').props.onClick();
+  assert.equal(opened, 1); assert.equal(f.stored().value.notes, 'Occurrence writing only');
+  const details = nodes.find(node => node.type?.name === 'TaskOccurrenceDetails'); assert.equal(details.props.occurrence.date, '2026-01-02');
+  assert.ok(nodes.some(node => node.type === 'p' && JSON.stringify(node.props.children).includes('Original schedule: every 1 day.')));
 });

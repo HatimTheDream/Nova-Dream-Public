@@ -119,3 +119,37 @@ test('legacy Add Task hints cannot trap creation on saved, trashed, foreign or i
   f.storage.write(key, { ...journal, pending: { kind: 'task', entityId: legacy.id, epoch: 'epoch', expectedRevision: 0, requestId: 'original' } });
   assert.equal(resumableNewTask(legacy, f.snapshot, f.storage)!.id, legacy.id);
 });
+
+test('future schedule keeps the exact occurrence, task draft and Reminders return through reload', () => {
+  const f = fixture(), c = f.controller, routineId = 'routine:00000000-0000-4000-8000-000000000001';
+  f.snapshot.routines = [{ id: routineId, revision: 7, value: { title: 'Future schedule' } }] as any;
+  f.snapshot.taskState = { occurrences: [{ taskId: f.parent.id, routineId, templateRevision: 1, date: '2026-01-02', timezone: 'Asia/Tokyo', kind: 'task' }] } as any;
+  const origin = { route: 'tasks' as const, label: 'Reminders', reminders: true, reminderReturn: { token: 'original-return', id: 'reminder:one', tab: 'missed' } as any };
+  c.open(f.parent, origin); c.view('history', 145); const taskToken = c.state!.token, frame = structuredClone(c.frame);
+  const writing = { epoch: 'epoch', revision: 2, value: { ...f.parent.value, notes: 'Occurrence only', checklist: [{ id: 'one', text: 'Not a template', done: false }] } };
+  f.storage.write(taskDraftKey('device', f.parent.id), writing);
+  assert.equal(c.futureSchedule(taskToken), true); const scheduleToken = c.state!.token;
+  assert.deepEqual(c.state!.routine, { taskId: f.parent.id, routineId }); assert.notEqual(scheduleToken, taskToken);
+  assert.equal(c.acknowledged({ ...f.parent, revision: 3 }, taskToken, true), false);
+  const reload = f.create(); assert.deepEqual(reload.state!.origin, origin); assert.deepEqual(reload.frame, frame);
+  assert.equal(reload.occurrence(taskToken), false); assert.equal(reload.occurrence(scheduleToken), true);
+  assert.equal(reload.state!.routine, undefined); assert.deepEqual(reload.frame, frame); assert.deepEqual(reload.state!.origin, origin);
+  assert.deepEqual(f.storage.read(taskDraftKey('device', f.parent.id)), writing);
+  assert.equal(JSON.stringify(reload.state).includes('Occurrence only'), false);
+});
+
+test('future schedule entry/return refuse failed storage, stale tokens, missing series and changed epochs', () => {
+  const f = fixture(), c = f.controller, routineId = 'routine:00000000-0000-4000-8000-000000000001';
+  f.snapshot.routines = [{ id: routineId, revision: 1 }] as any;
+  f.snapshot.taskState = { occurrences: [{ taskId: f.parent.id, routineId }] } as any;
+  c.open(f.parent, { route: 'home', label: 'Home' }); const original = structuredClone(c.state);
+  f.fail(key => key === taskNavigationKey(f.scope)); assert.equal(c.futureSchedule(c.state!.token), false); assert.deepEqual(c.state, original);
+  f.fail(() => false); f.snapshot.routines = []; assert.equal(c.futureSchedule(c.state!.token), false); assert.deepEqual(c.state, original);
+  f.snapshot.routines = [{ id: routineId, revision: 2 }] as any;
+  assert.equal(c.futureSchedule('old-token'), false); assert.equal(c.futureSchedule(c.state!.token), true);
+  const schedule = structuredClone(c.state); f.fail(() => true);
+  assert.equal(c.occurrence(c.state!.token), false); assert.deepEqual(c.state, schedule);
+  f.fail(() => false); c.open(f.other, { route: 'tasks', label: 'Tasks' }); assert.equal(c.occurrence(schedule!.token), false); assert.equal(c.selected!.id, f.other.id);
+  f.snapshot.epoch = 'replacement'; assert.equal(c.futureSchedule(c.state!.token), false);
+  assert.equal(readTaskNavigation({ ...schedule, routine: { taskId: f.other.id, routineId } }, f.scope), undefined);
+});

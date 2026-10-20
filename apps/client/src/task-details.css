@@ -24,6 +24,9 @@
 .task-details-body [role="tabpanel"][hidden] { display:none; }
 .task-details-body fieldset { min-width:0; padding:0; margin:0; border:0; display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
 .task-details-body label { min-width:0; }
+.task-details-occurrence { display:grid; gap:8px; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--line); }
+.task-details-occurrence p { margin:0; }
+.task-details-occurrence button { justify-self:start; min-height:44px; }
 .task-details-body .form-grid { gap:12px; }
 .task-details-body .task-detail-fields, .task-details-body .task-reminder-fields { display:grid; gap:12px; }
 .task-details-body .task-reminder-fields { border-top:1px solid var(--line); padding-top:16px; }

@@ -5,9 +5,10 @@ import type { ReminderReturn } from './reminder-workspace';
 export type TaskSection = 'details' | 'dates' | 'history';
 export type TaskOrigin = { route: ModuleId | 'settings'; label: string; reminders?: boolean; reminderReturn?: ReminderReturn };
 export type TaskFrame = { taskId: string; section: TaskSection; scroll: number; sectionScroll?: Partial<Record<TaskSection, number>> };
+export type TaskRoutineView = { taskId: string; routineId: string };
 export type TaskNavigation = {
   format: 1; epoch: string; deviceId: string; windowId: string; active: boolean;
-  origin: TaskOrigin; frames: TaskFrame[]; children: Record<string, string>; token: string;
+  origin: TaskOrigin; frames: TaskFrame[]; children: Record<string, string>; token: string; routine?: TaskRoutineView;
 };
 type Scope = Pick<TaskNavigation, 'epoch' | 'deviceId' | 'windowId'>;
 export type TaskEditorStorage = { read(key: string): unknown; write(key: string, value: unknown): boolean };
@@ -34,7 +35,8 @@ export function readTaskNavigation(value: unknown, scope: Scope): TaskNavigation
     || item.frames.some(frame => !taskId(frame?.taskId) || !sections.includes(frame.section) || !Number.isFinite(frame.scroll) || frame.scroll < 0
       || frame.sectionScroll && (typeof frame.sectionScroll !== 'object' || Object.entries(frame.sectionScroll).some(([section, scroll]) => !sections.includes(section) || !Number.isFinite(scroll) || scroll! < 0)))
     || !item.children || Array.isArray(item.children) || typeof item.children !== 'object'
-    || Object.entries(item.children).some(([parent, child]) => !taskId(parent) || !taskId(child))) return undefined;
+    || Object.entries(item.children).some(([parent, child]) => !taskId(parent) || !taskId(child))
+    || item.routine && (item.routine.taskId !== item.frames.at(-1)?.taskId || !/^routine:[0-9a-f-]{36}$/i.test(item.routine.routineId))) return undefined;
   return item;
 }
 
@@ -83,7 +85,7 @@ export class TaskNavigationController {
     const index = this.state.frames.findIndex(frame => frame.taskId === task.id);
     const frames = index >= 0 ? this.state.frames.slice(0, index + 1) : [...this.state.frames, { taskId: task.id, section: 'details' as const, scroll: 0 }];
     if (frames.length > 64) { this.error = 'Return to an earlier task before opening another level. Your drafts are kept.'; return false; }
-    return this.keep({ ...this.state, frames, token: this.nonce() });
+    return this.keep({ ...this.state, frames, routine: undefined, token: this.nonce() });
   }
   child(defaults: Partial<Task>) {
     const parent = this.selected;
@@ -103,17 +105,29 @@ export class TaskNavigationController {
     if (!this.state?.active || !this.frame) return false;
     return this.keep({ ...this.state, frames: [...this.state.frames.slice(0, -1), { ...this.frame, section, scroll: Math.max(0, scroll), sectionScroll: { ...this.frame.sectionScroll, [section]: Math.max(0, scroll) } }] });
   }
+  futureSchedule(token: string) {
+    if (!this.state?.active || this.state.token !== token || this.state.routine || !this.selected?.revision) return false;
+    const occurrence = this.snapshot().taskState?.occurrences.find(item => item.taskId === this.frame?.taskId);
+    if (!occurrence || !this.snapshot().routines?.some(item => item.id === occurrence.routineId && item.revision > 0)) {
+      this.error = 'The original series is unavailable. This occurrence and its draft stay open.'; return false;
+    }
+    return this.keep({ ...this.state, routine: { taskId: occurrence.taskId, routineId: occurrence.routineId }, token: this.nonce() });
+  }
+  occurrence(token: string) {
+    if (!this.state?.active || this.state.token !== token || !this.state.routine) return false;
+    return this.keep({ ...this.state, routine: undefined, token: this.nonce() });
+  }
   back() {
     if (!this.state?.active || this.state.frames.length < 2) return false;
     const previous = this.state.frames.at(-2)!;
     if (!this.resolve(previous.taskId)) { this.error = 'The previous task is unavailable. This task and both drafts are kept.'; return false; }
-    return this.keep({ ...this.state, frames: this.state.frames.slice(0, -1), token: this.nonce() });
+    return this.keep({ ...this.state, frames: this.state.frames.slice(0, -1), routine: undefined, token: this.nonce() });
   }
   close() { return !!this.state && this.keep({ ...this.state, active: false, token: this.nonce() }); }
   dismissError() { this.error = ''; return true; }
   acknowledged(task: Entity<Task>, token: string, clean: boolean) {
     for (const [parent, child] of this.newChildren) if (child.id === task.id) this.newChildren.delete(parent);
-    if (!clean || !this.state?.active || this.state.token !== token || this.frame?.taskId !== task.id) return false;
+    if (!clean || !this.state?.active || this.state.routine || this.state.token !== token || this.frame?.taskId !== task.id) return false;
     return this.state.frames.length > 1 ? this.back() : this.close();
   }
 }

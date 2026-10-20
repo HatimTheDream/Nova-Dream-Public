@@ -78,6 +78,33 @@ test('weekly recurrence and bounded catch-up preserve their cursor without dupli
     f.time('2028-03-14T20:00:00Z'); const one = f.store.snapshot('a'), two = f.store.snapshot('a'); assert.ok(two.tasks.length > one.tasks.length); assert.equal(new Set(two.tasks.map(t => t.id)).size, two.tasks.length);
   } finally { f.close(); }
 });
+
+test('future cadence revision preserves completed, missed and replanned occurrences and their task-only structure', () => {
+  const f = fixture(); try {
+    const id = `routine:${randomUUID()}`;
+    const routine = f.store.mutate('a', f.cmd('routine', id, template())) as Entity<Routine>;
+    const first = f.store.snapshot('a').tasks[0], dependencyId = `task:${randomUUID()}`, childId = `task:${randomUUID()}`;
+    f.store.mutate('a', f.cmd('task', dependencyId, { ...base, title: 'Separate prerequisite', status: 'done' }));
+    f.store.mutate('a', f.cmd('task', first.id, { ...first.value, planned: '2026-03-20', notes: 'Occurrence only', checklist: [{ id: randomUUID(), text: 'Only this occurrence', done: false }], dependencies: [dependencyId] }, first.revision));
+    f.store.mutate('a', f.cmd('task', childId, { ...base, title: 'Separate child', parentTaskId: first.id }));
+    f.time('2026-03-10T20:00:00Z'); let before = f.store.snapshot('a');
+    const completed = before.tasks.find(task => task.id.endsWith('2026-03-08'))!;
+    f.store.mutate('a', f.cmd('task', completed.id, { ...completed.value, status: 'done' }, completed.revision)); before = f.store.snapshot('a');
+    const update = f.cmd('routine', id, { ...routine.value, title: 'Future every other day', notes: 'Future template', interval: 2 }, routine.revision);
+    const saved = f.store.mutate('a', update) as Entity<Routine>; assert.deepEqual(f.store.mutate('a', update), saved);
+    const sameDay = f.store.snapshot('a'); assert.deepEqual(sameDay.tasks, before.tasks); assert.deepEqual(sameDay.taskState?.occurrences, before.taskState?.occurrences);
+    assert.deepEqual(sameDay.taskState?.events, before.taskState?.events); assert.equal(sameDay.taskState?.earnedXp, before.taskState?.earnedXp);
+    f.time('2026-03-11T20:00:00Z'); f.restart(); const after = f.store.snapshot('a'), prior = new Set(before.tasks.map(task => task.id));
+    assert.deepEqual(after.tasks.filter(task => prior.has(task.id)), before.tasks);
+    const next = after.tasks.find(task => task.id.endsWith('2026-03-11'))!;
+    assert.equal(next.value.title, 'Future every other day'); assert.equal(next.value.notes, 'Future template');
+    assert.equal(next.value.checklist, undefined); assert.equal(next.value.dependencies, undefined); assert.equal(next.value.parentTaskId, undefined);
+    assert.equal(after.taskState?.occurrences.find(item => item.taskId === next.id)?.templateRevision, saved.revision);
+    assert.deepEqual(after.taskState?.occurrences.filter(item => prior.has(item.taskId)), before.taskState?.occurrences);
+    assert.equal(after.taskState?.presentation?.[first.id]?.recurrence?.interval, 1); assert.equal(after.taskState?.presentation?.[next.id]?.recurrence?.interval, 2);
+    assert.equal(after.taskState?.earnedXp, before.taskState?.earnedXp); assert.equal(f.store.snapshot('b').tasks.length, after.tasks.length);
+  } finally { f.close(); }
+});
 test('focus fences windows, reconciles lost pulses, caps disconnect time and retains confirmed time after restart', () => {
   const f = fixture(); try {
     const id = `task:${randomUUID()}`, clientId = randomUUID(); f.store.mutate('a', f.cmd('task', id, { ...base, status: 'active' }));
