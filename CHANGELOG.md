@@ -1,3 +1,11 @@
+## [2.9.11] — 2026-10-19
+
+### Improved
+
+- Give Contacts compact People, Organizations and Pipeline controls with retained searches, filters and selected records.
+- Show the next original follow-up Task with separate planned dates, deadlines, status and project, and filter activity without losing its original sources.
+- Keep contact, organization and activity writing and original pending requests intact through navigation and reload.
+
 ## [2.9.10] — 2026-10-19
 
 ### Improved
