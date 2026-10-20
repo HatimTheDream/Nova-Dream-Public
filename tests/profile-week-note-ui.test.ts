@@ -198,3 +198,19 @@ test('pending selection read is retired when Your Week becomes inactive', async 
   button(render(), 'Write My Note').props.onClick(); props.active = false; render(); f.hooks.calls[1].resolve(f.state); await settle();
   assert(!nodes(render()).some(row => row.type === WeekNoteEditor)); assert.equal(f.hooks.calls.filter(call => call.input).length, 0);
 });
+
+
+test('closing a reviewed note refreshes the current week preview without a command', async () => {
+  const f = fixture(true), props = { epoch: f.epoch, deviceId: f.deviceId, identity: f.identity, active: true };
+  const render = () => f.hooks.render(() => ProfileWeekNotes(props)); render();
+  f.hooks.calls[0].resolve(f.state); await settle();
+  button(render(), 'Edit My Note').props.onClick();
+  const newer = { ...f.state, note: { ...f.note, revision: 5, text: 'Newer saved reflection from another window' } };
+  f.hooks.calls[1].resolve(newer); await settle();
+  const editor = nodes(render()).find(row => row.type === WeekNoteEditor); assert(editor);
+  editor.props.close(); assert.equal(f.hooks.calls.length, 3);
+  f.hooks.calls[2].resolve(newer); await settle();
+  assert.match(text(render()), /Newer saved reflection from another window/);
+  assert(!text(render()).includes('Original saved writing'));
+  assert.equal(f.hooks.calls.filter(call => call.input).length, 0);
+});

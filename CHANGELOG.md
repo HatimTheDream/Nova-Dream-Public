@@ -1,3 +1,15 @@
+## [2.9.28] — 2026-10-20
+
+### Added
+
+- Write optional weekly notes tied to the exact week and timezone, with explicit Save, Trash and Restore.
+- Browse saved notes across timezones and recover unfinished writing from another browser window.
+
+### Improved
+
+- Preserve original note requests through interrupted saves and review changed versions before choosing what to keep.
+- Keep notes separate from Task credit, Search and automatic Assistant context, with clear workspace visibility.
+
 ## [2.9.27] — 2026-10-20
 
 ### Improved

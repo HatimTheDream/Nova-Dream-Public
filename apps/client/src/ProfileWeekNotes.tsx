@@ -76,7 +76,7 @@ export function ProfileWeekNotes({ epoch, deviceId, identity, active }: {
   };
   const close = () => {
     if (!alive.current || !mayLeaveRecordDrafts()) return;
-    generation.current++; setMode(undefined); setEditor(undefined); setLoading(false); refreshKept();
+    generation.current++; setMode(undefined); setEditor(undefined); setLoading(false); refreshKept(); void refreshSummary();
     focusFrame.current = requestAnimationFrame(() => {
       if (alive.current && current.current.active) action.current?.focus();
       focusFrame.current = undefined;
