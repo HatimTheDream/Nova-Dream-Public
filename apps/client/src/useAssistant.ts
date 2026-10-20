@@ -11,6 +11,7 @@ import { historyAfterReadFailure, historyRepairAnchor, mergeHistoryPage } from '
 import { AssistantHistoryReader, type HistoryReadOptions } from './assistant-history-reader';
 import { RefreshReader } from './refresh-reader';
 import { pollReader } from './polling';
+import { mayLeaveRecordDrafts } from './record-draft-navigation';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 import { editConversation } from './conversation-edit';
 import { directChatStorage, keepDirectChatSelection, mayLeaveDirectChat, readDirectSelection, settleDirectSelection, type PreparedDirectView } from './direct-agent-chat';
@@ -70,7 +71,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
   const select = (id: string | null, hint?: AssistantSpace) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
     const nextSpace = hint ?? (conversation ? assistantSpace(conversation) : spaceRef.current);
-    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && (!mayLeaveAssistantDraft() || !mayLeaveDirectChat())) return false;
+    if ((id !== selectedRef.current || nextSpace !== spaceRef.current) && (!mayLeaveAssistantDraft() || !mayLeaveDirectChat() || !mayLeaveRecordDrafts())) return false;
     if (!settleDirectSelection(directChatStorage, snapshot.epoch, snapshot.deviceId)) { setError('The original chat selection is kept. Browser storage must be restored before another selection.'); return false; }
     if (nextSpace !== spaceRef.current) { setSpace(nextSpace); spaceRef.current = nextSpace; saveLocal(spaceKey, nextSpace); }
     saveLocal(selectionKey(nextSpace), id);
@@ -80,7 +81,7 @@ export function useAssistant(snapshot: Snapshot, visible = true) {
   };
   const selectRetained = (id: string | null, nextSpace: AssistantSpace, view: PreparedDirectView) => {
     const conversation = context.current.state.conversations.find(c => c.id === id);
-    if (id && (!conversation || assistantSpace(conversation) !== nextSpace) || !mayLeaveAssistantDraft() || !mayLeaveDirectChat()
+    if (id && (!conversation || assistantSpace(conversation) !== nextSpace) || !mayLeaveAssistantDraft() || !mayLeaveDirectChat() || !mayLeaveRecordDrafts()
       || !keepDirectChatSelection(directChatStorage, snapshot.epoch, snapshot.deviceId, id, nextSpace, view)) { setError('The previous chat selection and writing are kept. Restore browser storage before opening or returning from this chat.'); return false; }
     setSpace(nextSpace); spaceRef.current = nextSpace;
     if (id !== selectedRef.current) { historyReader.current?.cancel(); generation.current++; historyRequest.current++; setHistory(undefined); setHistorySource(undefined); setHistoryError(''); setLoading(false); }

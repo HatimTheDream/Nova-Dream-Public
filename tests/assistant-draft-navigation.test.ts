@@ -1,8 +1,11 @@
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { registerDirectChatOwner } from '../apps/client/src/direct-agent-chat';
 import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { emptyDraft, type Snapshot } from '../packages/domain/contracts';
+import { registerRecordDraftNavigation } from '../apps/client/src/record-draft-navigation';
 import { mayLeaveAssistantDraft, registerAssistantDraftNavigation } from '../apps/client/src/assistant-draft-navigation';
 
 const fixtureKey = Symbol.for('nova.test.draft-navigation-hooks');
@@ -168,7 +171,9 @@ test('actual Editor source preview, History and Back keep the original conversat
   controls = render(); panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
   assert.equal(panel.props.active, `file:${attachment.id}:${attachment.sha256}`);
   assert.ok(controls.some(node => node.type?.name === 'ConversationSources'), 'source contents stay mounted behind the exact file preview');
-  panel.props.select('sources:next'); controls = render();
+  assert.equal(panel.props.tabs.find((tab: any) => tab.id === panel.props.active).view.returnTabId, 'sources:next');
+  controls.find(node => node.type === 'button' && node.props.className === 'text-button workspace-file-return').props.onClick(); controls = render();
+  assert.equal(controls.find(node => node.type?.name === 'AssistantSidePanel').props.active, 'sources:next');
   controls.find(node => node.type?.name === 'ConversationHeaderTools').props.runs();
   controls = render(); panel = controls.find(node => node.type?.name === 'AssistantSidePanel');
   assert.equal(panel.props.active, 'history');
@@ -181,4 +186,71 @@ test('actual Editor source preview, History and Back keep the original conversat
   assert.equal(f.renderAssistant().selectedId, 'original');
   assert.equal(JSON.parse(f.storage.get(f.journalKey)!).value.text, 'Newer unsent writing');
   assert.equal(calls, 0); assert.equal(operation.input, 'Original sent input');
+});
+
+
+test('actual Projects panel refuses archived, pin, saved-version and conversation navigation while its writer cannot retain',t=>{
+  const f=fixture(t),controller=f.renderAssistant(),time='2026-10-20T12:00:00Z';
+  const conversation={id:'original',nativeId:'native',nativeKey:'key',connectionGeneration:'generation',revision:1,title:'Original',state:'ready',projectId:null,archived:false,model:null,thinking:null,createdAt:time,updatedAt:time};
+  const archived={...conversation,id:'archived',nativeId:'native:archive',title:'Earlier Chat',archived:true};
+  let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('Navigation must not dispatch');});
+  const props={appIcon:'red',snapshot:{...f.snapshot,records:{},drafts:[{id:f.id,deviceId:'device',revision:1,value:{...emptyDraft,conversationId:'original',text:'Original writing'},updatedAt:time}]},
+    controller:{...controller,conversation,conversations:[conversation,archived],connection:{state:'ready',generation:'generation',methods:[],grantedScopes:['operator.write']},statusRead:'ready'},
+    voice:{subscribe:()=>()=>{},getSnapshot:()=>({phase:'idle',turns:[]})},contentActions:{},refreshWorkspace:async()=>{},openSettings(){},newProject(){},editProject(){},
+  } as unknown as Parameters<typeof Assistant>[0];
+  const outer=f.renderer(()=>Assistant(props))(),renderBranch=f.renderer(()=>(outer.type as any)(outer.props));let branch=renderBranch();
+  const renderEditor=f.renderer(()=>(branch.type as any)(branch.props));const nodes=(node:any):any[]=>Array.isArray(node)?node.flatMap(nodes):node?.props?[node,...nodes(node.props.children)]:[];
+  const render=()=>{branch=renderBranch();return nodes(renderEditor());};let controls=render();
+  controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  let allowed=false;const unregister=registerRecordDraftNavigation(()=>allowed);t.after(unregister);
+  const tools=controls.find(n=>n.type?.name==='ConversationHeaderTools');tools.props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));assert.equal(controls.some(n=>n.type?.name==='ConversationReader'),false);
+  tools.props.openPin({conversationId:archived.id,nativeId:archived.nativeId,messageId:'message',messageHash:'a'.repeat(64),role:'assistant'});controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  controls.find(n=>n.type?.name==='AssistantSidePanel').props.close();controls=render();assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.visible,true);
+  assert.equal(controller.select('other'),false);assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);assert.equal(f.storage.has('e3:reading:device'),false);
+  allowed=true;controls.find(n=>n.type?.name==='ConversationHeaderTools').props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ConversationReader'));assert.equal(controls.some(n=>n.type?.name==='ProjectManager'),false);assert.equal(branch.props.journal.value.text,'Original writing');assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);
+});
+
+
+test('actual Project preview returns to its exact Project and refuses losing a hidden writer', t => {
+  const f=fixture(t),controller=f.renderAssistant(),time='2026-10-20T13:00:00Z',file={id:'original-file',name:'Source.txt',size:12,sha256:'a'.repeat(64)};
+  const conversation={id:'original',nativeId:'native',nativeKey:'key',connectionGeneration:'generation',revision:1,title:'Original',state:'ready',projectId:null,archived:false,model:null,thinking:null,createdAt:time,updatedAt:time};
+  let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('Inspection must not dispatch');});
+  const props={appIcon:'red',snapshot:{...f.snapshot,records:{},drafts:[{id:f.id,deviceId:'device',revision:1,value:{...emptyDraft,conversationId:'original',text:'Kept Writing'},updatedAt:time}]},controller:{...controller,conversation,conversations:[conversation],connection:{state:'ready',generation:'generation',methods:[],grantedScopes:['operator.write']},statusRead:'ready'},voice:{subscribe:()=>()=>{},getSnapshot:()=>({phase:'idle',turns:[]})},contentActions:{},refreshWorkspace:async()=>{},openSettings(){},newProject(){},editProject(){}} as unknown as Parameters<typeof Assistant>[0];
+  const outer=f.renderer(()=>Assistant(props))(),renderBranch=f.renderer(()=>(outer.type as any)(outer.props));let branch=renderBranch();const renderEditor=f.renderer(()=>(branch.type as any)(branch.props));
+  const nodes=(node:any):any[]=>Array.isArray(node)?node.flatMap(nodes):node?.props?[node,...nodes(node.props.children)]:[];
+  const render=()=>{branch=renderBranch();return nodes(renderEditor());};let controls=render();
+  controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();
+  controls.find(n=>n.type?.name==='ProjectManager').props.openFile(file,'origin-project');controls=render();
+  let panel=controls.find(n=>n.type?.name==='AssistantSidePanel');const previewId=panel.props.active;
+  assert.ok(controls.some(n=>n.type?.name==='ProjectManager'),'original manager stays mounted behind its preview');
+  assert.equal(panel.props.tabs.find((tab:any)=>tab.id===previewId).view.returnProjectId,'origin-project');
+  let allowed=false;const unregister=registerRecordDraftNavigation(()=>allowed);t.after(unregister);
+  controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
+  assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.active,previewId,'a hidden writer still guards return');
+  allowed=true;controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
+  assert.deepEqual(controls.find(n=>n.type?.name==='ProjectManager').props.request.target,{kind:'project',id:'origin-project',tab:'sources'});
+  panel=controls.find(n=>n.type?.name==='AssistantSidePanel');panel.props.select(previewId);controls=render();panel=controls.find(n=>n.type?.name==='AssistantSidePanel');panel.props.closeTab('projects');controls=render();
+  controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
+  assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.visible,false,'a deliberately closed origin returns to the conversation');
+  assert.equal(branch.props.journal.value.text,'Kept Writing');assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);
+});
+
+
+test('combined ordinary and direct selection honor all draft owners before committing the original return view', t => {
+  const f=fixture(t);f.snapshot.epoch=randomUUID();const controller=f.renderAssistant();
+  const allowed={assistant:true,record:true,direct:true};
+  t.after(registerAssistantDraftNavigation(()=>allowed.assistant));t.after(registerRecordDraftNavigation(()=>allowed.record));t.after(registerDirectChatOwner(()=>allowed.direct));
+  let accepted=0,calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('Selection cannot dispatch');});
+  const viewKey=`e3:direct-chat-view:${f.snapshot.epoch}:device:${retainedWindowId}`;
+  const view={write:{key:viewKey,before:null,after:'null'},accept(){accepted++;}};
+  for(const owner of ['assistant','record','direct'] as const){
+    allowed[owner]=false;const before=[...f.storage];
+    assert.equal(controller.select(null),false,owner+' protects ordinary selection');
+    assert.equal(controller.selectRetained(null,'chat',view),false,owner+' protects direct return selection');
+    assert.equal(f.renderAssistant().selectedId,'original');assert.deepEqual([...f.storage],before);assert.equal(accepted,0);
+    allowed[owner]=true;
+  }
+  assert.equal(controller.selectRetained(null,'chat',view),true);assert.equal(accepted,1);
+  assert.equal(f.storage.get(viewKey),'null');assert.equal(f.storage.get('e3:conversation:device'),'null');
+  assert.equal(f.renderAssistant().selectedId,null);assert.equal(calls,0);
 });

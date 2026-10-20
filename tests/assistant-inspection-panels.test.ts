@@ -84,3 +84,29 @@ test('Return To Question opens the existing disclosure and focuses only the exac
     assert.equal(focusConversationQuestion('exact-question', root), true); assert.equal(focused, 'exact-question'); assert.equal(scrolled, 1);
   } finally { if (previous) Object.defineProperty(globalThis, 'HTMLDetailsElement', previous); else Reflect.deleteProperty(globalThis, 'HTMLDetailsElement'); }
 });
+
+
+test('next-message groups deduplicate sources by the send contract while preserving exact preview and historical format truth', () => {
+  const saved = snapshot(), sharedDraft = { ...currentFile, name: 'Latest Selected.txt', sha256: 'b'.repeat(64) };
+  const unsupported = { ...draftFile, name: 'Keep The Original.zip' };
+  const props = { snapshot: saved, conversation, draft: { ...emptyDraft, attachments: [sharedDraft, unsupported] }, operations: [operation()], editProject() {}, openFile(value: Attachment) { selected.push(value); } };
+  const selected: Attachment[] = [], before = JSON.stringify(props);
+  const tree = ConversationSources(props), all = nodes(tree), html = renderToStaticMarkup(createElement(ConversationSources, props));
+  assert.match(html, /2 Of 10 Files/); assert.match(html, /1 Need Attention/); assert.match(html, /Draft Attachments/); assert.match(html, /Project Sources/);
+  const projectRows = nodes(all.find(n => n.props['aria-label'] === 'Project Sources'));
+  projectRows.find(n => n.type === 'button').props.onClick(); assert.equal(selected[0], sharedDraft);
+  assert.equal(all.filter(n => n.type === 'button' && n.props['aria-label']?.startsWith('Preview')).length, 2);
+  const original = operation(); original.context.attachments = [unsupported];
+  const captured = renderToStaticMarkup(createElement(ConversationSources, { ...props, operations: [original], operationId: original.id }));
+  assert.match(captured, /Saved File Version/); assert.doesNotMatch(captured, /cannot be sent|Need Attention|Latest Selected/);
+  assert.equal(JSON.stringify(props), before, 'reading readiness never edits sources or drops unsupported originals');
+});
+
+test('combined over-limit guidance counts shared duplicates only once and keeps every preview', () => {
+  const saved = snapshot(), originals = Array.from({length: 10}, (_, i) => file(`file-${i}`, 1));
+  saved.projects[0].value.attachments = originals.slice(0, 6);
+  const props = { snapshot: saved, conversation, draft: { ...emptyDraft, attachments: [...originals, draftFile] }, operations: [], editProject() {}, openFile() {} };
+  const html = renderToStaticMarkup(createElement(ConversationSources, props));
+  assert.match(html, /11 Of 10 Files/); assert.match(html, /11 files selected/);
+  assert.equal(nodes(ConversationSources(props)).filter(n => n.type === 'button' && n.props['aria-label']?.startsWith('Preview')).length, 11);
+});

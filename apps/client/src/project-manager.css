@@ -1,0 +1,25 @@
+.project-manager{padding:16px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.project-manager h3,.project-manager h4,.project-manager p{margin:0}
+.project-manager-toolbar,.project-manager-tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.project-manager .section-heading{gap:12px;flex-wrap:wrap}
+.project-manager .section-heading h3{overflow-wrap:anywhere;min-width:0;flex:1}
+.project-manager-tabs button{min-height:36px;width:auto}
+.project-manager-tabs button[aria-pressed=true]{color:var(--accent);border-color:currentColor}
+.project-manager-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:10px}
+.project-manager-card{display:flex;text-align:left;align-items:flex-start;gap:12px;padding:14px;min-width:0;width:100%}
+.project-manager-card>span{display:flex;flex-direction:column;gap:6px;min-width:0}
+.project-manager-card strong,.project-manager-card small,.project-manager-card span{overflow-wrap:anywhere}
+.project-manager-card small{color:var(--muted)}
+.project-manager-card>span>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.project-manager-details{display:flex;flex-direction:column;align-items:flex-start;gap:14px;min-width:0}
+.project-manager-details .source-link{max-width:100%;overflow-wrap:anywhere}
+.project-manager .project-editor-embedded{width:100%;min-width:0;max-width:760px}
+.project-editor-embedded form,.project-editor-embedded fieldset{display:flex;flex-direction:column;gap:14px;min-width:0}
+.project-editor-embedded fieldset{border:0;margin:0;padding:0}
+.project-editor-embedded label{min-width:0}
+.project-editor-embedded input,.project-editor-embedded textarea{box-sizing:border-box;min-width:0;width:100%}
+.project-editor-embedded .dialog-footer{position:static;flex-wrap:wrap;gap:8px}
+.project-setup-steps{display:flex;gap:8px;flex-wrap:wrap}
+.project-setup-steps button{min-height:36px}
+.project-setup-review{display:flex;flex-direction:column;gap:12px;overflow-wrap:anywhere}
+@media(pointer:coarse),(max-width:800px){.project-manager button,.project-manager .source-link,.project-setup-steps button{min-height:44px}.project-manager input,.project-manager textarea,.project-manager select{font-size:16px}.project-manager{padding:12px}.project-manager .section-heading .primary{flex:none}}
