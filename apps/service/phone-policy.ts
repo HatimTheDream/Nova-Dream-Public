@@ -71,6 +71,9 @@ POST /api/assistant/artifact/read
 POST /api/assistant/artifact/save
 POST /api/assistant/browse
 POST /api/assistant/cancel
+GET /api/assistant/conversation-cleanup
+POST /api/assistant/conversation-cleanup/prepare
+POST /api/assistant/conversation-cleanup/decide
 POST /api/assistant/conversation/edit
 POST /api/assistant/conversation/fork
 POST /api/assistant/conversation/recover-settings

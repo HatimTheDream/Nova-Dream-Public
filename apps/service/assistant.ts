@@ -1006,6 +1006,21 @@ export class AssistantService {
       this.saveOperation({ ...operation, state: beforeSend || rejected ? 'failed' : 'unknown', error: beforeSend ? error instanceof Fault ? error.message : 'The Assistant could not prepare this reply. Your message was not sent. Review the saved input and try again.' : rejected ? 'OpenClaw rejected this request before admission. The original input is kept for review.' : 'OpenClaw has not confirmed the outcome. Check the original run; it will not be sent again.' });
     }
   }
+  /** Bulk organization never hides an unresolved request or its recovery route. */
+  assertCleanupReady(conversation: Conversation) {
+    this.removals.assertAvailable(conversation.id);
+    const id = conversation.id;
+    if (['creating', 'unknown'].includes(conversation.state) || conversation.pendingResume || conversation.pendingSettings || conversation.nativeRestorePending) throw new Fault(409, 'pending_conversation', 'Finish checking this conversation before including it in cleanup.');
+    if (this.operations().some(op => op.conversationId === id && !terminal.has(op.state))) throw new Fault(409, 'pending_run', 'Finish or check the original reply before including it in cleanup.');
+    if (this.voiceBusy(id)
+      || this.store.internalList<{ draftId: string; state: string; cleanupPending?: boolean }>('dictation:').some(a => a.draftId.endsWith(`:${id}`) && (a.cleanupPending || !['ended', 'failed'].includes(a.state)))
+      || this.store.internalList<VoiceAttempt>('voice:attempt:').some(call => call.target.conversation.id === id && (!['ended', 'failed'].includes(call.state) || call.entries.some(entry => !entry.saved) || call.consults.some(consult => !['completed', 'failed'].includes(consult.state))))) throw new Fault(409, 'pending_voice', 'Finish the original call or dictation and save its writing before cleanup.');
+    if (this.store.internalList<{ conversationId: string; state: string }>('assistant:output:').some(output => output.conversationId === id && output.state !== 'ready')) throw new Fault(409, 'pending_output', 'Finish saving this conversation’s output before cleanup.');
+    for (const prefix of ['assistant:approval:', 'assistant:question:']) if (this.store.internalList<{ conversationId: string; snapshot: { status: string }; action?: { state: string } }>(prefix).some(item => item.conversationId === id && (item.snapshot.status === 'pending' || item.action && item.action.state !== 'confirmed'))) throw new Fault(409, 'pending_decision', 'Resolve the original pending decision before cleanup.');
+    if (this.queue().some(item => item.conversationId === id && item.state === 'paused')) throw new Fault(409, 'pending_queue', 'Keep or finish this conversation’s queued writing before cleanup.');
+    if (this.plans.list().some(plan => plan.conversationId === id && plan.state === 'ready' && plan.autoStartAt)) throw new Fault(409, 'pending_plan', 'Resolve the scheduled plan before cleanup.');
+  }
+
   async edit(device: string, raw: unknown) {
     const input = conversationEditSchema.parse(raw), conversation = this.conversation(input.conversationId);
     // Moving a chat is reversible local organization, not a native settings or

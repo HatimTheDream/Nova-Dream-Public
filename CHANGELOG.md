@@ -1,3 +1,11 @@
+## [2.9.19] — 2026-10-19
+
+### Improved
+
+- Review an exact group of conversations before archiving, moving them to Trash or restoring them, with selected and matching-list scopes.
+- Preserve the original cleanup request and show applied, blocked, unconfirmed and remaining conversations without hiding unfinished work.
+- Keep cleanup reviews and results reachable after reload, with explicit recovery for a review request that has not reached the workspace.
+
 ## [2.9.18] — 2026-10-19
 
 ### Improved

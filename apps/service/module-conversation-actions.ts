@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { assistantSpace } from '../../packages/domain/assistant-space.js';
 import { conversationEditSchema, createConversationSchema, type Conversation } from '../../packages/domain/assistant.js';
 import { browseConversationSchema, conversationSearchSchema } from '../../packages/domain/search.js';
-import { canonical } from '../../packages/domain/contracts.js';
+import { conversationMatchesScope } from '../../packages/domain/conversation-cleanup.js';
+import { conversationItemRequestId } from './conversation-organization.js';
 import type { ModuleAction } from '../../packages/domain/module-actions.js';
 import type { ModuleServices, Operation } from './module-actions.js';
 import { Fault } from './store.js';
@@ -24,16 +24,8 @@ function metadata(chat: Conversation) {
     state: chat.state, settingsPending: !!chat.pendingSettings, model: chat.model, thinking: chat.thinking, fastMode: chat.fastMode,
     createdAt: chat.createdAt, updatedAt: chat.updatedAt };
 }
-function matches(chat: Conversation, input: z.infer<typeof selection>) {
-  const inFolder = input.folder === 'all' || (input.folder === 'deleted' ? !!chat.deleted : !chat.deleted && chat.archived === (input.folder === 'archived'));
-  return (input.space === 'all' || assistantSpace(chat) === input.space)
-    && (input.projectId === undefined || input.projectId === chat.projectId)
-    && inFolder;
-}
-function requestId(action: ModuleAction, id: string) {
-  const hash = createHash('sha256').update(canonical([action.id, 'conversation', id])).digest('hex');
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-}
+function matches(chat: Conversation, input: z.infer<typeof selection>) { return conversationMatchesScope(chat, input); }
+function requestId(action: ModuleAction, id: string) { return conversationItemRequestId(action.id, id); }
 function summarize(outcomes: ItemResult[]) {
   const counts = { applied: 0, blocked: 0, unknown: 0 };
   for (const outcome of outcomes) counts[outcome.state]++;
