@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Snapshot } from '../../../packages/domain/contracts';
+import type { Attachment, Snapshot } from '../../../packages/domain/contracts';
 import type { Conversation } from '../../../packages/domain/assistant';
 import { assistantSpace } from '../../../packages/domain/assistant-space';
 import { projectIsDeleted } from '../../../packages/domain/project-organization';
@@ -8,15 +8,16 @@ import { ProjectOrganizationDialog } from './ProjectOrganizationDialog';
 import { mayLeaveRecordDrafts } from './record-draft-navigation';
 import { retainedWindowId } from './useWorkspace';
 import { keepProjectManager, readProjectManager, requestProjectManager, type ProjectManagerOwner, type ProjectManagerRequest, type ProjectManagerSelection } from './project-manager-view';
-import { ArrowLeft, File, Folder, Plus } from './icons';
+import { ArrowLeft, Folder, Plus } from './icons';
 import { Empty } from './ui';
 import './project-manager.css';
+import { sourceFileRows } from './source-file-rows';
 
 type Props = {
   snapshot: Snapshot; conversations: Conversation[]; draftId: string; conversationId: string | null;
-  space: 'chat' | 'work'; request?: ProjectManagerRequest; refresh: () => Promise<void>; close: () => void;
+  space: 'chat' | 'work'; request?: ProjectManagerRequest; openFile?: (file: Attachment, projectId: string) => void; refresh: () => Promise<void>; close: () => void;
 };
-export function ProjectManager({ snapshot, conversations, draftId, conversationId, space, request, refresh, close }: Props) {
+export function ProjectManager({ snapshot, conversations, draftId, conversationId, space, request, openFile, refresh, close }: Props) {
   const scope = { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId, draftId, conversationId, space };
   const signature = JSON.stringify(scope);
   const read = (applyRequest = true) => {
@@ -77,7 +78,7 @@ export function ProjectManager({ snapshot, conversations, draftId, conversationI
       {deleted && <p className="notice">This Project Is In Deleted. Restore It To Make Changes.</p>}
       {project && <div className="project-manager-tabs" role="group" aria-label="Project Sections">{(['overview', 'sources', 'settings'] as const).map(tab => <button key={tab} disabled={deleted && tab === 'settings' && selected.tab !== 'settings'} aria-pressed={selected.tab === tab} onClick={() => move({ ...selected, tab })}>{tab === 'sources' ? assistantSpace(project.value) === 'work' ? 'Workspace' : 'Sources' : tab === 'overview' ? 'Overview' : 'Settings'}</button>)}</div>}
       {selected.tab === 'settings' ? <ProjectEditor key={`${signature}:${selected.id}`} embedded snapshot={snapshot} projectId={selected.id} space={editorSpaces.current.get(selected.id) ?? space} close={() => move({ ...selected, tab: 'overview' }, filter, owner)} saved={saved} refresh={refresh}/> : !project ? <Empty title="This Project Is Unavailable">Its saved reference and kept writing remain unchanged.</Empty> : selected.tab === 'sources' ? <section className="project-manager-details">
-        {assistantSpace(project.value) === 'work' ? <><h4>Host Workspace</h4><p className="preserve-lines">{project.value.workspace?.folder || 'No Host Folder Saved'}</p><p className="metadata">This path belongs to Nova’s host. Opening this view does not prepare a checkout or start work.</p></> : <><h4>Saved Project Sources</h4><p className="metadata">These files apply to future messages. Earlier replies keep their captured versions.</p>{project.value.attachments?.length ? project.value.attachments.map(file => <a className="source-link" key={file.id} href={`/api/attachments/${file.id}`}><File size={17}/><span>{file.name}</span></a>) : <p>No Shared Files Yet</p>}</>}
+        {assistantSpace(project.value) === 'work' ? <><h4>Host Workspace</h4><p className="preserve-lines">{project.value.workspace?.folder || 'No Host Folder Saved'}</p><p className="metadata">This path belongs to Nova’s host. Opening this view does not prepare a checkout or start work.</p></> : <><h4>Saved Project Sources</h4><p className="metadata">These files apply to future messages. Earlier replies keep their captured versions.</p>{project.value.attachments?.length ? sourceFileRows(project.value.attachments, openFile ? file => openFile(file, project.id) : undefined, true) : <p>No Shared Files Yet</p>}</>}
         {!deleted && <button onClick={() => move({ ...selected, tab: 'settings' })}>Manage {assistantSpace(project.value) === 'work' ? 'Workspace' : 'Sources'}</button>}
       </section> : <section className="project-manager-details"><p className="metadata">{assistantSpace(project.value) === 'work' ? 'Work' : 'Chat'} Project · Saved Revision {project.revision}</p>{project.value.purpose && <p className="preserve-lines">{project.value.purpose}</p>}{project.value.instructions && <><h4>Shared Instructions</h4><p className="preserve-lines">{project.value.instructions}</p></>}<p>{conversations.filter(c => c.projectId === project.id).length} Conversations</p><div className="button-row">{!deleted && <button onClick={() => move({ ...selected, tab: 'settings' })}>Edit Project</button>}<button onClick={() => { if (mayLeaveRecordDrafts()) setOrganizing(project.id); }}>{deleted ? 'Restore Project' : 'Move To Deleted'}</button></div></section>}
     </>}

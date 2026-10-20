@@ -116,3 +116,15 @@
 .workspace-source-row .source-link { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 :root .assistant-tabbed-panel :is(.workspace-source-row > button, .conversation-sources > button, .history-question-summary > button, .workspace-tab-content > details > button) { min-height: 32px; width: auto; flex: none; padding: 4px 10px; background: var(--raised); box-shadow: none; }
 @media (max-width: 800px), (pointer: coarse) { :root .assistant-tabbed-panel :is(.workspace-source-row > button, .conversation-sources > button, .history-question-summary > button, .workspace-tab-content > details > button) { min-height: 44px; } }
+
+.workspace-source-item { padding-block: 5px; }
+.workspace-source-row .source-link > span { min-width: 0; }
+.workspace-source-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.workspace-source-item > .field-error { font-size: 12px; margin: 4px 0; }
+.workspace-file-toolbar { flex-wrap: wrap; }
+.workspace-file-return { min-height: 32px; flex: none; }
+@media (max-width: 650px), (pointer: coarse) {
+  .workspace-source-row { flex-wrap: wrap; }
+  .workspace-source-row .source-link { flex-basis: 100%; }
+  .workspace-file-return { min-height: 44px; }
+}

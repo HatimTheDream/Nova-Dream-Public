@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyWorkspace, restoreWorkspace, workspaceTabs, type WorkspaceView } from '../apps/client/src/workspace-tabs.js';
+import { emptyWorkspace, filePreviewReturn, restoreWorkspace, workspaceTabs, type WorkspaceView } from '../apps/client/src/workspace-tabs.js';
 
 const file = (id: string, hash = 'a'.repeat(64)): WorkspaceView => ({ kind: 'file', file: { id, name: `${id}.md`, size: 12, sha256: hash } });
 test('workspace keeps open views, reuses the same file, and replaces the new-tab launcher', () => {
@@ -83,4 +83,27 @@ test('source recovery rejects a substituted identity, empty capture or copied co
     { id: 'sources:next', view: { kind: 'sources', project: { revision: 4 } } },
     { id: 'sources:next', view: { kind: 'sources', operationId: 'x'.repeat(201) } },
   ]) assert.deepEqual(restoreWorkspace({ ...state, active: tab.id, tabs: [tab] }), emptyWorkspace());
+});
+
+
+test('exact preview origins survive reload and closed origins never substitute a neighboring view', () => {
+  let state = workspaceTabs(emptyWorkspace(), { type: 'open', view: { kind: 'sources', operationId: 'captured-one' } });
+  state = workspaceTabs(state, { type: 'open', view: { kind: 'sources' } });
+  const view: Extract<WorkspaceView, {kind:'file'}> = { kind:'file', file:{id:'original',name:'Original.txt',size:12,sha256:'a'.repeat(64)},returnTabId:'sources:reply:captured-one' };
+  state = workspaceTabs(state, { type: 'open', view });
+  const recovered = restoreWorkspace(JSON.parse(JSON.stringify(state)));
+  assert.equal(filePreviewReturn(recovered, view)?.id, 'sources:reply:captured-one');
+  assert.equal(recovered.visible, false);
+  state = workspaceTabs(recovered, { type: 'close', id: 'sources:reply:captured-one' });
+  assert.equal(filePreviewReturn(state, view), undefined);
+  assert.ok(state.tabs.some(tab => tab.id === 'sources:next'));
+});
+
+test('Project return binds the original identity and rejects ambiguous or recursive origins', () => {
+  const view: Extract<WorkspaceView, {kind:'file'}> = {kind:'file', file:{id:'source',name:'Source.txt',size:12,sha256:'a'.repeat(64)},returnTabId:'projects',returnProjectId:'original-project'};
+  let state=workspaceTabs(emptyWorkspace(),{type:'open',view:{kind:'projects'}});state=workspaceTabs(state,{type:'open',view});
+  assert.equal(filePreviewReturn(restoreWorkspace(state),view)?.id,'projects');
+  for(const wrong of [{...view,returnProjectId:undefined},{...view,returnTabId:'files'},{...view,returnTabId:'file:source'},{...view,returnTabId:'sources:reply:',returnProjectId:undefined}]) {
+    assert.deepEqual(restoreWorkspace({...state,tabs:[state.tabs[0],{id:state.active,view:wrong}]}),emptyWorkspace());
+  }
 });

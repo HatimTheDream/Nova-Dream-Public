@@ -293,3 +293,11 @@ test('deleted or missing Project snapshots preserve failed in-memory writing and
     }finally{app.close();}
   }
 });
+
+
+test('Project source preview receives the saved file and exact Project without edits or commands',async()=>{
+  const saved=snapshot(),id='project:source',file={id:'file:original',name:'Original.txt',size:12,sha256:'a'.repeat(64)};
+  saved.projects=[{id,deviceId:'device',revision:3,updatedAt:'',value:{name:'Original Project',purpose:'Keep This Context',attachments:[file]}}];
+  let opened:any;const app=host(ProjectManager,{snapshot:saved,conversations:[],draftId:'draft:origin',conversationId:null,space:'chat',request:{requestId:randomUUID(),target:{kind:'project',id,tab:'sources'}},openFile:(source:any,projectId:string)=>{opened={source,projectId};},refresh:async()=>{},close(){}});
+  try{await app.flush();const before=JSON.stringify(saved);nodes(app.tree).find(n=>n.props['aria-label']==='Preview Original.txt').props.onClick();assert.equal(opened.source,file);assert.equal(opened.projectId,id);assert.equal(JSON.stringify(saved),before);assert.equal(app.calls.length,0);}finally{app.close();}
+});

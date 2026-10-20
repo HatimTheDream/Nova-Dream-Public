@@ -4,7 +4,7 @@ import { attachmentSchema } from '../../../packages/domain/attachments';
 const viewSchema = z.union([
   z.object({ kind: z.literal('projects'), request: projectManagerRequestSchema.optional() }).strict(),
   z.object({ kind: z.enum(['home', 'files', 'changes', 'live', 'browser', 'team', 'history', 'cleanup']) }).strict(),
-  z.object({ kind: z.literal('file'), file: attachmentSchema, outputId: z.string().optional(), outputVersion: z.number().int().positive().optional() }).strict(),
+  z.object({ kind: z.literal('file'), file: attachmentSchema, outputId: z.string().optional(), outputVersion: z.number().int().positive().optional(), returnTabId: z.string().min(1).max(240).refine(id => id === 'projects' || id === 'files' || id === 'sources:next' || id.startsWith('sources:reply:') && id.length > 14).optional(), returnProjectId: z.string().min(1).max(200).optional() }).strict().refine(view => view.returnTabId === 'projects' ? !!view.returnProjectId : !view.returnProjectId),
   z.object({ kind: z.literal('sources'), operationId: z.string().min(1).max(200).optional() }).strict(),
   z.object({ kind: z.literal('plan'), planId: z.string().min(1).max(200) }).strict(),
 ]);
@@ -36,4 +36,9 @@ export function workspaceTabs(state: WorkspaceTabs, action: WorkspaceAction): Wo
   const tabs = state.tabs.filter(tab => tab.id !== action.id);
   if (!tabs.length) return { ...emptyWorkspace(), visible: state.visible, expanded: state.expanded };
   return { ...state, tabs, active: state.active === action.id ? tabs[Math.min(index, tabs.length - 1)].id : state.active };
+}
+
+/** A closed origin stays closed. Never substitute another capture or a new Project view. */
+export function filePreviewReturn(state: WorkspaceTabs, view: Extract<WorkspaceView, { kind: 'file' }>): WorkspaceTab | undefined {
+  return view.returnTabId ? state.tabs.find(tab => tab.id === view.returnTabId && (tab.view.kind === 'projects' || tab.view.kind === 'files' || tab.view.kind === 'sources')) : undefined;
 }
