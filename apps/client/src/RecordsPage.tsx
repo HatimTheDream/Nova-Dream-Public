@@ -14,9 +14,13 @@ import { RecordEditor } from './RecordEditor';
 import { SquareLynx } from './nova/square-lynx/SquareLynx';
 import { retainedWindowId } from './useWorkspace';
 import { RecordDraftRecovery } from './RecordDraftRecovery';
-import { currentRecordDraftTitle } from './record-draft-recovery';
-import { admittedRecordIndex, type AdmittedRecordTarget } from './record-target-navigation';
+import { currentRecordDraftTitle, readRecordJournal } from './record-draft-recovery';
+import { admittedRecordIndex, readRecordIndex, type AdmittedRecordTarget } from './record-target-navigation';
 import './records.css';
+import { readNavigationLocal } from './navigation-storage';
+import { mayLeaveRecordDrafts } from './record-draft-navigation';
+import { agentDraftScope, agentLocalSlot, keepAgentSelection, mayLeaveAgentDrafts, nextAgentSelection, readAgentSelection, registerAgentDraftNavigation, type AgentSelectionRead, type AgentView, type AgentDestination } from './agent-workspace-navigation';
+import { AgentWorkControls, AgentsWorkspaceNavigation } from './AgentsWorkspaceControls';
 import { AgentRoutines } from './AgentRoutines';
 import { ContentPlanning } from './ContentPlanning';
 import { dayInZone } from '../../../packages/domain/tasks';
@@ -36,36 +40,115 @@ const headings: Record<Page, { title: string; eyebrow: string; detail: string; k
 };
 type SourceActions = { openAssistantSettings?: () => void; openWork?: (conversationId: string) => void; openEmail?: (source: MailContactSource) => Promise<void>; outputs: AssistantOutput[]; openContent: (id: string) => void; openSource: (source: ContentOutputSource) => void };
 type LocalIndex = { selected: string | null; drafts: string[]; seenTarget?: string; attempt?: { id: string; epoch: string } };
+type RecordPreferences = { query: string; archived: boolean; project: string; stage: string; view: 'list' | 'board' | 'calendar'; showFilters: boolean; collection: string; tag: string };
+const assignmentPreferencesValue = (value: unknown): value is Partial<RecordPreferences> => !!value && typeof value === 'object' && !Array.isArray(value)
+  && Object.entries(value).every(([key, item]) => ['query', 'project', 'stage', 'collection', 'tag'].includes(key) ? typeof item === 'string' : ['archived', 'showFilters'].includes(key) ? typeof item === 'boolean' : key === 'view' && ['list', 'board', 'calendar'].includes(item));
+
 export default function RecordsPage({ page, snapshot, refresh, editTask, target, outputs, openContent, openSource, openEmail, openWork, openAssistantSettings }: SourceActions & { page: Page; snapshot: Snapshot; refresh: () => Promise<void>; editTask: (task: Entity<Task>) => void; target?: RecordTarget | null }) {
   const scrollRef = useRef<HTMLElement>(null);
   const scrollKey = `e3:record-scroll:${snapshot.deviceId}:${page}:${retainedWindowId}`;
   useLayoutEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = readLocal<number>(scrollKey) ?? 0; }, [scrollKey]);
   const agentViewKey = `e3:agent-view:${snapshot.deviceId}:${retainedWindowId}`;
-  const [agentSelection, setAgentSelection] = useState<{ view: 'agent' | 'assignment' | 'routines' | 'skills' | 'hub'; target?: string }>(() => readLocal(agentViewKey) ?? { view: 'agent' });
+  const scope = agentDraftScope(snapshot.epoch, snapshot.deviceId, retainedWindowId);
+  const alive = useRef(true), currentScope = useRef(scope); currentScope.current = scope;
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const storage = { getItem: (key: string) => localStorage.getItem(key), setItem: (key: string, value: string) => localStorage.setItem(key, value) };
+  const [viewRead, setViewRead] = useState<AgentSelectionRead>(() => readAgentSelection(storage, agentViewKey));
+  const viewRef = useRef(viewRead); viewRef.current = viewRead;
+  const agentSelection = viewRead.ok ? viewRead.value : { view: 'agent' as const };
   const [navigationError, setNavigationError] = useState('');
   const agentIndexKey = `e3:record-index:${snapshot.deviceId}:agent:${retainedWindowId}`;
-  const [agentIndex, setAgentIndex] = useState<LocalIndex>(() => readLocal(agentIndexKey) ?? { drafts: [], selected: null });
-  const keepAgentIndex = (next: LocalIndex) => { if (!saveLocal(agentIndexKey, next)) { setNavigationError('Free browser storage before opening another agent. Your current writing is kept.'); return false; } setAgentIndex(next); return true; };
-  const openDesign = (id?: string) => { const selected = id ?? `agent:${crypto.randomUUID()}`; keepAgentIndex({ ...agentIndex, selected, drafts: id ? agentIndex.drafts : [...agentIndex.drafts, selected] }); };
-  const closeDesign = () => keepAgentIndex({ ...agentIndex, selected: null });
+  const [agentIndex, setAgentIndex] = useState<LocalIndex>(() => readRecordIndex(readNavigationLocal(agentIndexKey)) ?? { drafts: [], selected: null });
   const [dismissedTarget, setDismissedTarget] = useState<string>();
+  const pendingNavigation = useRef<(() => boolean) | undefined>(undefined);
+  const [hasPendingNavigation, setHasPendingNavigation] = useState(false);
+  useEffect(() => registerAgentDraftNavigation(scope, () => !pendingNavigation.current), [scope]);
   const admittedView = target?.admitted && ['agent', 'assignment'].includes(target.kind) && admittedRecordIndex(snapshot, retainedWindowId, target, { read: readLocal });
   const agentView = admittedView && target!.nonce !== dismissedTarget && !target!.admitted!.restore ? target!.kind as 'agent' | 'assignment' : agentSelection.view;
-  const setAgentView = (view: 'agent' | 'assignment' | 'routines' | 'skills' | 'hub') => { const next = { ...agentSelection, view }; if (!saveLocal(agentViewKey, next)) { setNavigationError('Free browser storage before changing this view. Your current selection is kept.'); return; } setAgentSelection(next); setDismissedTarget(target?.nonce); };
-  const openRecord = (kind: 'agent' | 'assignment', id?: string) => {
-    const key = `e3:record-index:${snapshot.deviceId}:${kind}:${retainedWindowId}`, current = readLocal<LocalIndex>(key) ?? { drafts: [], selected: null }, selected = id ?? `${kind}:${crypto.randomUUID()}`;
-    if (!saveLocal(key, { ...current, drafts: id ? current.drafts : [...current.drafts, selected], selected, attempt: undefined, seenTarget: target?.nonce })) { setNavigationError('Free browser storage before navigating. Your current writing remains open.'); return; }
-    setNavigationError(''); setAgentView(kind);
+  const canNavigate = () => alive.current && currentScope.current === scope && mayLeaveRecordDrafts() && mayLeaveAgentDrafts(scope);
+  const readIndex = (kind: 'agent' | 'assignment' | 'routines', selected?: string) => {
+    const key = kind === 'routines' ? `e3:agent-routines:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}` : `e3:record-index:${snapshot.deviceId}:${kind}:${retainedWindowId}`;
+    try {
+      const raw = localStorage.getItem(key), value = raw === null ? { selected: null, drafts: [] } : readRecordIndex(JSON.parse(raw));
+      if (!value || value.seenTarget !== undefined && typeof value.seenTarget !== 'string' || value.attempt !== undefined && (!value.attempt || typeof value.attempt.id !== 'string' || typeof value.attempt.epoch !== 'string')) throw Error('Invalid kept selection');
+      const id = selected ?? value.selected;
+      if (kind !== 'routines' && id) {
+        const journal = localStorage.getItem(`e3:journal:${snapshot.deviceId}:${id}:${retainedWindowId}`);
+        if (journal !== null) { const parsed = readRecordJournal(journal, kind, id); if (!parsed || parsed.epoch !== snapshot.epoch) throw Error('Invalid kept writing'); }
+      }
+      return { key, raw, value };
+    } catch { setNavigationError('The kept selection or writing could not be read. Its original browser data is preserved.'); return; }
   };
-  const openPlan = (id: string) => openRecord('assignment', id);
+  const setAgentView = (destination: AgentView | AgentDestination, seenTarget?: string) => {
+    if (!canNavigate() || pendingNavigation.current) { setNavigationError('Keep the current writing before changing Agents views.'); return false; }
+    const original = viewRef.current; if (!original.ok) { setNavigationError(original.error); return false; }
+    const next = nextAgentSelection(original.value, destination);
+    if (seenTarget !== undefined) next.target = seenTarget;
+    if ((next.view === 'agent' || next.view === 'assignment' || next.view === 'routines') && !readIndex(next.view)) return false;
+    const saved = keepAgentSelection(storage, agentViewKey, original, next, canNavigate);
+    if (!saved.ok) { setNavigationError(saved.error); return false; }
+    viewRef.current = saved; setViewRead(saved); setDismissedTarget(target?.nonce); setNavigationError(''); return true;
+  };
+  const navigateIndex = (destination: 'agent' | 'hub' | 'assignment' | 'routines', kept: NonNullable<ReturnType<typeof readIndex>>, next: LocalIndex, journal?: { key: string; value: unknown }, seenTarget?: string) => {
+    if (pendingNavigation.current) { setNavigationError('Retry opening the original kept writing before starting another selection.'); return false; }
+    if (!canNavigate()) { setNavigationError('Keep the current writing before opening another item.'); return false; }
+    const view = viewRef.current;
+    if (!view.ok) { setNavigationError(view.error); return false; }
+    try { if (localStorage.getItem(agentViewKey) !== view.raw) throw Error('Changed view'); }
+    catch { setNavigationError('The original Agents view could not be confirmed. Its selection and writing are preserved.'); return false; }
+    const steps = [...(journal ? [{ key: journal.key, before: null as string | null, after: JSON.stringify(journal.value), written: false }] : []), { key: kept.key, before: kept.raw, after: JSON.stringify(next), written: false }];
+    const run = () => {
+      // The retry owns these exact identities only. It never creates another ID,
+      // changes a journal payload or invokes a command.
+      if (!alive.current || currentScope.current !== scope || !mayLeaveRecordDrafts()) return false;
+      const held = pendingNavigation.current; pendingNavigation.current = undefined;
+      const ownersKept = mayLeaveAgentDrafts(scope); pendingNavigation.current = held;
+      if (!ownersKept) { setNavigationError('Keep the current writing before opening the retained selection.'); return false; }
+      try {
+        for (const step of steps) {
+          const raw = localStorage.getItem(step.key);
+          if (raw !== (step.written ? step.after : step.before)) throw Error('The retained selection changed.');
+          if (!step.written) { localStorage.setItem(step.key, step.after); step.written = true; }
+        }
+      } catch { setNavigationError('The original writing and selection are kept. Retry opening that same item when browser storage is available.'); return false; }
+      pendingNavigation.current = undefined;
+      const changed = setAgentView(destination, seenTarget);
+      if (!changed) { pendingNavigation.current = run; return false; }
+      if (destination === 'agent' || destination === 'hub') setAgentIndex(next);
+      setHasPendingNavigation(false); return true;
+    };
+    pendingNavigation.current = run; setHasPendingNavigation(true); return run();
+  };
+  const keepAgentIndex = (next: LocalIndex) => {
+    if (!canNavigate()) { setNavigationError('Keep the current Agent writing before closing or changing it.'); return false; }
+    const kept = readIndex('agent', next.selected ?? undefined); if (!kept) return false;
+    return navigateIndex(agentView === 'hub' ? 'hub' : 'agent', kept, next);
+  };
+  const openDesign = (id?: string) => {
+    if (pendingNavigation.current) { setNavigationError('Retry opening the original kept item first.'); return; }
+    const kept = readIndex('agent', id); if (!kept) return;
+    const selected = id ?? `agent:${crypto.randomUUID()}`;
+    navigateIndex(agentView === 'hub' ? 'hub' : 'agent', kept, { ...kept.value, selected, drafts: id ? kept.value.drafts : [...kept.value.drafts, selected] });
+  };
+  const closeDesign = () => keepAgentIndex({ ...agentIndex, selected: null });
+  const openRecord = (kind: 'agent' | 'assignment', id: string, attemptId?: string, seenTarget?: string) => {
+    const kept = readIndex(kind, id); if (!kept) return false;
+    return navigateIndex(kind, kept, { ...kept.value, selected: id, attempt: attemptId ? { id: attemptId, epoch: snapshot.epoch } : undefined, seenTarget: target?.nonce }, undefined, seenTarget);
+  };
+  const openPlan = (id: string, attemptId?: string) => openRecord('assignment', id, attemptId);
   const assignWork = (agentId: string) => {
+    if (pendingNavigation.current) { setNavigationError('Retry opening the original kept item first.'); return; }
     const agent = snapshot.records?.agent.find(record => record.id === agentId && !record.value.archived); if (!agent) { setNavigationError('Choose a current agent before assigning work.'); return; }
-    const id = `assignment:${crypto.randomUUID()}`, key = `e3:record-index:${snapshot.deviceId}:assignment:${retainedWindowId}`, index = readLocal<LocalIndex>(key) ?? { drafts: [], selected: null };
+    const kept = readIndex('assignment'); if (!kept || !canNavigate()) return;
+    const id = `assignment:${crypto.randomUUID()}`;
     const value = { ...blankRecord('assignment', snapshot.layout.value.timezone), agentId, agentRevision: agent.revision, title: `Assignment for ${agent.value.name}` };
-    if (!saveLocal(`e3:journal:${snapshot.deviceId}:${id}:${retainedWindowId}`, { value, revision: 0, epoch: snapshot.epoch, dirty: true }) || !saveLocal(key, { ...index, selected: id, drafts: [...index.drafts, id] })) { setNavigationError('Free browser storage before creating an assignment. The original agent is kept.'); return; }
-    setNavigationError(''); setAgentView('assignment');
+    navigateIndex('assignment', kept, { ...kept.value, selected: id, drafts: [...kept.value.drafts, id], attempt: undefined, seenTarget: target?.nonce }, { key: `e3:journal:${snapshot.deviceId}:${id}:${retainedWindowId}`, value: { value, revision: 0, epoch: snapshot.epoch, dirty: true } });
   };
-  const openRoutine = (id: string) => { const key = `e3:agent-routines:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`; if (!saveLocal(key, { ...(readLocal(key) ?? { drafts: [] }), selected: id })) { setNavigationError('Free browser storage before opening this routine.'); return; } setNavigationError(''); setAgentView('routines'); };
+  const openRoutine = (id: string) => { const kept = readIndex('routines'); if (kept) navigateIndex('routines', kept, { ...kept.value, selected: id }); };
+  const continueFromAgent = (next: () => void) => { if (!canNavigate()) { setNavigationError('Keep the current Agents writing before opening its linked work.'); return; } next(); };
+  const agentTask = (task: Entity<Task>) => continueFromAgent(() => editTask(task));
+  const agentContent = (id: string) => continueFromAgent(() => openContent(id));
+  const agentSource = (source: ContentOutputSource) => continueFromAgent(() => openSource(source));
   useEffect(() => {
     if (page !== 'agents' || !target || !['agent', 'assignment'].includes(target.kind)) return;
     if (target.admitted) {
@@ -74,34 +157,38 @@ export default function RecordsPage({ page, snapshot, refresh, editTask, target,
       return;
     }
     if (target.nonce === agentSelection.target) return;
-    if (target.kind === 'agent') openDesign(target.id);
-    const next = { view: target.kind as 'agent' | 'assignment', target: target.nonce };
-    if (saveLocal(agentViewKey, next)) setAgentSelection(next);
+    openRecord(target.kind as 'agent' | 'assignment', target.id, target.attemptId, target.nonce);
   }, [target?.nonce, page]);
   const heading = headings[page]; const kind = page === 'agents' ? agentView : heading.kind;
   return <main ref={scrollRef} onScroll={event => saveLocal(scrollKey, event.currentTarget.scrollTop)} className={`page-scroll records-page records-page-${page}${page === 'agents' && ['agent', 'hub'].includes(kind) ? ' records-hub' : ''}`}>
     {page !== 'agents' && page !== 'content' && <div className="page-intro"><h1>{heading.eyebrow}</h1><ComposerMenu label={`About ${heading.eyebrow}`} icon={<Help size={20}/>} placement="below" align="right">{() => <p>{heading.detail}</p>}</ComposerMenu></div>}
-    {page === 'agents' && !['agent', 'hub'].includes(kind) && <div className="page-intro"><h1>{kind === 'assignment' ? 'Assignments' : kind === 'routines' ? 'Routines' : 'Skills'}</h1><button onClick={() => setAgentView('agent')}>← Team</button></div>}
-    {navigationError && <p role="alert" className="field-error">{navigationError}</p>}
-    {kind === 'skills' ? <Suspense fallback={<LoadingRing label="Opening skills…"/>}><AgentSkills key={`${snapshot.epoch}:${snapshot.deviceId}`} snapshot={snapshot}/></Suspense> : page === 'agents' && (kind === 'hub' || kind === 'agent') ? <Suspense fallback={<LoadingRing label="Opening your team…"/>}><AgentHub openSettings={openAssistantSettings} key={`${snapshot.epoch}:${snapshot.deviceId}`} snapshot={snapshot} openWork={openWork} presentation={kind === 'hub' ? 'hub' : 'team'} setPresentation={view => setAgentView(view === 'hub' ? 'hub' : 'agent')} openAgent={openDesign} assignWork={assignWork} openPlan={openPlan} openRoutine={openRoutine} openContent={openContent} editTask={editTask} manage={setAgentView} unfinished={agentIndex.drafts.filter(id => !snapshot.records?.agent.some(a => a.id === id))}/></Suspense> : kind === 'routines' ? <AgentRoutines key={`${snapshot.epoch}:${snapshot.deviceId}`} snapshot={snapshot} openPlan={openPlan}/> : kind === 'profile' ? <Suspense fallback={<LoadingRing label="Opening Profile…"/>}><ProfilePage key={`${snapshot.deviceId}:${snapshot.epoch}`} snapshot={snapshot} refresh={refresh} editTask={editTask}/></Suspense> : <RecordCollection key={`${snapshot.deviceId}:${snapshot.epoch}:${kind}`} kind={kind as RecordKind} snapshot={snapshot} refresh={refresh} editTask={editTask} target={target} outputs={outputs} openContent={openContent} openSource={openSource} openEmail={openEmail} openAssistantSettings={openAssistantSettings}/>}
-    {page === 'agents' && agentIndex.selected && <Dialog title={snapshot.records?.agent.some(a => a.id === agentIndex.selected) ? 'Agent settings' : 'Create agent'} close={closeDesign}><RecordEditor kind="agent" id={agentIndex.selected} key={agentIndex.selected} entity={snapshot.records?.agent.find(a => a.id === agentIndex.selected)} snapshot={snapshot} refresh={refresh} editTask={editTask} onSaved={closeDesign} removeDraft={() => keepAgentIndex({ selected: null, drafts: agentIndex.drafts.filter(id => id !== agentIndex.selected) })}/></Dialog>}
+    {page === 'agents' && <><AgentsWorkspaceNavigation view={agentView} choose={setAgentView}/>{!viewRead.ok && <p className="field-error" role="alert">{viewRead.error}</p>}{kind === 'routines' || kind === 'skills' ? <h1 className="sr-only">{kind === 'routines' ? 'Routines' : 'Skills'}</h1> : null}</>}
+    {navigationError && <p role="alert" className="field-error">{navigationError}</p>}{hasPendingNavigation && <button className="compact-action" onClick={() => pendingNavigation.current?.()}>Retry Opening Kept Writing</button>}
+    {kind === 'skills' ? <Suspense fallback={<LoadingRing label="Opening skills…"/>}><AgentSkills key={scope} snapshot={snapshot}/></Suspense> : page === 'agents' && (kind === 'hub' || kind === 'agent') ? <Suspense fallback={<LoadingRing label="Opening your team…"/>}><AgentHub openSettings={openAssistantSettings ? () => continueFromAgent(openAssistantSettings) : undefined} key={scope} snapshot={snapshot} openWork={openWork ? id => continueFromAgent(() => openWork(id)) : undefined} presentation={kind === 'hub' ? 'hub' : 'team'} setPresentation={view => setAgentView(view === 'hub' ? 'hub' : 'agent')} openAgent={openDesign} assignWork={assignWork} openPlan={openPlan} openRoutine={openRoutine} openContent={agentContent} editTask={agentTask} manage={setAgentView} unfinished={agentIndex.drafts.filter(id => !snapshot.records?.agent.some(a => a.id === id))}/></Suspense> : kind === 'routines' ? <AgentRoutines key={scope} snapshot={snapshot} openPlan={openPlan}/> : kind === 'profile' ? <Suspense fallback={<LoadingRing label="Opening Profile…"/>}><ProfilePage key={`${snapshot.deviceId}:${snapshot.epoch}`} snapshot={snapshot} refresh={refresh} editTask={editTask}/></Suspense> : <RecordCollection key={page === 'agents' ? `${scope}:${kind}` : `${snapshot.deviceId}:${snapshot.epoch}:${kind}`} kind={kind as RecordKind} snapshot={snapshot} refresh={refresh} editTask={page === 'agents' ? agentTask : editTask} target={target} outputs={outputs} openContent={page === 'agents' ? agentContent : openContent} openSource={page === 'agents' ? agentSource : openSource} openEmail={openEmail} openAssistantSettings={openAssistantSettings}/>}
+    {page === 'agents' && agentIndex.selected && <Dialog title={snapshot.records?.agent.some(a => a.id === agentIndex.selected) ? 'Agent settings' : 'Create agent'} close={closeDesign}><RecordEditor kind="agent" id={agentIndex.selected} key={`${scope}:${agentIndex.selected}`} entity={snapshot.records?.agent.find(a => a.id === agentIndex.selected)} snapshot={snapshot} refresh={refresh} editTask={agentTask} onSaved={closeDesign} removeDraft={() => keepAgentIndex({ selected: null, drafts: agentIndex.drafts.filter(id => id !== agentIndex.selected) })}/></Dialog>}
   </main>;
 }
 function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, openContent, openSource, openEmail, openWork, openAssistantSettings }: SourceActions & { kind: RecordKind; snapshot: Snapshot; refresh: () => Promise<void>; editTask: (task: Entity<Task>) => void; target?: RecordTarget | null }) {
   const key = `e3:record-index:${snapshot.deviceId}:${kind}:${retainedWindowId}`;
-  const [index, setIndex] = useState<LocalIndex>(() => readLocal(key) ?? { selected: null, drafts: [] });
+  const [originalAssignmentIndex] = useState(() => kind === 'assignment' ? readNavigationLocal(key) : undefined);
+  const assignmentIndexReadable = kind !== 'assignment' || originalAssignmentIndex === undefined || !!readRecordIndex(originalAssignmentIndex);
+  const [index, setIndex] = useState<LocalIndex>(() => kind === 'assignment' ? readRecordIndex(originalAssignmentIndex) ?? { selected: null, drafts: [] } : readLocal(key) ?? { selected: null, drafts: [] });
   const [library, setLibrary] = useState(false), [catalog, setCatalog] = useState<'templates' | 'brands' | null>(null), [creating, setCreating] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false), searchId = useId();
   const searchTrigger = useRef<HTMLButtonElement>(null), searchField = useRef<HTMLInputElement>(null);
   const closeSearch = () => { setSearchOpen(false); searchTrigger.current?.focus({ preventScroll: true }); };
   useEffect(() => { if (searchOpen) searchField.current?.focus(); }, [searchOpen]);
-  const [error, setError] = useState('');
-  const [preferences, setPreferences] = useState<{ query: string; archived: boolean; project: string; stage: string; view: 'list' | 'board' | 'calendar'; showFilters: boolean; collection:string; tag:string }>(() => ({ collection:'',tag:'',query: '', archived: false, project: '', stage: '', showFilters: false, view: kind === 'content' && window.innerWidth > 700 ? 'board' : 'list', ...(readLocal(key + ':view') ?? {}) }));
+  const [error, setError] = useState(''), [viewRetentionError, setViewRetentionError] = useState('');
+  const defaultPreferences: RecordPreferences = { collection: '', tag: '', query: '', archived: false, project: '', stage: '', showFilters: false, view: kind === 'content' && window.innerWidth > 700 ? 'board' : 'list' };
+  const [assignmentPreferences] = useState(() => kind === 'assignment' ? agentLocalSlot({ getItem: value => localStorage.getItem(value), setItem: (name, value) => localStorage.setItem(name, value) }, key + ':view', assignmentPreferencesValue, defaultPreferences) : undefined);
+  const [preferences, setPreferences] = useState<RecordPreferences>(() => ({ ...defaultPreferences, ...(assignmentPreferences?.initial ?? readLocal(key + ':view') ?? {}) }));
   const { query, archived, project, stage, view, showFilters } = preferences;
   // A disclosure can update more than one preference before React renders again.
   // Keep the latest merged value without putting persistence inside a state updater.
   const preferencesRef = useRef(preferences); preferencesRef.current = preferences;
-  const prefer = (patch: Partial<typeof preferences>) => { const next = { ...preferencesRef.current, ...patch }; preferencesRef.current = next; setPreferences(next); if (!saveLocal(key + ':view', next)) setError('This view is kept in the current window only. Browser storage is full.'); };
+  const keepAssignmentPreferences = () => { const saved = !assignmentPreferences || assignmentPreferences.keep(preferencesRef.current); setViewRetentionError(saved ? '' : 'Your assignment search and filters are kept in this window. Retry keeping them before leaving.'); return saved; };
+  useEffect(() => assignmentPreferences ? registerAgentDraftNavigation(agentDraftScope(snapshot.epoch, snapshot.deviceId, retainedWindowId), keepAssignmentPreferences) : undefined, [key]);
+  const prefer = (patch: Partial<typeof preferences>) => { const next = { ...preferencesRef.current, ...patch }; preferencesRef.current = next; setPreferences(next); if (assignmentPreferences) keepAssignmentPreferences(); else if (!saveLocal(key + ':view', next)) setError('This view is kept in the current window only. Browser storage is full.'); };
   const setQuery = (query: string) => prefer({ query }), setArchived = (archived: boolean) => prefer({ archived }), setProject = (project: string) => prefer({ project }), setStage = (stage: string) => prefer({ stage });
   const [publicationRequest, setPublicationRequest] = useState<{ id: string; nonce: string }>();
   const [needsFocus, setNeedsFocus] = useState(false), editorArea = useRef<HTMLDivElement>(null), listArea = useRef<HTMLElement>(null), opener = useRef<HTMLElement | null>(null);
@@ -115,9 +202,9 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
     if (!saveLocal(key, next)) return false;
     opener.current = null; setPublicationRequest(undefined); setIndex(next); setNeedsFocus(true); return true;
   };
-  const keep = (next: LocalIndex) => { if (!saveLocal(key, next)) { setError('Free browser storage before navigating. Your current selection and writing are kept.'); return false; } setIndex(next); return true; };
-  const openRecord = (id: string, element?: HTMLElement, publication = false) => { opener.current = element ?? null; setPublicationRequest(publication ? { id, nonce: crypto.randomUUID() } : undefined); keep({ ...index, selected: id, attempt: undefined }); setNeedsFocus(true); };
-  const closeRecord = () => { const id = index.selected; keep({ ...index, selected: null, attempt: undefined }); setPublicationRequest(undefined); const card = Array.from(listArea.current?.querySelectorAll<HTMLElement>('[data-content-id]') ?? []).find(node => node.dataset.contentId === id)?.querySelector<HTMLButtonElement>('button'); requestAnimationFrame(()=>(opener.current?.isConnected ? opener.current : card ?? listArea.current)?.focus()); };
+  const keep = (next: LocalIndex) => { if (kind === 'assignment' && (!assignmentIndexReadable || !mayLeaveRecordDrafts())) { setError('Keep the current assignment writing before changing the selection. Unreadable original data is preserved.'); return false; } if (!saveLocal(key, next)) { setError('Free browser storage before navigating. Your current selection and writing are kept.'); return false; } setIndex(next); return true; };
+  const openRecord = (id: string, element?: HTMLElement, publication = false) => { if (kind === 'assignment') { if (!keep({ ...index, selected: id, attempt: undefined })) return; opener.current = element ?? null; setNeedsFocus(true); return; } opener.current = element ?? null; setPublicationRequest(publication ? { id, nonce: crypto.randomUUID() } : undefined); keep({ ...index, selected: id, attempt: undefined }); setNeedsFocus(true); };
+  const closeRecord = () => { const id = index.selected; if (kind === 'assignment') { if (!keep({ ...index, selected: null, attempt: undefined })) return; } else keep({ ...index, selected: null, attempt: undefined }); setPublicationRequest(undefined); const card = Array.from(listArea.current?.querySelectorAll<HTMLElement>('[data-content-id]') ?? []).find(node => node.dataset.contentId === id)?.querySelector<HTMLButtonElement>('button'); requestAnimationFrame(()=>(opener.current?.isConnected ? opener.current : card ?? listArea.current)?.focus()); };
   useEffect(() => {
     if (target?.kind !== kind || target.nonce === index.seenTarget) return;
     if (target.admitted) {
@@ -128,6 +215,7 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
     opener.current = null; setPublicationRequest(undefined); setNeedsFocus(true);
   }, [target?.nonce, kind]);
   const create = (seed?: Partial<Content>) => {
+    if (kind === 'assignment' && (!assignmentIndexReadable || !mayLeaveRecordDrafts())) { setError('Keep the current assignment writing before starting another brief. Original kept data is preserved.'); return; }
     const id = `${kind}:${crypto.randomUUID()}`, next = { selected: id, drafts: [...index.drafts, id] };
     if (kind === 'content') {
       const zone = snapshot.layout.value.timezone, value = { ...blankRecord('content', zone), projectId: project || null, stage: contentStages.includes(stage as Content['stage']) ? stage : 'ideas', ...seed, ...((seed?.stage ?? stage) === 'published' ? { publication: { kind: 'manual', date: dayInZone(zone), note: '' } } : {}) };
@@ -169,11 +257,11 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
     </div>
     {filterSummary && <p className="metadata content-active-filters">{filterSummary}</p>}
     {searchOpen ? <div className="content-search-disclosure" id={searchId} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeSearch(); } }}><label className="search-input"><Search size={16}/><input ref={searchField} type="search" aria-label="Search Content Records" placeholder="Search Content…" value={query} onChange={e => setQuery(e.target.value)}/></label><button className="compact-action compact-utility compact-icon" aria-label="Close Content Search" title="Close Content Search" onClick={closeSearch}><X size={16}/></button></div> : query && <div className="content-active-search"><button className="compact-action compact-utility" onClick={() => setSearchOpen(true)}>Search: <span className="preserve-case">{query}</span></button><button className="compact-action compact-utility" aria-label="Clear Content Search" onClick={() => { setQuery(''); closeSearch(); }}>Clear</button></div>}
-  </div> : <>
-    <div className="record-toolbar"><label className="search-input"><Search size={18}/><input aria-label={`Search ${kind} records`} placeholder="Search records…" value={query} onChange={e => setQuery(e.target.value)}/></label><button className="primary" onClick={() => create()}><Plus size={18}/>New {kind === 'assignment' ? 'Plan' : kind === 'agent' ? 'Agent' : kind === 'profile' ? 'Profile' : 'Contact'}</button><button className="record-filter-toggle icon-button" aria-label={`Filters${[archived, project, stage].filter(Boolean).length ? ` · ${[archived, project, stage].filter(Boolean).length} active` : ''}`} title="Filters" aria-expanded={showFilters} aria-controls={`${kind}-record-filters`} onClick={() => prefer({ showFilters: !showFilters })}><Filter size={18}/>{!![archived, project, stage].filter(Boolean).length && <span className="filter-dot"/>}</button></div>
+  </div> : kind === 'assignment' ? <AgentWorkControls savedCount={filtered.length} draftCount={activeDrafts.length} query={query} changeQuery={setQuery} assign={() => create()} filterCount={[archived, project].filter(Boolean).length} filterSummary={[archived && 'Archived Briefs', project && (snapshot.projects.find(p => p.id === project)?.value.name ?? 'Project unavailable')].filter(Boolean).join(' · ')} filters={close => <div className="agents-assignment-filters"><label>Show<select value={archived ? 'archived' : 'active'} onChange={event => setArchived(event.target.value === 'archived')}><option value="active">Active Briefs</option><option value="archived">Archived Briefs</option></select></label><label>Project<select value={project} onChange={event => setProject(event.target.value)}><option value="">All Projects</option>{snapshot.projects.map(item => <option value={item.id} key={item.id}>{item.value.name}</option>)}</select></label><div className="compact-actions"><button className="compact-action" disabled={!archived && !project} onClick={() => prefer({ archived: false, project: '' })}>Reset Filters</button><button className="compact-action primary" onClick={close}>Done</button></div></div>}/> : <>
+    <div className="record-toolbar"><label className="search-input"><Search size={18}/><input aria-label={`Search ${kind} records`} placeholder="Search records…" value={query} onChange={e => setQuery(e.target.value)}/></label><button className="primary" onClick={() => create()}><Plus size={18}/>New {kind === 'agent' ? 'Agent' : kind === 'profile' ? 'Profile' : 'Contact'}</button><button className="record-filter-toggle icon-button" aria-label={`Filters${[archived, project, stage].filter(Boolean).length ? ` · ${[archived, project, stage].filter(Boolean).length} active` : ''}`} title="Filters" aria-expanded={showFilters} aria-controls={`${kind}-record-filters`} onClick={() => prefer({ showFilters: !showFilters })}><Filter size={18}/>{!![archived, project, stage].filter(Boolean).length && <span className="filter-dot"/>}</button></div>
     <div id={`${kind}-record-filters`} className="record-filters" hidden={!showFilters}><label>Show<select value={archived ? 'archived' : 'active'} onChange={e => setArchived(e.target.value === 'archived')}><option value="active">Active records</option><option value="archived">Archived records</option></select></label>{['contact', 'assignment'].includes(kind) && <label>Project filter<select value={project} onChange={e => setProject(e.target.value)}><option value="">All Projects</option>{snapshot.projects.map(p => <option key={p.id} value={p.id}>{p.value.name}</option>)}</select></label>}<span className="metadata">{filtered.length} saved · {activeDrafts.length} device drafts</span></div>
     {!showFilters && <p className="metadata content-filter-summary">{filtered.length} saved · {activeDrafts.length} device drafts{archived ? ' · Archived' : ''}{project ? ` · ${snapshot.projects.find(p => p.id === project)?.value.name ?? 'Project unavailable'}` : ''}{stage ? ` · ${stage}` : ''}{preferences.collection?` · ${preferences.collection}`:''}{preferences.tag?` · #${preferences.tag}`:''}</p>}
-    </>}{error && <p className="field-error" role="alert">{error}</p>}
+    </>}{viewRetentionError && <div className="notice" role="alert"><span>{viewRetentionError}</span><button className="compact-action" onClick={keepAssignmentPreferences}>Retry Keeping View</button></div>}{assignmentPreferences?.error && <p className="field-error" role="alert">{assignmentPreferences.error}</p>}{!assignmentIndexReadable && <p className="field-error" role="alert">The kept assignment selection could not be read. Its original browser data is preserved.</p>}{error && <p className="field-error" role="alert">{error}</p>}
     {recovering && kind === 'content' && <RecordDraftRecovery scope={recoveryScope} canOpen={!index.selected} open={openRecovered} close={() => setRecovering(false)}/>}
     {creating && <Dialog title="Start Something New" size="choice" close={() => setCreating(false)}><div className="compact-actions content-start-options"><button className="compact-action primary" onClick={() => { setCreating(false); create(); }}>Blank Draft</button><button className="compact-action" onClick={() => { setCreating(false); setCatalog('templates'); }}>Start With A Template</button><button className="compact-action" onClick={() => { setCreating(false); setLibrary(true); }}>Use Saved Agent Result</button></div></Dialog>}
     {catalog&&<Suspense fallback={<LoadingRing label="Opening library…"/>}><ContentLibrary snapshot={snapshot} initialSection={catalog} close={()=>setCatalog(null)} useTemplate={item=>{setCatalog(null);create({title:item.name,brief:item.brief,body:item.body,format:item.format??'markdown',assets:item.assets??[],platform:item.platform,collection:item.collection,tags:item.tags,brandId:item.brandId,stage:'ideas'});}}/></Suspense>}

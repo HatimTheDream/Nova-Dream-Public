@@ -40,6 +40,7 @@ const loader = registerHooks({
       export const useMemo=(f,d)=>h().memo(f,d),useCallback=(f,d)=>h().memo(()=>f,d);
       export const useSyncExternalStore=(_subscribe,read)=>read();` };
     if (url.startsWith('nova-search:./')) return { format: 'module', shortCircuit: true, source: mocks[url.slice('nova-search:'.length)] };
+    if (url.endsWith('.png')) return { format: 'module', shortCircuit: true, source: 'export default "fixture-art";' };
     if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
     return next(url, context);
   },
@@ -54,6 +55,9 @@ const { ConversationSearch } = await import('../apps/client/src/ConversationSear
 const { default: Contacts } = await import('../apps/client/src/Contacts');
 const { default: RecordsPage } = await import('../apps/client/src/RecordsPage');
 const { HomeLibrary } = await import('../apps/client/src/HomeLibrary');
+const { AgentsWorkspaceNavigation, AgentWorkControls } = await import('../apps/client/src/AgentsWorkspaceControls');
+const { default: AgentHub } = await import('../apps/client/src/AgentHub');
+const { registerAgentDraftNavigation, mayLeaveAgentDrafts } = await import('../apps/client/src/agent-workspace-navigation');
 const { registerHomeDraftNavigation } = await import('../apps/client/src/home-draft-navigation');
 loader.deregister();
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
@@ -338,10 +342,10 @@ test('an explicit Agents view change is storage-first and releases the temporary
     f.storage.set(recordIndexKey(scope.deviceId, 'assignment', scope.windowId), JSON.stringify({ selected: 'assignment:one', drafts: ['assignment:unsaved'], seenTarget: nonce }));
     const viewKey = `e3:agent-view:${scope.deviceId}:${scope.windowId}`; f.storage.set(viewKey, JSON.stringify({ view: 'skills' }));
     const app = f.mount(RecordsPage, { page: 'agents', snapshot: data, refresh: async () => {}, editTask() {}, outputs: [], openContent() {}, openSource() {}, target: { kind: 'assignment', id: 'assignment:one', nonce, admitted: { ...scope, revision: 2 } } }); await app.flush();
-    assert.equal(app.find(node => node.type === 'h1').props.children, 'Assignments');
-    f.refuse(key => key === viewKey); app.button('← Team').props.onClick(); await app.flush();
-    assert.equal(app.find(node => node.type === 'h1').props.children, 'Assignments');
-    f.refuse(() => false); app.button('← Team').props.onClick(); await app.flush();
+    assert.equal(app.find(node => node.type === AgentsWorkspaceNavigation).props.view, 'assignment');
+    f.refuse(key => key === viewKey); app.find(node => node.type === AgentsWorkspaceNavigation).props.choose('team'); await app.flush();
+    assert.equal(app.find(node => node.type === AgentsWorkspaceNavigation).props.view, 'assignment');
+    f.refuse(() => false); app.find(node => node.type === AgentsWorkspaceNavigation).props.choose('team'); await app.flush();
     assert.equal(app.find(node => node.props.presentation).props.presentation, 'team');
     assert.equal(JSON.parse(f.storage.get(viewKey)!).view, 'agent'); assert.deepEqual(f.calls, []);
   } finally { f.close(); }
@@ -378,4 +382,112 @@ test('the actual Library target previews exact saved text without capture, comma
     assert.match(text(detail), /Saved version three/); assert.equal(f.storage.get(key), original); assert.deepEqual(f.calls, []);
     assert.equal(JSON.parse(f.storage.get(libraryViewKey(scope))!).searchNonce, target.nonce);
   } finally { f.close(); }
+});
+
+
+test('actual failed Team room writing refuses module and global Search departure, then succeeds after exact retention', async () => {
+  const hubState = { observedAt: 1, runtimeReady: false, runtimeReason: 'Disconnected fixture', agents: [], roster: [], layout: { version: 1, revision: 1, rooms: [], placements: {}, previousPlacements: {} }, total: 0, nextCursor: null, activeAgentId: null };
+  const f = fixture(path => path.includes('agents/hub') ? hubState : path.includes('agents/meetings') ? { current: null, history: [] } : { epoch: scope.epoch, items: [], collections: [], resources: [], ideaPreferences: { revision: 0, saved: [], hidden: [] } });
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Agents').props.onClick(); await app.flush(); assert.equal(currentRoute(app), 'agents');
+    const hub = f.mount(AgentHub, { snapshot: snapshot(), presentation: 'hub', setPresentation() {}, manage() {}, unfinished: [], openAgent() {}, assignWork() {}, openPlan() {}, openRoutine() {}, openContent() {}, editTask() {} }); await hub.flush();
+    hub.button('Add Room').props.onClick(); await hub.flush();
+    const key = `e3:hub:${scope.epoch}:${scope.deviceId}:${scope.windowId}:room-form`; f.refuse(value => value === key);
+    hub.find(node => node.type === 'input' && node.props.value === 'Private office').props.onChange({ target: { value: 'Keep original room writing 雪' } }); await hub.flush();
+    app.button('Search saved work').props.onClick(); await app.flush(); assert.equal(currentRoute(app), 'agents'); assert.equal(f.storage.has(searchKey(scope)), false);
+    app.button('Home').props.onClick(); await app.flush(); assert.equal(currentRoute(app), 'agents');
+    assert.ok(hub.find(node => node.type === 'input' && node.props.value === 'Keep original room writing 雪'));
+    f.refuse(() => false); hub.button('Retry Keeping Writing').props.onClick(); await hub.flush();
+    app.button('Home').props.onClick(); await app.flush(); assert.equal(currentRoute(app), 'home');
+    app.button('Agents').props.onClick(); await app.flush(); app.button('Search saved work').props.onClick(); await app.flush(); assert.equal(currentRoute(app), 'search');
+    assert.equal(JSON.parse(f.storage.get(key)!).name, 'Keep original room writing 雪'); assert.ok(f.calls.every(call => call.init.method === 'GET'));
+  } finally { f.close(); }
+});
+
+test('Agents local views retain owners first, remember Headquarters and keep exact profile attempt identity', async () => {
+  const f = fixture(), data = snapshot(); let release: (() => void) | undefined;
+  try {
+    const viewKey = `e3:agent-view:${scope.deviceId}:${scope.windowId}`; f.storage.set(viewKey, JSON.stringify({ view: 'hub' }));
+    const page = f.mount(RecordsPage, { page: 'agents', snapshot: data, refresh: async () => {}, editTask() {}, outputs: [], openContent() {}, openSource() {} }); await page.flush();
+    const choose = (value: string) => page.find(node => node.type === AgentsWorkspaceNavigation).props.choose(value);
+    release = registerAgentDraftNavigation(`${scope.epoch}:${scope.deviceId}:${scope.windowId}`, () => false);
+    assert.equal(choose('work'), false); await page.flush(); assert.equal(page.find(node => node.props.presentation).props.presentation, 'hub');
+    release(); release = undefined; assert.equal(choose('work'), true); await page.flush(); assert.equal(choose('team'), true); await page.flush();
+    let hub = page.find(node => node.props.presentation); assert.equal(hub.props.presentation, 'hub'); assert.equal(hub.key, `${scope.epoch}:${scope.deviceId}:${scope.windowId}`);
+    hub.props.openAgent('agent:design'); await page.flush(); assert.equal(page.find(node => node.props.presentation).props.presentation, 'hub');
+    page.find(node => node.type === Dialog).props.close(); await page.flush(); assert.equal(page.find(node => node.props.presentation).props.presentation, 'hub');
+    hub = page.find(node => node.props.presentation);
+    hub.props.openPlan('assignment:old', 'attempt:exact-old'); await page.flush();
+    const index = JSON.parse(f.storage.get(recordIndexKey(scope.deviceId, 'assignment', scope.windowId))!);
+    assert.equal(index.selected, 'assignment:old'); assert.deepEqual(index.attempt, { id: 'attempt:exact-old', epoch: scope.epoch });
+    assert.equal(page.find(node => node.type === AgentsWorkspaceNavigation).props.view, 'assignment'); assert.deepEqual(f.calls, []);
+    const stale = hub.props.openPlan; await page.update({ snapshot: { ...data, epoch: 'another-epoch' } }); const before = new Map(f.storage); stale('assignment:different', 'wrong'); await page.flush(); assert.deepEqual(f.storage, before);
+  } finally { release?.(); f.close(); }
+});
+
+test('partial Assign navigation retries the same durable draft and refuses a changed destination', async () => {
+  const f = fixture(), data = snapshot();
+  data.records!.agent = [{ id: 'agent:one', revision: 3, updatedAt: '', deviceId: scope.deviceId, value: { ...blankRecord('agent', 'UTC'), name: 'One' } as any }];
+  try {
+    const page = f.mount(RecordsPage, { page: 'agents', snapshot: data, refresh: async () => {}, editTask() {}, outputs: [], openContent() {}, openSource() {} }); await page.flush();
+    const viewKey = `e3:agent-view:${scope.deviceId}:${scope.windowId}`, indexKey = recordIndexKey(scope.deviceId, 'assignment', scope.windowId);
+    f.refuse(key => key === viewKey); page.find(node => node.props.presentation).props.assignWork('agent:one'); await page.flush();
+    const originalIndex = f.storage.get(indexKey)!; const selected = JSON.parse(originalIndex).selected;
+    const journalKey = `e3:journal:${scope.deviceId}:${selected}:${scope.windowId}`, originalJournal = f.storage.get(journalKey)!;
+    assert.equal(JSON.parse(originalJournal).value.agentRevision, 3); assert.equal(mayLeaveAgentDrafts(`${scope.epoch}:${scope.deviceId}:${scope.windowId}`), false);
+    page.find(node => node.props.presentation).props.assignWork('agent:one'); await page.flush(); assert.equal([...f.storage.keys()].filter(key => key.startsWith('e3:journal:')).length, 1);
+    f.refuse(() => false); f.storage.set(indexKey, JSON.stringify({ selected: 'assignment:other', drafts: [selected, 'assignment:other'] }));
+    page.button('Retry Opening Kept Writing').props.onClick(); await page.flush(); assert.equal(page.find(node => node.props.presentation).props.presentation, 'team'); assert.equal(f.storage.get(journalKey), originalJournal);
+    f.storage.set(indexKey, originalIndex); page.button('Retry Opening Kept Writing').props.onClick(); await page.flush();
+    assert.equal(page.find(node => node.type === AgentsWorkspaceNavigation).props.view, 'assignment'); assert.equal(JSON.parse(f.storage.get(indexKey)!).selected, selected);
+    assert.equal(f.storage.get(journalKey), originalJournal); assert.equal(mayLeaveAgentDrafts(`${scope.epoch}:${scope.deviceId}:${scope.windowId}`), true); assert.deepEqual(f.calls, []);
+  } finally { f.close(); }
+});
+
+
+test('Work query retention refuses local departure on storage failure and preserves malformed old preferences', async () => {
+  for (const original of [undefined, '{original malformed preferences']) {
+    const f = fixture();
+    try {
+      const viewKey = `e3:agent-view:${scope.deviceId}:${scope.windowId}`, key = recordIndexKey(scope.deviceId, 'assignment', scope.windowId) + ':view';
+      f.storage.set(viewKey, JSON.stringify({ view: 'assignment', teamPresentation: 'hub' })); if (original) f.storage.set(key, original);
+      const page = f.mount(RecordsPage, { page: 'agents', snapshot: snapshot(), refresh: async () => {}, editTask() {}, outputs: [], openContent() {}, openSource() {} }); await page.flush();
+      const collection = page.find(node => typeof node.type === 'function' && node.props.kind === 'assignment');
+      const work = f.mount(collection.type, collection.props); await work.flush();
+      f.refuse(value => value === key); work.find(node => node.type === AgentWorkControls).props.changeQuery('Kept exact brief query 雪'); await work.flush();
+      assert.equal(page.find(node => node.type === AgentsWorkspaceNavigation).props.choose('team'), false); await page.flush();
+      assert.equal(page.find(node => node.type === AgentsWorkspaceNavigation).props.view, 'assignment'); assert.equal(work.find(node => node.type === AgentWorkControls).props.query, 'Kept exact brief query 雪');
+      f.refuse(() => false); const changed = page.find(node => node.type === AgentsWorkspaceNavigation).props.choose('team'); await page.flush();
+      if (original) { assert.equal(changed, false); assert.equal(f.storage.get(key), original); }
+      else { assert.equal(changed, true); assert.equal(JSON.parse(f.storage.get(key)!).query, 'Kept exact brief query 雪'); assert.equal(page.find(node => node.props.presentation).props.presentation, 'hub'); }
+      assert.deepEqual(f.calls, []);
+    } finally { f.close(); }
+  }
+});
+
+
+test('Agents linked-work callbacks retain the original owner before changing any offscreen destination', async () => {
+  const f = fixture(), calls: unknown[][] = []; let release: (() => void) | undefined;
+  try {
+    const page = f.mount(RecordsPage, { page: 'agents', snapshot: snapshot(), refresh: async () => {}, editTask: (value: unknown) => calls.push(['task', value]), outputs: [], openContent: (id: string) => calls.push(['content', id]), openSource() {}, openWork: (id: string) => calls.push(['work', id]), openAssistantSettings: () => calls.push(['settings']) }); await page.flush();
+    const hub = page.find(node => node.props.presentation), task = { id: 'task:original', revision: 4 };
+    release = registerAgentDraftNavigation(`${scope.epoch}:${scope.deviceId}:${scope.windowId}`, () => false);
+    hub.props.openWork('conversation:original'); hub.props.openContent('content:original'); hub.props.editTask(task); hub.props.openSettings(); await page.flush(); assert.deepEqual(calls, []);
+    release(); release = undefined;
+    hub.props.openWork('conversation:original'); hub.props.openContent('content:original'); hub.props.editTask(task); hub.props.openSettings();
+    assert.deepEqual(calls, [['work', 'conversation:original'], ['content', 'content:original'], ['task', task], ['settings']]); assert.deepEqual(f.calls, []);
+  } finally { release?.(); f.close(); }
+});
+
+
+test('an unreadable original Agents view admits no index or draft write', async () => {
+  for (const readFailure of [false, true]) {
+    const f = fixture();
+    try {
+      const key = `e3:agent-view:${scope.deviceId}:${scope.windowId}`; f.storage.set(key, readFailure ? JSON.stringify({ view: 'hub' }) : '{original view'); if (readFailure) f.refuseRead(value => value === key);
+      const page = f.mount(RecordsPage, { page: 'agents', snapshot: snapshot(), refresh: async () => {}, editTask() {}, outputs: [], openContent() {}, openSource() {} }); await page.flush();
+      const before = new Map(f.storage); page.find(node => node.props.presentation).props.openAgent(); await page.flush();
+      assert.deepEqual(f.storage, before); assert.equal(nodes(page.tree).some(node => node.type === Dialog), false); assert.deepEqual(f.calls, []);
+    } finally { f.close(); }
+  }
 });

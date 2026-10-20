@@ -7,6 +7,7 @@ import { SquareLynx } from '../square-lynx/SquareLynx';
 import { Dialog } from '../../ui';
 import { readLocal, saveLocal } from '../../api';
 import { RetainedLocalDrafts } from '../../retained-local-drafts';
+import { registerAgentDraftNavigation } from '../../agent-workspace-navigation';
 import { ComposerMenu } from '../../ComposerMenu';
 import { ArrowLeft, ArrowRight, FileText, History, MessageSquare, Moon, MoreHorizontal, Settings2, Sun } from '../../icons';
 import { useHeadquartersMotion } from './useHeadquartersMotion';
@@ -15,9 +16,9 @@ import furnitureUrl from './assets/nova-hub-furniture-p01.png';
 
 type ActivityInput = Omit<AgentActivityCommand,'requestId'|'epoch'|'expectedRevision'> & Record<string,unknown>;
 type Props = {
-  draftKey:string; state: HubState; meetings?: HubMeetingState; meetingError: string; selected?: string; current?: HubAgent; stale: boolean; disabled: boolean;
+  navigationScope?: string; draftKey:string; state: HubState; meetings?: HubMeetingState; meetingError: string; selected?: string; current?: HubAgent; stale: boolean; disabled: boolean;
   pick: (member: HubMember, element: HTMLElement) => void; editRoom: (room: HubRoom) => void; manageRooms: () => void;
-  openDiscussion: (id?: string) => void; openProfile: () => void; openPlan: (id:string)=>void; openTeam?:(id:string)=>void; assignWork:(id:string)=>void;
+  openDiscussion: (id?: string) => void; openProfile: () => void; openPlan: (id:string,attemptId?:string)=>void; openTeam?:(id:string)=>void; assignWork:(id:string)=>void;
   activityCommand: (input: ActivityInput)=>Promise<boolean>; activityBusy: boolean; activityError: string; meetingControls: HubMeetingControls;
   ownerAppearance: unknown;
 };
@@ -33,10 +34,14 @@ const personalityDrafts=new RetainedLocalDrafts<PersonalityDraft>({read:readLoca
   if(typeof window==='undefined')return;
   if(unsaved)window.addEventListener('beforeunload',warnPersonality);else window.removeEventListener('beforeunload',warnPersonality);
 });
-function PersonalityDialog({name,value,revision,draftKey,nextAt,attempts,busy,error,save,close}:{name:string;value:AgentActivityPreferences;revision:number;draftKey:string;nextAt:number|null;attempts:number;busy:boolean;error:string;save:(value:AgentActivityPreferences,revision:number)=>Promise<boolean>;close:()=>void}) {
+export function PersonalityDialog({name,value,revision,draftKey,nextAt,attempts,busy,error,save,close,navigationScope}:{navigationScope?:string;name:string;value:AgentActivityPreferences;revision:number;draftKey:string;nextAt:number|null;attempts:number;busy:boolean;error:string;save:(value:AgentActivityPreferences,revision:number)=>Promise<boolean>;close:()=>void}) {
   const [saved,setSaved]=useState<PersonalityDraft>(()=>{const kept=personalityDrafts.read(draftKey);return kept&&agentActivityPreferencesSchema.safeParse(kept.value).success&&agentActivityPreferencesSchema.safeParse(kept.base).success&&Number.isSafeInteger(kept.revision)&&JSON.stringify(kept.value)!==JSON.stringify(value)&&JSON.stringify(kept.value)!==JSON.stringify(kept.base)?kept:{value,base:value,revision};});
   const [discard,setDiscard]=useState(false),[storageError,setStorageError]=useState(personalityDrafts.unsaved(draftKey)),draft=saved.value,dirty=JSON.stringify(saved.base)!==JSON.stringify(draft),conflict=revision!==saved.revision;
   const keep=(next:PersonalityDraft)=>{setSaved(next);setStorageError(!personalityDrafts.write(draftKey,next));};
+  const writing = useRef(saved); writing.current = saved;
+  useEffect(() => navigationScope ? registerAgentDraftNavigation(navigationScope, () => {
+    const retained = personalityDrafts.write(draftKey, writing.current); setStorageError(!retained); return retained;
+  }) : undefined, [navigationScope, draftKey]);
   const change=(patch:Partial<AgentActivityPreferences>)=>keep({...saved,value:{...draft,...patch}});
   useEffect(()=>{if(conflict&&!dirty&&!busy)keep({value,base:value,revision});},[revision]);
   const confirmSave=async()=>{if(busy||conflict)return;if(await save(draft,saved.revision)){keep({value:draft,base:draft,revision:saved.revision+1});close();}};
@@ -54,6 +59,14 @@ function PersonalityDialog({name,value,revision,draftKey,nextAt,attempts,busy,er
   </Dialog>;
 }
 
+/** Keep a work link and its optional attempt/meeting from one source. */
+export function headquartersWorkTarget(current: HubAgent | undefined, member: HubMember | undefined) {
+  const review = current?.reviews[0];
+  if (review) return { assignmentId: review.assignmentId, attemptId: review.attemptId, meetingId: undefined };
+  if (current?.active) return { assignmentId: current.active.assignmentId, attemptId: current.active.id, meetingId: undefined };
+  if (current?.latest) return { assignmentId: current.latest.assignmentId, attemptId: current.latest.id, meetingId: undefined };
+  return member?.work ? { assignmentId: member.work.assignmentId, attemptId: member.work.attemptId, meetingId: member.work.meetingId } : undefined;
+}
 export function Headquarters(props: Props) {
   const {state,meetings,selected,current,stale,disabled,pick,activityCommand,activityBusy,activityError,meetingControls}=props;
   const floor=useRef<HTMLDivElement>(null),motion=useHeadquartersMotion(floor,state.roster,state.activity,meetings,stale);
@@ -64,9 +77,9 @@ export function Headquarters(props: Props) {
   const gathering=meetings?.current,boardroom=state.layout.rooms.find(r=>r.template==='boardroom'),commons=state.layout.rooms.find(r=>r.template==='commons'),attendees=gathering?.attendees??[];
   const recentReply=gathering?.turns.filter(t=>t.result).at(-1),hasPending=!!meetingControls.pending;
   const sleep=async(id:string)=>{if(value(id).sleep!=='awake'){await activityCommand({type:'wake',agentId:id});return;}if(pref(id)?.busy){setSleepId(id);return;}await activityCommand({type:'sleep',agentId:id});};
-  const workId=current?.reviews[0]?.assignmentId??current?.active?.assignmentId??current?.latest?.assignmentId??member?.work?.assignmentId;
-  const openMemberWork=(agent:HubMember)=>{if(agent.team?.conversationId&&props.openTeam)props.openTeam(agent.team.conversationId);else if(agent.work?.meetingId)props.openDiscussion(agent.work.meetingId);else if(agent.work)props.openPlan(agent.work.assignmentId);};
-  const openWork=()=>{if(current?.team?.conversationId&&props.openTeam)props.openTeam(current.team.conversationId);else if(workId===member?.work?.assignmentId&&member?.work?.meetingId)props.openDiscussion(member.work.meetingId);else if(workId)props.openPlan(workId);else if(member)props.assignWork(member.id);};
+  const workTarget=headquartersWorkTarget(current,member),workId=workTarget?.assignmentId;
+  const openMemberWork=(agent:HubMember)=>{if(agent.team?.conversationId&&props.openTeam)props.openTeam(agent.team.conversationId);else if(agent.work?.meetingId)props.openDiscussion(agent.work.meetingId);else if(agent.work)props.openPlan(agent.work.assignmentId,agent.work.attemptId);};
+  const openWork=()=>{if(current?.team?.conversationId&&props.openTeam)props.openTeam(current.team.conversationId);else if(workTarget?.meetingId)props.openDiscussion(workTarget.meetingId);else if(workId)props.openPlan(workId,workTarget?.attemptId);else if(member)props.assignWork(member.id);};
   const figure=(agent:HubMember,physical=false)=><span className={'hq-avatar'+(motion.wave===agent.id?' hq-wave':'')+(physical?' hq-physical':'')} data-sleep={value(agent.id).sleep}><SquareLynx appearance={agent.appearance} size="icon" expression={motion.expression(agent.id)} accessibility={{mode:'decorative'}}/>{value(agent.id).sleep==='asleep'&&<span className="hq-sleep-cue">Zzz</span>}</span>;
   const visibleAt=(id:string,place:'office'|'commons'|'boardroom')=>(motion.places[id]??'office')===place&&motion.moving?.id!==id;
   return <div className="headquarters">
@@ -107,7 +120,7 @@ export function Headquarters(props: Props) {
       {gathering?<><h3>{gathering.title}</h3><p className="hq-agenda">{gathering.agenda}</p><div className="hq-discussion-people">{attendees.map(a=>{const person=state.roster.find(p=>p.id===a.id);return <button key={a.id} onClick={e=>person&&pick(person,e.currentTarget)}>{person&&figure(person)}<span>{a.name}</span></button>;})}</div><p className="hq-discussion-status" role="status">{gathering.message}</p><div className="hq-discussion-actions">{['gathered','paused'].includes(gathering.state)&&gathering.next<gathering.turns.length?<button className="primary" disabled={meetingControls.busy||hasPending||!!props.meetingError} onClick={()=>void meetingControls.command({type:'start',meetingId:gathering.id,expectedRevision:gathering.revision})}>{gathering.state==='paused'?'Continue Discussion':'Start Discussion'}</button>:gathering.state==='running'?<button disabled={meetingControls.busy||hasPending||!!props.meetingError} onClick={()=>void meetingControls.command({type:'pause',meetingId:gathering.id,expectedRevision:gathering.revision})}>Pause Discussion</button>:null}<button onClick={()=>props.openDiscussion(gathering.id)}>Open Discussion</button></div>{recentReply?.result&&<button className="hq-returned-reply" onClick={()=>props.openDiscussion(gathering.id)}><strong>{recentReply.agentName}{recentReply.kind==='summary'?' · Summary':''}</strong><span>{recentReply.result.text}</span></button>}</>:<><p className="hq-empty-discussion">Choose a question and invite your team. Contributions and the summary stay with the original discussion.</p><button className="primary" onClick={()=>props.openDiscussion()}>New Discussion</button></>}
       {!!meetings?.history.length&&<div className="hq-past-discussions"><h3>Past Discussions</h3>{meetings.history.slice(0,3).map(m=><button key={m.id} onClick={()=>props.openDiscussion(m.id)}><span>{m.title}</span><small>{new Date(m.createdAt).toLocaleDateString()}</small></button>)}</div>}
     </aside></div>
-    {personalityId&&<PersonalityDialog key={personalityId} draftKey={props.draftKey+':personality:'+personalityId} revision={pref(personalityId)?.revision??0} name={state.roster.find(a=>a.id===personalityId)?.name??'Agent'} value={value(personalityId)} nextAt={pref(personalityId)?.nextConversationAt??null} attempts={pref(personalityId)?.conversationsToday??0} busy={activityBusy} error={activityError} close={()=>setPersonalityId(undefined)} save={async(draft,expectedRevision)=>{const {sleep,...saved}=draft;return activityCommand({type:'preferences',agentId:personalityId,expectedRevision,value:saved});}}/>}
+    {personalityId&&<PersonalityDialog navigationScope={props.navigationScope} key={props.draftKey+':personality:'+personalityId} draftKey={props.draftKey+':personality:'+personalityId} revision={pref(personalityId)?.revision??0} name={state.roster.find(a=>a.id===personalityId)?.name??'Agent'} value={value(personalityId)} nextAt={pref(personalityId)?.nextConversationAt??null} attempts={pref(personalityId)?.conversationsToday??0} busy={activityBusy} error={activityError} close={()=>setPersonalityId(undefined)} save={async(draft,expectedRevision)=>{const {sleep,...saved}=draft;return activityCommand({type:'preferences',agentId:personalityId,expectedRevision,value:saved});}}/>}
     {sleepId&&<Dialog title={'Sleep · '+(state.roster.find(a=>a.id===sleepId)?.name??'Agent')} close={()=>setSleepId(undefined)}><p>The original work is still active or needs confirmation. Sleep After Work keeps it intact and stops new automatic activity.</p><div className="button-row"><button className="primary" disabled={activityBusy} onClick={async()=>{if(await activityCommand({type:'sleep',agentId:sleepId}))setSleepId(undefined);}}>Sleep After Work</button>{gathering?.state==='running'&&gathering.attendees.some(a=>a.id===sleepId)&&<button disabled={activityBusy} onClick={async()=>{if(await activityCommand({type:'sleep',agentId:sleepId,pauseMeeting:{id:gathering.id,revision:gathering.revision}}))setSleepId(undefined);}}>Pause Discussion And Sleep</button>}<button onClick={()=>setSleepId(undefined)}>Keep Awake</button></div>{activityError&&<p className="field-error" role="alert">{activityError}</p>}</Dialog>}
     {showActivity&&<Dialog title="Activity & Decisions" close={()=>setShowActivity(false)}><div className="hq-activity-list">{(state.activity?.events??[]).filter(e=>e.agentId===member?.id).slice(-12).reverse().map(e=><article key={e.id}><strong>{e.action==='conversation'?'Work Conversation':e.action==='office'?'Return To Office':e.action==='coffee'?'Coffee Break':e.action==='visit'?'Visit Office':e.action==='hello'?'Say Hello':e.action==='sleep'?'Sleep':'Wake'}</strong><time>{new Date(e.at).toLocaleString()}</time><p>{e.reason}</p>{e.meetingId&&<button onClick={()=>{setShowActivity(false);props.openDiscussion(e.meetingId);}}>Open Discussion</button>}</article>)}{!(state.activity?.events??[]).some(e=>e.agentId===member?.id)&&<p>No activity has been recorded for this agent.</p>}{state.activity?.sleepRequests.filter(i=>i.agentId===member?.id&&i.state!=='requested').map(i=><article key={i.id}><strong>{i.state==='review'?'Sleep Needs Review':'Sleep Pause Pending'}</strong><p>{i.message??'The original pause needs confirmation. The held work is kept.'}</p><button onClick={()=>props.openDiscussion(i.meetingId)}>Open Original Discussion</button></article>)}{state.activity?.conversations.filter(c=>c.state==='blocked'&&c.agentIds.includes(member?.id??'')).map(c=><article key={c.id}><strong>Conversation Needs Review</strong><p>{c.message}</p>{c.meetingId&&<button onClick={()=>props.openDiscussion(c.meetingId)}>Open Original Discussion</button>}</article>)}</div></Dialog>}
   </div>;
