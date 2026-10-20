@@ -41,6 +41,8 @@ GET /api/assistant/outputs
 GET /api/assistant/state
 GET /api/assistant/groups
 POST /api/assistant/groups
+GET /api/assistant/group-preparations
+POST /api/assistant/group-preparations
 GET /api/assistant/voice/catalog
 GET /api/assistant/read-aloud/catalog
 POST /api/assistant/read-aloud/speak

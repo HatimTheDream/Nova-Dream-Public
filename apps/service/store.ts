@@ -4,6 +4,11 @@ import { assertDirectAgentWrite, hasDirectAgentAuthority, verifyDirectAgentRecor
 import { groupPrefix, groupKey, groupMemberPrefix, groupMemberKey, groupEventPrefix, groupEventKey,
   groupCommandSchema, groupEventSchema, groupIntent, groupReceipt, hasGroupReceipt, changeGroup, verifyGroupRecords,
   type GroupBundle, type GroupEvent, type GroupReceipt } from '../../packages/domain/assistant-groups.js';
+import { groupPreparationPrefix, preparationGroupPrefix, groupPreparationEventSchema, groupPreparationCommandSchema,
+  groupPreparationIntent, groupPreparationReceipt, hasGroupPreparationReceipt, verifyGroupPreparations,
+  emptyGroupPreparation, changeGroupPreparation, groupPreparationEntries, parseGroupDraft,
+  groupPreparationBytes, type GroupPreparationBundle, type GroupDraftScope,
+  type GroupPreparationReceipt, type PreparedGroupRound } from '../../packages/domain/assistant-group-turns.js';
 import { homeWidgetPreservationKey } from './home-widget-preservation.js';
 import { importedProgressSchema } from '../../packages/domain/profile-progression.js';
 import { buildProfileProgress, progressHistory, questCommandSchema, type PersonalQuest } from '../../packages/domain/profile-progression.js';
@@ -48,6 +53,7 @@ export class Store {
   // but can never remove protection or add reads to ordinary transcript deltas.
   private directAgentProtected = new Set<string>();
   private writingGroup = false;
+  private writingGroupPreparation = false;
   readonly directory: string;
   constructor(directory: string, private now: () => number = Date.now, protectedKey?: Buffer, private reviewOnly = false) {
     this.directory = directory;
@@ -66,7 +72,7 @@ export class Store {
     if (this.key.length !== 32) throw new Error('Invalid workspace key. No data was replaced.');
     this.db = new DatabaseSync(join(directory, 'workspace.sqlite'));
     const schema = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schema > 57) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
+    if (schema > 58) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
     // Authenticate an existing workspace before any schema or journal-mode write.
     try {
       if (schema > 0) {
@@ -75,7 +81,9 @@ export class Store {
         const records = this.db.prepare("SELECT id,revision,payload FROM service_records WHERE id LIKE 'assistant:%'").all() as { id: string; revision: number; payload: Uint8Array }[];
         const opened = records.map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
         verifyDirectAgentRecords(schema, opened);
-        verifyGroupRecords(schema, opened, this.originalGroupReceipts(), value => hash(canonical(value)));
+        const receipts = this.originalGroupReceipts();
+        const groups = verifyGroupRecords(schema, opened, receipts, value => hash(canonical(value)));
+        verifyGroupPreparations(schema, opened, receipts, groups, this.groupPreparationSaved(), value => hash(canonical(value)));
         for (const row of opened) if (hasDirectAgentAuthority(row.value)) this.directAgentProtected.add(row.id);
       } else if ((this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table'").get() as { count: number }).count) throw new Error('Unrecognized workspace schema. No data was replaced.');
     } catch (error) { this.db.close(); throw error; }
@@ -88,7 +96,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, bytes INTEGER NOT NULL, payload BLOB NOT NULL);
       CREATE TABLE IF NOT EXISTS blob_refs (entity_id TEXT NOT NULL REFERENCES entities(id), blob_id TEXT NOT NULL REFERENCES blobs(id), PRIMARY KEY(entity_id,blob_id));
-      PRAGMA user_version=57;`);
+      PRAGMA user_version=58;`);
     try {
       if (!this.db.prepare("SELECT value FROM meta WHERE key='epoch'").get()) this.transaction(() => {
         this.db.prepare('INSERT INTO meta VALUES (?,?)').run('epoch', randomUUID());
@@ -196,7 +204,7 @@ export class Store {
       const services = (this.db.prepare('SELECT * FROM service_records ORDER BY id').all() as { id: string; revision: number; payload: Uint8Array }[]).filter(row => !row.id.startsWith('backup:')).map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
       const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.download(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
       const references = (this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id,blob_id').all() as { entity_id: string; blob_id: string }[]).map(row => ({ entityId: row.entity_id, fileId: row.blob_id }));
-      const value: BackupSnapshot = { format: backupFormat, schema: 57, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
+      const value: BackupSnapshot = { format: backupFormat, schema: 58, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
       Store.verifyBackup(value); return value;
     });
   }
@@ -206,7 +214,27 @@ export class Store {
     const unique = (items: string[]) => { if (new Set(items).size !== items.length) throw new Fault(400, 'backup_duplicate', 'The backup contains duplicate identities.'); };
     unique(value.entities.map(e => e.id)); unique(value.history.map(h => String(h.cursor))); unique(value.services.map(s => s.id)); unique(value.receipts.map(r => r.requestId)); unique(value.files.map(f => f.id)); unique(value.references.map(r => r.entityId + '\0' + r.fileId));
     try { verifyDirectAgentRecords(value.schema, value.services); } catch { throw new Fault(400, 'backup_direct_agent', 'Saved direct-agent authority is incompatible or does not match its original work. Nothing was restored.'); }
-    try { verifyGroupRecords(value.schema, value.services, value.receipts, input => hash(canonical(input))); }
+    try {
+      const groups = verifyGroupRecords(value.schema, value.services, value.receipts, input => hash(canonical(input)));
+      const currentById = new Map(value.entities.map(entity => [entity.id, entity]));
+      let historicalByVersion: Map<string, unknown> | undefined;
+      verifyGroupPreparations(value.schema, value.services, value.receipts, groups, (kind, id, revision) => {
+        const current = currentById.get(id);
+        if (!current || current.kind !== kind) return undefined;
+        if (current.revision === revision) return current.value;
+        if (!historicalByVersion) {
+          historicalByVersion = new Map();
+          for (const row of value.history) {
+            const key = canonical([row.entityId, row.revision]);
+            // An ambiguous exact version cannot become authority through first-match ordering.
+            historicalByVersion.set(key, historicalByVersion.has(key) ? undefined : row.value);
+          }
+        }
+        const historical = historicalByVersion.get(canonical([id, revision]));
+        return historical && typeof historical === 'object' && (historical as { id?: unknown }).id === id
+          && (historical as { revision?: unknown }).revision === revision ? (historical as { value?: unknown }).value : undefined;
+      }, input => hash(canonical(input)));
+    }
     catch { throw new Fault(400, 'backup_groups', 'Saved Group membership does not match its original history and receipts. Nothing was restored.'); }
     try { verifyImportedProgress(value.services); } catch { throw new Fault(400, 'backup_progress', 'The earlier XP balance does not match its preserved source. Nothing was restored.'); }
     const ids = new Set(value.entities.map(e => e.id)), files = new Set(value.files.map(f => f.id));
@@ -836,6 +864,8 @@ export class Store {
   }
   internalWrite<T>(id: string, value: T): T {
     if (id.startsWith(groupPrefix) && !this.writingGroup) throw new Fault(409, 'group_original_required', 'Group history can only change through its original admitted command.');
+    if (id.startsWith(groupPreparationPrefix) && !this.writingGroupPreparation)
+      throw new Fault(409, 'group_preparation_original_required', 'Group writing and prepared inputs require their exact original command.');
     if (id.startsWith('assistant:') && (this.directAgentProtected.has(id) || hasDirectAgentAuthority(value) || id.startsWith('assistant:operation:') || id.startsWith('assistant:queue:'))) {
       assertDirectAgentWrite(id, this.internalRead(id), value, key => this.internalRead(key));
       if (hasDirectAgentAuthority(value)) this.directAgentProtected.add(id);
@@ -875,6 +905,8 @@ export class Store {
   }
   internalDelete(id: string) {
     if (id.startsWith(groupPrefix)) throw new Fault(409, 'group_history_kept', 'Group history is retained. Archive or move the Group to Trash instead.');
+    if (id.startsWith(groupPreparationPrefix))
+      throw new Fault(409, 'group_preparation_kept', 'Group writing, prepared inputs and original receipts are retained.');
     this.db.prepare('DELETE FROM service_records WHERE id=?').run(id);
   }
   /** Bounded reads let large private indexes yield between encrypted pages. */
@@ -903,7 +935,8 @@ export class Store {
     const receipts: { requestId: string; deviceId: string; digest: string; value: unknown }[] = [];
     for (const saved of this.db.prepare('SELECT request_id,digest,device_id,payload FROM receipts').iterate()) {
       const requestId = String(saved.request_id), value = this.open(`receipt:${requestId}`, saved.payload as Uint8Array);
-      if (hasGroupReceipt(value)) receipts.push({ requestId, digest: String(saved.digest), deviceId: String(saved.device_id), value });
+      if (hasGroupReceipt(value) || hasGroupPreparationReceipt(value))
+        receipts.push({ requestId, digest: String(saved.digest), deviceId: String(saved.device_id), value });
     }
     return receipts;
   }
@@ -987,6 +1020,139 @@ export class Store {
       const original = this.readAssistantGroup(input.groupId).events.find(event => event.command.requestId === input.requestId);
       if (!original || original.deviceId !== device || canonical(groupReceipt(original)) !== canonical(admitted.value))
         throw new Fault(409, 'group_original_unavailable', 'The original Group receipt has no complete saved history. Nothing was replayed.');
+    }
+    return admitted.value;
+  }
+  private groupPreparationSaved() {
+    const versions = new Map<string, unknown>();
+    return (kind: string, id: string, revision: number) => {
+      const key = canonical([kind, id, revision]);
+      if (!versions.has(key)) versions.set(key, this.readEntityVersion(kind as Kind, id, revision)?.value);
+      return versions.get(key);
+    };
+  }
+  private groupPreparationRows(groupId: string) {
+    const prefix = preparationGroupPrefix(groupId);
+    const rows: { id: string; revision: number; value: unknown }[] = [];
+    let after = '', bytes = 0;
+    for (;;) {
+      const page = this.db.prepare('SELECT id,revision,payload FROM service_records WHERE id>=? AND id<? AND id>? ORDER BY id LIMIT 200')
+        .all(prefix, prefix + '\uffff', after) as { id: string; revision: number; payload: Uint8Array }[];
+      for (const row of page) {
+        bytes += row.payload.byteLength;
+        if (rows.length >= 4000 || bytes > groupPreparationBytes * 3)
+          throw new Fault(409, 'group_preparation_bound', 'This Group preparation history exceeds its supported bound. Its original writing is kept.');
+        rows.push({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) });
+      }
+      if (page.length < 200) return rows;
+      after = page.at(-1)!.id;
+    }
+  }
+  private preparationReceipts(rows: { id: string; value: unknown }[]) {
+    return rows.filter(row => row.id.includes(':event:')).map(row => {
+      const event = groupPreparationEventSchema.parse(row.value);
+      const saved = this.db.prepare('SELECT request_id,digest,device_id,payload FROM receipts WHERE request_id=?')
+        .get(event.command.requestId) as { request_id: string; digest: string; device_id: string; payload: Uint8Array } | undefined;
+      if (!saved) throw new Fault(409, 'group_preparation_receipt_missing', 'An original Group preparation receipt is unavailable.');
+      return { requestId: saved.request_id, digest: saved.digest, deviceId: saved.device_id, value: this.open(`receipt:${saved.request_id}`, saved.payload) };
+    });
+  }
+  /** Pure saved preparation. No runtime, repair, source refresh or send is performed. */
+  readGroupPreparation(groupId: string): { group: GroupBundle; preparation: GroupPreparationBundle } {
+    const group = this.readAssistantGroup(groupId), rows = this.groupPreparationRows(groupId);
+    const preparation = verifyGroupPreparations(58, rows, this.preparationReceipts(rows), new Map([[groupId, group]]),
+      this.groupPreparationSaved(), value => hash(canonical(value)))
+      .get(groupId) ?? emptyGroupPreparation();
+    return { group, preparation };
+  }
+  private assertCurrentGroupScope(scope: GroupDraftScope, group: GroupBundle) {
+    const current = group.group;
+    if (!current || current.id !== scope.groupId || current.revision !== scope.groupRevision
+      || current.archived || current.trashed || current.membershipRevision !== scope.membershipRevision
+      || current.defaultRevision !== scope.defaultRevision || current.projectId !== (scope.project?.id ?? null))
+      throw new Fault(409, 'group_scope_changed', 'The original Group scope changed. Its draft and prepared inputs are kept.');
+    if (scope.project) {
+      const project = this.readEntity('project', scope.project.id);
+      if (!project || project.revision !== scope.project.revision || this.projectIsDeleted(project.id))
+        throw new Fault(409, 'group_project_changed', 'Review the exact current Project before preparing this Group input.');
+    }
+    for (const selected of scope.recipients) {
+      const member = group.members.find(row => row.id === selected.membershipId);
+      const agent = member && this.readEntity('agent', member.agentId);
+      if (!member || !current.activeMembershipIds.includes(member.id) || !agent || agent.value.archived
+        || agent.revision !== selected.agentRevision)
+        throw new Fault(409, 'group_recipient_changed', 'An original recipient changed or left. Keep this draft and review the recipients.');
+    }
+  }
+  /** Revalidation is owner-visible status only. It never upgrades a prepared input to native authority. */
+  groupPreparationAvailability(round: PreparedGroupRound, group = this.readAssistantGroup(round.groupId)) {
+    try {
+      this.assertUpdateAdmission();
+      if (this.recoveryEffectsPaused || round.epoch !== this.epoch) throw new Fault(409, 'group_workspace_changed', 'The original workspace needs review.');
+      this.assertCurrentGroupScope(round.scope, group);
+      for (const source of round.context.sources) {
+        const current = this.readEntity(source.kind, source.id);
+        if (!current || current.revision !== source.revision || hash(canonical(current.value)) !== source.sha256
+          || ('archived' in current.value && current.value.archived)
+          || ('trashed' in current.value && current.value.trashed)
+          || source.kind === 'project' && this.projectIsDeleted(source.id))
+          throw new Fault(409, 'group_source_changed', 'An exact provided source changed or is unavailable.');
+      }
+      return { current: true as const, execution: 'unavailable' as const, mode: 'provided-context-only' as const };
+    } catch (error) {
+      if (!(error instanceof Fault)) throw error;
+      return { current: false as const, execution: 'unavailable' as const, mode: 'provided-context-only' as const,
+        reason: error.code, message: error.message };
+    }
+  }
+  /** Draft revision, prepared input, membership captures and original receipt commit together. */
+  admitGroupPreparation(device: string, raw: unknown): GroupPreparationReceipt {
+    const input = groupPreparationCommandSchema.parse(raw);
+    this.assertUpdateAdmission();
+    if (this.recoveryEffectsPaused)
+      throw new Fault(409, 'recovery_held', 'Finish reviewing the recovered workspace before preparing Group work.');
+    const admitted = this.admit(device, input, groupPreparationIntent(input), () => {
+      const { group, preparation } = this.readGroupPreparation(input.groupId);
+      if (!group.group) throw new Fault(404, 'group_missing', 'The original Group is unavailable.');
+      if (input.action === 'prepare') {
+        const draft = parseGroupDraft(input.expectedRaw);
+        this.assertCurrentGroupScope(draft.scope, group);
+      } else if (input.action === 'grant-history' && (group.group.revision !== input.expectedGroupRevision
+        || group.group.archived || group.group.trashed))
+        throw new Fault(409, 'group_scope_changed', 'Review the current Group before sharing earlier history.');
+      const profile = this.readEntity('profile', 'profile:owner');
+      const event = changeGroupPreparation(preparation, input, {
+        eventId: randomUUID(), at: new Date(this.now()).toISOString(), deviceId: device,
+        ...(input.action === 'prepare' ? { roundId: randomUUID(),
+          attemptIds: parseGroupDraft(input.expectedRaw).scope.recipients.map(() => randomUUID()),
+          owner: profile ? { id: 'profile:owner' as const, revision: profile.revision, value: profile.value } : null } : {}),
+        ...(input.action === 'grant-history' ? { grantId: randomUUID() } : {}),
+      }, { group, saved: this.groupPreparationSaved(),
+        digest: value => hash(canonical(value)) });
+      if (event.round) {
+        const availability = this.groupPreparationAvailability(event.round, group);
+        if (!availability.current) throw new Fault(409, availability.reason!, availability.message!);
+        if (Buffer.byteLength(canonical(event.round)) > 1024 * 1024)
+          throw new Fault(413, 'group_round_large', 'The selected agent designs and provided context exceed the supported prepared input size.');
+      }
+      const rows = this.groupPreparationRows(input.groupId), receipts = this.preparationReceipts(rows);
+      const entries = groupPreparationEntries(event), replacing = new Set(entries.map(row => row.id));
+      for (const entry of entries) if (!entry.id.includes(':draft:group:') && this.internalRead(entry.id) !== undefined)
+        throw new Fault(409, 'group_preparation_exists', 'An original preparation identity already exists. Observe that original work.');
+      const receipt = groupPreparationReceipt(event);
+      verifyGroupPreparations(58, [...rows.filter(row => !replacing.has(row.id)), ...entries],
+        [...receipts, { requestId: input.requestId, deviceId: device, digest: hash(canonical(groupPreparationIntent(input))), value: receipt }],
+        new Map([[input.groupId, group]]), this.groupPreparationSaved(),
+        value => hash(canonical(value)));
+      this.writingGroupPreparation = true;
+      try { for (const entry of entries) this.internalWrite(entry.id, entry.value); }
+      finally { this.writingGroupPreparation = false; }
+      return receipt;
+    });
+    if (!admitted.fresh) {
+      const event = this.readGroupPreparation(input.groupId).preparation.events.find(row => row.command.requestId === input.requestId);
+      if (!event || event.deviceId !== device || canonical(groupPreparationReceipt(event)) !== canonical(admitted.value))
+        throw new Fault(409, 'group_preparation_original_missing', 'The original receipt has no complete saved preparation. Nothing was replayed.');
     }
     return admitted.value;
   }
