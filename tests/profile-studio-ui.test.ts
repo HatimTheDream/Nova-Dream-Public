@@ -16,7 +16,7 @@ const loader = registerHooks({
    if (specifier === './api') return { url: 'nova-profile-test:api', shortCircuit: true };
    if (specifier === './useWorkspace') return { url: 'nova-profile-test:window', shortCircuit: true };
    if (specifier === './prepared-views') return { url: 'nova-profile-test:prepared', shortCircuit: true };
-   if (specifier === './RecordEditor' || specifier === './ProfileQuestEditor' || specifier.endsWith('/SquareLynx')) return { url: 'nova-profile-test:child', shortCircuit: true };
+   if (specifier === './ProfileIdentityEditor' || specifier === './ProfileQuestEditor' || specifier.endsWith('/SquareLynx')) return { url: 'nova-profile-test:child', shortCircuit: true };
   }
   return next(specifier, context);
  },
@@ -26,7 +26,7 @@ const loader = registerHooks({
   if (url === 'nova-profile-test:api') return { format: 'module', shortCircuit: true, source: `${f}export class ApiError extends Error{};export const readLocal=k=>f().read(k);export const saveLocal=(k,v)=>f().save(k,v);export const request=(p,d)=>f().request(p,d);` };
   if (url === 'nova-profile-test:window') return { format: 'module', shortCircuit: true, source: `export const retainedWindowId='studio-test-window';` };
   if (url === 'nova-profile-test:prepared') return { format: 'module', shortCircuit: true, source: `${f}export const readPreparedView=()=>f().progress;` };
-  if (url === 'nova-profile-test:child') return { format: 'module', shortCircuit: true, source: `export const RecordEditor=()=>null;export const ProfileQuestEditor=()=>null;export const SquareLynx=()=>null;` };
+  if (url === 'nova-profile-test:child') return { format: 'module', shortCircuit: true, source: `export const ProfileIdentityEditor=()=>null;export const ProfileQuestEditor=()=>null;export const SquareLynx=()=>null;` };
   if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
   return next(url, context);
  },
@@ -95,9 +95,17 @@ test('Profile keeps selected view through reload and refuses a failed navigation
  f.hooks.failStorage=false;button(tree,'Quests').props.onClick();tree=render();assert.equal(button(tree,'Quests').props['aria-pressed'],true);button(tree,'Weekly').props.onClick();tree=render();assert.equal(button(tree,'Weekly').props['aria-pressed'],true);
  const saved=new Map(f.hooks.storage);f.hooks.dispose();const reopened=new Hooks(f.progress,f.state);reopened.storage=saved;tree=reopened.render(()=>ProfilePage(props));assert.equal(button(tree,'Quests').props['aria-pressed'],true);assert.equal(button(tree,'Weekly').props['aria-pressed'],true);assert.equal(reopened.posts.length,0);await settle();
 });
-test('Profile identity uses the original full editor and Close obeys its retained-writer guard',()=>{
- const f=fixture();const render=()=>f.hooks.render(()=>ProfilePage({snapshot:f.snapshot,refresh:async()=>{},editTask:()=>{}}));button(render(),'Edit Profile & Appearance').props.onClick();let tree=render();const dialog=nodes(tree).find(n=>n.props?.title==='Your profile & appearance');assert(dialog);
- assert(nodes(dialog).some(n=>n.props?.kind==='profile'&&n.props.id==='profile:owner'&&n.props.snapshot===f.snapshot));const unreg=registerRecordDraftNavigation(()=>false);dialog.props.close();assert(nodes(render()).some(n=>n.props?.title==='Your profile & appearance'));unreg();dialog.props.close();assert(!nodes(render()).some(n=>n.props?.title==='Your profile & appearance'));assert.equal(f.hooks.posts.length,0);
+test('Profile identity entry points share one exact guarded owner and return to the original trigger',()=>{
+ const prior=Object.getOwnPropertyDescriptor(globalThis,'requestAnimationFrame'),frames:Function[]=[];
+ Object.defineProperty(globalThis,'requestAnimationFrame',{configurable:true,value:(fn:Function)=>{frames.push(fn);return frames.length;}});
+ const f=fixture();const render=()=>f.hooks.render(()=>ProfilePage({snapshot:f.snapshot,refresh:async()=>{},editTask:()=>{}}));
+ try {
+  let tree=render();let profileFocus=0,lookFocus=0;button(tree,'Edit Profile').props.ref.current={focus(){profileFocus++;}};button(tree,'Edit Look').props.ref.current={focus(){lookFocus++;}};
+  button(tree,'Edit Look').props.onClick();tree=render();const editor=nodes(tree).find(n=>n.type?.name==='ProfileIdentityEditor');assert(editor);assert.equal(editor.props.initialSection,'look');assert.equal(editor.props.snapshot,f.snapshot);
+  const unreg=registerRecordDraftNavigation(()=>false);editor.props.close();assert(nodes(render()).some(n=>n.type?.name==='ProfileIdentityEditor'));unreg();editor.props.close();assert(!nodes(render()).some(n=>n.type?.name==='ProfileIdentityEditor'));
+  for(const frame of frames.splice(0))frame();assert.equal(lookFocus,1);assert.equal(profileFocus,0);
+  button(render(),'Edit Profile').props.onClick();tree=render();const replacement=nodes(tree).find(n=>n.type?.name==='ProfileIdentityEditor');assert.equal(replacement.props.initialSection,'identity');assert.equal(editor.props.owns(),false);editor.props.close();assert(nodes(render()).some(n=>n.type?.name==='ProfileIdentityEditor'));replacement.props.close();for(const frame of frames.splice(0))frame();assert.equal(profileFocus,1);assert.equal(f.hooks.posts.length,0);
+ }finally{if(prior)Object.defineProperty(globalThis,'requestAnimationFrame',prior);else delete(globalThis as any).requestAnimationFrame;}
 });
 
 test('original quest archive response with failed acknowledgement cannot start another action',async()=>{
