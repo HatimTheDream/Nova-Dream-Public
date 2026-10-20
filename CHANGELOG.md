@@ -1,3 +1,10 @@
+## [2.9.29] — 2026-10-20
+
+### Improved
+
+- Separate Profile and Look editing while preserving unfinished writing, original save requests and the full mascot creator.
+- Save a look without sending unfinished profile text, and review saved profile changes without losing local writing.
+
 ## [2.9.28] — 2026-10-20
 
 ### Added
