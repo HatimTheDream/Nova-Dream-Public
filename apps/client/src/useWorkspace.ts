@@ -96,13 +96,13 @@ type Journal<T> = { value: T; revision: number; epoch: string; dirty: boolean; p
 const tabId = (() => { try { const id = sessionStorage.getItem('e3:tab') ?? crypto.randomUUID(); sessionStorage.setItem('e3:tab', id); return id; } catch { return crypto.randomUUID(); } })();
 export const retainedWindowId = tabId;
 /** Durable local proposal + immutable retry envelope. Server acknowledgment is a separate state. */
-export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entity<T> | undefined, snapshot: Snapshot, refresh: () => Promise<void>, options: { autoSave?: boolean } = {}) {
+export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entity<T> | undefined, snapshot: Snapshot, refresh: () => Promise<void>, options: { autoSave?: boolean; initialJournal?: { value?: Journal<T> } } = {}) {
   const autoSave = options.autoSave !== false;
   const removedRevision = kind === 'draft' ? snapshot.draftRemovals?.find(item => item.draftId === id)?.revision ?? 0 : 0;
   const removal = useRef(removedRevision); removal.current = removedRevision;
   const key = `e3:journal:${snapshot.deviceId}:${id}:${tabId}`;
   const [journal, setJournal] = useState<Journal<T>>(() => {
-    const kept = readLocal<Journal<T>>(key);
+    const kept = options.initialJournal ? options.initialJournal.value : readLocal<Journal<T>>(key);
     if (kept && (kept.dirty || kept.pending || kept.revision >= removedRevision)) return kept;
     return { value: entity?.value ?? initial, revision: entity?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false };
   });
@@ -134,6 +134,13 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     // retry envelopes must survive the editor that currently owns them.
     return !local.dirty && !local.pending || persist(local);
   }, [persist]);
+  // Explicit editors can finish a failed local acknowledgement after the host
+  // saved it. Keeping this current journal never dispatches another command.
+  const retainNow = useCallback(() => {
+    if (!owner.current.mounted || owner.current.scope !== ownerScope || ref.current.conflict?.code === 'local_editor' || !persist(ref.current)) return false;
+    try { const kept = localStorage.getItem(key) === JSON.stringify(ref.current); setStorageError(!kept); return kept; }
+    catch { setStorageError(true); return false; }
+  }, [ownerScope, persist, key]);
   useEffect(() => {
     const local = ref.current;
     if (local.epoch !== snapshot.epoch && local.dirty) {
@@ -230,5 +237,5 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     return persist({ value: host?.value ?? initial, revision: host?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false });
   };
   const status = storageError ? 'Kept in this window · browser storage is full' : journal.conflict ? 'Review needed · your changes are kept' : saving ? 'Saving to host…' : journal.dirty ? networkError ? 'On this device · waiting for host' : autoSave ? 'On this device · saving soon' : 'Edits kept on this device · save when ready' : journal.revision ? 'Saved on host' : 'Ready for a draft';
-  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, flushForSubmit, submitBlocked: !!journal.conflict || !!journal.pending && !saving, storageError, networkError };
+  return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, retainNow, hasUnsentChanges: () => ref.current.dirty || !!ref.current.pending, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, flushForSubmit, submitBlocked: !!journal.conflict || !!journal.pending && !saving, storageError, networkError };
 }

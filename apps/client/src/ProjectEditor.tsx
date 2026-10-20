@@ -2,11 +2,12 @@ import { projectIsDeleted } from '../../../packages/domain/project-organization'
 import { ProjectOrganizationDialog } from './ProjectOrganizationDialog';
 import { LoadingRing } from './ModuleLoading';
 import { assistantSpace, type AssistantSpace } from '../../../packages/domain/assistant-space';
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { lazy } from './preload-lazy';
-import type { Attachment, Command, Entity, Project, Snapshot } from '../../../packages/domain/contracts';
-import { readLocal, saveLocal } from './api';
+import type { Attachment, Entity, Project, Snapshot } from '../../../packages/domain/contracts';
 import { retainedWindowId, useRetained } from './useWorkspace';
+import { finishProjectDraftIdentity, readProjectDraftIdentity, retainProjectDraftIdentity, retainProjectDraftLocation, type ProjectDraftIdentity } from './project-editor-draft';
+import { registerRecordDraftNavigation } from './record-draft-navigation';
 import { useAttachments } from './useAttachments';
 import { Dialog, Empty } from './ui';
 import { File, Folder, Paperclip, X } from './icons';
@@ -15,35 +16,76 @@ const GitHubRepositoryPicker = lazy(() => import('./GitHubRepositoryPicker').the
 
 type Form = Project & { attachments: Attachment[] };
 const form = (value?: Project): Form => ({ name: '', purpose: '', ...value, attachments: value?.attachments ?? [] });
-export function ProjectEditor({ snapshot, projectId, space = 'chat', close, saved, refresh }: { snapshot: Snapshot; projectId?: string; space?: AssistantSpace; close: () => void; saved: () => void; refresh: () => Promise<void> }) {
+type Props = { snapshot: Snapshot; projectId?: string; space?: AssistantSpace; close: () => void; saved: () => void; refresh: () => Promise<void> };
+export function ProjectEditor(props: Props) {
+  const scope = `${props.snapshot.deviceId}:${props.projectId ?? 'new'}:${props.space ?? 'chat'}`;
+  const prepare = (identity?: ProjectDraftIdentity) => {
+    try {
+      identity ??= readProjectDraftIdentity({ ...props.snapshot, windowId: retainedWindowId, space: props.space ?? 'chat', projectId: props.projectId });
+      retainProjectDraftIdentity(identity);
+      return { identity, error: '', scope };
+    } catch (error) { return { identity, error: error instanceof Error ? error.message : 'This browser could not read the kept Project draft.', scope }; }
+  };
+  const [prepared, setPrepared] = useState(() => prepare());
+  if (prepared.scope !== scope) return <Dialog title="Project draft" close={props.close}><Empty title="This Project belongs to an earlier workspace">Its original writing is kept. Close this view and reopen the Project.</Empty></Dialog>;
+  if (prepared.error || !prepared.identity) return <Dialog title="Project draft" close={props.close}><p role="alert">{prepared.error}</p><p>Existing writing is unchanged. Free browser storage or restore access, then try opening the same draft again.</p><div className="dialog-footer"><button type="button" onClick={props.close}>Close</button><button type="button" onClick={() => setPrepared(prepare(prepared.identity))}>Try opening again</button></div></Dialog>;
+  return <RetainedProjectEditor {...props} identity={prepared.identity}/>;
+}
+export function RetainedProjectEditor({ snapshot, projectId, space = 'chat', close, saved, refresh, identity }: Props & { identity: ProjectDraftIdentity }) {
   const [organizing, setOrganizing] = useState(false);
-  const newKey = `e3:new-project:${snapshot.deviceId}:${retainedWindowId}:${space}`, legacyKey = `e3:project-editor:${snapshot.deviceId}`;
-  const [id] = useState(() => {
-    if (projectId) return projectId;
-    const kept = readLocal<string>(newKey); if (typeof kept === 'string' && kept.startsWith('project:')) return kept;
-    const legacy = space === 'chat' ? readLocal<{ value: Project; command?: Command }>(legacyKey) : undefined, next = legacy?.command?.entityId ?? `project:${crypto.randomUUID()}`;
-    saveLocal(newKey, next);
-    if (legacy) saveLocal(`e3:journal:${snapshot.deviceId}:${next}:${retainedWindowId}`, { value: form(legacy.value), revision: legacy.command?.expectedRevision ?? 0, epoch: legacy.command?.epoch ?? snapshot.epoch, dirty: true, pending: legacy.command });
-    return next;
-  });
+  const id = identity.id;
   const entity = snapshot.projects.find(project => project.id === id), initial = useMemo(() => form({ name: '', purpose: '', space, ...(space === 'work' ? { workspace: { folder: '', environment: 'local' } } : {}) }), [id, space]);
   const current = useMemo(() => entity ? { ...entity, value: form(entity.value) } : undefined, [entity]);
-  const editor = useRetained<Form>('project', id, initial, current, snapshot, refresh, { autoSave: false });
+  const editor = useRetained<Form>('project', id, initial, current, snapshot, refresh, { autoSave: false, initialJournal: identity.initialJournal });
   const uploads = useAttachments(snapshot, editor.value, editor.change, `project-sources:${id}:${retainedWindowId}`, 'Project');
   const input = useRef<HTMLInputElement>(null), [error, setError] = useState(''), [repositoryPicker,setRepositoryPicker] = useState(space === 'work' && !projectId);
   const saving = useRef(false), blocked = editor.saving || !!editor.pending || !!editor.conflict;
+  const scope = `${snapshot.deviceId}:${snapshot.epoch}:${id}`;
+  const owner = useRef({ scope, mounted: true, generation: 0 });
+  if (owner.current.scope !== scope) { owner.current.scope = scope; owner.current.generation++; }
+  useEffect(() => { owner.current.mounted = true; owner.current.generation++; return () => { owner.current.mounted = false; owner.current.generation++; }; }, [scope]);
+  const retain = () => {
+    if (!owner.current.mounted || owner.current.scope !== scope) return false;
+    try {
+      if (uploads.staging) throw Error('Wait for the selected files to be kept before leaving this Project.');
+      retainProjectDraftLocation(identity);
+      if ((editor.dirty || editor.pending || editor.storageError) && !editor.retainNow()) throw Error('Free browser storage before leaving this Project. Your writing remains in this window.');
+      setError(''); return true;
+    } catch (error) { setError(error instanceof Error ? error.message : 'This Project could not be kept yet.'); return false; }
+  };
+  const guard = useRef(retain); guard.current = retain;
+  useEffect(() => {
+    const unregister = registerRecordDraftNavigation(() => guard.current());
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (!guard.current()) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => { unregister(); window.removeEventListener('beforeunload', beforeUnload); };
+  }, [scope]);
+  const leave = () => { if (retain()) { owner.current.mounted = false; owner.current.generation++; close(); } };
   const save = async () => {
-    if (saving.current || uploads.pending.length || editor.conflict) return;
-    if (!editor.pending && !editor.change(value => value)) { setError('Free browser storage before saving this Project.'); return; }
+    if (saving.current || uploads.staging || uploads.pending.length || editor.conflict || !retain()) return;
+    const generation = owner.current.generation;
+    const owns = () => owner.current.mounted && owner.current.scope === scope && owner.current.generation === generation;
     saving.current = true; setError('');
-    try { const result = await editor.flush(); if (result) { if (!projectId) { localStorage.removeItem(newKey); localStorage.removeItem(legacyKey); } saved(); } }
+    try {
+      // A prior host save may be acknowledged while refreshing or removing the
+      // local pointer failed. Finish it locally instead of creating a new POST.
+      const acknowledged = editor.revision > 0 && !editor.dirty && !editor.pending;
+      if (acknowledged) await refresh();
+      const result = acknowledged ? true : await editor.flush();
+      if (result && owns()) {
+        if (!editor.retainNow()) { setError('The Project is saved on the host. Free browser storage, then finish keeping it here.'); return; }
+        if (editor.hasUnsentChanges()) { setError('The original save is confirmed. Your newer edits are kept; save them when ready.'); return; }
+        finishProjectDraftIdentity(identity);
+        saved();
+      }
+    } catch (error) { if (owns()) setError(error instanceof Error ? error.message : 'The Project is kept. Try finishing its save again.'); }
     finally { saving.current = false; }
   };
   const desktop = (window as Window & { novaDesktop?: { chooseWorkingFolder: () => Promise<string | null> } }).novaDesktop;
   const isWork = assistantSpace(editor.value) === 'work';
   const host = editor.conflict?.current as Entity<Form> | undefined;
   if (organizing && entity) return <ProjectOrganizationDialog snapshot={snapshot} project={entity} refresh={refresh} close={() => setOrganizing(false)}/>;
-  return <Dialog title={projectId ? 'Project settings' : space === 'work' ? 'Create a Work Project' : 'Create a Chat Project'} close={close}>
+  return <Dialog title={projectId ? 'Project settings' : space === 'work' ? 'Create a Work Project' : 'Create a Chat Project'} close={leave}>
     {projectId && !entity ? <Empty title="This Project is unavailable">Your kept changes remain on this device.</Empty> : <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={blocked}><label>Project name<input autoFocus required maxLength={100} value={editor.value.name} onChange={event => editor.change(value => ({ ...value, name: event.target.value }))}/></label>
       {isWork ? <><div className="work-source-options"><button type="button" aria-pressed={repositoryPicker} onClick={()=>setRepositoryPicker(true)}>GitHub repository</button><button type="button" aria-pressed={!repositoryPicker} onClick={()=>setRepositoryPicker(false)}>Host folder</button></div>{repositoryPicker ? <Suspense fallback={<LoadingRing label="Opening repositories…"/>}><GitHubRepositoryPicker epoch={snapshot.epoch} deviceId={snapshot.deviceId} projectId={id} onSelect={checkout=>{const kept=editor.change(value=>({...value,name:value.name.trim()?value.name:checkout.repository.fullName.split("/")[1],workspace:{folder:checkout.folder,environment:"local"}}));if(kept)setRepositoryPicker(false);return kept;}}/></Suspense> : <div className="project-folder-field">
@@ -61,7 +103,7 @@ export function ProjectEditor({ snapshot, projectId, space = 'chat', close, save
       {uploads.notice && <p role="status" className="field-error">{uploads.notice}</p>}</fieldset>
       {editor.conflict && <section className="notice warning" role="alert"><div><strong>Review Project changes</strong><p>{editor.conflict.message}</p>{host && <details><summary>Current saved Project</summary><h3>{host.value.name}</h3><p className="preserve-lines">{host.value.purpose}</p>{host.value.attachments?.map(file => <p key={file.id}>{file.name}</p>)}</details>}<div className="button-row"><button type="button" onClick={editor.editProposal}>Continue with my changes</button><button type="button" onClick={editor.discard}>Use saved version</button></div></div></section>}
       {(editor.storageError || editor.networkError || error) && <p role="alert" className="field-error">{error || editor.status}</p>}
-      <div className="dialog-footer">{entity && <button type="button" className="text-button" disabled={blocked || uploads.pending.length > 0} onClick={() => setOrganizing(true)}>{projectIsDeleted(snapshot, entity.id) ? 'Restore project' : 'Move project to Deleted'}</button>}<button type="button" onClick={close}>Keep for later</button><button className="primary" disabled={editor.saving || !!editor.conflict || uploads.pending.length > 0 || !editor.value.name.trim() || isWork && !editor.value.workspace?.folder.trim()}>{editor.saving ? 'Saving…' : editor.pending ? 'Reconcile save' : projectId ? 'Save Project' : 'Create Project'}</button></div>
+      <div className="dialog-footer">{entity && <button type="button" className="text-button" disabled={blocked || uploads.staging || uploads.pending.length > 0} onClick={() => { if (retain()) setOrganizing(true); }}>{projectIsDeleted(snapshot, entity.id) ? 'Restore project' : 'Move project to Deleted'}</button>}<button type="button" onClick={leave}>Keep for later</button><button className="primary" disabled={editor.saving || !!editor.conflict || uploads.staging || uploads.pending.length > 0 || !editor.value.name.trim() || isWork && !editor.value.workspace?.folder.trim()}>{editor.saving ? 'Saving…' : editor.pending ? 'Reconcile save' : projectId ? 'Save Project' : 'Create Project'}</button></div>
     </form>}
   </Dialog>;
 }
