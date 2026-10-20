@@ -1,5 +1,9 @@
 import { verifyImportedProgress } from './workspace-import-progress.js';
+import { z } from 'zod';
 import { assertDirectAgentWrite, hasDirectAgentAuthority, verifyDirectAgentRecords } from '../../packages/domain/direct-agent.js';
+import { groupPrefix, groupKey, groupMemberPrefix, groupMemberKey, groupEventPrefix, groupEventKey,
+  groupCommandSchema, groupEventSchema, groupIntent, groupReceipt, hasGroupReceipt, changeGroup, verifyGroupRecords,
+  type GroupBundle, type GroupEvent, type GroupReceipt } from '../../packages/domain/assistant-groups.js';
 import { homeWidgetPreservationKey } from './home-widget-preservation.js';
 import { importedProgressSchema } from '../../packages/domain/profile-progression.js';
 import { buildProfileProgress, progressHistory, questCommandSchema, type PersonalQuest } from '../../packages/domain/profile-progression.js';
@@ -43,6 +47,7 @@ export class Store {
   // Positive-only cache: a rolled-back write may leave an extra guarded key,
   // but can never remove protection or add reads to ordinary transcript deltas.
   private directAgentProtected = new Set<string>();
+  private writingGroup = false;
   readonly directory: string;
   constructor(directory: string, private now: () => number = Date.now, protectedKey?: Buffer, private reviewOnly = false) {
     this.directory = directory;
@@ -61,15 +66,16 @@ export class Store {
     if (this.key.length !== 32) throw new Error('Invalid workspace key. No data was replaced.');
     this.db = new DatabaseSync(join(directory, 'workspace.sqlite'));
     const schema = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schema > 56) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
+    if (schema > 57) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
     // Authenticate an existing workspace before any schema or journal-mode write.
     try {
       if (schema > 0) {
         const check = this.db.prepare("SELECT value FROM meta WHERE key='key-check'").get() as { value: string } | undefined;
         if (!check || this.open('key-check', Buffer.from(check.value, 'base64')) !== 'edition3') throw new Error('Workspace key did not verify.');
-        const records = this.db.prepare("SELECT id,payload FROM service_records WHERE id LIKE 'assistant:%'").all() as { id: string; payload: Uint8Array }[];
-        const opened = records.map(row => ({ id: row.id, value: this.open(`service:${row.id}`, row.payload) }));
+        const records = this.db.prepare("SELECT id,revision,payload FROM service_records WHERE id LIKE 'assistant:%'").all() as { id: string; revision: number; payload: Uint8Array }[];
+        const opened = records.map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
         verifyDirectAgentRecords(schema, opened);
+        verifyGroupRecords(schema, opened, this.originalGroupReceipts(), value => hash(canonical(value)));
         for (const row of opened) if (hasDirectAgentAuthority(row.value)) this.directAgentProtected.add(row.id);
       } else if ((this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table'").get() as { count: number }).count) throw new Error('Unrecognized workspace schema. No data was replaced.');
     } catch (error) { this.db.close(); throw error; }
@@ -82,7 +88,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, bytes INTEGER NOT NULL, payload BLOB NOT NULL);
       CREATE TABLE IF NOT EXISTS blob_refs (entity_id TEXT NOT NULL REFERENCES entities(id), blob_id TEXT NOT NULL REFERENCES blobs(id), PRIMARY KEY(entity_id,blob_id));
-      PRAGMA user_version=56;`);
+      PRAGMA user_version=57;`);
     try {
       if (!this.db.prepare("SELECT value FROM meta WHERE key='epoch'").get()) this.transaction(() => {
         this.db.prepare('INSERT INTO meta VALUES (?,?)').run('epoch', randomUUID());
@@ -190,7 +196,7 @@ export class Store {
       const services = (this.db.prepare('SELECT * FROM service_records ORDER BY id').all() as { id: string; revision: number; payload: Uint8Array }[]).filter(row => !row.id.startsWith('backup:')).map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
       const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.download(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
       const references = (this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id,blob_id').all() as { entity_id: string; blob_id: string }[]).map(row => ({ entityId: row.entity_id, fileId: row.blob_id }));
-      const value: BackupSnapshot = { format: backupFormat, schema: 56, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
+      const value: BackupSnapshot = { format: backupFormat, schema: 57, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
       Store.verifyBackup(value); return value;
     });
   }
@@ -200,6 +206,8 @@ export class Store {
     const unique = (items: string[]) => { if (new Set(items).size !== items.length) throw new Fault(400, 'backup_duplicate', 'The backup contains duplicate identities.'); };
     unique(value.entities.map(e => e.id)); unique(value.history.map(h => String(h.cursor))); unique(value.services.map(s => s.id)); unique(value.receipts.map(r => r.requestId)); unique(value.files.map(f => f.id)); unique(value.references.map(r => r.entityId + '\0' + r.fileId));
     try { verifyDirectAgentRecords(value.schema, value.services); } catch { throw new Fault(400, 'backup_direct_agent', 'Saved direct-agent authority is incompatible or does not match its original work. Nothing was restored.'); }
+    try { verifyGroupRecords(value.schema, value.services, value.receipts, input => hash(canonical(input))); }
+    catch { throw new Fault(400, 'backup_groups', 'Saved Group membership does not match its original history and receipts. Nothing was restored.'); }
     try { verifyImportedProgress(value.services); } catch { throw new Fault(400, 'backup_progress', 'The earlier XP balance does not match its preserved source. Nothing was restored.'); }
     const ids = new Set(value.entities.map(e => e.id)), files = new Set(value.files.map(f => f.id));
     if (value.services.some(record => record.id.startsWith('backup:'))) throw new Fault(400, 'backup_transient_state', 'Temporary backup jobs are not portable workspace records.');
@@ -827,6 +835,7 @@ export class Store {
     return rows.map(row => this.open(`service:${row.id}`, row.payload) as T);
   }
   internalWrite<T>(id: string, value: T): T {
+    if (id.startsWith(groupPrefix) && !this.writingGroup) throw new Fault(409, 'group_original_required', 'Group history can only change through its original admitted command.');
     if (id.startsWith('assistant:') && (this.directAgentProtected.has(id) || hasDirectAgentAuthority(value) || id.startsWith('assistant:operation:') || id.startsWith('assistant:queue:'))) {
       assertDirectAgentWrite(id, this.internalRead(id), value, key => this.internalRead(key));
       if (hasDirectAgentAuthority(value)) this.directAgentProtected.add(id);
@@ -864,7 +873,10 @@ export class Store {
     this.internalDelete(`assistant:transcript-state:${conversationId}`);
     this.internalDelete(`assistant:conversation:${conversationId}`);
   }
-  internalDelete(id: string) { this.db.prepare('DELETE FROM service_records WHERE id=?').run(id); }
+  internalDelete(id: string) {
+    if (id.startsWith(groupPrefix)) throw new Fault(409, 'group_history_kept', 'Group history is retained. Archive or move the Group to Trash instead.');
+    this.db.prepare('DELETE FROM service_records WHERE id=?').run(id);
+  }
   /** Bounded reads let large private indexes yield between encrypted pages. */
   internalPage<T>(prefix: string, after = '', limit = 100): { id: string; value: T }[] {
     if (!prefix || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('Invalid internal page.');
@@ -884,6 +896,100 @@ export class Store {
   }
   /** Atomic service-owned state transitions; callers must not nest this inside admission. */
   internalAtomic<T>(work: () => T): T { return this.transaction(work); }
+  /** Receipt payloads are encrypted and untyped in the existing table. A single
+   * startup scan detects orphaned originals even if every Group row is missing.
+   * Ordinary unrelated receipts are never interpreted as Group authority. */
+  private originalGroupReceipts() {
+    const receipts: { requestId: string; deviceId: string; digest: string; value: unknown }[] = [];
+    for (const saved of this.db.prepare('SELECT request_id,digest,device_id,payload FROM receipts').iterate()) {
+      const requestId = String(saved.request_id), value = this.open(`receipt:${requestId}`, saved.payload as Uint8Array);
+      if (hasGroupReceipt(value)) receipts.push({ requestId, digest: String(saved.digest), deviceId: String(saved.device_id), value });
+    }
+    return receipts;
+  }
+  private groupReceipts(rows: { id: string; value: unknown }[]) {
+    return rows.filter(row => row.id.startsWith(groupPrefix + 'event:')).map(row => {
+      const event = groupEventSchema.parse(row.value);
+      const saved = this.db.prepare('SELECT request_id,digest,device_id,payload FROM receipts WHERE request_id=?')
+        .get(event.command.requestId) as { request_id: string; digest: string; device_id: string; payload: Uint8Array } | undefined;
+      if (!saved) throw new Fault(409, 'group_receipt_missing', 'An original Group receipt is unavailable. Its saved history is kept.');
+      return { requestId: saved.request_id, digest: saved.digest, deviceId: saved.device_id, value: this.open(`receipt:${saved.request_id}`, saved.payload) };
+    });
+  }
+  private groupRows(id: string): { id: string; revision: number; value: unknown }[] {
+    const open = (row: { id: string; revision: number; payload: Uint8Array }) => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) });
+    const original = this.db.prepare('SELECT id,revision,payload FROM service_records WHERE id=?').get(groupKey(id)) as { id: string; revision: number; payload: Uint8Array } | undefined;
+    const rows = original ? [open(original)] : [];
+    for (const prefix of [groupMemberPrefix(id), groupEventPrefix(id)]) {
+      let after = '', count = 0;
+      for (;;) {
+        const page = (this.db.prepare('SELECT id,revision,payload FROM service_records WHERE id>=? AND id<? AND id>? ORDER BY id LIMIT 500')
+          .all(prefix, prefix + '\uffff', after) as { id: string; revision: number; payload: Uint8Array }[]).map(open);
+        rows.push(...page); count += page.length;
+        if (count > 10032) throw new Fault(409, 'group_history_bound', 'This Group history exceeds the supported bound. Its original records are kept.');
+        if (page.length < 500) break; after = page.at(-1)!.id;
+      }
+    }
+    return rows;
+  }
+  /** Pure authoritative read. It does not repair unknown records or materialize work. */
+  readAssistantGroup(id: string): GroupBundle {
+    z.string().uuid().parse(id);
+    const rows = this.groupRows(id);
+    return verifyGroupRecords(57, rows, this.groupReceipts(rows), value => hash(canonical(value))).get(id)
+      ?? { group: null, members: [], events: [] };
+  }
+  /** A4 metadata-only transaction. Native operations are deliberately not dependencies. */
+  admitAssistantGroup(device: string, raw: unknown, prepare: (bundle: GroupBundle) => GroupEvent): GroupReceipt {
+    const input = groupCommandSchema.parse(raw);
+    this.assertUpdateAdmission();
+    if (this.recoveryEffectsPaused) throw new Fault(409, 'recovery_held', 'Finish reviewing the recovered workspace before changing Groups.');
+    const admitted = this.admit(device, input, groupIntent(input), () => {
+      const rows = this.groupRows(input.groupId), receipts = this.groupReceipts(rows);
+      const bundle = verifyGroupRecords(57, rows, receipts, value => hash(canonical(value))).get(input.groupId)
+        ?? { group: null, members: [], events: [] };
+      const event = groupEventSchema.parse(prepare(bundle));
+      if (event.deviceId !== device || canonical(event.command) !== canonical(input))
+        throw new Fault(409, 'group_original_changed', 'The Group result does not match its original command.');
+      const profile = this.readEntity('profile', 'profile:owner');
+      const actor = { profileId: 'profile:owner', revision: profile?.revision ?? 0, name: profile?.value.name ?? 'You',
+        ...(profile ? { appearance: profile.value.appearance } : {}) };
+      if (canonical(event.actor) !== canonical(actor)) throw new Fault(409, 'group_owner_changed', 'The saved owner capture changed before admission.');
+      for (const member of event.addedMembers) {
+        const agent = this.readEntity('agent', member.agentId);
+        if (!agent || agent.value.archived || agent.revision !== member.agentRevision || agent.value.name !== member.name
+          || canonical(agent.value.appearance) !== canonical(member.appearance))
+          throw new Fault(409, 'group_agent_changed', 'A selected agent changed before admission.');
+      }
+      const projectId = event.after.projectId;
+      if (input.action !== 'set-archived' && input.action !== 'set-trashed' && projectId
+        && (!this.readEntity('project', projectId) || this.projectIsDeleted(projectId)))
+        throw new Fault(409, 'group_project_unavailable', 'Restore the original Project before changing this Group.');
+      const expected = changeGroup(bundle, input, { eventId: event.id, at: event.at, deviceId: device,
+        actor: event.actor, addedMembers: event.addedMembers });
+      if (canonical(expected) !== canonical(event)) throw new Fault(409, 'group_transition_changed', 'The Group transition could not be verified.');
+      const receipt = groupReceipt(event), entries = [
+        { id: groupEventKey(input.groupId, event.sequence), revision: 1, value: event },
+        ...event.addedMembers.map(member => ({ id: groupMemberKey(input.groupId, member.id), revision: 1, value: member })),
+        { id: groupKey(input.groupId), revision: event.after.revision, value: event.after },
+      ];
+      for (const entry of entries.slice(0, -1)) if (this.internalRead(entry.id) !== undefined)
+        throw new Fault(409, 'group_history_exists', 'An original Group history record already exists.');
+      const next = [...rows.filter(row => row.id !== groupKey(input.groupId)), ...entries];
+      verifyGroupRecords(57, next, [...receipts, { requestId: input.requestId, deviceId: device,
+        digest: hash(canonical(groupIntent(input))), value: receipt }], value => hash(canonical(value)));
+      this.writingGroup = true;
+      try { for (const entry of entries) this.internalWrite(entry.id, entry.value); }
+      finally { this.writingGroup = false; }
+      return receipt;
+    });
+    if (!admitted.fresh) {
+      const original = this.readAssistantGroup(input.groupId).events.find(event => event.command.requestId === input.requestId);
+      if (!original || original.deviceId !== device || canonical(groupReceipt(original)) !== canonical(admitted.value))
+        throw new Fault(409, 'group_original_unavailable', 'The original Group receipt has no complete saved history. Nothing was replayed.');
+    }
+    return admitted.value;
+  }
   readEntity<K extends Kind>(kind: K, id: string): Entity<Values[K]> | undefined { return this.get(kind, id); }
   /** Content service calls inside admission, keeping entity/history/blob references atomic. */
   reviseContent(device:string,id:string,payload:Content,expectedRevision:number):Entity<Content>{
