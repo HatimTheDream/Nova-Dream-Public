@@ -1,0 +1,51 @@
+import { useRef, useState } from 'react';
+import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
+import { readLocal, saveLocal } from './api';
+import { retainedWindowId } from './useWorkspace';
+import { TaskNavigationController, type TaskOrigin, type TaskSection } from './task-editor-navigation';
+import { TaskEditor } from './TaskEditor';
+import { Dialog } from './ui';
+
+export function useTaskWorkspace(snapshot: Snapshot) {
+  const current = useRef(snapshot); current.current = snapshot;
+  const departure = useRef<() => boolean>(() => true);
+  const [controller] = useState(() => new TaskNavigationController(
+    { deviceId: snapshot.deviceId, epoch: snapshot.epoch, windowId: retainedWindowId },
+    { read: readLocal, write: saveLocal }, () => current.current,
+  ));
+  const [, render] = useState(0);
+  const run = (action: () => boolean) => { const result = action(); render(value => value + 1); return result; };
+  return {
+    controller, state: controller.state, task: controller.selected, error: controller.error,
+    open: (task: Entity<Task>, origin: TaskOrigin) => run(() => departure.current() && controller.open(task, origin)),
+    registerDeparture: (guard: () => boolean) => { departure.current = guard; return () => { if (departure.current === guard) departure.current = () => true; }; },
+    dismissError: () => run(() => controller.dismissError()),
+    go: (task: Entity<Task>) => run(() => controller.go(task)),
+    child: (defaults: Partial<Task>) => run(() => controller.child(defaults)),
+    view: (section: TaskSection, scroll: number) => run(() => controller.view(section, scroll)),
+    back: () => run(() => controller.back()), close: () => run(() => controller.close()),
+    acknowledge: (task: Entity<Task>, token: string, clean: boolean) => run(() => controller.acknowledged(task, token, clean)),
+  };
+}
+
+export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin }: {
+  workspace: ReturnType<typeof useTaskWorkspace>; snapshot: Snapshot; refresh(): Promise<void>;
+  closed(origin: TaskOrigin): void; openOrigin(origin: NonNullable<Task['origin']>): void;
+}) {
+  const state = workspace.state;
+  if (!state?.active) return workspace.error ? <Dialog title="Open Task" close={workspace.dismissError}><p role="alert">{workspace.error}</p></Dialog> : null;
+  const task = workspace.task, frame = state.frames.at(-1)!;
+  const finish = () => { if (workspace.close()) closed(state.origin); };
+  if (!task) return <Dialog title="Task Unavailable" close={finish}><p>The original task is unavailable in this workspace. Its draft and return path are kept.</p>{workspace.error && <p role="alert">{workspace.error}</p>}{state.frames.length > 1 && <button type="button" onClick={workspace.back}>Back To Previous Task</button>}<button type="button" onClick={finish}>Back To {state.origin.label}</button></Dialog>;
+  const previous = state.frames.at(-2), parent = previous && workspace.controller.resolve(previous.taskId);
+  return <TaskEditor key={task.id} task={task} snapshot={snapshot} section={frame.section} scroll={frame.scroll} sectionScroll={frame.sectionScroll} keepView={workspace.view}
+    registerDeparture={workspace.registerDeparture}
+    back={previous ? workspace.back : finish} backLabel={previous ? `Back To ${parent?.value.title || 'Previous Task'}` : `Back To ${state.origin.label}`}
+    navigationError={workspace.error} close={finish} openTask={workspace.go} newTask={workspace.child}
+    openOrigin={origin => { if (workspace.close()) openOrigin(origin); }}
+    saved={(confirmed, clean) => {
+      const changed = workspace.acknowledge(confirmed, state.token, clean);
+      if (changed && !workspace.controller.state?.active) closed(state.origin);
+      void refresh();
+    }}/>
+}

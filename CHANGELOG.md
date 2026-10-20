@@ -1,3 +1,11 @@
+## [2.9.9] — 2026-10-19
+
+### Improved
+
+- Organize Task Details into Details, Dates & Reminders, and exact saved History, using an adjoining desktop panel and a focused phone workspace.
+- Keep parent and child drafts, original task identities, selected tabs and return paths through navigation and reload, with independent child completion.
+- Reconcile delayed saves against their original requests without closing a different task or losing newer writing; explain storage failures and safely resume older retained drafts.
+
 ## [2.9.8] — 2026-10-19
 
 ### Improved

@@ -42,7 +42,8 @@ import { useAssistant } from './useAssistant';
 const Tasks = lazy(() => import('./Tasks').then(module => ({ default: module.Tasks })));
 import { Reminders } from './Reminders';
 import { useReminders } from './useReminders';
-import { TaskEditor } from './TaskEditor';
+import { TaskWorkspace, useTaskWorkspace } from './TaskWorkspace';
+import { resumableNewTask } from './task-editor-navigation';
 import { Conflict, Dialog, Empty } from './ui';
 import { RenderingFallback } from './RenderingFallback';
 import { StartupScreen } from './StartupScreen';
@@ -138,7 +139,8 @@ export function App() {
   return <Workspace key={`${workspace.snapshot.epoch}:${workspace.snapshot.deviceId}`} {...workspace} snapshot={workspace.snapshot}/>;
 }
 function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired, frontendUpdate, dismissFrontendUpdate }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
-  const [route, setRoute] = useState<Route>('home');
+  const taskWorkspace = useTaskWorkspace(snapshot);
+  const [route, setRoute] = useState<Route>(() => taskWorkspace.state?.active ? taskWorkspace.state.origin.route : 'home');
   const assistant = useAssistant(snapshot, route === 'assistant');
   const [voice] = useState(() => new VoiceController(snapshot.deviceId));
   useEffect(() => { const release = () => voice.dispose(); window.addEventListener('pagehide', release); return () => { window.removeEventListener('pagehide', release); release(); }; }, [voice]);
@@ -165,7 +167,6 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
   const [showProject, setShowProject] = useState<string>();
   const [previewRequest, setPreviewRequest] = useState<{ id: string; nonce: string } | null>(null);
   const [routineTarget, setRoutineTarget] = useState<{ id: string; nonce: string } | null>(null);
-  const [task, setTask] = useState<Entity<Task> | null>(null);
   const taskActions = useTaskActions(snapshot, refresh);
   const [undoLayout, setUndoLayout] = useState<LayoutResetUndo | null>(null);
   const layout = useRetained('layout', 'layout', defaultLayout, snapshot.layout, snapshot, refresh);
@@ -235,15 +236,19 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
     return !!result && Object.entries(patch).every(([field, value]) => result.value[field as keyof Layout] === value);
   };
   useEffect(() => { const media = matchMedia('(prefers-color-scheme: dark)'); const apply = () => { document.documentElement.dataset.theme = currentLayout.theme === 'system' ? media.matches ? 'dark' : 'light' : currentLayout.theme; }; apply(); media.addEventListener('change', apply); return () => media.removeEventListener('change', apply); }, [currentLayout.theme]);
-  const editTask = (next: Entity<Task>) => { setTask(next); saveLocal(`e3:active-task:${snapshot.deviceId}`, next); };
+  const editTask = (next: Entity<Task>) => taskWorkspace.open(next, { route, label: route === 'settings' ? 'Settings' : modules[route].label });
   const openReminder = (item: WorkspaceReminder) => {
     if ('eventId' in item) void calendarWindowIdentity().then(({id}) => { keepCalendarTarget(snapshot.deviceId, id, item.eventId, item.originalDate); setRemindersOpen(false); open('calendar'); }).catch(error => setReminderError(error instanceof Error ? error.message : 'This event could not be opened.'));
-    else { const task = snapshot.tasks.find(task => task.id === item.taskId); if (task) { setRemindersOpen(false); if (open('tasks')) editTask(task); } }
+    else { const task = snapshot.tasks.find(task => task.id === item.taskId); if (task && open('tasks') && taskWorkspace.open(task, { route, label: 'Reminders', reminders: true })) setRemindersOpen(false); }
   };
   const notifications = useReminders(snapshot, online && !access?.recovery && !access?.recoveryLocal, refresh, openReminder, appIcon);
   const reminderCount = reminderItems(snapshot).filter(r => ['ready', 'missed', 'unavailable'].includes(r.state)).length;
-  const newTask = (defaults?: Partial<Task>) => { const kept = readLocal<Entity<Task>>(`e3:active-task:${snapshot.deviceId}`) ?? readLocal<Entity<Task>>(`e3:kept-task:${snapshot.deviceId}`); editTask(!defaults && kept?.revision === 0 ? kept : { id: `task:${crypto.randomUUID()}`, revision: 0, deviceId: snapshot.deviceId, updatedAt: new Date().toISOString(), value: { title: '', notes: '', status: 'open', planned: '', due: '', timezone: snapshot.layout.value.timezone, ...defaults } }); };
-  const closeTask = (saved = false) => { if (task && !saved) saveLocal(`e3:kept-task:${snapshot.deviceId}`, task); if (saved) localStorage.removeItem(`e3:kept-task:${snapshot.deviceId}`); localStorage.removeItem(`e3:active-task:${snapshot.deviceId}`); setTask(null); };
+  const newTask = (defaults?: Partial<Task>) => {
+    const frame = taskWorkspace.controller.frame, retained = frame && taskWorkspace.controller.resolve(frame.taskId);
+    const legacy = readLocal<Entity<Task>>(`e3:active-task:${snapshot.deviceId}`) ?? readLocal<Entity<Task>>(`e3:kept-task:${snapshot.deviceId}`);
+    const kept = resumableNewTask(retained, snapshot, { read: readLocal }) ?? resumableNewTask(legacy, snapshot, { read: readLocal });
+    editTask(!defaults && kept ? kept : { id: `task:${crypto.randomUUID()}`, revision: 0, deviceId: snapshot.deviceId, updatedAt: new Date().toISOString(), value: { title: '', notes: '', status: 'open', planned: '', due: '', timezone: snapshot.layout.value.timezone, ...defaults } });
+  };
   const changeTaskStatus = (item: Entity<Task>, status: Task['status']) => { void taskActions.run([{ task: item, value: { ...item.value, status } }], status === 'done' ? 'Task completed' : 'Task updated'); };
   const complete = (item: Entity<Task>) => changeTaskStatus(item, ['done', 'skipped'].includes(item.value.status) ? 'open' : 'done');
   const needle = search?.trim().toLowerCase() ?? "";
@@ -252,7 +257,7 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
   const projectMatches = snapshot.projects.filter(item => `${item.value.name} ${item.value.purpose}`.toLowerCase().includes(needle));
   const recordMatches = savedRecordMatches(snapshot, needle);
   const title = route === 'settings' ? 'Settings' : modules[route].label;
-  return <div className="app-shell"><header className="topbar"><div className="topbar-leading"><button className="brand" aria-label="Nova Dream Home" onClick={() => open('home')}><NovaAppMark choice={appIcon}/></button><button ref={navigationToggle} className="icon-button navigation-toggle" aria-label={navigationVisible ? "Hide main navigation" : "Show main navigation"} title={navigationVisible ? "Hide main navigation" : "Show main navigation"} aria-expanded={navigationVisible} aria-controls="main-navigation" onClick={toggleNavigation}><Menu size={20}/></button><div className="breadcrumb"><strong>{title}</strong></div></div><div className="topbar-actions"><button className="icon-button reminder-bell" aria-label={`Reminders${reminderCount ? ` Â· ${reminderCount} waiting` : ''}`} title="Reminders" onClick={() => setRemindersOpen(true)}><Bell size={20}/>{reminderCount > 0 && <span className="reminder-dot"/>}</button><button className="icon-button" aria-label="Search saved work" title="Search saved work" onClick={() => setSearch('')}><Search size={20}/></button><button className="icon-button" aria-label="Toggle color theme" title="Toggle color theme" onClick={() => layout.change(value => ({ ...value, theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark' }))}>{document.documentElement.dataset.theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}</button></div></header>
+  return <div className={`app-shell${taskWorkspace.state?.active ? ' task-details-open' : ''}`}><header className="topbar"><div className="topbar-leading"><button className="brand" aria-label="Nova Dream Home" onClick={() => open('home')}><NovaAppMark choice={appIcon}/></button><button ref={navigationToggle} className="icon-button navigation-toggle" aria-label={navigationVisible ? "Hide main navigation" : "Show main navigation"} title={navigationVisible ? "Hide main navigation" : "Show main navigation"} aria-expanded={navigationVisible} aria-controls="main-navigation" onClick={toggleNavigation}><Menu size={20}/></button><div className="breadcrumb"><strong>{title}</strong></div></div><div className="topbar-actions"><button className="icon-button reminder-bell" aria-label={`Reminders${reminderCount ? ` Â· ${reminderCount} waiting` : ''}`} title="Reminders" onClick={() => setRemindersOpen(true)}><Bell size={20}/>{reminderCount > 0 && <span className="reminder-dot"/>}</button><button className="icon-button" aria-label="Search saved work" title="Search saved work" onClick={() => setSearch('')}><Search size={20}/></button><button className="icon-button" aria-label="Toggle color theme" title="Toggle color theme" onClick={() => layout.change(value => ({ ...value, theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark' }))}>{document.documentElement.dataset.theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}</button></div></header>
     <NavigationLabels placement="right" suspended={Boolean(nav.dragging)}><nav id="main-navigation" className="primary-rail" onKeyDown={event => {
       if (event.defaultPrevented) return;
       if (event.key === 'Escape' && !navMenu) { event.preventDefault(); closeNavigation(); }
@@ -275,7 +280,10 @@ function Workspace({ snapshot, online, error, refresh, reconnect, access, update
     {homeDestination && <HomeDestination input={homeDestination} navigationError={homeNavigationError} discuss={acceptHomeHandoff} close={() => { keepHomeDestination(undefined); }} open={openHomeDestinationLink}/>}
     {reminderError && <Dialog title="Open Calendar event" close={() => setReminderError('')}><p role="alert">{reminderError}</p></Dialog>}
     {remindersOpen && <Reminders snapshot={snapshot} notifications={notifications} refresh={refresh} close={() => setRemindersOpen(false)} openReminder={openReminder}/>}
-    {task && <TaskEditor key={task.id} task={task} snapshot={snapshot} openTask={next => { closeTask(); editTask(next); }} newTask={defaults => { closeTask(); newTask(defaults); }} openOrigin={(origin: RecordOrigin) => { closeTask(); setRecordTarget({ kind: origin.kind, id: origin.id, nonce: crypto.randomUUID() }); open(origin.kind === 'contact' ? 'contacts' : origin.kind === 'content' ? 'content' : 'agents'); }} close={() => closeTask()} saved={() => { closeTask(true); void refresh(); }}/>}
+    <TaskWorkspace workspace={taskWorkspace} snapshot={snapshot} refresh={refresh}
+      closed={origin => { if (open(origin.route) && origin.reminders) setRemindersOpen(true); }}
+      openOrigin={(origin: RecordOrigin) => { setRecordTarget({ kind: origin.kind, id: origin.id, nonce: crypto.randomUUID() }); open(origin.kind === 'contact' ? 'contacts' : origin.kind === 'content' ? 'content' : 'agents'); }}/>
+
     {showProject && <Suspense fallback={null}><ProjectEditor key={showProject} space={assistant.space} snapshot={snapshot} projectId={showProject === 'new' ? undefined : showProject} refresh={refresh} close={() => setShowProject(undefined)} saved={() => setShowProject(undefined)}/></Suspense>}
     {search !== null && <Dialog title="Search saved work" close={() => setSearch(null)}><label className="search-input"><Search size={19}/><input autoFocus aria-label="Search query" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search your saved workâ€¦"/></label><div className="search-results">{search.trim() ? <>{taskMatches.length + draftMatches.length + projectMatches.length + recordMatches.length === 0 && <Empty title="No saved work matched.">Try a few different words. Device-only changes are not included until saved on the host.</Empty>}{taskMatches.map(item => <button className="search-result" key={item.id} onClick={() => { setSearch(null); if (open('tasks')) editTask(item); }}><CheckSquare2 size={18}/><span>{item.value.title}<small>Task Â· {item.value.status}</small></span></button>)}{draftMatches.map(item => <div className="search-result" key={item.id}><MessageSquare size={18}/><span>{item.value.title}<small>{item.deviceId === snapshot.deviceId ? 'Your device draft' : 'Another saved device draft'}</small><p>{item.value.text.slice(0, 220)}</p></span><button onClick={() => { if (!mayLeaveAssistantDraft()) return; setSearch(null); assistant.select(item.deviceId === snapshot.deviceId ? item.value.conversationId ?? null : null, assistantSpace(item.value)); open('assistant'); setPreviewRequest({ id: item.id, nonce: crypto.randomUUID() }); }}>Open draft</button></div>)}{projectMatches.map(item => <button className="search-result" key={item.id} onClick={() => { setSearch(null); setShowProject(item.id); }}><FileText size={18}/><span>{item.value.name}<small>Project</small><p>{item.value.purpose}</p></span></button>)}{recordMatches.map(item => { const Icon = item.kind === 'contact' ? Users : item.kind === 'content' ? ContentIcon : item.kind === 'profile' ? UserRound : Bot; return <button className="search-result" key={item.id} onClick={() => { setSearch(null); setRecordTarget({ kind: item.kind, id: item.id, nonce: crypto.randomUUID() }); open(item.kind === 'contact' ? 'contacts' : item.kind === 'content' ? 'content' : item.kind === 'profile' ? 'profile' : 'agents'); }}><Icon size={18}/><span>{item.title}<small>{item.label}{item.archived ? ' Â· Archived' : ''}</small></span></button>; })}</> : <Empty title="Find something you kept.">Search Tasks, Projects, drafts, Contacts, Content, Agents and plans. Conversations have their own search in Assistant; mail search lives in Inbox. Device-only changes appear here once saved on the host.</Empty>}</div></Dialog>}
   </div>;

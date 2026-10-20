@@ -1,6 +1,6 @@
 import type { Command, Entity, Task } from '../../../packages/domain/contracts';
 
-export type TaskEditorDraft = { value: Task; revision: number; epoch: string; pending?: Command };
+export type TaskEditorDraft = { value: Task; revision: number; epoch: string; pending?: Command; confirmation?: { requestId: string; task: Entity<Task> } };
 
 /** Adopt our acknowledged write without reverting newer writing or another save. */
 export function adoptTaskConfirmation(current: TaskEditorDraft, captured: Entity<Task>, confirmed: Entity<Task>, epoch: string): TaskEditorDraft {
