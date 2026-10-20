@@ -582,6 +582,11 @@ export async function startServer(options: { directory: string; port: number; pr
         }
         if (url.pathname === '/api/agent-skills/operation/resolve' && request.method === 'POST') return json(200, skillManagement.resolve(device, await commandBody(request)));
         if (url.pathname === '/api/home/library' && request.method === 'GET') return json(200, homeLibrary.state(device));
+        if (url.pathname === '/api/home/library/export' && request.method === 'GET') {
+          const exported = homeLibrary.export(url.searchParams);
+          response.setHeader('Content-Disposition', 'attachment; filename="nova-library.json"');
+          return json(200, exported);
+        }
         if (url.pathname === '/api/home/library' && request.method === 'POST') return json(200, homeLibrary.command(device, await commandBody(request, 500000)));
         if (url.pathname === '/api/home/context' && request.method === 'POST') return json(200, homeLibrary.capture(device, await commandBody(request, 20000)));
         if (url.pathname === '/api/home/feed' && request.method === 'GET') return json(200, homeFeed.state(device));

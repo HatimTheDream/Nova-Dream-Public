@@ -129,6 +129,11 @@ const savedItem = (value: unknown): value is HomeItem => {
  if (!object(value) || !keys(value, value.kind === 'note' ? ['id', 'revision', 'updatedAt', 'kind', 'title', 'body', 'archived'] : ['id', 'revision', 'updatedAt', 'kind', 'title', 'url', 'body', 'archived']) || !identifier(value.id) || !revision(value.revision, 1) || !timestamp(value.updatedAt)) return false;
  const { id: _id, revision: _revision, updatedAt: _updatedAt, ...draft } = value;return itemValue(draft);
 };
+/** Exact saved-value readers shared by the bounded portable Library format. */
+export const isSavedHomeCollection = savedCollection;
+export const isSavedHomeItem = savedItem;
+export const isHomeReference = reference;
+export const isHomeItemValue = itemValue;
 const preferences = (value: unknown): value is HomeIdeaPreferences => object(value) && keys(value, ['saved', 'hidden', 'revision']) && revision(value.revision) && choices({ saved: value.saved, hidden: value.hidden });
 const resource = (value: unknown): value is HomeResource => object(value) && keys(value, ['reference', 'title', 'subtitle', 'text', 'url', 'updatedAt', 'availability', 'currentRevision']) && reference(value.reference) && typeof value.title === 'string' && typeof value.subtitle === 'string' && typeof value.updatedAt === 'string' &&
  ['current', 'changed', 'missing'].includes(value.availability as string) && (value.text === undefined || typeof value.text === 'string') && (value.url === undefined || typeof value.url === 'string') && (value.currentRevision === undefined || revision(value.currentRevision, 1));
@@ -161,6 +166,51 @@ export function isHomeLibraryReceipt(value: unknown): value is HomeLibraryReceip
  return true;
 }
 export const isHomeLibraryResult = (value: unknown): value is HomeLibraryResult => savedCollection(value) || savedItem(value) || preferences(value) || isHomeLibraryReceipt(value) || isHomeShelvesReceipt(value);
+
+/** Match created writing to the original capture, before acknowledging its journal. */
+export function captureResultMatches(command: Extract<HomeLibraryCommand, { type: 'items-capture' }>, result: unknown): result is HomeLibraryReceipt {
+ if (!isHomeLibraryCommand(command) || !isHomeLibraryReceipt(result) || result.type !== command.type ||
+     result.operationId !== command.requestId || result.epoch !== command.epoch || result.outcomes.length !== command.rows.length) return false;
+ const created: HomeReference[] = [], urls = new Map<string, HomeReference>();
+ for (let index = 0; index < command.rows.length; index++) {
+  const row = command.rows[index], outcome = result.outcomes[index];
+  if (outcome.rowId !== row.rowId || outcome.reference.kind !== row.value.kind || outcome.reference.sha256 !== undefined) return false;
+  const url = row.value.kind === 'link' ? normalizeHomeUrl(row.value.url) : undefined;
+  if (row.value.kind === 'link' && !url) return false;
+  const previous = url ? urls.get(url) : undefined;
+  if (outcome.disposition === 'created-and-added') {
+   if (previous || !exactHomeReference(outcome.reference, { kind: row.value.kind, id: row.id, revision: 1 })) return false;
+   const item = result.createdItems.find(item => item.id === row.id);
+   if (!item || item.updatedAt !== result.appliedAt || item.title !== row.value.title.trim() || item.body !== row.value.body ||
+       item.archived !== row.value.archived || item.kind === 'link' && item.url !== url) return false;
+   created.push(outcome.reference);
+  } else {
+   if (!url) return false;
+   if (outcome.disposition === 'duplicate-in-batch') {
+    if (!previous || !exactHomeReference(previous, outcome.reference) || !created.some(ref => exactHomeReference(ref, previous))) return false;
+   } else if (outcome.disposition === 'already-in-destination') {
+    // The unchanged legacy receipt does not contain the old destination body.
+    // Keep these rows visibly unimported; never infer that their title/body was saved.
+    if (command.rows.some(row => row.id === outcome.reference.id) || previous && !exactHomeReference(previous, outcome.reference)) return false;
+   } else return false;
+  }
+  if (url) urls.set(url, outcome.reference);
+ }
+ if (result.createdItems.length !== created.length || result.changed !== (created.length > 0)) return false;
+ if (!created.length) return result.collections.length === 0 && result.undo === null && result.organization === undefined;
+ if (result.collections.length !== 1) return false;
+ const destination = result.collections[0];
+ if (destination.id !== command.destination.id || destination.revision !== command.destination.expectedRevision + 1 ||
+     destination.archived || destination.updatedAt !== result.appliedAt || destination.references.length < created.length) return false;
+ const offset = destination.references.length - created.length;
+ if (!created.every((ref, index) => exactHomeReference(ref, destination.references[offset + index])) ||
+     destination.references.slice(0, offset).some(ref => created.some(item => homeReferenceKey(item) === homeReferenceKey(ref)))) return false;
+ if (!result.outcomes.filter(row => row.disposition === 'already-in-destination').every(row =>
+     destination.references.slice(0, offset).some(ref => exactHomeReference(ref, row.reference)))) return false;
+ return result.undo?.expected.organizationRevision === null &&
+  result.undo.expected.collections.length === 1 && result.undo.expected.collections[0].id === destination.id &&
+  result.undo.expected.collections[0].expectedRevision === destination.revision;
+}
 
 /** Legacy GET responses get an in-memory order only. No read seeds or rewrites host storage. */
 function preservation(value: unknown): value is HomePreservationState {

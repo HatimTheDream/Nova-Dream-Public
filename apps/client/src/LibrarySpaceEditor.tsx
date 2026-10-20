@@ -8,12 +8,13 @@ import { Dialog } from './ui';
 import { draftBrowserStorage } from './draft-browser-storage';
 
 export type SpaceEditorRequest = LibrarySpaceScope & { nonce: string; draft: LibrarySpaceDraft };
-export function LibrarySpaceEditor({ scope, shelves, request, controller }: {
- scope: LibrarySpaceScope; shelves?: HomeShelves; request?: SpaceEditorRequest; controller: HomeLibraryController;
+export function LibrarySpaceEditor({ scope, shelves, request, controller, prepareFocus }: {
+ scope: LibrarySpaceScope; shelves?: HomeShelves; request?: SpaceEditorRequest; controller: HomeLibraryController; prepareFocus?: () => () => void;
 }) {
  const life = useRef({ active: true }), [owner] = useState(() => new LibrarySpaceDraftOwner(draftBrowserStorage, scope, () => life.current.active));
  const [, repaint] = useState(0), [visible, setVisible] = useState(false), [message, setMessage] = useState('');
  const known = useRef<{ command: HomeShelvesCommand; result: HomeShelvesReceipt } | undefined>(undefined);
+ const finishFocus = useRef<(() => void) | undefined>(undefined);
  const seen = useRef<string | undefined>(undefined);
  const refresh = () => repaint(value => value + 1);
  useEffect(() => {
@@ -31,7 +32,7 @@ export function LibrarySpaceEditor({ scope, shelves, request, controller }: {
  const adopt = (command: HomeShelvesCommand, result: HomeShelvesReceipt) => {
   if (!life.current.active || !owner.value || command.type !== 'space-save' || owner.value.id !== command.id) return;
   known.current = { command, result };
-  if (owner.acknowledge(command, result)) { known.current = undefined;setMessage('Space saved.');if (!owner.value) setVisible(false); }
+  if (owner.acknowledge(command, result)) { known.current = undefined;setMessage('Space saved.');if (!owner.value) { setVisible(false);finishFocus.current?.();finishFocus.current = undefined; } }
   refresh();
  };
  useEffect(() => {
@@ -44,6 +45,7 @@ export function LibrarySpaceEditor({ scope, shelves, request, controller }: {
  const nameConflict = !!value && !!shelves && shelves.spaces.some(space => space.id !== value.id && homeSpaceNameKey(space.name) === homeSpaceNameKey(value.name));
  const save = async () => {
   if (!life.current.active) return;
+  finishFocus.current = prepareFocus?.();
   if (known.current) { adopt(known.current.command, known.current.result);return; }
   const current = owner.value;
   if (blocked || !shelves || !current || current.expectedRevision !== shelves.revision || !current.name.trim() || nameConflict || !owner.keep()) { refresh();return; }

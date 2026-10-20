@@ -44,6 +44,7 @@ GET /api/assistant/read-aloud/catalog
 POST /api/assistant/read-aloud/speak
 GET /api/home/weather
 GET /api/home/library
+GET /api/home/library/export
 POST /api/home/library
 POST /api/home/context
 GET /api/home/feed

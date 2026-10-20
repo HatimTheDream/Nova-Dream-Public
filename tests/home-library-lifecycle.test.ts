@@ -252,6 +252,32 @@ test('confirmed original capture clears only its exact submitted draft and rebas
  }
 });
 
+test('capture reply with another body keeps the original journal; verified original clears only locally after ack refusal', async () => {
+ const s = snapshot('a'), f = new Hooks(), key = `e3:home-library-command:${s.deviceId}:${s.epoch}:lifecycle-window`;
+ const command: Extract<HomeLibraryCommand, { type: 'items-capture' }> = { type: 'items-capture', requestId: crypto.randomUUID(), epoch: s.epoch,
+  destination: { id: 'collection:target', expectedRevision: 1 }, rows: [{ rowId: 'row:original', id: 'library:created', value: { kind: 'note', title: 'Kept', body: 'Exact original writing', archived: false } }] };
+ const at = '2026-10-20T12:00:00.000Z', item = { ...command.rows[0].value, id: command.rows[0].id, revision: 1, updatedAt: at },
+  saved: HomeCollection = { id: command.destination.id, revision: 2, title: 'Target', subtitle: '', icon: 'folder', pinned: false, archived: false, references: [{ kind: 'note', id: item.id, revision: 1 }], updatedAt: at };
+ const receipt: HomeLibraryReceipt = { format: 1, type: 'items-capture', operationId: command.requestId, epoch: s.epoch, appliedAt: at, changed: true,
+  collections: [saved], createdItems: [item], outcomes: [{ rowId: 'row:original', reference: saved.references[0], disposition: 'created-and-added' }],
+  undo: { operationId: command.requestId, expected: { collections: [{ id: saved.id, expectedRevision: 2 }], organizationRevision: null } } };
+ try {
+  f.render(() => useHomeLibrary(s));f.reads.shift()!.resolve(state(s));await settle();
+  let controller = f.render(() => useHomeLibrary(s)), first = controller.run(command);
+  f.writes[0].resolve({ ...receipt, createdItems: [{ ...item, body: 'Unrelated reply writing' }] });await first;
+  assert.deepEqual((f.storage.get(key) as any).command, command);
+  controller = f.render(() => useHomeLibrary(s));assert.equal(controller.lastSave, undefined);
+  const retry = controller.run(command);assert.deepEqual(f.writes[1].data, command);
+  f.failSave = (storedKey, value) => storedKey === key && value === null;
+  f.writes[1].resolve(receipt);await retry;assert.deepEqual((f.storage.get(key) as any).command, command);
+  f.failSave = undefined;controller = f.render(() => useHomeLibrary(s));
+  const acknowledged = controller.run(command);await settle();assert.equal(f.writes.length, 2);
+  f.reads.shift()!.resolve({ ...state(s), collections: [saved], items: [item], organization: { revision: 1, collectionIds: [saved.id] } });
+  await acknowledged;assert.equal(f.storage.has(key), false);
+  assert.deepEqual(f.render(() => useHomeLibrary(s)).lastSave?.command, command);
+ } finally { f.dispose(); }
+});
+
 
 test('focused collections have one heading and no overview chrome while keeping source and recovery actions', () => {
  const s=snapshot('a'), c:HomeCollection={id:'collection:research',revision:4,title:'Research shelf',subtitle:'Useful retained work',icon:'folder',pinned:false,archived:false,references:[{kind:'link',id:'library:exact',revision:1},{kind:'task',id:'task:missing',revision:2}],updatedAt:'2026-10-19T04:00:00.000Z'};

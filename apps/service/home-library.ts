@@ -8,6 +8,7 @@ import { normalizeHomeUrl, isHomeShelvesCommand } from '../../packages/domain/ho
 import { Fault, Store } from './store.js';
 import { homeLibraryWithinCapacity, homeWidgetPreservationState, originalHomeWidget, preserveHomeWidgets } from './home-widget-preservation.js';
 import { HomeLibraryShelves } from './home-library-shelves.js';
+import { buildLibraryPortable, LibraryPortableError, readLibraryExportQuery } from '../../packages/domain/home-library-portable.js';
 
 const collections = 'home:library:collection:', items = 'home:library:item:';
 const organizationKey = 'home:library:organization', operationKey = 'home:library:operation:', undoneKey = 'home:library:undone:';
@@ -25,6 +26,20 @@ const linkUrl = (value: string) => {
 export class HomeLibrary {
  constructor(private store: Store, private now = Date.now) {}
  initializePreservation() { return preserveHomeWidgets(this.store); }
+ /** Authenticated by the HTTP owner. No snapshot/catalog, capture or metadata writes. */
+ export(params: URLSearchParams) {
+  try {
+   const query = readLibraryExportQuery(params);
+   return this.store.internalAtomic(() => {
+    const collection = this.store.internalRead<HomeCollection>(collections + query.collection);
+    if (!collection) throw new LibraryPortableError('library_export_changed', 'The exact collection is unavailable. Its saved references have not been replaced.');
+    return buildLibraryPortable(this.store.epoch, collection, query, new Date(this.now()).toISOString(), ref => this.savedItem(ref));
+   });
+  } catch (error) {
+   if (error instanceof LibraryPortableError) throw new Fault(error.code === 'library_file_large' ? 413 : error.code === 'library_export_changed' ? 409 : 400, error.code, error.message);
+   throw error;
+  }
+ }
  private catalog(device: string): HomeResource[] {
   const snapshot = this.store.snapshot(device), result: HomeResource[] = [];
   const add = (reference: HomeReference, title: string, subtitle: string, updatedAt: string, url?: string) => result.push({ reference, title, subtitle, updatedAt, availability: 'current', ...(url ? { url } : {}) });
