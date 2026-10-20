@@ -64,6 +64,21 @@ test('actual original reconciliation passes the exact pending command and does n
  const props={scope,controller:ctl,request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
  try {render();let tree=render();assert.equal(calls.length,0);assert.equal(button(tree,'Save 1 Selected Sources').props.disabled,true);button(tree,'Check Original Save').props.onClick();await tick();assert.equal(calls.length,1);assert.equal(calls[0],original);ctl.lastSave={command:original,result:reply(original),undo:reply(original).undo};ctl.pending=undefined;render();tree=render();assert.equal(button(tree,'Save 0 Selected Sources').props.disabled,true);}finally{f.close();}
 });
+test('own import result keeps its destination current while a later external collection change still requires review',async()=>{
+ const f=new Hooks();f.seed();let commands=0;
+ const ctl=controller(async input=>{commands++;const result=reply(input as Extract<HomeLibraryCommand,{type:'items-capture'}>);ctl.state!.collections=result.collections;return result;});
+ const props={scope,controller:ctl,request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
+ try {
+  render();button(render(),'Save 1 Selected Sources').props.onClick();await tick();
+  let tree=render();assert.equal(commands,1);assert.doesNotMatch(text(tree),/The destination changed/);
+  dialog(tree).props.close();button(render(),'Resume Import Review').props.onClick();
+  assert.doesNotMatch(text(render()),/The destination changed/);
+  ctl.state!.collections=[{...ctl.state!.collections[0],revision:3}];tree=render();
+  assert.match(text(tree),/The destination changed/);assert.equal(commands,1);
+  button(tree,'Use Current Collection').props.onClick();assert.doesNotMatch(text(render()),/The destination changed/);
+  assert.equal(commands,1);
+ }finally{f.close();}
+});
 test('actual import survives denied storage getter and preserves a malformed kept source',()=>{
  for(const deny of [true,false]){const f=new Hooks();if(deny)f.deny=true;else f.values.set(`e3:library-transfer-draft:${scope.deviceId}:${scope.epoch}:${scope.windowId}`,'{original');let calls=0;
   const props={scope,controller:controller(async()=>{calls++;return undefined;}),request:request(),acceptText:()=>false,showPaste(){}};

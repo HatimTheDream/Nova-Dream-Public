@@ -9,8 +9,11 @@
 .direct-agent-chat-list button { display:grid; text-align:left; gap:3px; min-height:44px; }
 .direct-agent-chat-list small { color:var(--muted); }
 .direct-agent-status button, .direct-agent-chooser button { min-height:44px; }
+.direct-agent-account { display:flex; flex-wrap:wrap; gap:4px 12px; padding:6px 16px; line-height:1.5; }
+.direct-agent-account > span { min-width:0; overflow-wrap:anywhere; }
 @media(max-width:650px) {
   .direct-agent-status { padding:8px 12px; }
+  .direct-agent-account { padding:6px 12px; }
   .direct-agent-person { flex-wrap:wrap; }
   .direct-agent-person > button { margin-left:auto; }
 }
