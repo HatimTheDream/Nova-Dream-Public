@@ -53,6 +53,9 @@ GET /api/calendar/state
 GET /api/snapshot
 GET /api/content/library
 GET /api/profile/progress
+GET /api/profile/week
+GET /api/profile/week/activity
+GET /api/profile/week/history
 GET /api/profile/history
 GET /api/profile/studio
 POST /api/profile/studio

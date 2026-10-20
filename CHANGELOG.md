@@ -1,3 +1,14 @@
+## [2.9.26] — 2026-10-20
+
+### Added
+
+- Explore Your Week with a selected week and timezone, showing current earned credit separately from actual completion activity.
+- Read complete Earned History, including reopened and completed-again Tasks, and return to your original week and position.
+
+### Improved
+
+- Keep confirmed history pages through failed reads and refuse stale responses or unavailable original Task links.
+
 ## [2.9.25] — 2026-10-20
 
 ### Added
