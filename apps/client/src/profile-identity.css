@@ -1,0 +1,19 @@
+.profile-identity-actions, .profile-identity-sections, .profile-identity-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.profile-identity-editor { display: grid; gap: 16px; min-width: 0; }
+.profile-identity-editor .metadata, .profile-identity-editor .notice { margin: 0; }
+.profile-identity-sections > button, .profile-identity-entry > button { flex: 0 0 auto; width: auto; min-height: 36px; }
+.profile-identity-sections > button[aria-pressed="true"] { color: var(--selection-ink); background: var(--selection); border-color: var(--selection-edge); }
+.profile-identity-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.profile-identity-fields [data-profile-section]:not([hidden]) { display: grid; gap: 16px; }
+.profile-identity-fields [data-profile-section][hidden] { display: none; }
+.profile-identity-actions { margin-top: 16px; }
+.profile-identity-actions > button { flex: 0 0 auto; width: auto; }
+.profile-identity-review { border-top: 1px solid var(--line); padding-top: 16px; }
+.profile-identity-review-copy { display: grid; grid-template-columns: minmax(80px, 128px) minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 16px; }
+.profile-identity-review-copy > * { min-width: 0; }
+.profile-identity-about { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  .profile-identity-sections > button, .profile-identity-entry > button, .profile-identity-actions > button { min-height: 44px; }
+  .profile-identity-fields input, .profile-identity-fields textarea { font-size: max(16px, 1em); }
+}
+@media (max-width: 420px) { .profile-identity-review-copy { grid-template-columns: 1fr; } }

@@ -1,0 +1,25 @@
+.profile-week-notes { border-top: 1px solid var(--line); margin-block: 18px; padding-block: 16px; min-width: 0; }
+.profile-week-notes h3 { margin: 0 0 5px; }
+.profile-week-notes .section-heading { align-items: center; }
+.profile-week-notes .button-row { flex-wrap: wrap; gap: 8px; }
+.week-note-preview { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; }
+.week-note-editor, .week-note-list { display: grid; gap: 14px; min-width: 0; }
+.week-note-editor p, .week-note-list p { margin: 0; }
+.week-note-visibility { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.week-note-editor textarea { width: 100%; min-height: 220px; resize: vertical; line-height: 1.6; }
+.week-note-editor .field { display: grid; gap: 8px; }
+.week-note-writing { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35vh; overflow-y: auto; line-height: 1.6; }
+.week-note-review { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.week-note-actions { flex-wrap: wrap; }
+.week-note-list ul { padding: 0; margin: 0; list-style: none; display: grid; gap: 12px; }
+.week-note-list li { display: grid; justify-items: start; gap: 8px; border-top: 1px solid var(--line); padding-block: 12px; min-width: 0; }
+.week-note-list .text-button { text-align: start; white-space: normal; }
+:root .week-note-list button, :root .week-note-editor button { width: auto; flex: 0 1 auto; white-space: normal; }
+@media (max-width: 800px), (pointer: coarse) {
+  :root .week-note-list button, :root .week-note-editor button { min-height: 44px; }
+  .week-note-editor textarea { font-size: 16px; }
+}
+@media (max-width: 540px) {
+  .profile-week-notes .section-heading { align-items: stretch; flex-direction: column; }
+  .week-note-actions { gap: 8px; }
+}
