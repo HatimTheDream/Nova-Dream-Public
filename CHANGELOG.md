@@ -1,3 +1,10 @@
+## [2.9.12] — 2026-10-19
+
+### Improved
+
+- Show truthful You and Nova speaker labels outside message writing, with restrained identity marks and unchanged saved message anchors, actions and attachments.
+- Keep source-match labels separate from writing in saved conversation readers, and preserve original message parts in grouped voice replies.
+
 ## [2.9.11] — 2026-10-19
 
 ### Improved

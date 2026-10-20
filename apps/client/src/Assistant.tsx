@@ -1,3 +1,4 @@
+import { TranscriptIdentity, MessageWriting, messageSpeaker } from './TranscriptIdentity';
 import type { AppDestination } from '../../../packages/domain/app-actions';
 import { withQuestionReceipts } from './question-transcript';
 import { QuestionReceipts } from './QuestionReceipts';
@@ -462,9 +463,10 @@ function Editor({ snapshot, journal, controller, voice, appIcon, draftId, onOpen
     const progressing = !!active && source.operation?.id === active.id;
     const reportOperation = researchReportOperation(message, operations, conversation!.id, controller.history?.nativeId, assistantSpace(conversation));
     const delivery = message.role === 'user' ? message.delivery === 'unknown' ? 'Delivery Unconfirmed' : message.delivery === 'failed' ? 'Reply Failed · Input Saved' : message.delivery === 'cancelled' ? 'Stopped · Input Saved' : ['prepared', 'dispatching'].includes(message.delivery ?? '') ? 'Sending…' : undefined : undefined;
-    return <article aria-label={`${message.role} message`} className={`chat-message message-${message.role} ${progressing ? 'message-progress' : ''} ${message.toolInfo && (message.role === 'tool' || !message.text.trim()) ? 'message-tool-compact' : ''}`} id={`message-${message.novaId ?? message.id}`} key={message.novaId ?? `${message.role}:${message.id}`}>
+    return <article aria-label={`${message.role} message`} className={`chat-message message-${message.role} ${messageSpeaker(message) ? 'message-with-identity' : ''} ${progressing ? 'message-progress' : ''} ${message.toolInfo && (message.role === 'tool' || !message.text.trim()) ? 'message-tool-compact' : ''}`} id={`message-${message.novaId ?? message.id}`} key={message.novaId ?? `${message.role}:${message.id}`}>
+      <TranscriptIdentity message={message}/>
       {(message.role === 'tool' && !message.toolInfo || message.role === 'system') && <div className="message-author">{message.role === 'tool' ? 'Tool activity' : 'Conversation note'}</div>}
-      {!options?.hideTool && <HistoryTool message={message}/>}{reportOperation ? <Suspense fallback={<SavedMessageText message={message}/>}><ResearchReport key={`${snapshot.epoch}:${conversation!.id}:${message.id}:${message.textHash}`} text={message.authoredText ?? message.text} operation={reportOperation}><SavedMessageText message={message}/></ResearchReport></Suspense> : <SavedMessageText message={message}/>}
+      <MessageWriting message={message}>{!options?.hideTool && <HistoryTool message={message}/>}{reportOperation ? <Suspense fallback={<SavedMessageText message={message}/>}><ResearchReport key={`${snapshot.epoch}:${conversation!.id}:${message.id}:${message.textHash}`} text={message.authoredText ?? message.text} operation={reportOperation}><SavedMessageText message={message}/></ResearchReport></Suspense> : <SavedMessageText message={message}/>}</MessageWriting>
       {delivery && <p className="metadata" role="status">{delivery}</p>}
       {(message.role === 'user' || message.role === 'assistant' && !!message.text.trim() && !progressing) && <MessageActions
         sources={source.operation ? () => setContextDialog({ kind: 'sources', operationId: source.operation!.id }) : undefined}

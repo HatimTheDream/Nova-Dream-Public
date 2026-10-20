@@ -1,0 +1,43 @@
+/* Opt in only the real transcript renderers; question receipts keep their own UI. */
+:root .chat-message.message-with-identity {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.transcript-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.identity-user { justify-content: flex-end; }
+.transcript-identity-name { font-weight: 650; overflow-wrap: anywhere; }
+.transcript-identity-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.identity-user .transcript-identity-avatar { background: var(--raised); border: 1px solid var(--line); }
+.transcript-identity-avatar > .square-lynx { flex: none; transform: scale(.7); }
+.message-with-identity > .message-writing { min-width: 0; overflow-wrap: anywhere; }
+.message-with-identity.message-user > .message-writing {
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--surface);
+}
+:root .chat-message.message-with-identity.matched-message { outline: 2px solid var(--focus); outline-offset: 5px; }
+@media (max-width: 800px) {
+  .message-with-identity.message-user > .message-writing { padding: 12px; }
+}

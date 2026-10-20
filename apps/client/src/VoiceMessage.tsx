@@ -1,3 +1,4 @@
+import { TranscriptIdentity, MessageWriting, messageSpeaker } from './TranscriptIdentity';
 import { useState, type ReactNode } from 'react';
 import { Copy, MoreHorizontal } from './icons';
 import { ComposerMenu } from './ComposerMenu';
@@ -9,8 +10,9 @@ import { transcriptParts, transcriptText, type TranscriptMessage } from './voice
 export function VoiceMessage({ message, renderPart }: { message: TranscriptMessage; renderPart?: (part: TranscriptMessage, index: number) => ReactNode }) {
   const [notice, setNotice] = useState(''), [details, setDetails] = useState(false);
   const parts = transcriptParts(message), saved = parts.filter(part => !part.pendingVoice);
-  return <article aria-label={`${message.role} message`} className={`chat-message message-${message.role} ${message.streaming ? 'live-message' : ''}`} id={details ? undefined : `message-${message.id}`}>
-    <ReplyText text={transcriptText(message)} role={message.role} streaming={!!message.streaming}/>
+  return <article aria-label={`${message.role} message`} className={`chat-message message-${message.role} ${messageSpeaker(message) ? 'message-with-identity' : ''} ${message.streaming ? 'live-message' : ''}`} id={details ? undefined : `message-${message.id}`}>
+    <TranscriptIdentity message={message}/>
+    <MessageWriting message={message} text={transcriptText(message)}><ReplyText text={transcriptText(message)} role={message.role} streaming={!!message.streaming}/></MessageWriting>
     {message.unconfirmed && <span className="metadata">Unconfirmed Transcription{message.retainedVoice && ' · Kept On This Device'}</span>}
     {renderPart && <div className="message-actions"><button className="icon-button" aria-label="Copy message" title="Copy message" onClick={() => void navigator.clipboard.writeText(transcriptText(message)).then(() => setNotice('Copied')).catch(() => setNotice('Copy was unavailable. Select the text to copy it.'))}><Copy size={16}/></button>
       {saved.length > 0 && <ComposerMenu label="Voice message actions" placement="below" icon={<MoreHorizontal size={16}/>}>{close => <button onClick={() => { close(); setDetails(true); }}>Original message parts</button>}</ComposerMenu>}
