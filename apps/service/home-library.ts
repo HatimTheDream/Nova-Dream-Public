@@ -6,6 +6,7 @@ import { canonical } from '../../packages/domain/contracts.js';
 import { homeCaptureSchema, homeLibraryCommandSchema, homeReferenceKey, type HomeCollection, type HomeIdeaPreferences, type HomeItem, type HomeLibraryState, type HomeReference, type HomeResource, type HomeSourceCapture, type HomeLibraryCommand, type HomeItemValue, type HomeOrganization, type LibraryReceipt } from '../../packages/domain/home-library.js';
 import { normalizeHomeUrl } from '../../packages/domain/home-library-view.js';
 import { Fault, Store } from './store.js';
+import { homeLibraryWithinCapacity, homeWidgetPreservationState, originalHomeWidget, preserveHomeWidgets } from './home-widget-preservation.js';
 
 const collections = 'home:library:collection:', items = 'home:library:item:';
 const organizationKey = 'home:library:organization', operationKey = 'home:library:operation:', undoneKey = 'home:library:undone:';
@@ -22,6 +23,7 @@ const linkUrl = (value: string) => {
 };
 export class HomeLibrary {
  constructor(private store: Store, private now = Date.now) {}
+ initializePreservation() { return preserveHomeWidgets(this.store); }
  private catalog(device: string): HomeResource[] {
   const snapshot = this.store.snapshot(device), result: HomeResource[] = [];
   const add = (reference: HomeReference, title: string, subtitle: string, updatedAt: string, url?: string) => result.push({ reference, title, subtitle, updatedAt, availability: 'current', ...(url ? { url } : {}) });
@@ -31,11 +33,19 @@ export class HomeLibrary {
   for (const task of snapshot.tasks) add({ kind: 'task', id: task.id, revision: task.revision }, task.value.title, `Task · ${task.value.status}`, task.updatedAt);
   for (const output of this.store.internalList<AssistantOutput>('assistant:output:')) if (output.state === 'ready' && output.file) add({ kind: 'output', id: output.id, revision: output.version, sha256: output.file.sha256 }, output.name, 'Saved Assistant Result', output.createdAt);
   for (const attempt of this.store.internalList<AssignmentAttempt>('assignments:summary:')) if (attempt.epoch === snapshot.epoch && attempt.state === 'returned' && attempt.result?.disposition === 'visible') add({ kind: 'assignment', id: attempt.id, revision: attempt.assignmentRevision, sha256: attempt.result.file.sha256 }, attempt.title, `${attempt.agentName} · Saved Result`, new Date(attempt.updatedAt).toISOString());
-  for (const widget of snapshot.layout.value.widgets) if (widget.type === 'note' || widget.type === 'links') add({ kind: 'widget', id: widget.id, revision: snapshot.layout.revision }, widget.title || (widget.type === 'note' ? 'Kept Note' : 'Kept Links'), 'Kept Widget · Original Content Preserved', snapshot.layout.updatedAt);
+  const preservation = homeWidgetPreservationState(this.store);
+  if (!['ready', 'changed'].includes(preservation.status)) for (const widget of snapshot.layout.value.widgets) if (widget.type === 'note' || widget.type === 'links') add({ kind: 'widget', id: widget.id, revision: snapshot.layout.revision }, widget.title || (widget.type === 'note' ? 'Kept Note' : 'Kept Links'), 'Kept Widget · Original Content Preserved', snapshot.layout.updatedAt);
   return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.title.localeCompare(b.title));
  }
  resolve(device: string, reference: HomeReference, catalog = this.catalog(device)): HomeResource {
   const current = catalog.find(r => homeReferenceKey(r.reference) === homeReferenceKey(reference));
+  if (reference.kind === 'widget') {
+   const original = originalHomeWidget(this.store, reference);
+   if (!original) return { reference, title: `Home writing · ${reference.id}`, subtitle: 'The exact original Home version is unavailable. Its reference is kept.', availability: 'missing', updatedAt: '' };
+   return { reference, title: original.widget.title || (original.widget.type === 'note' ? 'Kept Note' : 'Kept Links'), text: original.text,
+    subtitle: 'Original Home Writing · Exact Saved Version', updatedAt: original.layout.updatedAt,
+    availability: current && refEqual(current.reference, reference) ? 'current' : 'changed', ...(current ? { currentRevision: current.reference.revision } : {}) };
+  }
   if (reference.kind === 'note' || reference.kind === 'link') {
    const saved = this.savedItem(reference);
    if (saved) return { reference, title: saved.title, subtitle: saved.kind === 'link' ? saved.url : 'Saved Note',
@@ -59,7 +69,7 @@ export class HomeLibrary {
   if (ref.kind === 'output') { const output = this.store.internalRead<AssistantOutput>('assistant:output:' + ref.id);return output?.state === 'ready' && output.version === ref.revision && !!output.file && output.file.sha256 === ref.sha256; }
   if (ref.kind === 'assignment') { const attempt = this.store.internalRead<AssignmentAttempt>('assignments:summary:' + ref.id);return attempt?.epoch === this.store.epoch && attempt.state === 'returned' && attempt.assignmentRevision === ref.revision && attempt.result?.disposition === 'visible' && attempt.result.file.sha256 === ref.sha256; }
   if (ref.sha256 !== undefined) return false;
-  if (ref.kind === 'widget') { const layout = this.store.readEntity('layout', 'layout');return layout?.revision === ref.revision && layout.value.widgets.some(w => w.id === ref.id && (w.type === 'note' || w.type === 'links')); }
+  if (ref.kind === 'widget') { const layout = this.store.readEntity('layout', 'layout');return !['ready', 'changed'].includes(homeWidgetPreservationState(this.store).status) && layout?.revision === ref.revision && layout.value.widgets.some(w => w.id === ref.id && (w.type === 'note' || w.type === 'links')); }
   const entity = this.store.readEntity(ref.kind, ref.id);return !!entity && entity.revision === ref.revision && !('archived' in entity.value && entity.value.archived) && !('trashed' in entity.value && entity.value.trashed) && !(ref.kind === 'project' && this.store.projectIsDeleted(ref.id));
  }
  state(device: string): HomeLibraryState {
@@ -67,7 +77,7 @@ export class HomeLibrary {
   const byId = new Map(all.map(row => [row.id, row])), list = organization.collectionIds.map(id => byId.get(id)!);
   const resources = this.catalog(device), keys = new Set(resources.map(r => canonical(r.reference))), catalog = [...resources];
   for (const ref of list.flatMap(c => c.references)) if (!keys.has(canonical(ref))) { resources.push(this.resolve(device, ref, catalog)); keys.add(canonical(ref)); }
-  return { epoch: this.store.epoch, collections: list, organization, items: this.store.internalList<HomeItem>(items), resources, ideaPreferences: this.store.internalRead<HomeIdeaPreferences>('home:ideas:preferences') ?? { revision: 0, saved: [], hidden: [] } };
+  return { epoch: this.store.epoch, collections: list, organization, items: this.store.internalList<HomeItem>(items), resources, ideaPreferences: this.store.internalRead<HomeIdeaPreferences>('home:ideas:preferences') ?? { revision: 0, saved: [], hidden: [] }, homePreservation: homeWidgetPreservationState(this.store) };
  }
  private organization(all = this.store.internalList<HomeCollection>(collections)): HomeOrganization {
   const saved = this.store.internalRead<HomeOrganization>(organizationKey);
@@ -132,7 +142,7 @@ export class HomeLibrary {
     if (url) batch.set(url, reference);
     additions.push(reference); pending.push({ id: row.id, value: row.value.kind === 'link' ? { ...row.value, url: url! } : row.value });
    }
-   if (destination.references.length + additions.length > 200 || all.length + pending.length > 300 || [...all, ...pending.map(p => p.value)].reduce((n, item) => n + item.body.length, 0) > 2_000_000) throw new Fault(507, 'home_library_limit', 'Library capacity is reached. No items or memberships were saved.');
+   if (destination.references.length + additions.length > 200 || !homeLibraryWithinCapacity(this.store, [...all, ...pending.map(row => ({ ...row.value, id: row.id, revision: 1, updatedAt: at }))])) throw new Fault(507, 'home_library_limit', 'Library capacity is reached. No items or memberships were saved.');
    if (pending.length) {
     seed();
     result.createdItems = pending.map(row => this.saveItem(row.id, row.value, 1, at));
@@ -201,7 +211,7 @@ export class HomeLibrary {
    } else {
     if (old && (!('kind' in old) || old.kind !== input.value.kind)) throw new Fault(409, 'home_library_kind', 'Keep the original item type.');
     const all = this.store.internalList<HomeItem>(items);
-    if (!old && all.length >= 300 || all.filter(i => i.id !== input.id).reduce((n, i) => n + i.body.length, 0) + input.value.body.length > 2_000_000) throw new Fault(507, 'home_library_limit', 'Library storage is full. Existing notes and links are kept.');
+    if (!homeLibraryWithinCapacity(this.store, [...all.filter(item => item.id !== input.id), { ...input.value, id: input.id, revision: input.expectedRevision + 1, updatedAt: new Date(this.now()).toISOString() }])) throw new Fault(507, 'home_library_limit', 'Library storage is full or Home preservation needs review. Existing notes and links are kept.');
    }
    const at = new Date(this.now()).toISOString();
    if (input.type === 'item-save') return this.saveItem(input.id, input.value, input.expectedRevision + 1, at);

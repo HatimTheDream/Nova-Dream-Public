@@ -1,6 +1,6 @@
 import type { Snapshot } from './contracts.js';
 import type { WorkMode } from './work-mode.js';
-import type { CollectionGuard, HomeCollection, HomeCollectionValue, HomeIdeaPreferences, HomeItem, HomeItemValue, HomeLibraryCommand, HomeLibraryJournal, HomeLibraryJournalOwner, HomeLibraryReceipt, HomeLibraryResult, HomeLibraryState, HomeLibraryUndo, HomeOrganization, HomeReference, HomeResource, HomeSourceCapture } from './home-library.js';
+import type { CollectionGuard, HomeCollection, HomeCollectionValue, HomeIdeaPreferences, HomeItem, HomeItemValue, HomeLibraryCommand, HomeLibraryJournal, HomeLibraryJournalOwner, HomeLibraryReceipt, HomeLibraryResult, HomeLibraryState, HomeLibraryUndo, HomeOrganization, HomePreservationState, HomeReference, HomeResource, HomeSourceCapture } from './home-library.js';
 import { activeProjects } from './project-organization.js';
 
 // Display and local-writing helpers must not construct host command validators.
@@ -120,12 +120,19 @@ export function isHomeLibraryReceipt(value: unknown): value is HomeLibraryReceip
 export const isHomeLibraryResult = (value: unknown): value is HomeLibraryResult => savedCollection(value) || savedItem(value) || preferences(value) || isHomeLibraryReceipt(value);
 
 /** Legacy GET responses get an in-memory order only. No read seeds or rewrites host storage. */
+function preservation(value: unknown): value is HomePreservationState {
+ if (!object(value) || !keys(value, ['status', 'message', 'original', 'current', 'mappings']) || !['pending', 'held', 'ready', 'changed', 'needs-review'].includes(value.status as string) || !text(value.message, 2000) ||
+  !Array.isArray(value.mappings) || value.mappings.length > 288 || !value.mappings.every(row => object(row) && keys(row, ['widgetId', 'linkId', 'reference']) && identifier(row.widgetId) && (row.linkId === undefined || uuid(row.linkId)) && reference(row.reference) && ['note', 'link'].includes(row.reference.kind) && row.reference.revision === 1 && row.reference.sha256 === undefined)) return false;
+ if (new Set(value.mappings.map(row => row.reference.id)).size !== value.mappings.length) return false;
+ for (const source of [value.original, value.current]) if (source !== undefined && (!object(source) || !keys(source, ['revision', 'updatedAt', 'widgets']) || !revision(source.revision, 1) || !timestamp(source.updatedAt) || !Array.isArray(source.widgets) || source.widgets.length > 24 || JSON.stringify(source.widgets).length > 2 * 1024 * 1024)) return false;
+ return !['ready', 'changed'].includes(value.status as string) || value.original !== undefined;
+}
 export function readHomeLibraryState(value: unknown): HomeLibraryState | undefined {
- if (!object(value) || !keys(value, ['epoch', 'collections', 'items', 'resources', 'ideaPreferences', 'organization']) || !uuid(value.epoch) || !Array.isArray(value.collections) || value.collections.length > 100 || !value.collections.every(savedCollection) || !recordIdsUnique(value.collections) || !Array.isArray(value.items) || value.items.length > 300 || !value.items.every(savedItem) || !recordIdsUnique(value.items) || !Array.isArray(value.resources) || !value.resources.every(resource) || !preferences(value.ideaPreferences)) return undefined;
+ if (!object(value) || !keys(value, ['epoch', 'collections', 'items', 'resources', 'ideaPreferences', 'organization', 'homePreservation']) || !uuid(value.epoch) || !Array.isArray(value.collections) || value.collections.length > 100 || !value.collections.every(savedCollection) || !recordIdsUnique(value.collections) || !Array.isArray(value.items) || value.items.length > (value.homePreservation === undefined ? 300 : 588) || !value.items.every(savedItem) || !recordIdsUnique(value.items) || !Array.isArray(value.resources) || !value.resources.every(resource) || !preferences(value.ideaPreferences) || value.homePreservation !== undefined && !preservation(value.homePreservation)) return undefined;
  const organization = value.organization === undefined ? { revision: 0, collectionIds: [...value.collections].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).map(collection => collection.id) } : value.organization;
  if (!isHomeOrganization(organization) || organization.collectionIds.length !== value.collections.length || !value.collections.every(collection => organization.collectionIds.includes(collection.id))) return undefined;
  const byId = new Map(value.collections.map(collection => [collection.id, collection]));
- return { epoch: value.epoch, collections: organization.collectionIds.map(id => byId.get(id)!), items: value.items, resources: value.resources, ideaPreferences: value.ideaPreferences, organization };
+ return { epoch: value.epoch, collections: organization.collectionIds.map(id => byId.get(id)!), items: value.items, resources: value.resources, ideaPreferences: value.ideaPreferences, organization, ...(value.homePreservation === undefined ? {} : { homePreservation: value.homePreservation }) };
 }
 export const isHomeLibraryState = (value: unknown): value is HomeLibraryState => object(value) && value.organization !== undefined && readHomeLibraryState(value) !== undefined;
 

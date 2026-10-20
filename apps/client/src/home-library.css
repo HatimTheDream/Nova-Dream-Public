@@ -179,3 +179,8 @@
  .home-library-tools { margin-left:auto; }
  .home-library-search-disclosure { max-width:100%; }
 }
+
+.home-writing-entry { margin-block:12px; border-top:1px solid var(--border); padding-top:12px; }
+.home-writing-form { padding-block:10px; }
+.home-writing-form h4 { margin:0 0 6px; overflow-wrap:anywhere; }
+.home-writing-form .home-source-text { margin-block:6px 10px; white-space:pre-wrap; overflow-wrap:anywhere; }

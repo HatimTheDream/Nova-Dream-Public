@@ -38,7 +38,7 @@ const section = (rendered: string, title: string) => {
   return match[0];
 };
 
-test('Home opens Library with Ideas and Feed while saved widgets remain reachable', context => {
+test('Home preserves Library landing and exposes Today while retired widget writing stays in recovery', context => {
   context.mock.method(Date, 'now', () => now);
   const note = { ...createHomeWidget('note'), title: 'My private note', settings: { text: 'Saved note content' } };
   const props = homeProps([], { widgets: [note] });
@@ -51,8 +51,10 @@ test('Home opens Library with Ideas and Feed while saved widgets remain reachabl
   }
   assert.ok(home.indexOf('home-tab-library') < home.indexOf('home-tab-ideas') && home.indexOf('home-tab-ideas') < home.indexOf('home-tab-feed'));
   assert.match(home, /aria-label="Library"/);
-  assert.match(home, />Widgets<\/button>/);
-  assert.doesNotMatch(home, /home-tab-today|home-tab-space|My private note|Saved note content|data-reorder-item=/);
+  assert.doesNotMatch(home, />Widgets<\/button>|Today And Widgets/);
+  assert.match(home, /id="home-tab-today" role="tab" aria-selected="false"/);
+  assert.match(home, /id="home-panel-today"[^>]*hidden=""/);
+  assert.doesNotMatch(home, /home-tab-space|My private note|Saved note content|data-reorder-item=/);
   const space = renderToStaticMarkup(createElement(HomeSpace, props));
   assert.match(section(space, 'My private note'), /Saved note content/);
   assert.doesNotMatch(space, /aria-label="Daily briefing"|home-activity-title/);
@@ -68,7 +70,7 @@ test('Home restores approved views and falls back safely from retired views with
     for (const kept of ['library', 'ideas', 'feed', 'today', 'space', 'unknown']) {
       Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => key === 'e3:home-view:fixture' ? JSON.stringify(kept) : null, setItem: (key: string) => { writes.push(key); } } });
       const rendered = renderToStaticMarkup(createElement(Home, props));
-      const selected = ['library', 'ideas', 'feed'].includes(kept) ? kept : 'library';
+      const selected = ['today', 'library', 'ideas', 'feed'].includes(kept) ? kept : 'library';
       assert.match(rendered, new RegExp(`id="home-tab-${selected}" role="tab" aria-selected="true"`));
       assert.equal((rendered.match(/role="tab" aria-selected="true"/g) ?? []).length, 1);
       assert.deepEqual({ snapshot: props.snapshot, draft: props.draft }, original);

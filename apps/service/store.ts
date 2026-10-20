@@ -1,4 +1,5 @@
 import { verifyImportedProgress } from './workspace-import-progress.js';
+import { homeWidgetPreservationKey } from './home-widget-preservation.js';
 import { importedProgressSchema } from '../../packages/domain/profile-progression.js';
 import { buildProfileProgress, progressHistory, questCommandSchema, type PersonalQuest } from '../../packages/domain/profile-progression.js';
 import { backupFormat, backupSnapshotSchema, backupPlainMaxBytes, type BackupSnapshot } from '../../packages/domain/workspace-backup.js';
@@ -340,6 +341,12 @@ export class Store {
       if (currentRevision !== cmd.expectedRevision) throw new Fault(409, 'revision_conflict', 'Another window saved a newer version. Your proposal is kept.', current);
       // Older layout editors do not know the icon field and cannot reset it.
       if (cmd.kind === 'layout' && (cmd.payload as Partial<Layout>).appIcon === undefined) (value as Layout).appIcon = (current?.value as Layout | undefined)?.appIcon ?? 'red';
+      // Original receipts and revision conflicts above retain their authority.
+      // The marker's existence retires widget writes even if its body needs review.
+      if (cmd.kind === 'layout' && current && this.db.prepare('SELECT 1 FROM service_records WHERE id=?').get(homeWidgetPreservationKey) &&
+        canonical((value as Layout).widgets) !== canonical((current.value as Layout).widgets)) {
+        throw new Fault(409, 'revision_conflict', 'Home widgets are retired. Your full original proposal is kept; recover its writing in Library before reviewing other Appearance changes.', current);
+      }
       if (isRecordKind(cmd.kind)) this.validateRecord(cmd.kind, cmd.entityId, value as RecordValue, current as Entity<RecordValue> | undefined);
       if (cmd.kind === 'project') {
         const project = value as Project, previousProject = current?.value as Project | undefined;

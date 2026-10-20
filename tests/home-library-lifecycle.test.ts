@@ -27,6 +27,7 @@ const loader = registerHooks({
    const fixture=()=>globalThis[Symbol.for('nova.test.home-library-lifecycle')];
    export const useState=value=>fixture().state(value);
    export const useRef=value=>fixture().ref(value);
+   export const useId=()=>fixture().id();
    export const useCallback=(fn,deps)=>fixture().callback(fn,deps);
    export const useEffect=(fn,deps)=>fixture().effect(fn,deps);` };
   if (url === 'nova-home-test:api') return { format: 'module', shortCircuit: true, source: `const fixture=()=>globalThis[Symbol.for('nova.test.home-library-lifecycle')];
@@ -50,6 +51,7 @@ class Hooks {
  slots: any[] = []; index = 0; scheduled: (() => void)[] = []; storage = new Map<string, unknown>(); raw = new Map<string, string>(); reads: Deferred[] = []; writes: Deferred[] = [];
  state(initial: any) { const index = this.index++;if (!(index in this.slots)) this.slots[index] = typeof initial === 'function' ? initial() : initial;return [this.slots[index], (value: any) => { this.slots[index] = typeof value === 'function' ? value(this.slots[index]) : value; }]; }
  ref(value: unknown) { const index = this.index++;return this.slots[index] ??= { current: value }; }
+ id() { const index = this.index++;return this.slots[index] ??= `library-lifecycle-${index}`; }
  same(a: unknown[], b: unknown[]) { return a.length === b.length && a.every((value, index) => Object.is(value, b[index])); }
  callback(fn: unknown, deps: unknown[]) { const index = this.index++, old = this.slots[index];if (!old || !this.same(old.deps, deps)) this.slots[index] = { fn, deps };return this.slots[index].fn; }
  effect(fn: () => (() => void) | void, deps: unknown[]) { const index = this.index++, old = this.slots[index];if (!old || !this.same(old.deps, deps)) this.scheduled.push(() => { old?.cleanup?.();this.slots[index] = { deps, cleanup: fn() }; }); }
@@ -188,7 +190,7 @@ test('view mode and exact selection survive filtering without changing global Ho
  const f=new Hooks(),s=snapshot('a'),ref={kind:'note' as const,id:'library:n',revision:1},key=`e3:home-library-view:${s.deviceId}:${s.epoch}`;
  f.storage.set(key,{mode:'compact',filter:'all',collectionId:null,selection:{collectionId:'collection:one',references:[ref]}});
  const c={state:{...state(s),collections:[{id:'collection:one',revision:1,title:'Research',subtitle:'',icon:'folder' as const,pinned:false,archived:false,references:[ref],updatedAt:'2026-10-19T04:00:00.000Z'}],organization:{revision:1,collectionIds:['collection:one']}},error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async()=>undefined};
- try { let tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));const search=elements(tree).find(el=>el.type==='input'&&el.props.type==='search');search.props.onChange({target:{value:'hidden'}});tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));assert.ok(elements(tree).some(el=>el.props['aria-label']==='Selected sources'));assert.deepEqual((f.storage.get(key) as any).selection.references,[ref]);assert.ok(![...f.storage.keys()].some(k=>k.startsWith('e3:home-view:'))); }
+ try { let tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));elements(tree).find(el=>el.props['aria-label']==='Search Library').props.onClick();tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));const search=elements(tree).find(el=>el.type==='input'&&el.props.type==='search');search.props.onChange({target:{value:'hidden'}});tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));assert.ok(elements(tree).some(el=>el.props['aria-label']==='Selected sources'));assert.deepEqual((f.storage.get(key) as any).selection.references,[ref]);assert.ok(![...f.storage.keys()].some(k=>k.startsWith('e3:home-view:'))); }
  finally { f.dispose(); }
 });
 
@@ -235,7 +237,7 @@ test('unreadable writer and pasted-link drafts remain byte-for-byte retained wit
   const f=new Hooks(),s=snapshot('a'),prefix=`e3:home-library-writer:${s.deviceId}:${s.epoch}:lifecycle-window`;
   for(const suffix of [':item',':collection',':links'])f.raw.set(prefix+suffix,raw);
   const controller={state:state(s),error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async()=>undefined},render=()=>f.render(()=>HomeLibrary({snapshot:s,controller,openWidgets(){}}));
-  try {render();let tree=render();assert.ok(elements(tree).some(el=>el.props?.role==='alert'&&String(el.props.children).includes('draft cannot be read')));elements(tree).find(el=>el.type==='button'&&[el.props.children].flat(Infinity).includes('Add to Library')).props.onClick();tree=render();elements(tree).find(el=>el.type==='button'&&el.props.children==='Paste links').props.onClick();tree=render();const paste=elements(tree).find(el=>el.type==='textarea');assert.equal(paste.props.value,'');assert.equal(paste.props.disabled,true);for(const suffix of [':item',':collection',':links']){assert.equal(f.raw.get(prefix+suffix),raw);assert.equal(f.storage.has(prefix+suffix),false);}}
+  try {render();let tree=render();assert.ok(elements(tree).some(el=>el.props?.role==='alert'&&String(el.props.children).includes('draft cannot be read')));const menu=elements(tree).find(el=>el.props.label==='View Options');elements(menu.props.children(()=>{})).find(el=>el.type==='button'&&el.props.children==='Paste Links').props.onClick();tree=render();const paste=elements(tree).find(el=>el.type==='textarea');assert.equal(paste.props.value,'');assert.equal(paste.props.disabled,true);for(const suffix of [':item',':collection',':links']){assert.equal(f.raw.get(prefix+suffix),raw);assert.equal(f.storage.has(prefix+suffix),false);}}
   finally {f.dispose();}
  }
 });
@@ -258,11 +260,32 @@ test('focused collections have one heading and no overview chrome while keeping 
  for(const focused of [false,true]) {const f=new Hooks();try {
   f.storage.set(`e3:home-library-view:${s.deviceId}:${s.epoch}`,{mode:'compact',filter:'all',collectionId:focused?c.id:null,selection:null});
   const html=f.render(()=>renderToStaticMarkup(HomeLibrary({snapshot:s,controller,openWidgets(){}})));
-  assert.equal(html.includes('aria-label="Library collections"'),!focused);assert.equal(html.includes('home-library-count'),!focused);
+  assert.equal((html.match(/<h1 /g)??[]).length,1);assert.ok(html.includes('home-library-count'));assert.ok(html.includes(focused?'2 Sources':'1 Collection'));
   assert.equal(html.includes('Move collection Research shelf.'),!focused);assert.equal(html.includes('<h2>'),!focused);
-  assert.ok(html.includes(focused?'<h1 class="page-title">Research shelf</h1>':'<h1 class="page-title">Library</h1>'));
+  assert.ok(html.includes(focused?'<h1 class="page-title" aria-label="Research shelf">':'<h1 class="page-title" aria-label="All Collections">'));
   assert.equal((html.match(/Useful retained work/g)??[]).length,1);
   for(const label of ['Manage Research shelf','Pin Research shelf','Add links','Rename or edit','Archive collection','Add an existing source','Undo','Keep this visible','Source unavailable · reference kept'])assert.ok(html.includes(label),label);
   assert.ok(html.includes('href="https://example.test/kept?q=1#anchor"'));assert.ok(html.includes('Inspect Saved source'));
  }finally{f.dispose();}}
+});
+
+test('Home recovery adopts the existing durable Library writer once and never replaces newer writing or another epoch', () => {
+ const f = new Hooks(), s = snapshot('a'), key = `e3:home-library-writer:${s.deviceId}:${s.epoch}:lifecycle-window:item`;
+ const controller = { state: state(s), error: '', journalError: '', lastSave: undefined, loading: false, busy: false, pending: undefined, load: async () => {}, run: async () => undefined };
+ const render = (current = s) => f.render(() => HomeLibrary({ snapshot: current, controller, openWidgets() {} }));
+ try {
+  let tree = render();const menu = elements(tree).find(el => el.props.label === 'View Options');
+  elements(menu.props.children(() => {})).find(el => el.props.children === 'Recovered Home Writing').props.onClick();
+  tree = render();const recovery = elements(tree).find(el => el.type?.name === 'HomeWritingRecovery');
+  assert.ok(recovery.props.canAdopt());
+  const writer = { id: 'library:' + crypto.randomUUID(), revision: 0 as const, value: { kind: 'note' as const, title: 'Recovered exact title', body: 'Original incomplete writing', archived: false }, homeRecovery: { format: 1 as const, epoch: s.epoch, deviceId: s.deviceId, sourceKey: 'original-kept-key', sourceSha256: 'a'.repeat(64), formId: 'form:note:note', initialSha256: 'b'.repeat(64) } };
+  const copy = { key, raw: JSON.stringify(writer), writer };
+  f.storage.set(key, writer);assert.equal(recovery.props.adopt(copy), true);
+  tree = render();assert.ok(elements(tree).some(el => el.type === 'input' && el.props.value === writer.value.title));
+  elements(tree).find(el => el.type === 'textarea' && el.props.value === writer.value.body).props.onChange({ target: { value: 'Newer recovered writing' } });
+  render();assert.equal(recovery.props.adopt(copy), false);
+  assert.equal((f.storage.get(key) as any).value.body, 'Newer recovered writing');
+  render(snapshot('b'));assert.equal(recovery.props.adopt(copy), false);
+  assert.equal((f.storage.get(key) as any).value.body, 'Newer recovered writing');assert.equal(f.writes.length, 0);
+ } finally { f.dispose(); }
 });

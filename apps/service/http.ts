@@ -223,10 +223,13 @@ export async function startServer(options: { directory: string; port: number; pr
     epoch:()=>store.epoch,
     installed:()=>({novaVersion:options.version??'development',candidateId:options.candidateId??'',agent:agentServiceInfo(gateway.serviceInfo?.())}),
     heldFor:()=>updateHold,
-    hold:id=>{const wasHeld=store.updateMaintenanceHeld;updateHold=id;store.setUpdateMaintenanceHeld(!!id);if(wasHeld&&!id&&!store.recoveryEffectsPaused)mailIndex.start();},
+    hold:id=>{const wasHeld=store.updateMaintenanceHeld;updateHold=id;store.setUpdateMaintenanceHeld(!!id);if(wasHeld&&!id){homeLibrary.initializePreservation();if(!store.recoveryEffectsPaused)mailIndex.start();}},
     blockers:localUpdateBlockers,
     native:nativeUpdateLease,
   },updateHost);
+  // A failed content preservation stays visible in Library; it never aborts unrelated startup.
+  // Both maintenance and recovery holds are known here. GET handlers do not migrate data.
+  homeLibrary.initializePreservation();
   if (gateway instanceof Gateway && !store.recoveryEffectsPaused) gateway.start();
   let ownOrigin = '', closing = false;
   const requests = new Set<Promise<unknown>>();

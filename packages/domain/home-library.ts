@@ -30,7 +30,14 @@ export const homeLibraryUndoSchema = /* @__PURE__ */ (() => z.object({ operation
 export type HomeLibraryUndo = z.infer<typeof homeLibraryUndoSchema>;
 export const homeCaptureRowSchema = /* @__PURE__ */ (() => z.object({ rowId: id, id, value: homeItemValueSchema.refine(value => !value.archived, 'Capture an active item.') }).strict())();
 export type HomeCaptureRow = z.infer<typeof homeCaptureRowSchema>;
-export type HomeLibraryState = { epoch: string; collections: HomeCollection[]; items: HomeItem[]; resources: HomeResource[]; ideaPreferences: HomeIdeaPreferences; organization: HomeOrganization };
+export type HomePreservationState = {
+ status: 'pending' | 'held' | 'ready' | 'changed' | 'needs-review'; message: string;
+ // Read-only original metadata, including a legacy shape that may need review.
+ original?: { revision: number; updatedAt: string; widgets: unknown[] };
+ current?: { revision: number; updatedAt: string; widgets: unknown[] };
+ mappings: { widgetId: string; linkId?: string; reference: HomeReference }[];
+};
+export type HomeLibraryState = { epoch: string; collections: HomeCollection[]; items: HomeItem[]; resources: HomeResource[]; ideaPreferences: HomeIdeaPreferences; organization: HomeOrganization; homePreservation?: HomePreservationState };
 const envelope = /* @__PURE__ */ (() => ({ requestId: z.uuid().length(36), epoch: z.uuid().length(36) }))();
 const references = (minimum: number) => z.array(homeReferenceSchema).min(minimum).max(200).refine(refs => new Set(refs.map(homeReferenceKey)).size === refs.length, 'Keep each source once.');
 export const homeLibraryCommandSchema = /* @__PURE__ */ (() => z.discriminatedUnion('type', [

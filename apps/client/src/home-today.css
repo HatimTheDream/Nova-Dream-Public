@@ -1,0 +1,38 @@
+.home-approved > .home-view-tabs { max-width:100%; flex-wrap:wrap; }
+.home-today { min-width:0; max-width:900px; }
+.home-today-heading { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:14px; }
+.home-today-heading h1 { margin:3px 0; }
+.home-today-heading p { margin:0; color:var(--muted); }
+.home-today-heading > div { min-width:0; }
+.home-today-heading .compact-actions { padding-top:6px; }
+.home-today-group { margin-top:24px; }
+.home-today-group > header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+.home-today-group h2 { margin:0; font-size:18px; }
+.home-today-task { display:flex; align-items:flex-start; gap:10px; min-width:0; border-bottom:1px solid var(--line); }
+.home-today-task-toggle { display:flex; flex:none; align-items:center; justify-content:center; width:44px; min-height:44px; margin:2px 0; cursor:pointer; }
+.home-today-task-toggle > input { flex:none; width:18px; height:18px; margin:0; }
+:root button.home-today-task-open { display:grid; justify-content:stretch; gap:4px; flex:1; min-width:0; width:auto; padding:12px 2px; text-align:start; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.home-today-task-open strong, .home-today-task-open small { overflow-wrap:anywhere; }
+.home-today-task-open small { color:var(--muted); font-weight:400; }
+.home-today-task.completed .home-today-task-open > strong { text-decoration:line-through; color:var(--muted); }
+.home-today-capture { display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:100%; max-width:520px; margin:16px 0; }
+.home-today-capture > input { flex:1 1 180px; width:100%; max-width:360px; min-width:0; }
+.home-today-capture > button { flex:none; }
+.home-today-overdue { margin-top:24px; }
+.home-today-overdue > summary { color:var(--muted); cursor:pointer; padding:8px 0; }
+.home-today-continue { display:flex; flex-wrap:wrap; gap:8px; border-top:1px solid var(--line); margin-top:28px; padding-top:16px; }
+:root .home-today-continue > button { display:flex; flex:0 1 auto; align-items:center; justify-content:start; gap:10px; width:fit-content; max-width:100%; padding:10px 12px; text-align:start; }
+.home-today-continue strong, .home-today-continue small { display:block; overflow-wrap:anywhere; }
+.home-today-continue small { margin-top:3px; font-weight:400; color:var(--muted); }
+.home-today-plan-list { max-height:48vh; overflow:auto; overscroll-behavior:contain; margin:12px 0; }
+.home-today-plan-list > label { display:flex; align-items:flex-start; gap:12px; min-height:44px; padding:10px 0; border-bottom:1px solid var(--line); }
+.home-today-plan-list input { flex:none; width:18px; height:18px; margin-top:2px; }
+.home-today-plan-list span { min-width:0; }
+.home-today-plan-list strong, .home-today-plan-list small { display:block; overflow-wrap:anywhere; }
+.home-today-plan-list small { margin-top:4px; font-weight:400; color:var(--muted); }
+@media (pointer:coarse), (max-width:800px) {
+ .home-today-capture > input { min-height:44px; font-size:16px; }
+ .home-today-task-toggle > input { width:22px; height:22px; }
+ :root button.home-today-task-open { min-height:44px; }
+ .home-today-overdue > summary { min-height:44px; padding-block:12px; }
+}

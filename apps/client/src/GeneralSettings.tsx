@@ -19,7 +19,6 @@ export interface GeneralSettingsProps {
  status?: string;
  error?: string;
  saveShared: (patch: Partial<SharedGeneralSettings>, expected: GeneralSettingsSaveContext) => Promise<boolean>;
- resetHome?: () => void;
  resetNavigation?: () => void;
  undoReset?: () => void;
  hasUndoReset?: boolean;
@@ -32,7 +31,7 @@ const readingSizes={small:14,standard:15,large:17,'extra-large':20};
 const interfaceSizes={small:13,standard:14,large:15.4,'extra-large':16.8};
 function removeDraft(key:string):boolean {try{localStorage.removeItem(key);return true;}catch{return false;}}
 /** Stages shared appearance and device text preferences independently of their durable owners. */
-export function GeneralSettings({snapshot,online,pending=false,status,error,saveShared,resetHome,resetNavigation,undoReset,hasUndoReset,reveal,onDraftState}:GeneralSettingsProps) {
+export function GeneralSettings({snapshot,online,pending=false,status,error,saveShared,resetNavigation,undoReset,hasUndoReset,reveal,onDraftState}:GeneralSettingsProps) {
  const typography=useSyncExternalStore(typographyStore.subscribe,typographyStore.getSnapshot,typographyStore.getSnapshot);
  const current=generalSettingsValues(snapshot.layout.value,typography);
  const currentKey=JSON.stringify(current);
@@ -120,7 +119,7 @@ export function GeneralSettings({snapshot,online,pending=false,status,error,save
   <div className="general-settings-footer"><span role="status">{changes.length?`${changes.length} Unsaved ${changes.length===1?'Change':'Changes'}`:'No Unsaved Changes'}</span><div className="button-row"><button type="button" disabled={saving||pending||!changes.length} onClick={discard}>Discard</button><button type="button" className="primary" disabled={saving||pending||!changes.length||merged.conflicts.length>0} onClick={()=>void save()}>{saving?'Saving…':'Save Changes'}</button></div></div>
   {(message||error||pending)&&<p className="general-settings-status" role="status">{message||error||(pending?'A shared save is awaiting confirmation. Reconcile it before changing this proposal.':status)}</p>}
   {storageError&&<p className="field-error" role="status">Browser storage could not retain this settings draft. Keep this window open until it is saved or discarded.</p>}
-  {(resetHome||resetNavigation)&&<details className="settings-details"><summary>Reset Layout</summary>{resetHome&&<div className="setting-row"><div><strong>Home Arrangement</strong><p>Reset widget positions. Custom widgets, notes, links, tasks and drafts are kept.</p></div><button type="button" disabled={saving||pending} onClick={resetHome}>Reset Arrangement</button></div>}{resetNavigation&&<div className="setting-row"><div><strong>Navigation Order</strong><p>Settings stays pinned beside the scrollable bottom modules.</p></div><button type="button" disabled={saving||pending} onClick={()=>setResetReview(true)}>Reset Navigation</button></div>}</details>}
+  {resetNavigation&&<details className="settings-details"><summary>Reset Navigation</summary><div className="setting-row"><div><strong>Navigation Order</strong><p>Settings stays pinned beside the scrollable bottom modules.</p></div><button type="button" disabled={saving||pending} onClick={()=>setResetReview(true)}>Reset Navigation</button></div></details>}
   {hasUndoReset&&undoReset&&<div className="notice"><span>Previous arrangement is available.</span><button type="button" disabled={saving||pending} onClick={undoReset}>Undo Reset</button></div>}
   {resetReview&&<Dialog title="Reset Navigation Order?" size="choice" close={()=>setResetReview(false)}><p>Restore the default order of the main modules. Saved content and your appearance changes are kept. You can undo this reset.</p><div className="compact-actions"><button className="compact-action" type="button" onClick={()=>setResetReview(false)}>Keep Current Order</button><button className="compact-action primary" type="button" disabled={saving||pending} onClick={()=>{if(savingRef.current||pending)return;resetNavigation?.();setResetReview(false);}}>Reset Navigation</button></div></Dialog>}
   {leave&&<Dialog title="Unsaved Settings" size="choice" close={keepEditing}><p>{storageError ? 'Your changes are only in this window.' : 'Your changes are kept on this device.'} Save or discard them before leaving?</p>{(message||error)&&<p role="status">{message||error}</p>}<div className="button-row general-settings-leave"><button type="button" onClick={keepEditing}>Keep Editing</button><button type="button" disabled={saving||pending} onClick={()=>{if(discard())continueLeave();}}>Discard And Leave</button><button type="button" className="primary" disabled={saving||pending||merged.conflicts.length>0} onClick={()=>{void save().then(saved=>{if(saved)continueLeave();});}}>Save And Leave</button></div></Dialog>}

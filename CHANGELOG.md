@@ -1,3 +1,12 @@
+## [2.9.20] — 2026-10-19
+
+### Improved
+
+- Open Today for the current task list, daily routines, quick capture and explicit planning dates, with deadlines kept separate.
+- Preserve widget notes and links in Library, including hidden content and exact earlier source versions, before retiring widget controls.
+- Recover unfinished Home writing into existing Library editors without replacing original drafts, and reconcile an original pending layout save explicitly.
+- Keep Home writing and planning drafts visible when browser storage fails, with safe retry and compact touch controls.
+
 ## [2.9.19] — 2026-10-19
 
 ### Improved
