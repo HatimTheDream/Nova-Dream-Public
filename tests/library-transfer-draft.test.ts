@@ -57,10 +57,30 @@ test('exact confirmed original save survives acknowledgement refusal and keeps n
  f.owner.change(value => ({ ...value, rows: value.rows.map(row => ({ ...row, value: { ...row.value, body: 'Edited while original saved' } })) }));
  const result = receipt(command);f.faults.write = true;assert.equal(f.owner.acknowledge(command, result), false);
  assert.equal(f.owner.value?.rows[0].confirmation?.requestId, command.requestId);assert.equal(f.owner.value?.rows[0].value.body, 'Edited while original saved');
+ assert.deepEqual(f.owner.value?.destination, { id: command.destination.id, expectedRevision: 5 });
  f.faults.write = false;assert.equal(f.owner.keep(), true);assert.equal(f.owner.command(randomUUID()), undefined);
  const reopened = new LibraryTransferDraftOwner(f.io, f.identity, () => true);assert.equal(reopened.hasNewerWriting(reopened.value!.rows[0]), true);
  reopened.anotherCopy(199, 'library:deliberate-copy', 'row:deliberate-copy');const next = reopened.command(randomUUID())!;
  assert.equal(next.rows[0].id, 'library:deliberate-copy');assert.equal(next.rows[0].value.body, 'Edited while original saved');
+ assert.deepEqual(next.destination, { id: command.destination.id, expectedRevision: 5 });
+});
+test('own receipt advances only its exact original destination and repeated acknowledgement cannot move it backward', () => {
+ const f = fixture();f.owner.begin(draft());const command = f.owner.command(randomUUID())!, result = receipt(command);
+ assert.equal(f.owner.acknowledge(command, result), true);
+ const saved = f.map.get(f.owner.key);assert.deepEqual(f.owner.value?.destination, { id: command.destination.id, expectedRevision: 5 });
+ assert.equal(f.owner.acknowledge(command, result), true);assert.equal(f.map.get(f.owner.key), saved);
+ f.owner.change(value => ({ ...value, destination: { id: command.destination.id, expectedRevision: 7 } }));
+ assert.equal(f.owner.acknowledge(command, result), true);
+ assert.deepEqual(f.owner.value?.destination, { id: command.destination.id, expectedRevision: 7 });
+});
+test('a late own save keeps a newer destination choice while still preserving its original row confirmation', () => {
+ for (const destination of [{ id: 'collection:another', expectedRevision: 3 }, { id: 'collection:target', expectedRevision: 6 }]) {
+  const f = fixture();f.owner.begin(draft());const command = f.owner.command(randomUUID())!;
+  f.owner.change(value => ({ ...value, destination }));
+  assert.equal(f.owner.acknowledge(command, receipt(command)), true);
+  assert.deepEqual(f.owner.value?.destination, destination);
+  assert.equal(f.owner.value?.rows[0].confirmation?.requestId, command.requestId);
+ }
 });
 test('wrong receipt does not acknowledge and 500,000-byte bound preserves every selected row', () => {
  const f = fixture();f.owner.begin(draft());const command = f.owner.command(randomUUID())!, bad = receipt(command);bad.createdItems[0].body = 'Wrong body';

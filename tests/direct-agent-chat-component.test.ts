@@ -25,6 +25,7 @@ const mocks: Record<string, string> = {
   './useReorder': `export const useReorder=order=>({order,bind:()=>({}),suppressClick:{current:false},containerRef:{current:null}});`,
   './voice-controller': `export class VoiceController {dispose(){}}`,
   './AppIcon': `export const useAppIcon=()=> 'red'; export const NovaAppMark=()=>null;`,
+  './useHeadquartersMotion': `export const useHeadquartersMotion=()=>({moving:null,places:{},slots:{},bubble:null,visitor:null,wave:null,expression:()=>undefined});`,
 };
 const loader = registerHooks({
   resolve(specifier, context, next) {
@@ -59,6 +60,7 @@ const { default: RecordsPage } = await import('../apps/client/src/RecordsPage');
 const { HomeLibrary } = await import('../apps/client/src/HomeLibrary');
 const { AgentsWorkspaceNavigation, AgentWorkControls } = await import('../apps/client/src/AgentsWorkspaceControls');
 const { default: AgentHub } = await import('../apps/client/src/AgentHub');
+const { Headquarters } = await import('../apps/client/src/nova/hub/Headquarters');
 const { registerAgentDraftNavigation, mayLeaveAgentDrafts } = await import('../apps/client/src/agent-workspace-navigation');
 const { registerHomeDraftNavigation } = await import('../apps/client/src/home-draft-navigation');
 const { DirectAgentChooser, DirectAgentStatus, DirectAgentAccount } = await import('../apps/client/src/DirectAgentChat');
@@ -122,6 +124,54 @@ function directController(conversations: any[] = []) { return { space: 'chat', c
 function installController(value: any) { const key=Symbol.for('nova.test.direct-controller'), old=Object.getOwnPropertyDescriptor(globalThis,key); Object.defineProperty(globalThis,key,{configurable:true,value}); return () => {if(old)Object.defineProperty(globalThis,key,old);else Reflect.deleteProperty(globalThis,key);}; }
 const chooserTarget = () => ({ format: 1 as const, scope, recipient, token: randomUUID(), origin: 'agents' as const, previousSelection: { space: 'chat' as const, id: null } });
 const postCalls = (f: ReturnType<typeof fixture>) => f.calls.filter(c => c.init.body);
+
+test('Headquarters footer opens its exact first displayed agent after an initially empty roster without replacing room writing', async () => {
+  const member = (id: string) => ({ id, revision: 3, name: 'Same Name', position: 'Researcher', appearance: null,
+    archived: false, status: 'idle', reason: 'No assignment' });
+  const first = member('agent:one'), second = member('agent:two');
+  let hub = { observedAt: 0, runtimeReady: false, runtimeReason: 'Synthetic fixture', agents: [], roster: [] as ReturnType<typeof member>[],
+    total: 0, nextCursor: null, activeAgentId: null,
+    layout: { version: 1, revision: 1, rooms: [], placements: {}, previousPlacements: {} } };
+  const f = fixture(path => path.includes('agents/hub') ? hub : { current: null, history: [] }), opened: string[] = [];
+  const roomKey=`e3:hub:${scope.epoch}:${scope.deviceId}:${scope.windowId}:room-form`, roomRaw=JSON.stringify({name:'Original unfinished room',template:'private'});
+  f.storage.set(roomKey,roomRaw);
+  try {
+    const page=f.mount(AgentHub,{snapshot:directSnapshot(),presentation:'hub',setPresentation(){},manage(){},unfinished:[],
+      openAgent:(id:string)=>opened.push(id),assignWork(){},openPlan(){},openRoutine(){},openContent(){},editTask(){}});
+    await page.flush();assert.equal(page.find(n=>n.type===Headquarters).props.selected,undefined);
+    hub={...hub,roster:[first,second],total:2};
+    await page.update({snapshot:{...directSnapshot(),cursor:1}});
+    const hqProps=page.find(n=>n.type===Headquarters).props;assert.equal(hqProps.selected,undefined);
+    let passed: unknown[]=[];const original=hqProps.openProfile, element={focus(){}};
+    const hq=f.mount(Headquarters,{...hqProps,openProfile:(...args:unknown[])=>{passed=args;original(...args);}});
+    await hq.flush();hq.find(n=>n.props.className==='hq-selected-person').props.onClick({currentTarget:element});
+    await page.flush();assert.equal(passed[0],hqProps.state.roster[0]);assert.deepEqual(passed[0],first);assert.equal(passed[1],element);
+    const profile=page.find(n=>n.type===Dialog&&n.props.title==='Same Name');
+    nodes(profile).find(n=>n.type==='button'&&text(n).trim()==='Edit Agent').props.onClick();
+    assert.deepEqual(opened,['agent:one']);assert.equal(f.storage.get(roomKey),roomRaw);
+    assert.equal(f.storage.get(`e3:hub:${scope.epoch}:${scope.deviceId}:${scope.windowId}:selected`),JSON.stringify(first.id));
+    profile.props.close();await page.flush();assert.equal(nodes(page.tree).some(n=>n.type===Dialog&&n.props.title==='Same Name'),false);
+    assert.deepEqual(postCalls(f),[]);
+  } finally { f.close(); }
+});
+
+test('Headquarters footer refuses unavailable or changed displayed identity and retired callbacks without a latent profile', async () => {
+  const member={id:'agent:one',revision:3,name:'Same Name',position:'Researcher',appearance:null,archived:false,status:'idle',reason:'No assignment'};
+  const state={observedAt:0,runtimeReady:false,runtimeReason:'Synthetic',agents:[],roster:[member],total:1,nextCursor:null,activeAgentId:null,
+    layout:{version:1,revision:1,rooms:[],placements:{},previousPlacements:{}}};
+  const f=fixture(path=>path.includes('agents/hub')?state:{current:null,history:[]});
+  try {
+    const page=f.mount(AgentHub,{snapshot:directSnapshot(),presentation:'hub',setPresentation(){},manage(){},unfinished:[],
+      openAgent(){},assignWork(){},openPlan(){},openRoutine(){},openContent(){},editTask(){}});
+    await page.flush();const props=page.find(n=>n.type===Headquarters).props, element={focus(){}};
+    props.openProfile({...member,id:'agent:missing'},element);props.openProfile({...member,revision:2},element);await page.flush();
+    assert.equal(nodes(page.tree).some(n=>n.type===Dialog&&n.props.title==='Same Name'),false);
+    props.pick(member,element);await page.flush();
+    assert.equal(nodes(page.tree).some(n=>n.type===Dialog&&n.props.title==='Same Name'),false);
+    page.close();const before=new Map(f.storage);props.openProfile(member,element);await page.flush();
+    assert.deepEqual(f.storage,before);assert.deepEqual(postCalls(f),[]);
+  } finally { f.close(); }
+});
 
 test('actual chooser mounts without an effect and failed original retention blocks Create', async () => {
   const f = fixture(), target = chooserTarget(), controller = directController();

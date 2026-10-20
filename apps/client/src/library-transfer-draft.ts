@@ -126,8 +126,12 @@ export class LibraryTransferDraftOwner {
    return { ...row, selected: false, confirmation: { requestId: command.requestId, disposition: outcome.disposition as NonNullable<TransferRow['confirmation']>['disposition'], reference: outcome.reference, submittedValue: structuredClone(submittedValue) } };
   });
   if (!matched) return false;
+  const savedDestination = result.collections.find(collection => collection.id === command.destination.id);
+  const destination = savedDestination && this.value.destination?.id === command.destination.id
+    && this.value.destination.expectedRevision === command.destination.expectedRevision
+    ? { id: savedDestination.id, expectedRevision: savedDestination.revision } : this.value.destination;
   // Keep the genuine response in memory before a fallible acknowledgement write.
-  this.value = { ...this.value, rows };return this.keep();
+  this.value = { ...this.value, rows, destination };return this.keep();
  }
  anotherCopy(position: number, itemId: string, rowId: string): boolean {
   if (!id(itemId) || !id(rowId)) return false;
