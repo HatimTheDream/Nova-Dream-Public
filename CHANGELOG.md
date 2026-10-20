@@ -1,3 +1,9 @@
+## [2.10.0] - 2026-10-20
+
+- Organize Library collections in named Spaces with retained name drafts and archive/restore.
+- Keep exact saved sources in Up Next, reorder or remove them, and undo organization changes without changing the originals.
+- Preserve Library access and show clear recovery states when organization or browser storage is unavailable.
+
 ## [2.9.29] — 2026-10-20
 
 ### Improved
