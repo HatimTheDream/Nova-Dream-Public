@@ -1,0 +1,14 @@
+.library-transfer { display: grid; gap: 12px; min-width: 0; }
+.library-transfer > p { margin: 0; }
+.library-transfer > button { justify-self: start; }
+.library-transfer-entries { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.library-transfer-entries .check-label { min-height: 44px; align-items: center; }
+.library-transfer-entries .check-label span { min-width: 0; overflow-wrap: anywhere; }
+.library-transfer-entries small { display: block; color: var(--muted); font-weight: 400; }
+.library-transfer-row { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.library-transfer-row .check-label { min-height: 44px; }
+.library-transfer-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+@media (max-width: 800px) {
+ .library-transfer input, .library-transfer select, .library-transfer textarea { font-size: 16px; }
+ .library-transfer button { min-height: 44px; }
+}

@@ -133,4 +133,17 @@ test('actual Space editor survives a denied global storage getter without writin
   assert.equal(f.memory.writes, 0);assert.equal(commands, 0);assert.equal(reads, 1);
  } finally { f.close(); }
 });
+test('Space completion requests scoped focus only after its confirmed local acknowledgement', async () => {
+ const f = new Hooks();let restores = 0, calls = 0, resolve!: (reply: HomeShelvesReceipt) => void, sent!: ReturnType<typeof command>;
+ const props = { scope, shelves: shelves(), request: { ...scope, nonce: 'new-focus', draft: proposal() },
+  prepareFocus: () => () => { restores++; },
+  controller: controller(async input => { calls++;sent = input as ReturnType<typeof command>;return new Promise(done => { resolve = done; }); }) };
+ const render = () => f.render(() => LibrarySpaceEditor(props));
+ try {
+  render();elements(render()).find(row => row.type === 'form').props.onSubmit({ preventDefault() {} });
+  f.memory.failWrite = true;resolve(result(sent));for (let n = 0; n < 5; n++) await Promise.resolve();
+  assert.equal(restores, 0);f.memory.failWrite = false;elements(render()).find(row => row.type === 'form').props.onSubmit({ preventDefault() {} });await Promise.resolve();
+  assert.equal(restores, 1);assert.equal(calls, 1);assert.equal(elements(render()).some(row => row.props.title === 'New Space'), false);
+ } finally { f.close(); }
+});
 test.after(() => { loader.deregister();delete (globalThis as any)[symbol];delete (globalThis as any).localStorage; });

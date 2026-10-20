@@ -29,7 +29,7 @@ const loader = registerHooks({
   return next(url, context);
  },
 });
-const { HomeLibrary } = await import('../apps/client/src/HomeLibrary');
+const { HomeLibrary, UpNextShelf } = await import('../apps/client/src/HomeLibrary');
 class Hooks {
  slots: any[] = []; index = 0; pending: (() => void)[] = []; storage = new Map<string, string>(); failStorage = false;
  state(value: any) { const i = this.index++; if (!(i in this.slots)) this.slots[i] = typeof value === 'function' ? value() : value; return [this.slots[i], (next: any) => { this.slots[i] = typeof next === 'function' ? next(this.slots[i]) : next; }]; }
@@ -127,6 +127,28 @@ test('compact creation choices still open the original editors and Dialog defaul
  const ordinary = renderToStaticMarkup(createElement(Dialog, { title: 'Editor', close() {}, children: 'Writing' }));
  const choice = renderToStaticMarkup(createElement(Dialog, { title: 'Choose', size: 'choice', close() {}, children: 'Choices' }));
  assert.match(ordinary, /class="dialog"/); assert.match(choice, /class="dialog dialog-choice"/);
+});
+
+test('portable export entry captures exact collection or selected versions without replacing existing writers', () => {
+ const f = fixture(), writer = { id: 'library:kept', revision: 0, value: { kind: 'note', title: 'Kept writer', body: 'All original text', archived: false } };
+ f.hooks.save(writerKey, writer);f.hooks.save(viewKey, { mode: 'compact', filter: 'all', query: '', collectionId: 'collection:one', selection: { collectionId: 'collection:one', references: [f.reference] } });
+ let tree = f.hooks.render(f.props);button(menu(tree, 'View Options'), 'Export Collection').props.onClick();tree = f.hooks.render(f.props);
+ let transfer = elements(tree).find(node => node.type?.name === 'LibraryTransfer')!;
+ assert.deepEqual(transfer.props.request.query, { epoch: f.snapshot.epoch, collection: 'collection:one', revision: 4 });
+ assert.equal(transfer.props.request.current(), true);assert.deepEqual(f.hooks.read(writerKey), writer);
+ button(tree, 'Export Selected').props.onClick();tree = f.hooks.render(f.props);transfer = elements(tree).find(node => node.type?.name === 'LibraryTransfer')!;
+ assert.deepEqual(transfer.props.request.query.positions, [0]);const original = transfer.props.request;
+ button(tree, 'Clear selection').props.onClick();f.hooks.render(f.props);assert.equal(original.current(), false);
+ assert.deepEqual(f.hooks.read(writerKey), writer);assert.deepEqual(f.writes, []);
+});
+test('single Up Next source and single Space assignment use singular labels', () => {
+ const f = fixture();f.library.shelves = { status: 'ready', value: { format: 1, revision: 1, spaces: [{ id: 'space:one', name: 'Reading', archived: false }], assignments: [{ collectionId: 'collection:one', spaceId: 'space:one' }], upNext: [f.reference] } };
+ f.hooks.save(viewKey, { mode: 'compact', filter: 'all', query: '', collectionId: null, selection: null, route: { kind: 'up-next' } });
+ let tree = f.hooks.render(f.props);assert.match(text(tree), /1 Saved Source/);assert.doesNotMatch(text(tree), /1 Saved Sources/);
+ const shelf = elements(tree).find(node => node.type === UpNextShelf)!, h = new Hooks();(globalThis as any)[key] = h;
+ assert.match(text(UpNextShelf(shelf.props)), /1 saved source\./);
+ f.hooks.save(viewKey, { mode: 'compact', filter: 'all', query: '', collectionId: null, selection: null, route: { kind: 'space', id: 'space:one' } });
+ const fresh = new Hooks();fresh.storage = f.hooks.storage;tree = fresh.render(f.props);assert.match(text(tree), /1 assigned collection/);assert.doesNotMatch(text(tree), /1 assigned collections/);
 });
 
 test.after(() => { loader.deregister(); delete (globalThis as any)[key]; if (oldStorage) Object.defineProperty(globalThis, 'localStorage', oldStorage); else delete (globalThis as any).localStorage; });
