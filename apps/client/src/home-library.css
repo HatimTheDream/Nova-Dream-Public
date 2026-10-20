@@ -184,3 +184,10 @@
 .home-writing-form { padding-block:10px; }
 .home-writing-form h4 { margin:0 0 6px; overflow-wrap:anywhere; }
 .home-writing-form .home-source-text { margin-block:6px 10px; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Spaces and Up Next retain intrinsic actions inside the existing Library surface. */
+.home-library-space-actions { margin-bottom:14px; }
+.home-library-space-actions > p { flex-basis:100%; margin:0; }
+.home-library-up-next > .metadata { margin-block:0 12px; }
+.home-library-up-next .home-library-resource-actions { flex-wrap:wrap; }
+.home-library-up-next .home-library-resource-actions > .text-button { max-width:100%; overflow-wrap:anywhere; min-height:44px; }
