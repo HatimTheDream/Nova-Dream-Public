@@ -1,4 +1,6 @@
 import { AssistantPlans } from './assistant-plans.js';
+import { assertOrdinaryAssistant, createDirectAgentConversation } from './direct-agent.js';
+import { directAgentMessageAuthor } from '../../packages/domain/direct-agent.js';
 import { AssistantResearchProgress } from './assistant-research-progress.js';
 import { workProjectDiffSchema } from '../../packages/domain/work-project.js';
 import { assistantSpace, spaceDraftId, spaceInstructions } from '../../packages/domain/assistant-space.js';
@@ -99,6 +101,7 @@ export class AssistantService {
   setAccountRouter(route: (conversation: Conversation) => Promise<Conversation['accountSelection']>, validate: (profileId: string) => Promise<void>) { this.accountRouter = route; this.accountValidator = validate; }
   async selectAccount(device: string, raw: unknown) {
     const input = conversationAccountSchema.parse(raw);
+    assertOrdinaryAssistant(this.conversation(input.conversationId));
     const replay = this.store.replayAdmission<Conversation>(device, input, { type: 'conversation.account', ...input });
     if (replay) return replay;
     if (input.profileId) {
@@ -112,6 +115,7 @@ export class AssistantService {
     }).value;
   }
   async prepareAccount(id: string, history?: ConversationHistory) {
+    assertOrdinaryAssistant(this.conversation(id));
     if (!this.accountRouter) return history;
     const conversation = this.conversation(id), epoch = this.store.epoch;
     this.assertConnection(conversation);
@@ -158,6 +162,7 @@ export class AssistantService {
     this.pins = new MessagePins(store, id => this.conversation(id), id => this.cachedHistory(id));
     this.memory = new AssistantMemory(store, id => this.conversation(id), id => this.cachedHistory(id));
     this.continuations = new ConversationContinuation(store, gateway, { read: id => this.conversation(id), save: conversation => this.saveConversation(conversation), savedHistory: this.savedHistory(), assertIdle: conversation => {
+      assertOrdinaryAssistant(conversation);
       this.removals.assertAvailable(conversation.id);
       if (this.voiceBusy(conversation.id)) throw new Fault(409, 'voice_active', 'End the call before reconnecting this chat.');
     } });
@@ -196,7 +201,7 @@ export class AssistantService {
     if (!this.store.recoveryEffectsPaused && !this.transcriptMigration && Date.now() >= this.nextTranscriptMigration) {
       this.nextTranscriptMigration = Date.now() + 10000;
       const generation = this.gateway.status().generation;
-      this.transcriptMigration = this.savedHistory().captureNext(this.conversations().filter(c => c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }), 2)
+      this.transcriptMigration = this.savedHistory().captureNext(this.conversations().filter(c => !c.directAgent && c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }), 2)
         .catch(() => undefined).finally(() => { this.transcriptMigration = undefined; });
       if (!this.artifactRetention) this.artifactRetention = this.retainTranscriptArtifacts().catch(() => undefined).finally(() => { this.artifactRetention = undefined; });
     }
@@ -257,6 +262,7 @@ export class AssistantService {
   observeVoice(attempt: VoiceAttempt) {
     if (this.closed || attempt.epoch !== this.store.epoch || this.removals.removed(attempt.target.conversation.id)) return;
     const conversation = this.store.internalRead<Conversation>(conversationKey(attempt.target.conversation.id));
+    if (conversation?.directAgent) return;
     if (conversation && this.savedHistory().observeVoice(conversation, attempt)) this.historyVersions[conversation.id] = (this.historyVersions[conversation.id] ?? 0) + 1;
   }
   captureVoiceTarget(id: string, revision: number, projectRevision: number): VoiceTarget {
@@ -400,6 +406,7 @@ export class AssistantService {
     return value;
   }
   private currentOperation(captured: AssistantOperation, conversation: Conversation): AssistantOperation | undefined {
+    if (conversation.directAgent) return;
     if (this.closed || captured.epoch !== this.store.epoch || this.removals.removed(conversation.id)) return;
     const status = this.gateway.status(), currentConversation = this.store.internalRead<Conversation>(conversationKey(conversation.id));
     if (status.state !== 'ready' || !status.grantedScopes.includes('operator.read') || status.generation !== conversation.connectionGeneration || !currentConversation || currentConversation.deleted
@@ -412,6 +419,7 @@ export class AssistantService {
     return current;
   }
   private assertConnection(conversation?: Conversation, write = true, allowPendingRestore = false) {
+    assertOrdinaryAssistant(conversation);
     if (conversation) this.removals.assertAvailable(conversation.id);
     if (write && conversation?.nativeRestorePending && !allowPendingRestore) throw new Fault(409, 'restore_pending', 'This chat is restored. Check its status after reconnecting before starting new work.');
     if (write && conversation?.pendingResume) throw new Fault(409, 'continuation_pending', 'Check this chat’s pending connection before starting new work. Your draft is kept.');
@@ -427,6 +435,7 @@ export class AssistantService {
   async create(device: string, raw: unknown, teamId?:string): Promise<Conversation> {
     this.store.assertUpdateAdmission();
     const input = createConversationSchema.parse(raw);
+    if (input.recipient) return createDirectAgentConversation(this.store, device, input, teamId);
     const status = this.assertConnection();
     const admitted = this.store.admit(device, input, { type: 'conversation.create', ...input }, () => {
       const project = input.projectId ? this.store.readEntity('project', input.projectId) : undefined;
@@ -583,7 +592,7 @@ export class AssistantService {
   async captureSavedHistories() {
     if (this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || this.gateway.status().state !== 'ready') return;
     const generation = this.gateway.status().generation;
-    await this.savedHistory().capture(this.conversations().filter(c => c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }));
+    await this.savedHistory().capture(this.conversations().filter(c => !c.directAgent && c.connectionGeneration === generation), (id, offset) => this.readHistory(id, { offset, readOnly: true }));
   }
   private synchronizeReading(id: string) {
     if (this.closed || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || this.readingSyncs.has(id)) return;
@@ -685,6 +694,7 @@ export class AssistantService {
     const epoch = this.store.epoch, generation = this.gateway.status().generation;
     let remaining = 2;
     for (const conversation of this.conversations()) {
+      if (conversation.directAgent) continue;
       if (this.closed || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused || !remaining) return;
       if (conversation.deleted || this.removals.pending(conversation.id)) continue;
       for (const message of this.savedHistory().messages(conversation)) for (const attachment of message.attachments) {
@@ -742,6 +752,16 @@ export class AssistantService {
     return messages.map(message => {
       const runs = message.runId ? matching.filter(op => op.nativeRunId === message.runId) : [];
       const run = runs.length === 1 ? runs[0] : undefined;
+      if (conversation.directAgent) {
+        // Native labels or matching text cannot appoint an agent as author.
+        // Only the exact saved original run may supply its captured identity.
+        const { author: _untrustedAuthor, ...plain } = message;
+        if (!run || !['user', 'assistant'].includes(message.role)) return plain;
+        try {
+          const author = directAgentMessageAuthor(conversation, run, message.role as 'user' | 'assistant');
+          return { ...plain, operationId: run.id, ...(author ? { author } : {}) };
+        } catch { return plain; }
+      }
       const owners = message.role === 'user' ? matching.filter(op => matchesOwnerMessage(op, message.text)) : [];
       const owner = run && owners.includes(run) ? run : owners.length === 1 ? owners[0] : undefined;
       return owners.length ? { ...message, authoredText: owners[0].input, ...(owner ? { operationId: owner.id } : {}) }
@@ -832,6 +852,7 @@ export class AssistantService {
   }
   enqueue(device: string, raw: unknown): QueuedMessage {
     const input = enqueueSchema.parse(raw);
+    assertOrdinaryAssistant(this.conversation(input.conversationId));
     const admitted = this.store.admit(device, input, { type: 'assistant.queue', ...input }, () => {
       const conversation = this.conversation(input.conversationId);
       if (conversation.revision !== input.conversationRevision || conversation.archived || conversation.state !== 'ready' || !conversation.nativeId || conversation.pendingSettings) throw new Fault(409, 'conversation_changed', 'Review this conversation before queuing its message.');
@@ -1154,6 +1175,7 @@ export class AssistantService {
   }
   async cancel(device: string, input: { requestId: string; epoch: string; operationId: string }) {
     const original = this.operation(input.operationId);
+    assertOrdinaryAssistant(this.conversation(original.conversationId));
     if (!original.nativeRunId) throw new Fault(409, 'run_identity_unknown', 'The exact native run is not known yet. Check its status first.');
     const admitted = this.store.admit(device, input, { type: 'assistant.cancel', ...input }, () => this.saveOperation({ ...original, cancelRequested: true }));
     if (admitted.fresh && !terminal.has(original.state)) {
@@ -1164,6 +1186,7 @@ export class AssistantService {
   }
   async reconcile(id: string) {
     const conversation = this.conversation(id);
+    assertOrdinaryAssistant(conversation);
     const operations = this.operations().filter(op => op.conversationId === id && (!terminal.has(op.state) || !op.effectiveModel));
     const recoverInputs = !this.store.updateMaintenanceHeld && inputReceiptRuntimes.has(this.gateway.serviceInfo?.().version ?? '');
     const inputRunIds = recoverInputs ? [...new Set(operations.filter(op => !op.nativeRunId && ['dispatching', 'unknown'].includes(op.state)
@@ -1260,6 +1283,7 @@ export class AssistantService {
       if (this.operations().some(op => op.state === 'dispatching')) { const events = this.earlyEvents.get(runId) ?? []; if (events.length < 100) this.earlyEvents.set(runId, [...events, event]); if (this.earlyEvents.size > 20) this.earlyEvents.delete(this.earlyEvents.keys().next().value!); }
       return;
     }
+    if (operation.context.directAgent || this.conversations().find(c => c.id === operation.conversationId)?.directAgent) return;
     if (operation.epoch !== this.store.epoch || operation.connectionGeneration !== this.gateway.status().generation || (data.sessionKey && data.sessionKey !== operation.nativeKey)) return;
     if (event.event === 'agent') {
       if (!Number.isInteger(data.seq) || data.seq <= operation.lastSequence && !['tool', 'plan'].includes(data.stream)) return;

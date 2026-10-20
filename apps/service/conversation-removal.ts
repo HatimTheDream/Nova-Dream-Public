@@ -30,6 +30,8 @@ export class ConversationRemovals {
   }
   async remove(device: string, raw: unknown): Promise<ConversationRemoval> {
     const input = removeConversationSchema.parse(raw);
+    if (this.store.internalRead<Conversation>(`assistant:conversation:${input.conversationId}`)?.directAgent)
+      throw new Fault(409, 'direct_agent_runtime_unqualified', 'Keep the original agent chat until its dedicated removal route is qualified.');
     const receipt = this.store.admit(device, input, { type: 'conversation.remove', ...input }, () => {
       const currentId = this.store.internalRead<string>(`assistant:removal-current:${input.conversationId}`);
       const current = currentId ? this.store.internalRead<ConversationRemoval>(key(currentId)) : undefined;
@@ -53,6 +55,8 @@ export class ConversationRemovals {
     const work = this.apply(item).finally(() => this.running.delete(item.requestId)); this.running.set(item.requestId, work); return work;
   }
   private async apply(item: ConversationRemoval): Promise<ConversationRemoval> {
+    if (this.store.internalRead<Conversation>(`assistant:conversation:${item.conversationId}`)?.directAgent)
+      throw new Fault(409, 'direct_agent_runtime_unqualified', 'The original direct-agent removal cannot use the generic native route.');
     try {
       if (item.nativeId) {
         this.connection(item);

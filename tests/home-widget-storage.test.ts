@@ -33,7 +33,7 @@ test('Opening a schema54 workspace preserves legacy Home layout and saved writin
   const savedDraft = f.save('draft', `draft:${f.device}`, { ...emptyDraft, title: 'Writing before the upgrade', text: 'Keep every word\nand this second line.' });
   const epoch = f.store.epoch, before = f.store.captureBackup('fixture', { status: 'not-configured', notes: [] });
   f.reopen(54);
-  assert.equal(schemaVersion(f.directory), 55);
+  assert.equal(schemaVersion(f.directory), 56);
   assert.equal(f.store.epoch, epoch);
   assert.deepEqual(f.store.readEntity('layout', 'layout'), savedLayout);
   assert.deepEqual(f.store.readEntity('draft', savedDraft.id), savedDraft);
@@ -44,13 +44,13 @@ test('Opening a schema54 workspace preserves legacy Home layout and saved writin
   const oldArchive = { ...before, schema: 54 };
   const restored = Store.restoreBackup(join(f.root, 'legacy-copy'), oldArchive);
   try {
-    assert.equal(schemaVersion(restored.directory), 55);
+    assert.equal(schemaVersion(restored.directory), 56);
     assert.deepEqual(restored.readEntity('layout', 'layout'), savedLayout);
     assert.deepEqual(restored.readEntity('draft', savedDraft.id), savedDraft);
   } finally { restored.close(); }
 });
 
-test('Multiple widget instances, colors, notes and quick links survive restart and schema55 backup restoration', t => {
+test('Multiple widget instances, colors, notes and quick links survive restart and current backup restoration', t => {
   const f = fixture(t), first = createHomeWidget('note'), second = createHomeWidget('note'), links = createHomeWidget('links'), tasks = createHomeWidget('next');
   first.title = 'One note'; first.color = 'cream'; first.settings = { text: 'Exact first note\nA second line — 猫' };
   second.title = 'Another note'; second.color = 'slate'; second.hidden = true; second.settings = { text: 'Independent writing' };
@@ -62,11 +62,11 @@ test('Multiple widget instances, colors, notes and quick links survive restart a
   f.reopen();
   assert.deepEqual(f.store.readEntity('layout', 'layout'), saved);
   const backup = f.store.captureBackup('fixture', { status: 'not-configured', notes: [] });
-  assert.equal(backup.schema, 55);
+  assert.equal(backup.schema, 56);
   const target = join(f.root, 'restored');
   let restored = Store.restoreBackup(target, backup);
   try {
-    assert.equal(schemaVersion(target), 55);
+    assert.equal(schemaVersion(target), 56);
     assert.deepEqual(restored.readEntity('layout', 'layout'), saved);
     assert.deepEqual(restored.snapshot(f.device).layout.value.widgets, layout.widgets);
     const captured = restored.captureBackup('fixture', backup.native);

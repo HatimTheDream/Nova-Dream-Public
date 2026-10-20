@@ -2,6 +2,7 @@ import { assistantSpaceSchema, type AssistantSpace } from './assistant-space.js'
 import type { WorkMode } from './work-mode.js';
 import { z } from 'zod';
 import type { Attachment } from './contracts.js';
+import { directAgentRecipientSchema } from './direct-agent.js';
 
 export const permissionModeSchema = z.enum(['read-only', 'guarded', 'workspace', 'full']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
@@ -20,6 +21,7 @@ export const createConversationSchema = assistantRequestSchema.extend({
   fastMode: z.union([z.boolean(), z.literal('auto')]).optional(),
   permissionMode: permissionModeSchema.optional(),
   refineSource: refineSourceSchema.optional(),
+  recipient: directAgentRecipientSchema.optional(),
 }).strict();
 export const submitSchema = assistantRequestSchema.extend({
   conversationId: z.string().uuid(), conversationRevision: z.number().int().positive(),
@@ -56,6 +58,7 @@ export type AssistantConnection = {
   pairingRequestId?: string; grantedScopes: string[]; modelAuthReady: boolean;
 };
 export type Conversation = {
+  directAgent?: import('./direct-agent.js').DirectAgentBinding;
   preferredAccountId?: string | null;
   accountSelection?: { profileId: string; label?: string; reason?: 'preferred' | 'backup'; selectedAt: string };
   pendingResume?: { requestId: string };
@@ -85,6 +88,7 @@ export function isConversationVisibilityChange(value: unknown, withEnvelope = fa
     && keys.every(key => key === 'archived' || key === 'deleted' ? typeof changes[key] === 'boolean' : withEnvelope && ['requestId', 'epoch', 'conversationId', 'expectedRevision'].includes(key));
 }
 export type ContextManifest = {
+  directAgent?: import('./direct-agent.js').DirectAgentTurn;
   /** Captured only for new Chat Research requests. Historical and Work research stay direct. */
   researchWorkflow?: 'chat-research-v1';
   /** Immutable public progress instructions, absent on historical captures. */
@@ -131,6 +135,7 @@ export type QueuedMessage = {
 };
 export type MessageAttachment = { artifactId?: string; name: string; mimeType?: string; type?: string; size?: number; localFile?: Attachment; availability?: 'local' | 'native-reference' | 'unavailable' };
 export type ConversationMessage = {
+  author?: import('./direct-agent.js').DirectAgentAuthor;
   id: string; sequence?: number; role: 'user' | 'assistant' | 'system' | 'tool'; text: string;
   createdAt?: string; runId?: string; attachments: MessageAttachment[];
   textHash: string;

@@ -1,11 +1,14 @@
 import type { ReactNode } from 'react';
 import type { ConversationMessage } from '../../../packages/domain/assistant';
+import { capturedMessageAuthor } from '../../../packages/domain/direct-agent';
 import { UserRound } from './icons';
 import { SquareLynx } from './nova/square-lynx/SquareLynx';
 import './transcript-identity.css';
 
 /** Roles are captured by the transcript; current profiles are not historical authors. */
 export function messageSpeaker(message: ConversationMessage) {
+  const author = capturedMessageAuthor(message);
+  if (author) return author.name;
   if (message.role === 'user') return 'You';
   if (message.role === 'assistant' && (!message.toolInfo || (message.authoredText ?? message.text).trim())) return 'Nova';
   return undefined;
@@ -13,11 +16,12 @@ export function messageSpeaker(message: ConversationMessage) {
 
 export function TranscriptIdentity({ message, badge }: { message: ConversationMessage; badge?: string }) {
   const speaker = messageSpeaker(message);
+  const author = capturedMessageAuthor(message);
   if (!speaker) return null;
   return <div className={`transcript-identity identity-${message.role}`}>
-    <span className="transcript-identity-avatar" aria-hidden="true">{message.role === 'user'
+    <span className="transcript-identity-avatar" aria-hidden="true">{message.role === 'user' && !author?.appearance
       ? <UserRound size={18}/>
-      : <SquareLynx appearance={undefined} size="icon" accessibility={{ mode: 'decorative' }}/>}</span>
+      : <SquareLynx appearance={author?.appearance} size="icon" accessibility={{ mode: 'decorative' }}/>}</span>
     <span className="transcript-identity-name">{speaker}</span>
     {badge && <span className="match-label">{badge}</span>}
   </div>;

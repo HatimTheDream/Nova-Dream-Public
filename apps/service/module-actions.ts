@@ -189,6 +189,7 @@ export class ModuleActions {
    return this.s.assignments.authorizeModule(input);
   }
   const c=this.s.assistant.conversations().find(c=>c.nativeId===input.nativeId&&c.nativeKey===input.nativeKey);
+  if(input.nativeKey.startsWith('agent:edition3-direct:')||c?.directAgent)throw new Fault(403,'direct_agent_runtime_unqualified','Direct-agent tools require their separately qualified original route.');
   if(!c||c.archived||c.deleted||c.pendingSettings||c.state!=='ready'||c.connectionGeneration!==this.s.gateway.status().generation)throw new Fault(403,'conversation_unavailable','These tools belong to an active Nova Dream conversation.');
   if(!this.teamMayUse(c.id,input.operation,input.input,input.write))throw new Fault(403,'team_agent_access','This team member does not have this workspace capability.');
   if((c.permissionMode??'read-only')!==input.permissionMode)throw new Fault(403,'access_changed','Refresh the chat’s Access setting before changing app data.');

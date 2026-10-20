@@ -31,14 +31,14 @@ describe('backup schema compatibility', () => {
     const summary = summarizeBackup(parsed);
     assert.equal(summary.schema, 47);
   });
-  it('accepts schema 55 (current)', () => {
-    const parsed = backupSnapshotSchema.parse(minimalBackup(55));
-    assert.equal(parsed.schema, 55);
+  it('accepts schema 55 and current schema 56', () => {
+    assert.equal(backupSnapshotSchema.parse(minimalBackup(55)).schema, 55);
+    assert.equal(backupSnapshotSchema.parse(minimalBackup(56)).schema, 56);
   });
   it('rejects schema 46 (too old)', () => {
     assert.throws(() => backupSnapshotSchema.parse(minimalBackup(46)));
   });
-  it('rejects schema 56 (too new)', () => {
-    assert.throws(() => backupSnapshotSchema.parse(minimalBackup(56)));
+  it('rejects schema 57 (too new)', () => {
+    assert.throws(() => backupSnapshotSchema.parse(minimalBackup(57)));
   });
 });

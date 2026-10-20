@@ -1,4 +1,5 @@
 import { verifyImportedProgress } from './workspace-import-progress.js';
+import { assertDirectAgentWrite, hasDirectAgentAuthority, verifyDirectAgentRecords } from '../../packages/domain/direct-agent.js';
 import { homeWidgetPreservationKey } from './home-widget-preservation.js';
 import { importedProgressSchema } from '../../packages/domain/profile-progression.js';
 import { buildProfileProgress, progressHistory, questCommandSchema, type PersonalQuest } from '../../packages/domain/profile-progression.js';
@@ -39,6 +40,9 @@ export class Store {
   private key: Buffer;
   private updateHold = false;
   private updateEffects = new Map<string, number>();
+  // Positive-only cache: a rolled-back write may leave an extra guarded key,
+  // but can never remove protection or add reads to ordinary transcript deltas.
+  private directAgentProtected = new Set<string>();
   readonly directory: string;
   constructor(directory: string, private now: () => number = Date.now, protectedKey?: Buffer, private reviewOnly = false) {
     this.directory = directory;
@@ -57,12 +61,16 @@ export class Store {
     if (this.key.length !== 32) throw new Error('Invalid workspace key. No data was replaced.');
     this.db = new DatabaseSync(join(directory, 'workspace.sqlite'));
     const schema = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schema > 55) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
+    if (schema > 56) { this.db.close(); throw new Error('This workspace needs a newer Nova Dream build.'); }
     // Authenticate an existing workspace before any schema or journal-mode write.
     try {
       if (schema > 0) {
         const check = this.db.prepare("SELECT value FROM meta WHERE key='key-check'").get() as { value: string } | undefined;
         if (!check || this.open('key-check', Buffer.from(check.value, 'base64')) !== 'edition3') throw new Error('Workspace key did not verify.');
+        const records = this.db.prepare("SELECT id,payload FROM service_records WHERE id LIKE 'assistant:%'").all() as { id: string; payload: Uint8Array }[];
+        const opened = records.map(row => ({ id: row.id, value: this.open(`service:${row.id}`, row.payload) }));
+        verifyDirectAgentRecords(schema, opened);
+        for (const row of opened) if (hasDirectAgentAuthority(row.value)) this.directAgentProtected.add(row.id);
       } else if ((this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table'").get() as { count: number }).count) throw new Error('Unrecognized workspace schema. No data was replaced.');
     } catch (error) { this.db.close(); throw error; }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -74,7 +82,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (digest TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, bytes INTEGER NOT NULL, payload BLOB NOT NULL);
       CREATE TABLE IF NOT EXISTS blob_refs (entity_id TEXT NOT NULL REFERENCES entities(id), blob_id TEXT NOT NULL REFERENCES blobs(id), PRIMARY KEY(entity_id,blob_id));
-      PRAGMA user_version=55;`);
+      PRAGMA user_version=56;`);
     try {
       if (!this.db.prepare("SELECT value FROM meta WHERE key='epoch'").get()) this.transaction(() => {
         this.db.prepare('INSERT INTO meta VALUES (?,?)').run('epoch', randomUUID());
@@ -182,7 +190,7 @@ export class Store {
       const services = (this.db.prepare('SELECT * FROM service_records ORDER BY id').all() as { id: string; revision: number; payload: Uint8Array }[]).filter(row => !row.id.startsWith('backup:')).map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
       const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.download(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
       const references = (this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id,blob_id').all() as { entity_id: string; blob_id: string }[]).map(row => ({ entityId: row.entity_id, fileId: row.blob_id }));
-      const value: BackupSnapshot = { format: backupFormat, schema: 55, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
+      const value: BackupSnapshot = { format: backupFormat, schema: 56, version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
       Store.verifyBackup(value); return value;
     });
   }
@@ -191,6 +199,7 @@ export class Store {
     if (Buffer.byteLength(JSON.stringify(value)) > backupPlainMaxBytes) throw new Fault(413, 'backup_large', 'This workspace exceeds the backup size limit. Nothing was changed.');
     const unique = (items: string[]) => { if (new Set(items).size !== items.length) throw new Fault(400, 'backup_duplicate', 'The backup contains duplicate identities.'); };
     unique(value.entities.map(e => e.id)); unique(value.history.map(h => String(h.cursor))); unique(value.services.map(s => s.id)); unique(value.receipts.map(r => r.requestId)); unique(value.files.map(f => f.id)); unique(value.references.map(r => r.entityId + '\0' + r.fileId));
+    try { verifyDirectAgentRecords(value.schema, value.services); } catch { throw new Fault(400, 'backup_direct_agent', 'Saved direct-agent authority is incompatible or does not match its original work. Nothing was restored.'); }
     try { verifyImportedProgress(value.services); } catch { throw new Fault(400, 'backup_progress', 'The earlier XP balance does not match its preserved source. Nothing was restored.'); }
     const ids = new Set(value.entities.map(e => e.id)), files = new Set(value.files.map(f => f.id));
     if (value.services.some(record => record.id.startsWith('backup:'))) throw new Fault(400, 'backup_transient_state', 'Temporary backup jobs are not portable workspace records.');
@@ -235,6 +244,7 @@ export class Store {
         restored.internalDelete('http:session-cookie');
         restored.internalWrite('phone:access', { enabled: false });
       });
+      for (const record of value.services) if (hasDirectAgentAuthority(record.value)) restored.directAgentProtected.add(record.id);
       for (const file of value.files) restored.download(file.id);
       return restored;
     } catch (error) { restored.close(); throw error; }
@@ -817,6 +827,10 @@ export class Store {
     return rows.map(row => this.open(`service:${row.id}`, row.payload) as T);
   }
   internalWrite<T>(id: string, value: T): T {
+    if (id.startsWith('assistant:') && (this.directAgentProtected.has(id) || hasDirectAgentAuthority(value) || id.startsWith('assistant:operation:') || id.startsWith('assistant:queue:'))) {
+      assertDirectAgentWrite(id, this.internalRead(id), value, key => this.internalRead(key));
+      if (hasDirectAgentAuthority(value)) this.directAgentProtected.add(id);
+    }
     this.db.prepare('INSERT INTO service_records VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET revision=revision+1,payload=excluded.payload').run(id, this.seal(`service:${id}`, value));
     return value;
   }

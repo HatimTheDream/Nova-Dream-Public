@@ -30,7 +30,7 @@ export class ConversationSearch {
       }
     }
     const canSearchNative = before.state === 'ready' && before.grantedScopes.includes('operator.read') && before.methods.includes('sessions.search');
-    const eligible = canSearchNative ? scoped.filter(c => !completeIds.has(c.id) && !!c.nativeId && c.connectionGeneration === before.generation && c.state === 'ready') : [];
+    const eligible = canSearchNative ? scoped.filter(c => !c.directAgent && !completeIds.has(c.id) && !!c.nativeId && c.connectionGeneration === before.generation && c.state === 'ready') : [];
     const chunks: Conversation[][] = []; for (let i = 0; i < eligible.length; i += 200) chunks.push(eligible.slice(i, i + 200));
     const found = new Map(local); let indexing: boolean | null = completeIds.size === scoped.length ? false : canSearchNative ? false : null, limited = false, changedDuringSearch = false, nativeAbandoned = false;
     // The protocol bounds sessionKeys at 200 and hits at 25. Never broaden to other native sessions.

@@ -3,6 +3,7 @@ import { canonical, type Attachment } from '../../packages/domain/contracts.js';
 import type { AssistantOperation, Conversation, ConversationHistory, ConversationMessage } from '../../packages/domain/assistant.js';
 import type { VoiceAttempt } from '../../packages/domain/voice.js';
 import { Fault, type Store } from './store.js';
+import { directAgentMessageAuthor } from '../../packages/domain/direct-agent.js';
 
 type Binding = {
   id: string; conversationId: string; nativeId: string; nativeKey: string; generation: string; order: string[];
@@ -119,6 +120,7 @@ export class NovaTranscript {
         });
         for (const attachment of previousFiles) if (!attached.some(current => current.localFile?.id === attachment.localFile?.id)) attached.push({ ...attachment, availability: 'local' });
         const merged: ConversationMessage = { ...message, novaId: previous?.message.novaId ?? `nova:${key}`, aliases: [...new Set([...priorAliases, previous?.message.id, message.id].filter((id): id is string => !!id))],
+          ...(previous?.message.author ? { author: previous.message.author } : {}),
           ...(previous?.message.operationId && !message.operationId ? { operationId: previous.message.operationId } : {}),
           source: { bindingId: binding.id, nativeId: page.nativeId, nativeKey: binding.nativeKey, connectionGeneration: binding.generation, nativeMessageId: message.id, kind: options.source ?? 'native', observedAt: at },
           ...(final ? { delivery: 'completed' as const } : {}), attachments: attached };
@@ -159,6 +161,8 @@ export class NovaTranscript {
     const allEntries = () => entries ??= this.entries(conversation, binding);
     for (const role of ['user', 'assistant'] as const) {
       if (role === 'assistant' && !operation.text) continue;
+      const author = directAgentMessageAuthor(conversation, operation, role);
+      if (conversation.directAgent && role === 'assistant' && !author) continue;
       const lookup = base(conversation.id) + 'operation:' + hash([binding.id, operation.id, role]);
       const mappedKey = this.store.internalRead<string>(lookup);
       let entry = mappedKey ? this.store.internalRead<Entry>(base(conversation.id) + 'message:' + mappedKey) : undefined;
@@ -172,9 +176,13 @@ export class NovaTranscript {
       if (entry?.message.source && entry.message.source.kind !== 'operation') {
         const missing = files.filter(file => !entry!.message.attachments.some(attachment => attachment.localFile?.id === file.localFile.id));
         if (missing.length) { entry.message.attachments.push(...missing); changed.push(entry); }
+        if (author && !entry.message.author && entry.message.runId === operation.nativeRunId) {
+          entry.message = { ...entry.message, operationId: operation.id, author }; changed.push(entry);
+        }
         continue;
       }
       const message: ConversationMessage = { id: `operation:${operation.id}:${role}`, novaId: `nova:${key}`, operationId: operation.id, role, text, textHash: messageHash(text), createdAt: role === 'user' ? operation.createdAt : operation.updatedAt, ...(operation.nativeRunId ? { runId: operation.nativeRunId } : {}), attachments: files,
+        ...(author ? { author } : {}),
         delivery: operation.state, source: { bindingId: binding.id, nativeId: operation.nativeId, nativeKey: binding.nativeKey, connectionGeneration: binding.generation, kind: 'operation', observedAt: operation.updatedAt } };
       const next: Entry = { key, message, final: ['completed', 'failed', 'cancelled'].includes(operation.state) };
       if (entry && canonical(entry) === canonical(next)) continue;
@@ -190,6 +198,7 @@ export class NovaTranscript {
     binding.observedAt = operation.updatedAt; this.persist(conversation, binding, changed, aliases); return true;
   }
   observeVoice(conversation: Conversation, attempt: VoiceAttempt, legacy = false) {
+    if (conversation.directAgent) return false;
     if (!this.available(conversation) || !legacy && attempt.epoch !== this.store.epoch || attempt.target.conversation.id !== conversation.id) return false;
     const target = attempt.target.conversation, binding = this.binding(target, target.nativeId), entries = this.entries(conversation, binding);
     const changed: Entry[] = [], aliases: { id: string; value: string }[] = [], order: string[] = [];
