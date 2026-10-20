@@ -1,3 +1,12 @@
+## [2.11.0] - 2026-10-20
+
+- Keep Projects inside Assistant with retained creation and settings drafts, clear Chat and Work setup, and exact source-preview return.
+- Distinguish Project sources, draft attachments and captured file versions; verify bounded preview bytes and preserve original downloads.
+- Export portable Library notes and links, review imports and destinations, and undo added memberships while keeping source writing.
+- Add retained direct-agent conversation identity and original-request recovery, with explicit dedicated-connection readiness before sending.
+- Preserve original Work checkout requests through interrupted replies and browser-storage conflicts.
+- Add verified durable Group membership storage, including default selection, removal and Undo; Group messaging is still being prepared.
+
 ## [2.10.0] - 2026-10-20
 
 - Organize Library collections in named Spaces with retained name drafts and archive/restore.
