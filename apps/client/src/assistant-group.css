@@ -1,0 +1,38 @@
+.assistant-group { min-width: 0; }
+.assistant-group .conversation-header { flex-wrap: wrap; gap: 8px; }
+.group-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.group-conversation { flex: 1; min-width: 0; overflow: auto; }
+.group-empty { max-width: 540px; margin: auto; padding: 48px 24px; text-align: center; }
+.group-empty p { line-height: 1.6; color: var(--muted); }
+.group-empty h2 { font-size: 20px; }
+.group-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.group-members-panel { width: min(430px, 48%); flex-shrink: 0; min-width: 300px; overflow-y: auto; padding: 16px; border-left: 1px solid var(--line); }
+.group-panel-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 18px; }
+.group-panel-heading h2 { flex: 1; font-size: 17px; margin: 0; }
+.group-panel-heading > button:first-child { display: none; }
+.group-profile-heading > button:first-child { display: inline-flex; }
+.group-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin: 12px 0; }
+.group-field input, .group-field select { width: 100%; }
+.group-member-list, .group-history { list-style: none; padding: 0; margin: 16px 0; }
+.group-member-list > li, .group-history > li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.group-member-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.group-member-identity small { color: var(--muted); }
+.group-member-list .button-row { flex-wrap: wrap; gap: 6px; }
+.group-member-list select { min-width: 0; max-width: 100%; }
+.group-agent-options { display: grid; gap: 8px; max-height: 280px; overflow: auto; margin-bottom: 12px; }
+.group-agent-options label { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.group-agent-options input { flex-shrink: 0; width: auto; }
+.group-agent-options span { min-width: 0; overflow-wrap: anywhere; }
+.group-agent-options small { display: block; color: var(--muted); margin-top: 3px; }
+.group-management { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.group-history li { display: grid; gap: 7px; }
+.group-history button { justify-self: start; }
+.group-profile { padding: 16px 0; }
+.group-rail-status { padding: 8px 12px; font-size: 12px; }
+@media (max-width: 1100px) {
+  .group-panel-open .group-conversation { display: none; }
+  .group-members-panel { width: 100%; min-width: 0; border-left: 0; }
+  .group-panel-heading > button:first-child { display: inline-flex; }
+  .group-panel-heading > .icon-button { display: none; }
+  .assistant-group .conversation-title { min-width: 120px; }
+}

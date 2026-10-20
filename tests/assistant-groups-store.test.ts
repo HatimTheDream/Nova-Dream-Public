@@ -75,6 +75,23 @@ check('current agents, exact revisions, original epoch and strict command shape 
   assert.throws(() => f.groups().save(f.device, f.input({ members: [{ agentId: a.id, agentRevision: 3 }], defaultAgentId: a.id })), /unavailable/);
   assert.deepEqual(f.capture(), archived);
 });
+check('confirmed stale Group revision rejects before every write while original receipt replay remains exact', f => {
+  const create = f.input(), original = f.groups().save(f.device, create);
+  const stale = { requestId: randomUUID(), epoch: f.store.epoch, groupId: f.groupId,
+    expectedRevision: 0, action: 'rename', title: 'Kept Unfinished Name' };
+  const before = f.capture();
+  assert.throws(() => f.groups().save(f.device, stale), { status: 409, code: 'group_revision_changed' });
+  assert.deepEqual(f.capture(), before);
+  assert.throws(() => f.groups().read(f.device, { view: 'request', groupId: f.groupId, requestId: stale.requestId }),
+    { code: 'group_request_missing' });
+  assert.deepEqual(f.groups().save(f.device, create), original);
+  assert.deepEqual(f.capture(), before);
+  const corrected = { ...stale, requestId: randomUUID(), expectedRevision: 1 };
+  assert.equal(f.groups().save(f.device, corrected).group.title, 'Kept Unfinished Name');
+  const after = f.capture();
+  assert.deepEqual(f.groups().save(f.device, create), original);
+  assert.deepEqual(f.capture(), after);
+});
 check('current Project deletion prevents changes but preserves Archive, Trash and restoration', f => {
   const project = f.store.mutate(f.device, { requestId: randomUUID(), epoch: f.store.epoch, kind: 'project',
     entityId: 'project:group-context', expectedRevision: 0, payload: { name: 'Context', purpose: 'Saved context' } });
