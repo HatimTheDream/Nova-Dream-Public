@@ -134,3 +134,28 @@ test('Back to My Studio retains focused quest and refuses navigation until writi
  const kept=JSON.parse(f.hooks.storage.get(viewKey)!);assert.equal(kept.focusedId,f.quest.id);assert.equal(kept.reviewId,null);assert.equal(kept.cadence,'weekly');assert.equal(f.hooks.posts.length,0);
  const saved=new Map(f.hooks.storage);f.hooks.dispose();const reopened=new Hooks(f.progress,f.state);reopened.storage=saved;tree=reopened.render(()=>ProfilePage(props));assert.equal(button(tree,'My Studio').props['aria-pressed'],true);assert.equal(JSON.parse(saved.get(viewKey)!).focusedId,f.quest.id);
 });
+
+test('Profile reload keeps the latest week scroll through the original view owner and refuses a failed flush',()=>{
+ const oldWindow=Object.getOwnPropertyDescriptor(globalThis,'window'),listeners=new Map<string,Function>();
+ Object.defineProperty(globalThis,'window',{configurable:true,value:{addEventListener:(name:string,fn:Function)=>listeners.set(name,fn),removeEventListener:(name:string)=>listeners.delete(name)}});
+ const f=fixture(),viewKey=`e3:profile-view:${f.snapshot.epoch}:${f.snapshot.deviceId}:studio-test-window`;
+ try {
+  const tree=f.hooks.render(()=>ProfilePage({snapshot:f.snapshot,refresh:async()=>{},editTask:()=>{}}));
+  const week=nodes(tree).find(node=>node.type?.name==='ProfileWeek');assert(week);
+  week.props.captureView({historyScroll:654,weekScroll:321});
+  let prevented=0;const event={preventDefault(){prevented++;},returnValue:undefined};
+  f.hooks.failStorage=true;listeners.get('beforeunload')!(event);assert.equal(prevented,1);assert.equal(f.hooks.storage.get(viewKey),undefined);
+  f.hooks.failStorage=false;listeners.get('beforeunload')!(event);
+  const saved=JSON.parse(f.hooks.storage.get(viewKey)!);assert.equal(saved.historyScroll,654);assert.equal(saved.weekScroll,321);assert.equal(f.hooks.posts.length,0);
+  f.hooks.dispose();assert.equal(listeners.size,0);
+ } finally {f.hooks.dispose();if(oldWindow)Object.defineProperty(globalThis,'window',oldWindow);else delete(globalThis as any).window;}
+});
+
+
+test('top-level Your Week admission persists the exact original Home Timezone before opening',()=>{
+ const f=fixture(),viewKey=`e3:profile-view:${f.snapshot.epoch}:${f.snapshot.deviceId}:studio-test-window`;
+ const render=()=>f.hooks.render(()=>ProfilePage({snapshot:f.snapshot,refresh:async()=>{},editTask:()=>{}}));
+ button(render(),'Your Week').props.onClick();
+ const kept=JSON.parse(f.hooks.storage.get(viewKey)!);assert.equal(kept.tab,'week');assert.equal(kept.week.timezone,'UTC');assert.equal(kept.week.start,'2026-10-19');
+ assert.equal(f.hooks.posts.length,0);
+});

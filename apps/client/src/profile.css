@@ -195,3 +195,25 @@
  .profile-workspace .profile-milestones { grid-template-columns: minmax(0, 1fr); }
 }
 @media (pointer: coarse) { .profile-workspace .profile-experience summary, .profile-workspace .period-quest summary { min-height: 44px; } }
+
+/* Selected-week review keeps credit, actual transitions and full earned history distinct. */
+.profile-workspace .profile-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.profile-workspace .profile-week-entry { display: grid; justify-items: start; gap: 6px; width: fit-content; max-width: 100%; text-align: start; padding: 16px; white-space: normal; }
+.profile-week-entry > span { font-weight: 400; }
+.profile-week-workspace { min-width: 0; display: grid; gap: 18px; }
+.profile-week-workspace[hidden], .profile-week-workspace [hidden] { display: none !important; }
+.profile-week-workspace > section { min-width: 0; }
+.profile-week-workspace .button-row > button { flex: 0 1 auto; width: auto; white-space: normal; }
+.profile-week-chart { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-block: 16px; }
+:root .profile-week-chart > button { display: grid; gap: 6px; justify-items: center; min-width: 0; min-height: 96px; padding: 10px 6px; white-space: normal; background: var(--button-fill); }
+.profile-week-chart strong { font-size: 24px; }
+.profile-week-chart small { font-size: 11px; font-weight: 400; color: var(--muted); }
+:root .profile-week-chart > button.active { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.profile-day-activity { border-top: 1px solid var(--line); padding-top: 16px; margin-block: 20px; }
+.profile-event-list { padding: 0; list-style: none; }
+.profile-event-list li { display: flex; gap: 16px; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); padding-block: 12px; }
+.profile-event-list li > div { min-width: 0; }
+.profile-event-list .text-button { white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.profile-event-list li > strong { flex-shrink: 0; font-size: 13px; }
+@media (max-width: 480px) { .profile-week-chart { grid-template-columns: repeat(4, minmax(0, 1fr)); } .profile-event-list li { align-items: flex-start; } }
+@media (max-width: 800px), (pointer: coarse) { :root .profile-week-workspace button, :root .profile-workspace .profile-week-entry { min-height: 44px; } }
