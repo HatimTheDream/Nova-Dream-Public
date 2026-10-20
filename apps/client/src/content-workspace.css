@@ -67,3 +67,15 @@
  .content-studio .content-studio-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
  .content-studio .content-studio-tabs > button { min-width: 0; white-space: nowrap; }
 }
+
+/* Action chrome fits its labels; writing, context fields and library rows keep width. */
+.content-studio .content-studio-actions > .compact-action,
+.content-studio .content-delivery .compact-actions > .compact-action { flex:0 0 auto; width:fit-content; max-width:100%; }
+.content-library .compact-actions { margin-block:8px; }
+.content-library-list article > div { min-width:0; }
+.content-library-list strong { overflow-wrap:anywhere; }
+.content-template-preview h3 { overflow-wrap:anywhere; }
+.content-template-preview pre { max-height:320px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.65; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--canvas); }
+.content-template-preview li { overflow-wrap:anywhere; }
+.content-studio .content-inspector :is(input,select,textarea),
+.content-studio .content-draft-field textarea { font-size:16px; }

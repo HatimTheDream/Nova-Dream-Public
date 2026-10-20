@@ -1,3 +1,11 @@
+## [2.9.10] — 2026-10-19
+
+### Improved
+
+- Give Content a compact scope heading, honest counts, on-demand filters and retained search, with Board, List and Calendar controls adapted for desktop and phone.
+- Start a blank draft, use a saved template or choose an existing agent result from a focused creation chooser; preview exact saved template writing before using it.
+- Keep editor drafts, saved versions and library recovery intact while sizing ordinary actions to their labels.
+
 ## [2.9.9] — 2026-10-19
 
 ### Improved
