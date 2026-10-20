@@ -1,3 +1,16 @@
+## [2.9.27] — 2026-10-20
+
+### Improved
+
+- Keep unfinished contact activity and organization writing through navigation, reload and interrupted saves.
+- Recover writing from another window without replacing existing drafts, and review changed saved versions before continuing.
+- Preserve original save requests and explain storage failures without losing current writing.
+
+### Fixed
+
+- Keep incomplete organization website entries editable without interrupting the form.
+- Show a useful recovery error when browser storage is unavailable.
+
 ## [2.9.26] — 2026-10-20
 
 ### Added
