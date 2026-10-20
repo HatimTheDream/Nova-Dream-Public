@@ -1,3 +1,12 @@
+## [2.9.21] — 2026-10-19
+
+### Improved
+
+- Explore Ideas through compact Explore, Saved and Drafts views with honest saved-source and draft counts.
+- Keep source filters, searches and exact versions while previewing or continuing an idea into existing Assistant writing.
+- Preserve kept scope and original Library requests across blocked storage, reload and late responses.
+- Correct two garbled static saving and update notices.
+
 ## [2.9.20] — 2026-10-19
 
 ### Improved
