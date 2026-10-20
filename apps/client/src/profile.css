@@ -1,4 +1,27 @@
 .profile-workspace { display: grid; gap: 22px; max-width: 1280px; margin-inline: auto; min-width: 0; }
+.profile-hero.studio-hero { grid-template-columns: 112px minmax(0,1fr); padding: 20px 24px; gap: 22px; }
+.studio-hero .profile-portrait > * { max-width: 112px; max-height: 112px; }
+.studio-hero .profile-identity h2 { font-size: 26px; }
+.profile-studio { display: grid; gap: 16px; min-width: 0; }
+.profile-studio .section-heading { margin: 0; }
+.studio-quest-choices { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.studio-quest-choices button { display: grid; gap: 6px; text-align: start; white-space: normal; overflow-wrap: anywhere; padding: 14px 16px; }
+.studio-quest-choices button span { color: var(--muted); font-size: 12px; }
+.studio-quest-choices button[aria-pressed=true] { border-color: var(--green); background: var(--soft-green); }
+.studio-focus { padding: 24px; min-width: 0; }
+.studio-focus h3 { margin-block: 8px; font-size: 23px; overflow-wrap: anywhere; }
+.studio-focus > p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.studio-progress { display: grid; grid-template-columns: minmax(80px,1fr) auto; align-items: center; gap: 16px; margin-top: 22px; }
+.studio-earned { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.studio-earned strong { color: var(--text); }
+.studio-curation { display: grid; gap: 16px; min-width: 0; }
+.studio-curation fieldset { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.studio-curation label { display: flex; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.studio-curation label > span { display: grid; gap: 4px; overflow-wrap: anywhere; min-width: 0; }
+.studio-curation input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; }
+.studio-curation small { color: var(--muted); }
+.profile-workspace pre,.studio-curation pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+@media(max-width:600px) { .profile-hero.studio-hero { grid-template-columns: 80px minmax(0,1fr); padding: 16px; gap: 14px; } .studio-hero .profile-portrait > * { max-width: 80px; max-height: 80px; } .studio-hero .profile-identity { text-align: start; } .studio-hero .profile-identity h2 { font-size: 22px; } .studio-quest-choices { grid-template-columns: minmax(0,1fr); } .studio-focus { padding: 18px; } .studio-progress { grid-template-columns: minmax(0,1fr); gap: 8px; } }
 .profile-workspace h2,.profile-workspace h3 { margin-top: 0; }
 .profile-workspace p { line-height: 1.55; }
 .profile-hero { display: grid; grid-template-columns: 240px minmax(160px,1fr) minmax(190px,.8fr); gap: 28px; align-items: center; padding: 28px; }

@@ -54,6 +54,8 @@ GET /api/snapshot
 GET /api/content/library
 GET /api/profile/progress
 GET /api/profile/history
+GET /api/profile/studio
+POST /api/profile/studio
 POST /api/profile/quests
 GET /api/content/state
 GET /api/content/result
