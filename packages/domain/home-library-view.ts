@@ -1,12 +1,15 @@
 import type { Snapshot } from './contracts.js';
 import type { WorkMode } from './work-mode.js';
-import type { CollectionGuard, HomeCollection, HomeCollectionValue, HomeIdeaPreferences, HomeItem, HomeItemValue, HomeLibraryCommand, HomeLibraryJournal, HomeLibraryJournalOwner, HomeLibraryReceipt, HomeLibraryResult, HomeLibraryState, HomeLibraryUndo, HomeOrganization, HomePreservationState, HomeReference, HomeResource, HomeSourceCapture } from './home-library.js';
+import type { CollectionGuard, HomeCollection, HomeCollectionValue, HomeIdeaPreferences, HomeItem, HomeItemValue, HomeLibraryCommand, HomeLibraryJournal, HomeLibraryJournalOwner, HomeLibraryReceipt, HomeLibraryResult, HomeLibraryState, HomeLibraryUndo, HomeOrganization, HomePreservationState, HomeReference, HomeResource, HomeSourceCapture, HomeShelves, HomeShelvesCommand, HomeShelvesReceipt, HomeShelvesState, HomeShelvesUndo } from './home-library.js';
 import { activeProjects } from './project-organization.js';
 
 // Display and local-writing helpers must not construct host command validators.
 export const homeIcons = ['folder', 'book', 'sparkles', 'briefcase', 'heart', 'globe', 'leaf', 'coffee'] as const;
 export const homeIdeaIds = ['plan-week', 'daily-focus', 'research-sources', 'draft-notes'] as const;
 export function homeReferenceKey(ref: Pick<HomeReference, 'kind' | 'id'>) { return `${ref.kind}:${ref.id}`; }
+/** Display bytes stay authored; duplicate comparison is locale-independent. */
+export const homeSpaceNameKey = (name: string) => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+export const emptyHomeShelves = (): HomeShelves => ({ format: 1, revision: 0, spaces: [], assignments: [], upNext: [] });
 /** Membership identity is kind/id; captured identity also includes its exact revision and hash. */
 export function exactHomeReference(a: HomeReference, b: HomeReference) { return a.kind === b.kind && a.id === b.id && a.revision === b.revision && a.sha256 === b.sha256; }
 /** Normalize only URL syntax. Paths, query order, fragments and http/https stay distinct. */
@@ -58,10 +61,50 @@ const itemValue = (value: unknown): value is HomeItemValue => object(value) && t
 const choices = (value: unknown): value is Omit<HomeIdeaPreferences, 'revision'> => object(value) && keys(value, ['saved', 'hidden']) && [value.saved, value.hidden].every(list => Array.isArray(list) && list.length <= 4 && list.every(id => homeIdeaIds.includes(id)));
 export const isHomeOrganization = (value: unknown): value is HomeOrganization => object(value) && keys(value, ['revision', 'collectionIds']) && revision(value.revision) && uniqueIds(value.collectionIds, 100);
 export const isHomeLibraryUndo = (value: unknown): value is HomeLibraryUndo => object(value) && keys(value, ['operationId', 'expected']) && uuid(value.operationId) && object(value.expected) && keys(value.expected, ['collections', 'organizationRevision']) && guards(value.expected.collections) && (value.expected.organizationRevision === null || revision(value.expected.organizationRevision));
+export const homeShelvesTypes = ['space-save', 'space-archive', 'collection-assign', 'up-next-add', 'up-next-remove', 'up-next-order', 'shelves-undo'] as const;
+export function isHomeShelves(value: unknown): value is HomeShelves {
+ if (!object(value) || !keys(value, ['format', 'revision', 'spaces', 'assignments', 'upNext']) || value.format !== 1 || !revision(value.revision) ||
+     !Array.isArray(value.spaces) || value.spaces.length > 32 || !value.spaces.every(space => object(space) && keys(space, ['id', 'name', 'archived']) &&
+      identifier(space.id) && text(space.name, 100) && space.name.trim().length > 0 && typeof space.archived === 'boolean') ||
+     !Array.isArray(value.assignments) || value.assignments.length > 100 || !value.assignments.every(row => object(row) && keys(row, ['collectionId', 'spaceId']) &&
+      identifier(row.collectionId) && identifier(row.spaceId)) || !referenceList(value.upNext)) return false;
+ const spaces = value.spaces as HomeShelves['spaces'], assignments = value.assignments as HomeShelves['assignments'];
+ return new Set(spaces.map(space => space.id)).size === spaces.length && new Set(spaces.map(space => homeSpaceNameKey(space.name))).size === spaces.length &&
+  new Set(assignments.map(row => row.collectionId)).size === assignments.length && assignments.every(row => spaces.some(space => space.id === row.spaceId)) &&
+  new TextEncoder().encode(JSON.stringify(value)).length <= 256 * 1024;
+}
+export const isHomeShelvesUndo = (value: unknown): value is HomeShelvesUndo => object(value) && keys(value, ['operationId', 'expectedRevision']) && uuid(value.operationId) && revision(value.expectedRevision);
+export function isHomeShelvesCommand(value: unknown): value is HomeShelvesCommand {
+ if (!object(value) || !uuid(value.requestId) || !uuid(value.epoch) || !revision(value.expectedRevision)) return false;
+ const base = ['type', 'requestId', 'epoch', 'expectedRevision'];
+ switch (value.type) {
+  case 'space-save': return keys(value, [...base, 'id', 'name']) && identifier(value.id) && text(value.name, 100) && value.name.trim().length > 0;
+  case 'space-archive': return keys(value, [...base, 'id', 'archived']) && identifier(value.id) && typeof value.archived === 'boolean';
+  case 'collection-assign': return keys(value, [...base, 'collection', 'spaceId']) && guard(value.collection) && (value.spaceId === null || identifier(value.spaceId));
+  case 'up-next-add': case 'up-next-remove': return keys(value, [...base, 'reference']) && reference(value.reference);
+  case 'up-next-order': return keys(value, [...base, 'references']) && referenceList(value.references);
+  case 'shelves-undo': return keys(value, [...base, 'operationId']) && uuid(value.operationId);
+  default: return false;
+ }
+}
+export function isHomeShelvesReceipt(value: unknown): value is HomeShelvesReceipt {
+ if (!object(value) || !keys(value, ['format', 'kind', 'operationId', 'epoch', 'type', 'appliedAt', 'changed', 'shelves', 'undo', 'undoneOperationId']) ||
+     value.format !== 2 || value.kind !== 'shelves' || !uuid(value.operationId) || !uuid(value.epoch) ||
+     !homeShelvesTypes.includes(value.type as typeof homeShelvesTypes[number]) || !timestamp(value.appliedAt) || typeof value.changed !== 'boolean' ||
+     !isHomeShelves(value.shelves) || !(value.undo === null || isHomeShelvesUndo(value.undo))) return false;
+ if (value.type === 'shelves-undo') return value.changed && value.undo === null && uuid(value.undoneOperationId) && value.undoneOperationId !== value.operationId && value.shelves.revision > 0;
+ return value.undoneOperationId === undefined && (value.changed ?
+  value.undo !== null && value.undo.operationId === value.operationId && value.undo.expectedRevision === value.shelves.revision && value.shelves.revision > 0 :
+  value.undo === null);
+}
+const shelvesState = (value: unknown): value is HomeShelvesState => object(value) && (
+ value.status === 'ready' && keys(value, ['status', 'value']) && isHomeShelves(value.value) ||
+ value.status === 'needs-review' && keys(value, ['status', 'message']) && text(value.message, 2000) && value.message.length > 0);
 
 /** A persisted command must satisfy the same strict shape as the host, without loading Zod in the view. */
 export function isHomeLibraryCommand(value: unknown): value is HomeLibraryCommand {
  if (!object(value) || !uuid(value.requestId) || !uuid(value.epoch)) return false;
+ if (isHomeShelvesCommand(value)) return true;
  const envelope = ['type', 'requestId', 'epoch'];
  switch (value.type) {
   case 'collection-save': return keys(value, [...envelope, 'id', 'expectedRevision', 'value']) && identifier(value.id) && revision(value.expectedRevision) && collectionValue(value.value);
@@ -117,7 +160,7 @@ export function isHomeLibraryReceipt(value: unknown): value is HomeLibraryReceip
  }
  return true;
 }
-export const isHomeLibraryResult = (value: unknown): value is HomeLibraryResult => savedCollection(value) || savedItem(value) || preferences(value) || isHomeLibraryReceipt(value);
+export const isHomeLibraryResult = (value: unknown): value is HomeLibraryResult => savedCollection(value) || savedItem(value) || preferences(value) || isHomeLibraryReceipt(value) || isHomeShelvesReceipt(value);
 
 /** Legacy GET responses get an in-memory order only. No read seeds or rewrites host storage. */
 function preservation(value: unknown): value is HomePreservationState {
@@ -128,11 +171,11 @@ function preservation(value: unknown): value is HomePreservationState {
  return !['ready', 'changed'].includes(value.status as string) || value.original !== undefined;
 }
 export function readHomeLibraryState(value: unknown): HomeLibraryState | undefined {
- if (!object(value) || !keys(value, ['epoch', 'collections', 'items', 'resources', 'ideaPreferences', 'organization', 'homePreservation']) || !uuid(value.epoch) || !Array.isArray(value.collections) || value.collections.length > 100 || !value.collections.every(savedCollection) || !recordIdsUnique(value.collections) || !Array.isArray(value.items) || value.items.length > (value.homePreservation === undefined ? 300 : 588) || !value.items.every(savedItem) || !recordIdsUnique(value.items) || !Array.isArray(value.resources) || !value.resources.every(resource) || !preferences(value.ideaPreferences) || value.homePreservation !== undefined && !preservation(value.homePreservation)) return undefined;
+ if (!object(value) || !keys(value, ['epoch', 'collections', 'items', 'resources', 'ideaPreferences', 'organization', 'homePreservation', 'shelves']) || !uuid(value.epoch) || !Array.isArray(value.collections) || value.collections.length > 100 || !value.collections.every(savedCollection) || !recordIdsUnique(value.collections) || !Array.isArray(value.items) || value.items.length > (value.homePreservation === undefined ? 300 : 588) || !value.items.every(savedItem) || !recordIdsUnique(value.items) || !Array.isArray(value.resources) || !value.resources.every(resource) || !preferences(value.ideaPreferences) || value.homePreservation !== undefined && !preservation(value.homePreservation) || value.shelves !== undefined && !shelvesState(value.shelves)) return undefined;
  const organization = value.organization === undefined ? { revision: 0, collectionIds: [...value.collections].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).map(collection => collection.id) } : value.organization;
  if (!isHomeOrganization(organization) || organization.collectionIds.length !== value.collections.length || !value.collections.every(collection => organization.collectionIds.includes(collection.id))) return undefined;
  const byId = new Map(value.collections.map(collection => [collection.id, collection]));
- return { epoch: value.epoch, collections: organization.collectionIds.map(id => byId.get(id)!), items: value.items, resources: value.resources, ideaPreferences: value.ideaPreferences, organization, ...(value.homePreservation === undefined ? {} : { homePreservation: value.homePreservation }) };
+ return { epoch: value.epoch, collections: organization.collectionIds.map(id => byId.get(id)!), items: value.items, resources: value.resources, ideaPreferences: value.ideaPreferences, organization, ...(value.homePreservation === undefined ? {} : { homePreservation: value.homePreservation }), shelves: value.shelves ?? { status: 'ready', value: emptyHomeShelves() } };
 }
 export const isHomeLibraryState = (value: unknown): value is HomeLibraryState => object(value) && value.organization !== undefined && readHomeLibraryState(value) !== undefined;
 

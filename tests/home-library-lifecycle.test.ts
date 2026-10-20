@@ -6,7 +6,7 @@ import { createModuleRegistry } from '../apps/client/src/preload-lazy';
 import { registerHooks, createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { Snapshot } from '../packages/domain/contracts.js';
-import type { HomeLibraryCommand, HomeLibraryState, HomeLibraryReceipt, HomeCollection, HomeResource } from '../packages/domain/home-library.js';
+import type { HomeLibraryCommand, HomeLibraryState, HomeLibraryReceipt, HomeCollection, HomeResource, HomeReference } from '../packages/domain/home-library.js';
 
 const symbol = Symbol.for('nova.test.home-library-lifecycle'), react = pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
 const loader = registerHooks({
@@ -16,7 +16,7 @@ const loader = registerHooks({
    if (specifier === './api') return { url: 'nova-home-test:api', shortCircuit: true };
    if (specifier === './useWorkspace') return { url: 'nova-home-test:workspace', shortCircuit: true };
    if (/\/Home\./.test(context.parentURL ?? '')) {
-    if (['./HomeSpace', './HomeIdeas', './HomeFeed', './BriefingCard', './HomeAppointmentWidget'].includes(specifier)) return { url: 'nova-home-test:child:' + specifier.slice(2), shortCircuit: true };
+    if (['./HomeSpace', './HomeToday', './HomeIdeas', './HomeFeed', './BriefingCard', './HomeAppointmentWidget'].includes(specifier)) return { url: 'nova-home-test:child:' + specifier.slice(2), shortCircuit: true };
     if (specifier.endsWith('.css')) return { url: 'nova-home-test:css', shortCircuit: true };
    }
   }
@@ -41,7 +41,7 @@ const loader = registerHooks({
   return next(url, context);
  },
 });
-const { useHomeLibrary, HomeLibrary, previewLibraryLinks } = await import('../apps/client/src/HomeLibrary.js');
+const { useHomeLibrary, HomeLibrary, previewLibraryLinks, UpNextShelf } = await import('../apps/client/src/HomeLibrary.js');
 // The hook and fixture share the exact mocked API error constructor.
 // @ts-expect-error test loader owns this virtual module
 const { ApiError } = await import('nova-home-test:api');
@@ -188,17 +188,17 @@ test('batch preview uses exact historical URL and keeps query, fragment, invalid
 
 test('view mode and exact selection survive filtering without changing global Home preference', () => {
  const f=new Hooks(),s=snapshot('a'),ref={kind:'note' as const,id:'library:n',revision:1},key=`e3:home-library-view:${s.deviceId}:${s.epoch}`;
- f.storage.set(key,{mode:'compact',filter:'all',collectionId:null,selection:{collectionId:'collection:one',references:[ref]}});
+ f.storage.set(key,{query:'',mode:'compact',filter:'all',collectionId:null,selection:{collectionId:'collection:one',references:[ref]}});
  const c={state:{...state(s),collections:[{id:'collection:one',revision:1,title:'Research',subtitle:'',icon:'folder' as const,pinned:false,archived:false,references:[ref],updatedAt:'2026-10-19T04:00:00.000Z'}],organization:{revision:1,collectionIds:['collection:one']}},error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async()=>undefined};
  try { let tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));elements(tree).find(el=>el.props['aria-label']==='Search Library').props.onClick();tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));const search=elements(tree).find(el=>el.type==='input'&&el.props.type==='search');search.props.onChange({target:{value:'hidden'}});tree=f.render(()=>HomeLibrary({snapshot:s,controller:c,openWidgets(){}}));assert.ok(elements(tree).some(el=>el.props['aria-label']==='Selected sources'));assert.deepEqual((f.storage.get(key) as any).selection.references,[ref]);assert.ok(![...f.storage.keys()].some(k=>k.startsWith('e3:home-view:'))); }
  finally { f.dispose(); }
 });
 
 
-test('a failed acknowledgement write retains the exact host request for reconciliation', async () => {
+test('a verified reply survives failed local acknowledgement and retries locally without another POST', async () => {
  const f=new Hooks(),s=snapshot('a'),input=command(s),key=commandKey(s);
  try {const c=await ready(f,s);f.failSave=(target)=>target===key+':confirmed';const saving=c.run(input);f.writes.shift()!.resolve({...input.value,id:input.id,revision:1,updatedAt:'2026-10-19T04:00:00.000Z'});await saving;const unconfirmed=f.render(()=>useHomeLibrary(s));assert.deepEqual(unconfirmed.pending,input);assert.equal(unconfirmed.lastSave,undefined);assert.match(unconfirmed.error,/Saved on the host/);assert.equal(f.reads.length,0);
-  f.failSave=undefined;const checking=unconfirmed.run(input);assert.deepEqual(f.writes[0].data,input);f.writes.shift()!.resolve({...input.value,id:input.id,revision:1,updatedAt:'2026-10-19T04:00:00.000Z'});await settle();f.reads.shift()!.resolve(state(s));await checking;assert.equal(f.render(()=>useHomeLibrary(s)).pending,undefined);assert.equal(f.storage.has(key),false);
+  f.failSave=undefined;const checking=unconfirmed.run(input);assert.equal(f.writes.length,0);await settle();f.reads.shift()!.resolve(state(s));await checking;assert.equal(f.render(()=>useHomeLibrary(s)).pending,undefined);assert.equal(f.storage.has(key),false);
  } finally {f.dispose();}
 });
 
@@ -258,7 +258,7 @@ test('focused collections have one heading and no overview chrome while keeping 
  const input:Extract<HomeLibraryCommand,{type:'collection-save'}>={type:'collection-save',requestId:crypto.randomUUID(),epoch:s.epoch,id:c.id,expectedRevision:3,value:{title:c.title,subtitle:c.subtitle,icon:c.icon,pinned:c.pinned,archived:c.archived,references:c.references}};
  const controller={state:{...state(s),collections:[c],organization:{revision:1,collectionIds:[c.id]},resources:[{reference:c.references[0],title:'Exact link',subtitle:'Kept version',url:'https://example.test/kept?q=1#anchor',availability:'changed' as const,updatedAt:c.updatedAt}]},error:'Keep this visible',journalError:'',lastSave:{command:input,result:c,undo:{operationId:input.requestId,expected:{collections:[{id:c.id,expectedRevision:4}],organizationRevision:null}}},loading:false,busy:false,pending:undefined,load:async()=>{},run:async()=>undefined};
  for(const focused of [false,true]) {const f=new Hooks();try {
-  f.storage.set(`e3:home-library-view:${s.deviceId}:${s.epoch}`,{mode:'compact',filter:'all',collectionId:focused?c.id:null,selection:null});
+  f.storage.set(`e3:home-library-view:${s.deviceId}:${s.epoch}`,{query:'',mode:'compact',filter:'all',collectionId:focused?c.id:null,selection:null});
   const html=f.render(()=>renderToStaticMarkup(HomeLibrary({snapshot:s,controller,openWidgets(){}})));
   assert.equal((html.match(/<h1 /g)??[]).length,1);assert.ok(html.includes('home-library-count'));assert.ok(html.includes(focused?'2 Sources':'1 Collection'));
   assert.equal(html.includes('Move collection Research shelf.'),!focused);assert.equal(html.includes('<h2>'),!focused);
@@ -288,4 +288,93 @@ test('Home recovery adopts the existing durable Library writer once and never re
   render(snapshot('b'));assert.equal(recovery.props.adopt(copy), false);
   assert.equal((f.storage.get(key) as any).value.body, 'Newer recovered writing');assert.equal(f.writes.length, 0);
  } finally { f.dispose(); }
+});
+
+
+test('a known reply cannot acknowledge a replaced journal or dispatch from a retired owner', async () => {
+ const f=new Hooks(),s=snapshot('a'),input=command(s),key=commandKey(s);
+ try {
+  const c=await ready(f,s);f.failSave=target=>target===key+':confirmed';const saving=c.run(input);
+  f.writes.shift()!.resolve({...input.value,id:input.id,revision:1,updatedAt:'2026-10-19T04:00:00.000Z'});await saving;
+  const replacement={...input,requestId:crypto.randomUUID(),value:{...input.value,body:'Different original request'}};
+  f.storage.set(key,{format:1,deviceId:s.deviceId,epoch:s.epoch,windowId:'lifecycle-window',command:replacement,uncertain:true});f.failSave=undefined;
+  const current=f.render(()=>useHomeLibrary(s));await current.run(input);await current.run(replacement);
+  assert.equal(f.writes.length,0);assert.deepEqual((f.storage.get(key) as any).command,replacement);
+  f.dispose();await current.run(input);assert.equal(f.writes.length,0);assert.deepEqual((f.storage.get(key) as any).command,replacement);
+ } finally {f.dispose();}
+});
+
+test('a persisted exact confirmed reply reopens with local-only pending clearance', async () => {
+ const f=new Hooks(),s=snapshot('a'),input=command(s),key=commandKey(s);
+ f.storage.set(key,{format:1,deviceId:s.deviceId,epoch:s.epoch,windowId:'lifecycle-window',command:input,uncertain:true});
+ f.storage.set(key+':confirmed',{command:input,result:{...input.value,id:input.id,revision:1,updatedAt:'2026-10-19T04:00:00.000Z'},undo:null});
+ try {const c=await ready(f,s), saving=c.run(input);assert.equal(f.writes.length,0);await settle();f.reads.shift()!.resolve(state(s));await saving;assert.equal(f.render(()=>useHomeLibrary(s)).pending,undefined);}
+ finally {f.dispose();}
+});
+
+
+test('Up Next rendering and complete reordering keep hidden and unavailable exact references without capture', () => {
+ const f=new Hooks(), references:HomeReference[]=Array.from({length:53},(_,index)=>({kind:'link' as const,id:'link:'+index,revision:1}));
+ const resources:HomeResource[]=[{reference:references[0],title:'Old saved address',subtitle:'Earlier version',url:'https://example.test/old?q=1#part',availability:'changed',updatedAt:''}];
+ let ordered: typeof references|undefined, removed: typeof references[number]|undefined, captures=0;
+ const props={references,resources,query:'',mode:'cards' as const,blocked:false,inspect(){captures++;},remove(ref:typeof references[number]){removed=ref;},reorder(refs:typeof references){ordered=refs;}};
+ const render=()=>f.render(()=>UpNextShelf(props));
+ try {
+  let tree=render();assert.equal(captures,0);assert.equal(elements(tree).filter(el=>el.props.item).length,40);
+  const html=f.render(()=>renderToStaticMarkup(UpNextShelf(props)));assert.match(html,/https:\/\/example.test\/old\?q=1#part/);assert.match(html,/53 saved sources/);assert.match(html,/Source unavailable/);
+  tree=render();elements(tree).find(el=>el.props['aria-label']==='Move Old saved address later in Up Next').props.onClick();assert.equal(ordered?.length,53);assert.deepEqual(ordered?.slice(0,2),[references[1],references[0]]);assert.deepEqual(ordered?.slice(2),references.slice(2));
+  const missing=elements(tree).find(el=>el.props.item?.reference.id==='link:1');elements(missing).find(el=>el.props.children==='Remove From Up Next').props.onClick();assert.deepEqual(removed,references[1]);assert.equal(captures,0);
+  props.query='Old saved address';tree=render();const move=elements(tree).find(el=>el.props['aria-label']==='Move Old saved address later in Up Next');assert.equal(move.props.disabled,true);ordered=undefined;move.props.onClick();assert.equal(ordered,undefined);
+ }finally{f.dispose();}
+});
+
+test('Space routes keep collection identity, full global order and exact assignment inputs', async () => {
+ const f=new Hooks(),s=snapshot('a'),key=`e3:home-library-view:${s.deviceId}:${s.epoch}`;
+ const make=(id:string):HomeCollection=>({id,revision:7,title:id,subtitle:'',icon:'folder',archived:false,pinned:false,references:[],updatedAt:'2026-10-20T10:00:00.000Z'});
+ const a=make('collection:a'),b=make('collection:b'),c=make('collection:c'),shelf={format:1 as const,revision:4,spaces:[{id:'space:one',name:'Work',archived:false},{id:'space:two',name:'Other',archived:false}],assignments:[{collectionId:a.id,spaceId:'space:one'},{collectionId:c.id,spaceId:'space:one'}],upNext:[]};
+ f.storage.set(key,{query:'',mode:'cards',filter:'all',collectionId:null,selection:null,route:{kind:'space',id:'space:one'}});
+ const writes:HomeLibraryCommand[]=[];const controller={state:{...state(s),collections:[a,b,c],organization:{revision:3,collectionIds:[a.id,b.id,c.id]},shelves:{status:'ready' as const,value:shelf}},error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async(input:HomeLibraryCommand)=>{writes.push(input);return undefined;}};
+ const render=()=>f.render(()=>HomeLibrary({snapshot:s,controller}));
+ try {let tree=render(), canvas=elements(tree).find(el=>typeof el.props.order==='function');assert.deepEqual(canvas.props.collections.map((row:HomeCollection)=>row.id),[a.id,c.id]);await canvas.props.order([c.id,a.id]);assert.deepEqual((writes[0] as any).collectionIds,[c.id,b.id,a.id]);
+  canvas.props.render(a,undefined).props.moveSpace();tree=render();const dialog=elements(tree).find(el=>el.props.title==='Move Collection To Space');elements(dialog).find(el=>el.type==='select').props.onChange({target:{value:'space:two'}});tree=render();await elements(tree).find(el=>el.type==='button'&&el.props.children==='Move Collection').props.onClick();
+  const moved=writes[1] as any;assert.equal(moved.type,'collection-assign');assert.equal(moved.expectedRevision,4);assert.deepEqual(moved.collection,{id:a.id,expectedRevision:7});assert.equal(moved.spaceId,'space:two');assert.deepEqual(a.references,[]);assert.equal(f.writes.length,0);
+ }finally{f.dispose();}
+});
+
+
+test('late assignment acknowledgement cannot close a replacement collection choice', async () => {
+ const f=new Hooks(),s=snapshot('a'),make=(id:string):HomeCollection=>({id,revision:1,title:id,subtitle:'',icon:'folder',archived:false,pinned:false,references:[],updatedAt:'2026-10-20T10:00:00.000Z'}),a=make('collection:a'),b=make('collection:b');
+ let resolve!:(value:any)=>void;
+ const controller={state:{...state(s),collections:[a,b],organization:{revision:1,collectionIds:[a.id,b.id]},shelves:{status:'ready' as const,value:{format:1 as const,revision:1,spaces:[{id:'space:one',name:'Work',archived:false}],assignments:[],upNext:[]}}},error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async()=>new Promise<any>(done=>{resolve=done;})};
+ const render=()=>f.render(()=>HomeLibrary({snapshot:s,controller}));
+ try {let tree=render();elements(tree).find(el=>typeof el.props.order==='function').props.render(a,undefined).props.moveSpace();tree=render();elements(tree).find(el=>el.type==='select').props.onChange({target:{value:'space:one'}});tree=render();const saving=elements(tree).find(el=>el.type==='button'&&el.props.children==='Move Collection').props.onClick();
+  elements(tree).find(el=>el.props.title==='Move Collection To Space').props.close();tree=render();elements(tree).find(el=>typeof el.props.order==='function').props.render(b,undefined).props.moveSpace();render();resolve({confirmed:true});await saving;
+  tree=render();const dialog=elements(tree).find(el=>el.props.title==='Move Collection To Space');assert.ok(dialog);assert.ok(elements(dialog).some(el=>el.type==='p'&&el.props.children===b.title));
+ }finally{f.dispose();}
+});
+
+
+test('Spaces receipt must confirm the exact original revision and action before clearing its request', async () => {
+ for(const changed of ['revision','name','valid'] as const) {
+  const f=new Hooks(),s=snapshot('a'),input={type:'space-save' as const,requestId:crypto.randomUUID(),epoch:s.epoch,expectedRevision:2,id:'space:original',name:'Original exact name'};
+  const reply={format:2,kind:'shelves',operationId:input.requestId,epoch:s.epoch,type:input.type,appliedAt:'2026-10-20T10:00:00.000Z',changed:true,shelves:{format:1,revision:changed==='revision'?5:3,spaces:[{id:input.id,name:changed==='name'?'Wrong name':input.name,archived:false}],assignments:[],upNext:[]},undo:{operationId:input.requestId,expectedRevision:changed==='revision'?5:3}};
+  try {const c=await ready(f,s),saving=c.run(input);f.writes.shift()!.resolve(reply);await settle();if(changed==='valid')f.reads.shift()!.resolve(state(s));await saving;
+   const after=f.render(()=>useHomeLibrary(s));assert.equal(after.pending?.requestId,changed==='valid'?undefined:input.requestId);assert.equal(!!after.lastSave,changed==='valid');
+   if(changed==='valid')assert.deepEqual(after.lastSave?.undo,{operationId:input.requestId,expectedRevision:3});else assert.equal(f.reads.length,0);
+  }finally{f.dispose();}
+ }
+});
+
+
+test('unreadable organization never presents a retained shelf as empty or every collection as Unassigned', () => {
+ const s=snapshot('a'),c:HomeCollection={id:'collection:kept',revision:1,title:'Original collection',subtitle:'',icon:'folder',archived:false,pinned:false,references:[],updatedAt:'2026-10-20T10:00:00.000Z'};
+ for(const route of [{kind:'up-next'},{kind:'unassigned'},{kind:'space',id:'space:kept'}]) {
+  const f=new Hooks(),key=`e3:home-library-view:${s.deviceId}:${s.epoch}`,writes:HomeLibraryCommand[]=[];
+  f.storage.set(key,{query:'',mode:'cards',filter:'all',collectionId:null,selection:null,route});
+  const controller={state:{...state(s),collections:[c],organization:{revision:1,collectionIds:[c.id]},shelves:{status:'needs-review' as const,message:'Original organization cannot be read.'}},error:'',journalError:'',lastSave:undefined,loading:false,busy:false,pending:undefined,load:async()=>{},run:async(input:HomeLibraryCommand)=>{writes.push(input);return undefined;}};
+  const render=()=>f.render(()=>HomeLibrary({snapshot:s,controller}));
+  try {const html=f.render(()=>renderToStaticMarkup(HomeLibrary({snapshot:s,controller})));assert.match(html,/Organization unavailable/);assert.match(html,/Library Organization Is Unavailable/);assert.doesNotMatch(html,/0 Saved Sources|Choose what comes next|Make room for what matters/);
+   elements(render()).find(row=>row.props.title==='Library Organization Is Unavailable').props.action.props.onClick();const tree=render();assert.ok(elements(tree).find(row=>typeof row.props.order==='function').props.collections.some((row:HomeCollection)=>row.id===c.id));assert.equal(writes.length,0);assert.deepEqual(controller.state.shelves,{status:'needs-review',message:'Original organization cannot be read.'});
+  }finally{f.dispose();}
+ }
 });

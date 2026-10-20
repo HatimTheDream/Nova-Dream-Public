@@ -1,7 +1,7 @@
 // Keep unused host validators out of browser imports; referenced schemas execute unchanged.
 import { z } from 'zod';
 import type { WorkMode } from './work-mode.js';
-import { homeIcons, homeIdeaIds, homeReferenceKey } from './home-library-view.js';
+import { homeIcons, homeIdeaIds, homeReferenceKey, homeSpaceNameKey } from './home-library-view.js';
 export { homeIcons, homeIdeaIds, homeReferenceKey, exactHomeReference, normalizeHomeUrl, homeQuote, homeIdeaScope } from './home-library-view.js';
 
 const id = /* @__PURE__ */ (() => z.string().min(1).max(200).regex(/^[a-zA-Z0-9:_-]+(?![\s\S])/))();
@@ -37,9 +37,45 @@ export type HomePreservationState = {
  current?: { revision: number; updatedAt: string; widgets: unknown[] };
  mappings: { widgetId: string; linkId?: string; reference: HomeReference }[];
 };
-export type HomeLibraryState = { epoch: string; collections: HomeCollection[]; items: HomeItem[]; resources: HomeResource[]; ideaPreferences: HomeIdeaPreferences; organization: HomeOrganization; homePreservation?: HomePreservationState };
+export type HomeLibraryState = { epoch: string; collections: HomeCollection[]; items: HomeItem[]; resources: HomeResource[]; ideaPreferences: HomeIdeaPreferences; organization: HomeOrganization; homePreservation?: HomePreservationState; shelves?: HomeShelvesState };
 const envelope = /* @__PURE__ */ (() => ({ requestId: z.uuid().length(36), epoch: z.uuid().length(36) }))();
 const references = (minimum: number) => z.array(homeReferenceSchema).min(minimum).max(200).refine(refs => new Set(refs.map(homeReferenceKey)).size === refs.length, 'Keep each source once.');
+/** Shelves are independent metadata; legacy collection writers never replace them. */
+export const homeSpaceSchema = /* @__PURE__ */ (() => z.object({
+ id, name: z.string().max(100).refine(name => name.trim().length > 0, 'Name this Space.'), archived: z.boolean(),
+}).strict())();
+export type HomeSpace = z.infer<typeof homeSpaceSchema>;
+export const homeShelvesSchema = /* @__PURE__ */ (() => z.object({
+ format: z.literal(1), revision: expectedRevision, spaces: z.array(homeSpaceSchema).max(32),
+ assignments: z.array(z.object({ collectionId: id, spaceId: id }).strict()).max(100), upNext: references(0),
+}).strict().superRefine((value, ctx) => {
+ if (new Set(value.spaces.map(space => space.id)).size !== value.spaces.length ||
+     new Set(value.spaces.map(space => homeSpaceNameKey(space.name))).size !== value.spaces.length)
+  ctx.addIssue({ code: 'custom', message: 'Keep each Space identity and name once, including archived Spaces.' });
+ if (new Set(value.assignments.map(row => row.collectionId)).size !== value.assignments.length ||
+     value.assignments.some(row => !value.spaces.some(space => space.id === row.spaceId)))
+  ctx.addIssue({ code: 'custom', message: 'Assign each collection to one existing Space.' });
+ if (new TextEncoder().encode(JSON.stringify(value)).length > 256 * 1024)
+  ctx.addIssue({ code: 'custom', message: 'Saved Library organization is full. Existing organization is kept.' });
+}))();
+export type HomeShelves = z.infer<typeof homeShelvesSchema>;
+export type HomeShelvesState = { status: 'ready'; value: HomeShelves } | { status: 'needs-review'; message: string };
+export const homeShelvesUndoSchema = /* @__PURE__ */ (() => z.object({ operationId: z.uuid().length(36), expectedRevision }).strict())();
+export type HomeShelvesUndo = z.infer<typeof homeShelvesUndoSchema>;
+export const homeShelvesCommandSchema = /* @__PURE__ */ (() => z.discriminatedUnion('type', [
+ z.object({ ...envelope, type: z.literal('space-save'), expectedRevision, id, name: homeSpaceSchema.shape.name }).strict(),
+ z.object({ ...envelope, type: z.literal('space-archive'), expectedRevision, id, archived: z.boolean() }).strict(),
+ z.object({ ...envelope, type: z.literal('collection-assign'), expectedRevision, collection: homeCollectionGuardSchema, spaceId: id.nullable() }).strict(),
+ z.object({ ...envelope, type: z.literal('up-next-add'), expectedRevision, reference: homeReferenceSchema }).strict(),
+ z.object({ ...envelope, type: z.literal('up-next-remove'), expectedRevision, reference: homeReferenceSchema }).strict(),
+ z.object({ ...envelope, type: z.literal('up-next-order'), expectedRevision, references: references(0) }).strict(),
+ z.object({ ...envelope, type: z.literal('shelves-undo'), ...homeShelvesUndoSchema.shape }).strict(),
+]))();
+export type HomeShelvesCommand = z.infer<typeof homeShelvesCommandSchema>;
+export type HomeShelvesReceipt = {
+ format: 2; kind: 'shelves'; operationId: string; epoch: string; type: HomeShelvesCommand['type'];
+ appliedAt: string; changed: boolean; shelves: HomeShelves; undo: HomeShelvesUndo | null; undoneOperationId?: string;
+};
 export const homeLibraryCommandSchema = /* @__PURE__ */ (() => z.discriminatedUnion('type', [
  z.object({ ...envelope, type: z.literal('collection-save'), id, expectedRevision, value: homeCollectionValueSchema }).strict(),
  z.object({ ...envelope, type: z.literal('item-save'), id, expectedRevision, value: homeItemValueSchema }).strict(),
@@ -49,6 +85,7 @@ export const homeLibraryCommandSchema = /* @__PURE__ */ (() => z.discriminatedUn
  z.object({ ...envelope, type: z.literal('references-transfer'), mode: z.enum(['move', 'copy']), source: homeCollectionGuardSchema, destination: homeCollectionGuardSchema, references: references(1), before: homeReferenceSchema.nullable() }).strict().refine(value => value.source.id !== value.destination.id, 'Choose a different destination collection.'),
  z.object({ ...envelope, type: z.literal('references-order'), collection: homeCollectionGuardSchema, references: references(0) }).strict(),
  z.object({ ...envelope, type: z.literal('library-undo'), ...homeLibraryUndoSchema.shape }).strict(),
+ ...homeShelvesCommandSchema.options,
 ]))();
 export type HomeLibraryCommand = z.infer<typeof homeLibraryCommandSchema>;
 export type HomeLibraryMutation = Extract<HomeLibraryCommand, { type: 'items-capture' | 'collections-order' | 'references-transfer' | 'references-order' | 'library-undo' }>;
@@ -58,7 +95,7 @@ export type HomeLibraryReceipt = {
  collections: HomeCollection[]; organization?: HomeOrganization; createdItems: HomeItem[]; outcomes: HomeLibraryOutcome[]; undo: HomeLibraryUndo | null; undoneOperationId?: string;
 };
 export type LibraryReceipt = HomeLibraryReceipt;
-export type HomeLibraryResult = HomeCollection | HomeItem | HomeIdeaPreferences | HomeLibraryReceipt;
+export type HomeLibraryResult = HomeCollection | HomeItem | HomeIdeaPreferences | HomeLibraryReceipt | HomeShelvesReceipt;
 export type HomeLibraryJournalOwner = { deviceId: string; epoch: string; windowId: string };
 /** The exact command survives a lost response; this record never authorizes a new request. */
 export type HomeLibraryJournal = HomeLibraryJournalOwner & { format: 1; command: HomeLibraryCommand; uncertain: boolean };

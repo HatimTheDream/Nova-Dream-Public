@@ -10,7 +10,9 @@ export const relationshipLabels = { introduced_by: 'Introduced by', works_with: 
 export const relationshipSchema = z.object({ contactId, kind: z.enum(relationshipKinds) }).strict();
 export const keepInTouchSchema = z.object({ days: z.number().int().min(1).max(730), time: clockTime.refine(v => !!v), timezone }).strict();
 const envelope = z.object({ requestId: z.uuid(), epoch: z.uuid(), id: z.string().regex(/^[a-zA-Z0-9:_-]+$/).max(100), expectedRevision: z.number().int().nonnegative() });
-const website = z.union([z.literal(''), z.url().max(2000).refine(url => ['https:', 'http:'].includes(new URL(url).protocol), 'Use an https or http website.')]);
+const website = z.union([z.literal(''), z.url().max(2000).refine(url => {
+  try { return ['https:', 'http:'].includes(new URL(url).protocol); } catch { return false; }
+}, 'Use an https or http website.')]);
 export const organizationSchema = z.object({ name: z.string().trim().min(1).max(240), website, phone: z.string().max(80), industry: z.string().max(240), notes: z.string().max(20000) }).strict();
 export type Organization = z.infer<typeof organizationSchema>;
 export type OrganizationRecord = Entity<Organization> & { memberIds: string[] };

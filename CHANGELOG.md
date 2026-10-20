@@ -1,3 +1,41 @@
+## [2.10.0] - 2026-10-20
+
+- Organize Library collections in named Spaces with retained name drafts and archive/restore.
+- Keep exact saved sources in Up Next, reorder or remove them, and undo organization changes without changing the originals.
+- Preserve Library access and show clear recovery states when organization or browser storage is unavailable.
+
+## [2.9.29] — 2026-10-20
+
+### Improved
+
+- Separate Profile and Look editing while preserving unfinished writing, original save requests and the full mascot creator.
+- Save a look without sending unfinished profile text, and review saved profile changes without losing local writing.
+
+## [2.9.28] — 2026-10-20
+
+### Added
+
+- Write optional weekly notes tied to the exact week and timezone, with explicit Save, Trash and Restore.
+- Browse saved notes across timezones and recover unfinished writing from another browser window.
+
+### Improved
+
+- Preserve original note requests through interrupted saves and review changed versions before choosing what to keep.
+- Keep notes separate from Task credit, Search and automatic Assistant context, with clear workspace visibility.
+
+## [2.9.27] — 2026-10-20
+
+### Improved
+
+- Keep unfinished contact activity and organization writing through navigation, reload and interrupted saves.
+- Recover writing from another window without replacing existing drafts, and review changed saved versions before continuing.
+- Preserve original save requests and explain storage failures without losing current writing.
+
+### Fixed
+
+- Keep incomplete organization website entries editable without interrupting the form.
+- Show a useful recovery error when browser storage is unavailable.
+
 ## [2.9.26] — 2026-10-20
 
 ### Added

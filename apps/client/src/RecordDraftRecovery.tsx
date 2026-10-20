@@ -1,20 +1,21 @@
 import { useState } from 'react';
 import { Dialog } from './ui';
 import { checkKeptCopy, copyRecordDraft, discoverRecordDrafts, type KeptCopy, type RecoveryEntry, type RecoveryScope } from './record-draft-recovery';
+import { draftBrowserStorage as storage } from './draft-browser-storage';
 
 export function RecordDraftRecovery({ scope, canOpen, open, close }: { scope: RecoveryScope; canOpen: boolean; open(id: string): boolean; close(): void }) {
-  const [list, setList] = useState(() => discoverRecordDrafts(localStorage, scope));
+  const [list, setList] = useState(() => discoverRecordDrafts(storage, scope));
   const [selected, setSelected] = useState<RecoveryEntry>();
   const [copied, setCopied] = useState<KeptCopy>();
   const [error, setError] = useState('');
-  const refresh = () => { setList(discoverRecordDrafts(localStorage, scope)); setSelected(undefined); setCopied(undefined); setError(''); };
+  const refresh = () => { setList(discoverRecordDrafts(storage, scope)); setSelected(undefined); setCopied(undefined); setError(''); };
   const recover = () => {
     if (!canOpen) { setError('Close the current editor before opening retained writing.'); return; }
     try {
       if (!selected && !copied) return;
-      const kept = copied ?? copyRecordDraft(localStorage, selected!, scope);
+      const kept = copied ?? copyRecordDraft(storage, selected!, scope);
       setCopied(kept);
-      checkKeptCopy(localStorage, kept, scope);
+      checkKeptCopy(storage, kept, scope);
       if (!open(kept.id)) { setError('Your copy is kept in this window, but its editor could not be opened. Free browser storage, then choose Open Kept Copy. The original is unchanged.'); return; }
       close();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Browser storage refused the copy. Your original writing is unchanged.'); }

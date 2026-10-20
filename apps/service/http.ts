@@ -7,6 +7,7 @@ import { HomeWeatherService } from './home-weather.js';
 import { HomeLibrary } from './home-library.js';
 import { ProfileStudio } from './profile-studio.js';
 import { ProfileWeek, profileReadQuery } from './profile-week.js';
+import { ProfileWeekNotes } from './profile-week-note.js';
 import { HomeFeed } from './home-feed.js';
 import { HostBrowser } from './host-browser.js';
 import { browserInputSchema } from '../../packages/domain/host-browser.js';
@@ -100,7 +101,7 @@ const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js
 const recoveredLocalRoutes = new Set([
   '/api/transfers/start', '/api/transfers/piece',
   '/api/session', '/api/commands', '/api/attachments', '/api/contacts/photo',
-  '/api/profile/quests', '/api/profile/studio', '/api/content/workspace', '/api/content/from-output', '/api/content/from-assignment',
+  '/api/profile/quests', '/api/profile/studio', '/api/profile/week/note', '/api/content/workspace', '/api/content/from-output', '/api/content/from-assignment',
   '/api/tasks/order', '/api/tasks/focus', '/api/tasks/history', '/api/tasks/reminders/action',
   '/api/records/history', '/api/records/follow-up', '/api/contacts/read', '/api/contacts/merge', '/api/contacts/restore',
   '/api/contacts/crm', '/api/contacts/activity', '/api/contacts/organization', '/api/agents/hub/layout', '/api/home/library', '/api/home/context', '/api/home/feed/open',
@@ -145,6 +146,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const homeLibrary = new HomeLibrary(store);
   const profileStudio = new ProfileStudio(store);
   const profileWeek = new ProfileWeek(store);
+  const profileWeekNotes = new ProfileWeekNotes(store);
   const homeFeed = new HomeFeed(store);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
@@ -634,6 +636,9 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/profile/week' && request.method === 'GET') return json(200, profileWeek.state(profileReadQuery(url.searchParams)));
         if (url.pathname === '/api/profile/week/activity' && request.method === 'GET') return json(200, profileWeek.day(profileReadQuery(url.searchParams)));
         if (url.pathname === '/api/profile/week/history' && request.method === 'GET') return json(200, profileWeek.history(profileReadQuery(url.searchParams)));
+        if (url.pathname === '/api/profile/week/note' && request.method === 'GET') return json(200, profileWeekNotes.state(profileReadQuery(url.searchParams)));
+        if (url.pathname === '/api/profile/week/notes' && request.method === 'GET') return json(200, profileWeekNotes.index(profileReadQuery(url.searchParams)));
+        if (url.pathname === '/api/profile/week/note' && request.method === 'POST') return json(200, profileWeekNotes.save(device, await commandBody(request)));
         if (url.pathname === '/api/profile/studio' && request.method === 'GET') return json(200, profileStudio.state());
         if (url.pathname === '/api/profile/studio' && request.method === 'POST') return json(200, profileStudio.save(device, await commandBody(request)));
         if (url.pathname === '/api/profile/history' && request.method === 'GET') return json(200, store.profileHistory(z.string().min(1).max(200).optional().parse(url.searchParams.get('before') ?? undefined)));

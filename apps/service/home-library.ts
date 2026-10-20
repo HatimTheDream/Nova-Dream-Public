@@ -3,17 +3,18 @@ import { TextDecoder } from 'node:util';
 import type { AssistantOutput } from '../../packages/domain/assistant.js';
 import type { AssignmentAttempt } from '../../packages/domain/assignments.js';
 import { canonical } from '../../packages/domain/contracts.js';
-import { homeCaptureSchema, homeLibraryCommandSchema, homeReferenceKey, type HomeCollection, type HomeIdeaPreferences, type HomeItem, type HomeLibraryState, type HomeReference, type HomeResource, type HomeSourceCapture, type HomeLibraryCommand, type HomeItemValue, type HomeOrganization, type LibraryReceipt } from '../../packages/domain/home-library.js';
-import { normalizeHomeUrl } from '../../packages/domain/home-library-view.js';
+import { homeCaptureSchema, homeLibraryCommandSchema, homeReferenceKey, type HomeCollection, type HomeIdeaPreferences, type HomeItem, type HomeLibraryState, type HomeReference, type HomeResource, type HomeSourceCapture, type HomeLibraryCommand, type HomeItemValue, type HomeOrganization, type LibraryReceipt, type HomeLibraryMutation, type HomeLibraryResult } from '../../packages/domain/home-library.js';
+import { normalizeHomeUrl, isHomeShelvesCommand } from '../../packages/domain/home-library-view.js';
 import { Fault, Store } from './store.js';
 import { homeLibraryWithinCapacity, homeWidgetPreservationState, originalHomeWidget, preserveHomeWidgets } from './home-widget-preservation.js';
+import { HomeLibraryShelves } from './home-library-shelves.js';
 
 const collections = 'home:library:collection:', items = 'home:library:item:';
 const organizationKey = 'home:library:organization', operationKey = 'home:library:operation:', undoneKey = 'home:library:undone:';
 type CollectionInverse = { id: string; revision: number; before: Partial<Pick<HomeCollection, 'references' | 'pinned' | 'archived'>> };
 type OrganizationInverse = { revision: number; collectionIds: string[] };
 type Inverse = { epoch: string; device: string; type: HomeLibraryCommand['type']; collections: CollectionInverse[]; organization: OrganizationInverse | null };
-type Mutation = Exclude<HomeLibraryCommand, { type: 'collection-save' | 'item-save' | 'preferences-save' }>;
+type Mutation = HomeLibraryMutation;
 const equal = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 const refEqual = (a: HomeReference, b: HomeReference) => equal(a, b);
 const linkUrl = (value: string) => {
@@ -73,11 +74,12 @@ export class HomeLibrary {
   const entity = this.store.readEntity(ref.kind, ref.id);return !!entity && entity.revision === ref.revision && !('archived' in entity.value && entity.value.archived) && !('trashed' in entity.value && entity.value.trashed) && !(ref.kind === 'project' && this.store.projectIsDeleted(ref.id));
  }
  state(device: string): HomeLibraryState {
+  const shelves = new HomeLibraryShelves(this.store, ref => this.current(ref), this.now).state();
   const all = this.store.internalList<HomeCollection>(collections), organization = this.organization(all);
   const byId = new Map(all.map(row => [row.id, row])), list = organization.collectionIds.map(id => byId.get(id)!);
   const resources = this.catalog(device), keys = new Set(resources.map(r => canonical(r.reference))), catalog = [...resources];
-  for (const ref of list.flatMap(c => c.references)) if (!keys.has(canonical(ref))) { resources.push(this.resolve(device, ref, catalog)); keys.add(canonical(ref)); }
-  return { epoch: this.store.epoch, collections: list, organization, items: this.store.internalList<HomeItem>(items), resources, ideaPreferences: this.store.internalRead<HomeIdeaPreferences>('home:ideas:preferences') ?? { revision: 0, saved: [], hidden: [] }, homePreservation: homeWidgetPreservationState(this.store) };
+  for (const ref of [...list.flatMap(c => c.references), ...(shelves.status === 'ready' ? shelves.value.upNext : [])]) if (!keys.has(canonical(ref))) { resources.push(this.resolve(device, ref, catalog)); keys.add(canonical(ref)); }
+  return { epoch: this.store.epoch, collections: list, organization, items: this.store.internalList<HomeItem>(items), resources, ideaPreferences: this.store.internalRead<HomeIdeaPreferences>('home:ideas:preferences') ?? { revision: 0, saved: [], hidden: [] }, homePreservation: homeWidgetPreservationState(this.store), shelves };
  }
  private organization(all = this.store.internalList<HomeCollection>(collections)): HomeOrganization {
   const saved = this.store.internalRead<HomeOrganization>(organizationKey);
@@ -194,9 +196,10 @@ export class HomeLibrary {
   if (result.changed) result.undo = this.recordInverse(device, input.requestId, input.type, inverse);
   return result;
  }
- command(device: string, raw: unknown): HomeCollection | HomeItem | HomeIdeaPreferences | LibraryReceipt {
+ command(device: string, raw: unknown): HomeLibraryResult {
   const input = homeLibraryCommandSchema.parse(raw);
   return this.store.admit(device, input, { operation: 'home.library', ...input }, () => {
+   if (isHomeShelvesCommand(input)) return new HomeLibraryShelves(this.store, ref => this.current(ref), this.now).command(device, input);
    if (input.type === 'preferences-save') { const old = this.store.internalRead<HomeIdeaPreferences>('home:ideas:preferences');if ((old?.revision ?? 0) !== input.expectedRevision) throw new Fault(409, 'home_preferences_changed', 'Idea preferences changed. Refresh before saving your preference.');return this.store.internalWrite('home:ideas:preferences', { ...input.value, revision: input.expectedRevision + 1 }); }
    if (input.type !== 'collection-save' && input.type !== 'item-save') return this.mutate(device, input);
    const prefix = input.type === 'collection-save' ? collections : items, old = this.store.internalRead<HomeCollection | HomeItem>(prefix + input.id);

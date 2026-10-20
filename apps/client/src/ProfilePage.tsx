@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
 import { questCommandSchema, type QuestCommand, type ProfileProgress, type PersonalQuestProgress } from '../../../packages/domain/profile-progression';
 import { ApiError, request } from './api';
-import { RecordEditor } from './RecordEditor';
+import { ProfileIdentityEditor, type ProfileIdentitySection } from './ProfileIdentityEditor';
 import { SquareLynx } from './nova/square-lynx/SquareLynx';
 import { Check, Plus, Target } from './icons';
 import { Dialog, Empty } from './ui';
@@ -35,7 +35,17 @@ export default function ProfilePage({ snapshot, refresh, editTask }: { snapshot:
     if (delta > 0) setNotice({ text: `${finished.length ? `${finished.map(q => q.title).join(', ')} completed. ` : 'Task completed. '}+${delta} XP${progress.level > previous.level ? ` · You reached level ${progress.level}!` : ''}`, completed: !!finished.length });
     else if (delta < 0) setNotice({ text: `Progress corrected: ${delta} XP after a Task was reopened.`, completed: false });
   }, [progress]);
-  const [identity, setIdentity] = useState(false);
+  const [identity, setIdentity] = useState<{ section: ProfileIdentitySection; token: number }>();
+  const identityOwner = useRef(identity); identityOwner.current = identity;
+  const identitySequence = useRef(0), profileTrigger = useRef<HTMLButtonElement>(null), lookTrigger = useRef<HTMLButtonElement>(null);
+  const identityScope = `${snapshot.epoch}:${snapshot.deviceId}`, currentIdentityScope = useRef(identityScope); currentIdentityScope.current = identityScope;
+  const openIdentity = (section: ProfileIdentitySection) => { if (mayLeaveRecordDrafts()) { const next = { section, token: ++identitySequence.current }; identityOwner.current = next; setIdentity(next); } };
+  const closeIdentity = (token: number) => {
+    if (identityOwner.current?.token !== token || currentIdentityScope.current !== identityScope || !mayLeaveRecordDrafts()) return;
+    const trigger = identityOwner.current.section === 'identity' ? profileTrigger : lookTrigger;
+    identityOwner.current = undefined; setIdentity(undefined);
+    requestAnimationFrame(() => { if (!identityOwner.current && currentIdentityScope.current === identityScope) trigger.current?.focus(); });
+  };
   const [viewSlot, setViewSlot] = useState(() => readProfileViewSlot(localStorage, `e3:profile-view:${snapshot.epoch}:${snapshot.deviceId}:${retainedWindowId}`));
   const viewOwner = useRef(viewSlot); viewOwner.current = viewSlot;
   const { tab, cadence, questFilter } = viewSlot.value;
@@ -105,7 +115,7 @@ export default function ProfilePage({ snapshot, refresh, editTask }: { snapshot:
   return <div className="profile-workspace">
     <section className={`card profile-hero${tab === 'studio' ? ' studio-hero' : ''}`} aria-label="Your profile and experience">
       <div className="profile-portrait"><SquareLynx appearance={profile?.value.appearance ?? null} size="profile" accessibility={{ mode: 'informative', label: `${profile?.value.name || 'Your'} avatar` }}/></div>
-      <div className="profile-identity"><span className="eyebrow">My Studio</span><h2>{profile?.value.name || 'Make it yours.'}</h2>{profile?.value.position && <p className="profile-position">{profile.value.position}</p>}{profile?.value.about && profile.value.about !== 'Isolated pixel navigation preview.' && <p className="profile-about">{profile.value.about}</p>}<button onClick={() => { if (mayLeaveRecordDrafts()) setIdentity(true); }}>Edit Profile & Appearance</button></div>
+      <div className="profile-identity"><span className="eyebrow">My Studio</span><h2>{profile?.value.name || 'Make it yours.'}</h2>{profile?.value.position && <p className="profile-position">{profile.value.position}</p>}{profile?.value.about && profile.value.about !== 'Isolated pixel navigation preview.' && <p className="profile-about">{profile.value.about}</p>}<div className="profile-identity-entry"><button ref={profileTrigger} onClick={() => openIdentity('identity')}>Edit Profile</button><button ref={lookTrigger} onClick={() => openIdentity('look')}>Edit Look</button></div></div>
       {tab !== 'studio' && <div className="profile-experience">{progress ? <><div className="profile-level"><span>Level</span><strong>{progress.level}</strong></div><p className="profile-xp"><strong>{progress.earnedXp.toLocaleString()}</strong> earned XP</p><progress aria-label={`Level ${progress.level} experience`} max={progress.nextLevelXp - progress.currentLevelXp} value={Math.max(0, progress.earnedXp - progress.currentLevelXp)}/><p className="metadata">{progress.nextLevelXp - progress.earnedXp} XP to level {progress.level + 1}</p>{progress.imported && <details><summary>{progress.imported.xp.toLocaleString()} XP carried from {progress.imported.source}</summary><p>Verified for {progress.imported.name} through {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: progress.timezone }).format(new Date(progress.imported.asOf))}. The {progress.imported.eventCount} original entries remain in the preserved import. Earlier completions do not earn XP again or count toward today’s quests.</p></details>}<details><summary>How Experience Works</summary><p>Completing a Task earns 10 XP. Reopening it reverses that award; completing it again restores the same credit. Quest steps share this ledger. Quest completion adds no extra XP.</p><p>Daily and weekly progress uses each Task’s first completion date. New routine occurrences count separately. Trash preserves earned history. Level 2 starts at 140 XP; later levels follow the original progression curve. Rest days never remove XP.</p></details></> : <LoadingRing label="Loading earned progress…"/>}</div>}
     </section>
     {viewSlot.invalid && <div className="notice warning" role="alert"><p>Your saved Profile view could not be verified. Its original record is preserved.</p><details><summary>Original view record</summary><pre>{viewSlot.original ?? 'Browser storage could not be read.'}</pre></details></div>}
@@ -133,9 +143,9 @@ export default function ProfilePage({ snapshot, refresh, editTask }: { snapshot:
         </section>
       </div>}
       {tab === 'milestones' && <section><h2>Milestones along the way</h2><p>Recognition for work you have completed. Corrections stay connected to their original Tasks.</p><div className="profile-milestones">{progress.milestones.map(m => <article key={m.id} className={`card profile-milestone${m.earned ? ' is-complete' : ''}`}><span className="quest-emblem" aria-hidden="true">{m.earned ? <Check size={22}/> : <Target size={22}/>}</span><h3>{m.title}</h3><p>{m.description}</p><progress max={m.target} value={Math.min(m.target, m.progress)} aria-label={`${m.title} progress`}/><span className="metadata">{m.earned ? 'Earned' : `${Math.min(m.target, m.progress)} / ${m.target}`}</span></article>)}</div></section>}
-      <ProfileWeek epoch={snapshot.epoch} progress={progress} view={viewSlot.value} changeView={changeView} captureView={patch => { if (viewOwner.current.invalid) return; const next = { ...viewOwner.current, value: { ...viewOwner.current.value, ...patch } }; viewOwner.current = next; setViewSlot(next); }} openTask={openTask} canOpenTask={id => !!tasks.get(id) && !tasks.get(id)!.value.trashed} revision={snapshot.cursor} active={tab === 'week'}/>
+      <ProfileWeek epoch={snapshot.epoch} deviceId={snapshot.deviceId} progress={progress} view={viewSlot.value} changeView={changeView} captureView={patch => { if (viewOwner.current.invalid) return; const next = { ...viewOwner.current, value: { ...viewOwner.current.value, ...patch } }; viewOwner.current = next; setViewSlot(next); }} openTask={openTask} canOpenTask={id => !!tasks.get(id) && !tasks.get(id)!.value.trashed} revision={snapshot.cursor} active={tab === 'week'}/>
     </>}
-    {identity && <Dialog title="Your profile & appearance" close={() => { if (mayLeaveRecordDrafts()) setIdentity(false); }}><RecordEditor kind="profile" id="profile:owner" compact snapshot={snapshot} refresh={refresh} editTask={editTask} entity={profile} onSaved={() => setIdentity(false)}/></Dialog>}
+    {identity && <ProfileIdentityEditor key={`${identityScope}:${identity.token}`} initialSection={identity.section} snapshot={snapshot} entity={profile} refresh={refresh} owns={() => identityOwner.current?.token === identity.token && currentIdentityScope.current === identityScope} close={() => closeIdentity(identity.token)}/>}
     {editing && <Dialog title={progress?.personalQuests.some(q => q.id === editing) ? 'Edit personal quest' : 'Create a personal quest'} close={() => { if (mayLeaveRecordDrafts()) setEditing(undefined); }}><ProfileQuestEditor key={`${snapshot.epoch}:${snapshot.deviceId}:${editing}`} id={editing} quest={progress?.personalQuests.find(q => q.id === editing)} snapshot={snapshot} saved={async () => { forgetWriter(); await updated(); }} discard={forgetWriter}/></Dialog>}
   </div>;
 }

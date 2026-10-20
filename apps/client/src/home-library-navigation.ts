@@ -2,7 +2,8 @@ import type { HomeLibraryState, HomeReference, HomeResource } from '../../../pac
 import { isHomeCollectionDraft } from '../../../packages/domain/home-library-view';
 import type { SearchScope, SearchStorage, SearchTarget } from './search-workspace';
 
-export type LibraryView = { query: string; mode: 'cards' | 'compact'; filter: 'all' | 'pinned' | 'archived'; collectionId: string | null; selection: { collectionId: string; references: HomeReference[] } | null };
+export type LibraryRoute = { kind: 'all' | 'up-next' | 'unassigned' } | { kind: 'space'; id: string };
+export type LibraryView = { query: string; mode: 'cards' | 'compact'; filter: 'all' | 'pinned' | 'archived'; collectionId: string | null; selection: { collectionId: string; references: HomeReference[] } | null; route?: LibraryRoute };
 export const defaultLibraryView = (): LibraryView => ({ query: '', mode: 'cards', filter: 'all', collectionId: null, selection: null });
 export function libraryView(value: unknown): LibraryView | undefined {
   const row = value as LibraryView | undefined;
@@ -10,7 +11,11 @@ export function libraryView(value: unknown): LibraryView | undefined {
   const selection = row.selection;
   if (selection !== null && (!selection || typeof selection !== 'object' || typeof selection.collectionId !== 'string' || !Array.isArray(selection.references) || selection.references.length > 200
     || !isHomeCollectionDraft({ title: '', subtitle: '', icon: 'folder', pinned: false, archived: false, references: selection.references }))) return;
-  return { query: row.query, mode: row.mode, filter: row.filter, collectionId: row.collectionId, selection };
+  const route = row.route;
+  if (route !== undefined && (!route || typeof route !== 'object' || (route.kind === 'space' ?
+    Object.keys(route).some(key => !['kind', 'id'].includes(key)) || typeof route.id !== 'string' || !/^[a-zA-Z0-9:_-]{1,200}$/.test(route.id) :
+    !['all', 'up-next', 'unassigned'].includes(route.kind) || Object.keys(route).some(key => key !== 'kind')))) return;
+  return { query: row.query, mode: row.mode, filter: row.filter, collectionId: row.collectionId, selection, ...(route ? { route } : {}) };
 }
 export type LibraryTarget = SearchScope & { nonce: string; target?: SearchTarget; restore?: LibraryView };
 export const libraryViewKey = (scope: Pick<SearchScope, 'epoch' | 'deviceId'>) => `e3:home-library-view:${scope.deviceId}:${scope.epoch}`;
@@ -24,7 +29,7 @@ export function admitLibraryTarget(scope: SearchScope, state: HomeLibraryState, 
     const row = source?.kind === 'collection' ? state.collections.find(item => item.id === source.id)
       : state.items.find(item => item.kind === source?.kind && item.id === source.id);
     if (!source || !row || row.revision !== source.revision) return 'This Library source changed or is unavailable. Review it in Search.';
-    next = source.kind === 'collection' ? { ...previous, query: '', filter: row.archived ? 'archived' : 'all', collectionId: row.id } : previous;
+    next = source.kind === 'collection' ? { ...previous, query: '', filter: row.archived ? 'archived' : 'all', collectionId: row.id, route: { kind: 'all' } } : previous;
   }
   // The nonce accompanies only view metadata. Both writer journals remain untouched.
   return storage.write(libraryViewKey(scope), { ...next, searchNonce: target.nonce }) ? undefined : 'Free browser storage before opening this Library source. Your writing and selection are kept.';
