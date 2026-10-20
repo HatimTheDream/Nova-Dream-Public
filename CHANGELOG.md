@@ -1,3 +1,11 @@
+## [2.12.0] - 2026-10-20
+
+- Open and manage saved Groups from Assistant, with named members, explicit default responders and accessible membership history.
+- Keep Group writing and original changes through interrupted replies; review stale saves before making a separate corrected change.
+- Require a replacement before removing the default responder, and preserve newer choices when undoing a removal.
+- Add safe Group turn preparation with exact selected sources and recipient scope; native Group messaging remains in preparation.
+- Fix Library import acknowledgments, Headquarters profile selection and direct-chat account spacing.
+
 ## [2.11.0] - 2026-10-20
 
 - Keep Projects inside Assistant with retained creation and settings drafts, clear Chat and Work setup, and exact source-preview return.
