@@ -7,6 +7,7 @@ import type { ProfileView } from './profile-view';
 import { ProfilePages } from './profile-week-client';
 import { request } from './api';
 import { Empty } from './ui';
+import { ProfileWeekNotes } from './ProfileWeekNotes';
 
 const dateLabel = (day: string) => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${day}T12:00:00Z`));
 const query = (identity: ProfileWeekIdentity) => new URLSearchParams(identity).toString();
@@ -16,8 +17,8 @@ export const currentProfileWeek = (progress: ProfileProgress): ProfileWeekIdenti
 });
 const stamp = (at: string, timezone: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone }).format(new Date(at));
 
-export function ProfileWeek({ epoch, progress, view, changeView, captureView, openTask, canOpenTask, revision, active }: {
-  epoch: string; progress: ProfileProgress; view: ProfileView; changeView(patch: Partial<ProfileView>): boolean;
+export function ProfileWeek({ epoch, deviceId, progress, view, changeView, captureView, openTask, canOpenTask, revision, active }: {
+  epoch: string; deviceId: string; progress: ProfileProgress; view: ProfileView; changeView(patch: Partial<ProfileView>): boolean;
   captureView(patch: Partial<ProfileView>): void;
   openTask(id: string): void; canOpenTask(id: string): boolean; revision: number; active: boolean;
 }) {
@@ -106,6 +107,7 @@ export function ProfileWeek({ epoch, progress, view, changeView, captureView, op
     <section hidden={view.weekSection !== 'week'}>
       <div className="section-heading"><div><h2 ref={weekHeading} tabIndex={-1}>Week Of {dateLabel(identity.start)}</h2><p className="metadata">{identity.timezone}{!currentZone && ' · Retained timezone'}</p></div><div className="button-row"><button onClick={() => moveWeek(-7)}>Previous Week</button><button onClick={() => moveWeek(7)}>Next Week</button><button disabled={sameProfileWeek(identity, current)} onClick={() => select({ week: current, day: null, weekScroll: 0 })}>{currentZone ? 'This Week' : 'Use Current Home Timezone'}</button></div></div>
       {!currentZone && <p className="notice">Home Timezone is now {progress.timezone}. This view keeps its original timezone until you choose the current one.</p>}
+      <ProfileWeekNotes key={`${epoch}:${deviceId}`} epoch={epoch} deviceId={deviceId} identity={identity} active={active && view.weekSection === 'week'}/>
       <p className="metadata">By first completion date · still credited.</p>
       {error && <div className="notice warning" role="alert"><p>{error}{confirmed ? ' Showing the last confirmed week.' : ''}</p><button onClick={() => void load()}>Retry Week</button></div>}
       {confirmed ? <div className="profile-week-chart" aria-label="Currently credited Tasks by first completion date">{confirmed.days.map(row => <button key={row.day} className={day === row.day ? 'active' : ''} aria-pressed={day === row.day} aria-label={`${dateLabel(row.day)}: ${row.count} still credited Tasks, ${row.activityCount} activity entries`} onClick={() => select({ week: identity, day: row.day })}><span>{new Intl.DateTimeFormat(undefined, { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${row.day}T12:00:00Z`))}</span><strong>{row.count}</strong><span>{dateLabel(row.day)}</span><small>{row.activityCount ? `${row.activityCount} activity` : 'No activity'}</small></button>)}</div> : <p role="status">{loading ? 'Loading this week…' : 'This week has not been read yet.'}</p>}

@@ -56,6 +56,9 @@ GET /api/profile/progress
 GET /api/profile/week
 GET /api/profile/week/activity
 GET /api/profile/week/history
+GET /api/profile/week/note
+GET /api/profile/week/notes
+POST /api/profile/week/note
 GET /api/profile/history
 GET /api/profile/studio
 POST /api/profile/studio
