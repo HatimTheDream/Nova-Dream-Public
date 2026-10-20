@@ -1,3 +1,11 @@
+## [2.9.24] — 2026-10-20
+
+### Improved
+
+- Review the exact conversations selected for permanent cleanup, with clear blocked and unconfirmed outcomes.
+- Keep cleanup tied to its original request across interrupted replies, navigation and reload, and check the saved outcome before continuing.
+- Preserve restorable project groups, unrelated saved work and retained conversation writing.
+
 ## [2.9.23] — 2026-10-20
 
 ### Improved

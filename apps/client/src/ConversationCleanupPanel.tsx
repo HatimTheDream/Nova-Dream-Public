@@ -1,26 +1,59 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { Conversation } from '../../../packages/domain/assistant';
 import { cleanupReason, conversationMatchesScope, conversationNeedsCleanup, type ConversationCleanupScope, type ConversationCleanupAction } from '../../../packages/domain/conversation-cleanup';
 import { request, saveLocal } from './api';
 import { retainedWindowId } from './useWorkspace';
 import { retainedCleanupClient } from './conversation-cleanup-client';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
+import { PermanentConversationCleanupPanel } from './PermanentConversationCleanupPanel';
+import { keepCleanupMode, readCleanupMode, type CleanupMode } from './conversation-permanent-cleanup-client';
 import './conversation-cleanup.css';
 
 type Props = { epoch: string; deviceId: string; conversations: Conversation[]; currentScope: ConversationCleanupScope; active: boolean; refresh: () => Promise<void> };
 const actionLabel = { archive: 'Archive', trash: 'Move To Trash', restore: 'Restore' };
+// The retained client outlives a panel remount. Its request fence must follow
+// the current mounted owner, not a stale component ref from the first mount.
+const cleanupActivity = new Map<string, { current: boolean }>();
 export function ConversationCleanupPanel({ epoch, deviceId, conversations, currentScope, active, refresh }: Props) {
+  return <CleanupModes key={`${epoch}:${deviceId}:${retainedWindowId}`} epoch={epoch} deviceId={deviceId} conversations={conversations} currentScope={currentScope} active={active} refresh={refresh}/>;
+}
+function CleanupModes(props: Props) {
+  const owner = { epoch: props.epoch, deviceId: props.deviceId, windowId: retainedWindowId };
+  const key = `e3:conversation-cleanup-mode:${owner.epoch}:${owner.deviceId}:${owner.windowId}`;
+  const read = () => { const raw = localStorage.getItem(key); return raw === null ? undefined : JSON.parse(raw); };
+  const [choice, setChoice] = useState(() => {
+    try { const raw = read(); return { raw, mode: readCleanupMode(raw, owner), error: '', invalid: false }; }
+    catch { return { raw: undefined as unknown, mode: 'organize' as CleanupMode, error: 'This saved cleanup mode could not be read. Its original browser record is kept.', invalid: true }; }
+  });
+  const select = (mode: CleanupMode) => {
+    if (!props.active || choice.invalid) return;
+    try { const raw = keepCleanupMode(mode, owner, choice.raw, read, value => saveLocal(key, value)); setChoice({ raw, mode, error: '', invalid: false }); }
+    catch { setChoice(value => ({ ...value, error: 'The cleanup mode could not be kept. Your original view and both requests are unchanged.' })); }
+  };
+  return <div className="conversation-cleanup-workspace">
+    <div className="cleanup-mode-controls" role="group" aria-label="Cleanup mode">
+      <button aria-pressed={choice.mode === 'organize'} disabled={!props.active || choice.invalid} onClick={() => select('organize')}>Archive, Trash And Restore</button>
+      <button aria-pressed={choice.mode === 'permanent'} disabled={!props.active || choice.invalid} onClick={() => select('permanent')}>Permanent Trash Removal</button>
+    </div>
+    {choice.error && <p className="notice warning" role="alert">{choice.error}</p>}
+    <div hidden={choice.mode !== 'organize'}><OrganizationCleanupPanel {...props} active={props.active && !choice.invalid && choice.mode === 'organize'}/></div>
+    <div hidden={choice.mode !== 'permanent'}><PermanentConversationCleanupPanel {...props} active={props.active && !choice.invalid && choice.mode === 'permanent'}/></div>
+  </div>;
+}
+function OrganizationCleanupPanel({ epoch, deviceId, conversations, currentScope, active, refresh }: Props) {
   const key = `e3:conversation-cleanup:${epoch}:${deviceId}:${retainedWindowId}`;
-  const client = useMemo(() => retainedCleanupClient(key, epoch, currentScope, { read: () => { const raw = localStorage.getItem(key); if (raw === null) return undefined; try { return JSON.parse(raw); } catch { return { unsupported: true }; } }, write: value => saveLocal(key, value), request, uuid: () => crypto.randomUUID() }), [key]);
+  const activeRef = useRef(active); activeRef.current = active;
+  cleanupActivity.set(key, activeRef);
+  const client = useMemo(() => retainedCleanupClient(key, epoch, currentScope, { read: () => { try { const raw = localStorage.getItem(key); return raw === null ? undefined : JSON.parse(raw); } catch { return { unsupported: true }; } }, write: value => saveLocal(key, value), request: <T,>(url: string, input?: unknown) => cleanupActivity.get(key)?.current ? request<T>(url, input) : Promise.reject(Error('Reopen this cleanup view to observe its original result.')), uuid: () => crypto.randomUUID() }), [key]);
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot), { saved, batch, busy } = view;
   const [shown, setShown] = useState(50);
-  useEffect(() => { if (active) { void client.observe(); void client.history(); } }, [active, client]);
+  useEffect(() => { activeRef.current = active; if (active) { void client.observe(); void client.history(); } return () => { activeRef.current = false; }; }, [active, client]);
   useEffect(() => { setShown(50); }, [saved.scope, batch?.id]);
   const rows = conversations.filter(chat => conversationMatchesScope(chat, saved.scope) && conversationNeedsCleanup(chat, saved.action));
-  const locked = busy || !!saved.pending || view.invalid;
+  const locked = !active || busy || !!saved.pending || view.invalid;
   const scope = (change: Partial<ConversationCleanupScope>) => client.configure({ scope: { ...saved.scope, ...change }, selected: [] });
-  const decide = async (kind: 'apply' | 'cancel') => { await client.decide(kind, mayLeaveAssistantDraft); await refresh().catch(() => undefined); void client.history(); };
-  const check = async () => { await client.observe(true); await refresh().catch(() => undefined); void client.history(); };
+  const decide = async (kind: 'apply' | 'cancel') => { if (!activeRef.current) return; await client.decide(kind, mayLeaveAssistantDraft); if (!activeRef.current) return; await refresh().catch(() => undefined); if (activeRef.current) void client.history(); };
+  const check = async () => { if (!activeRef.current) return; await client.observe(true); if (!activeRef.current) return; await refresh().catch(() => undefined); if (activeRef.current) void client.history(); };
   return <div className="conversation-cleanup-panel">
     <div><p className="metadata">Review exact conversations before changing their organization. Messages, saved writing and Project groups are kept. Nothing is permanently deleted.</p></div>
     {view.error && <p className="notice warning" role="alert">{view.error}</p>}

@@ -74,6 +74,9 @@ POST /api/assistant/cancel
 GET /api/assistant/conversation-cleanup
 POST /api/assistant/conversation-cleanup/prepare
 POST /api/assistant/conversation-cleanup/decide
+GET /api/assistant/conversation-cleanup/permanent
+POST /api/assistant/conversation-cleanup/permanent/prepare
+POST /api/assistant/conversation-cleanup/permanent/decide
 POST /api/assistant/conversation/edit
 POST /api/assistant/conversation/fork
 POST /api/assistant/conversation/recover-settings
