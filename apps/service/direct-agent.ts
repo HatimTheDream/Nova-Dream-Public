@@ -12,6 +12,9 @@ export function assertOrdinaryAssistant(conversation: Pick<Conversation, 'direct
 }
 
 export function createDirectAgentConversation(store: Store, device: string, input: z.infer<typeof createConversationSchema>, teamId?: string): Conversation {
+  return admitDirectAgentConversation(store, device, input, teamId).conversation;
+}
+export function admitDirectAgentConversation(store: Store, device: string, input: z.infer<typeof createConversationSchema>, teamId?: string) {
   store.assertUpdateAdmission();
   if (store.recoveryEffectsPaused) throw new Fault(409, 'recovery_held', 'Review the recovered workspace before creating an agent conversation.');
   if (!input.recipient) throw new Fault(400, 'direct_agent_required', 'Choose the exact saved agent.');
@@ -35,5 +38,5 @@ export function createDirectAgentConversation(store: Store, device: string, inpu
   });
   const original = store.internalRead<Conversation>(`assistant:conversation:${admitted.value.id}`);
   if (!original?.directAgent) throw new Fault(409, 'direct_agent_missing', 'The original agent conversation is unavailable.');
-  return original;
+  return { conversation: original, fresh: admitted.fresh };
 }

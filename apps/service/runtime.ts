@@ -11,6 +11,10 @@ import { withWorkerPlugin } from './worker-runtime-config.js';
 import { withModulePlugin } from './module-runtime-config.js';
 import { withSourcePlugin } from './source-runtime-config.js';
 import { withAccountPlugin } from './account-runtime-config.js';
+import { withDirectAgentPlugin, prepareDirectWorkspace, qualifyDirectRuntimeConfiguration } from './direct-agent-runtime-config.js';
+import { directPluginFiles } from './direct-agent-runtime-files.js';
+import { directConfigurationHash, assertDirectConfiguration, directPluginId } from './direct-agent-runtime-policy.js';
+import type { DirectRuntimeIdentity } from './direct-agent-owner.js';
 import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
 import { qualifyNativeUpdateStartup } from './update-native-startup.js';
 import type { RuntimeStatus } from '../../packages/domain/runtime.js';
@@ -28,6 +32,7 @@ export class ManagedRuntime {
   private childStartedAt?:number;
   private childVersion?: '2026.9.2' | '2026.9.6' | '2026.9.8';
   private childEntry?: string;
+  private directPluginSha256?: string;
   private browserNetwork=new BrowserNetwork();
   private shortTemporaryDirectory?:string;
   private launching?: Promise<RuntimeStatus>;
@@ -65,6 +70,24 @@ export class ManagedRuntime {
     if (!config || !this.child?.pid || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.stopping || this.current.state !== 'running' || !this.childStartedAt || connection.state !== 'ready' || !connection.generation || connection.url !== `ws://127.0.0.1:${config.port}` || selected?.url !== connection.url || selected.token !== config.token) return;
     try { if (!this.childVersion || this.childEntry !== realpathSync(this.entry()) || !this.child.spawnargs.includes(this.entry())) return; } catch { return; }
     return { epoch:this.store.epoch,pid:this.child.pid,url:connection.url,generation:connection.generation,startedAt:this.childStartedAt,version:this.childVersion };
+  }
+  directIdentity(): DirectRuntimeIdentity | undefined {
+    const identity = this.updateIdentity();
+    if (!identity || identity.version !== '2026.9.8' || !this.directPluginSha256) return;
+    const root = join(this.store.directory, 'openclaw-runtime'), path = join(root, 'openclaw.json');
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) return;
+    const configuration = JSON.parse(readFileSync(path, 'utf8'));
+    const sourcePolicySha256 = directConfigurationHash(configuration);
+    if (configuration.plugins?.entries?.[directPluginId]?.config?.policySha256 !== sourcePolicySha256) return;
+    assertDirectConfiguration(configuration, sourcePolicySha256);
+    qualifyDirectRuntimeConfiguration(configuration, root, import.meta.url.endsWith('.ts')
+      ? resolve(dirname(fileURLToPath(import.meta.url)), '../../dist/service/apps/service') : dirname(fileURLToPath(import.meta.url)), identity.version);
+    const here = dirname(fileURLToPath(import.meta.url));
+    const serviceDirectory = import.meta.url.endsWith('.ts') ? resolve(here, '../../dist/service/apps/service') : here;
+    const pluginSha256 = directPluginFiles(serviceDirectory);
+    if (pluginSha256 !== this.directPluginSha256) return;
+    return { ...identity, sourcePolicySha256, pluginSha256, configuration };
   }
   updateStartupBlockers() {
     try { const entry=this.entry(), version=this.childVersion??JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version; const serviceDirectory=dirname(fileURLToPath(import.meta.url)); return qualifyNativeUpdateStartup(join(this.store.directory,'openclaw-runtime'),import.meta.url.endsWith('.ts')?resolve(serviceDirectory,'../../dist/service/apps/service'):serviceDirectory,undefined,version); }
@@ -178,7 +201,12 @@ export class ManagedRuntime {
       parsedConfig.plugins = { ...parsedConfig.plugins, allow:[...new Set([...(parsedConfig.plugins?.allow??[]),'browser'])], entries:{...parsedConfig.plugins?.entries,browser:{...parsedConfig.plugins?.entries?.browser,enabled:true}} };
       const stagedConfig = withAccountPlugin(withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache')), this.store.epoch, join(dirname(bundlePath), 'account-plugin'), entry);
       const sessionBindings = this.store.internalList<import('../../packages/domain/assistant.js').Conversation>('assistant:conversation:').flatMap(conversation => conversation.nativeId && !conversation.deleted ? [{nativeKey:conversation.nativeKey,nativeId:conversation.nativeId}] : []);
-      const updatedConfig = JSON.stringify(this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig,null,2);
+      const moduleConfig = this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig;
+      const directSupported = this.moduleBridge && JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version === '2026.9.8';
+      if (directSupported) prepareDirectWorkspace(root);
+      const updatedConfig = JSON.stringify(directSupported ? withDirectAgentPlugin(moduleConfig, this.store.epoch, root,
+        join(dirname(bundlePath), 'direct-agent-plugin'), this.moduleBridge!()) : moduleConfig, null, 2);
+      this.directPluginSha256 = directSupported ? directPluginFiles(dirname(bundlePath)) : undefined;
       if (this.store.updateMaintenanceHeld) {
         const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig),JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version);
         if(blockers.length)throw new Fault(409,blockers[0].code,blockers[0].message);

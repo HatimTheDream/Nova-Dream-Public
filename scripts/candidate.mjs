@@ -37,6 +37,14 @@ export function verifyCandidate(workspace) {
     assert.equal(metadata.id, 'edition3-worker', 'The assignment plugin identity changed.');
     assert.deepEqual(packageMetadata.openclaw?.extensions, ['./index.js'], 'The assignment plugin entry is not paired with this candidate.');
   }
+  if (pkg.edition3.schemaVersion >= 56) {
+    const plugin = 'dist/service/apps/service/direct-agent-plugin/';
+    for (const path of ['index.js', 'openclaw.plugin.json', 'package.json'].map(name => plugin + name)
+      .concat(['direct-agent-tool-calls.js', 'direct-agent-runtime-policy.js', 'direct-agent-owner.js'].map(name => 'dist/service/apps/service/' + name)))
+      assert.ok(bytes.has(path), `Rebuild before starting: direct-agent artifact is missing: ${path}`);
+    assert.equal(JSON.parse(bytes.get(plugin + 'openclaw.plugin.json')).id, 'edition3-direct-agent');
+    assert.deepEqual(JSON.parse(bytes.get(plugin + 'package.json')).openclaw?.extensions, ['./index.js']);
+  }
   const id = sha(Buffer.concat([pkgBytes, manifestBytes]));
   return { root, id, manifest, bytes };
 }

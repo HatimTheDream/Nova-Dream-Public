@@ -31,8 +31,9 @@ function fixture() {
   };
   const configuration = {
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: { policySha256: '' } } } },
-    agents: { entries: { 'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
-    gateway: { controlUi: { enabled: false } },
+    cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } }, models: { catalogRefresh: { enabled: false } },
+    agents: { defaults: { heartbeat: { every: '0m' } }, entries: { 'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
+    gateway: { bind: 'loopback', controlUi: { enabled: false } },
   };
   const policySha256 = directConfigurationHash(configuration);
   configuration.plugins.entries[directPluginId].config.policySha256 = policySha256;

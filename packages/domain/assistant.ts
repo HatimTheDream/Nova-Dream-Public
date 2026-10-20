@@ -160,5 +160,8 @@ export type ConversationHistory = {
   routingContract?: string; leafEntryId?: string | null;
   nativeSettings?: { permissionModePending?: boolean; title?: string; archived?: boolean; pinned?: boolean; unread?: boolean; model?: string; thinking?: string; fastMode?: boolean | 'auto' | null; permissionMode?: 'read-only' | 'guarded' | 'workspace' | 'full' | null; lifecycleRevision?: number };
 };
-export type AssistantState = { plans?: import('./assistant-plan.js').AssistantPlan[]; removals?: import('./conversation-removal.js').ConversationRemoval[]; memory?: import('./memory.js').MemoryState; questions?: import('./questions.js').QuestionState; approvals?: import('./approvals.js').ApprovalState; connection: AssistantConnection; conversations: Conversation[]; operations: AssistantOperation[]; pins?: import('./message-pins.js').MessagePin[]; historyVersions?: Record<string, number>; queue?: QueuedMessage[] };
+export type DirectConnectionStatus = { conversationId: string; originalRequestId: string; setupSha256: string;
+  setupRevision: number; conversationRevision: number; state: 'preparing' | 'dispatching' | 'ready' | 'failed' | 'unknown';
+  canContinueUnsent: boolean };
+export type AssistantState = { plans?: import('./assistant-plan.js').AssistantPlan[]; removals?: import('./conversation-removal.js').ConversationRemoval[]; memory?: import('./memory.js').MemoryState; questions?: import('./questions.js').QuestionState; approvals?: import('./approvals.js').ApprovalState; connection: AssistantConnection; conversations: Conversation[]; operations: AssistantOperation[]; pins?: import('./message-pins.js').MessagePin[]; historyVersions?: Record<string, number>; queue?: QueuedMessage[]; directConnections?: DirectConnectionStatus[] };
 export type AssistantModel = { id: string; name: string; provider: string; reasoning?: string[]; available: boolean; isDefault?: boolean };

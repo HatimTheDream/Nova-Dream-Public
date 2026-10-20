@@ -17,7 +17,7 @@ export type AccountSdk = {
 };
 export type AccountPluginApi = {
   registrationMode: string; pluginConfig?: unknown; config?: unknown;
-  runtime: { version: string };
+  runtime: { version: string; config?: { current(): unknown } };
   registerGatewayMethod(name: string, handler: (options: { params: unknown; respond(ok: boolean, value?: unknown, error?: { code: string; message: string }): void }) => Promise<void>, options: { scope: 'operator.read' }): void;
   registerService(service: { id: string; start(): void; stop(): Promise<void> }): void;
 };
@@ -47,6 +47,37 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
     const info = sdk.resolveOpenAICodexAuthIdentity({ access: cred.access, ...(cred.accountId ? { accountId: cred.accountId } : {}), ...(cred.email ? { email: cred.email } : {}) });
     return info.accountId ? { accountId: info.accountId, identityKey: createHash('sha256').update(`${config.epoch}\0${info.accountId}`).digest('hex'), email: email(info.email) } : undefined;
   };
+  if (api.runtime.version === '2026.9.8') api.registerGatewayMethod('e3.accounts.direct-profile', async ({ params, respond }) => {
+    try {
+      current();
+      const input = z.object({ epoch: z.uuid(), agentId: z.literal('edition3-direct'), profileId: chatGptProfileIdSchema }).strict().parse(params);
+      if (api.runtime.version !== '2026.9.8' || input.epoch !== config.epoch || !api.runtime.config) throw Error('Original account scope unavailable.');
+      const sdk = await (sdkPromise ??= sdkLoader(config.runtimeEntry)); current();
+      const currentConfig = api.runtime.config.current();
+      const originalConfig = JSON.stringify(currentConfig);
+      const read = (agentId: string) => sdk.loadAuthProfileStoreWithoutExternalProfiles(sdk.resolveAgentDir(currentConfig, agentId), { allowKeychainPrompt: false });
+      const main = read('main'), direct = read(input.agentId), at = now();
+      const exact = (native: NativeStore) => {
+        const credential = native.profiles[input.profileId], info = identity(sdk, credential), stats = native.usageStats?.[input.profileId];
+        const expires = finite(credential?.expires);
+        const limits = [stats?.cooldownUntil, stats?.disabledUntil, stats?.blockedUntil];
+        if (!info || expires === null || expires <= at + 30000
+          || limits.some(value => value !== undefined && finite(value) === null)
+          || Math.max(...limits.map(value => value ?? 0)) > at)
+          throw Error('Exact selected profile is not ready.');
+        return { identityKey: info.identityKey, expiresAt: expires };
+      };
+      const original = exact(main), selected = exact(direct);
+      if (original.identityKey !== selected.identityKey || !same(selected, exact(read(input.agentId)))
+        || !same(original, exact(read('main')))) throw Error('Exact profile changed.');
+      current();
+      if (JSON.stringify(api.runtime.config.current()) !== originalConfig) throw Error('Original account configuration changed.');
+      // No key resolution, token refresh, usage request or credential material
+      // leaves this method. Missing dedicated access is never repaired here.
+      respond(true, { format: 1, epoch: config.epoch, agentId: input.agentId, profileId: input.profileId,
+        identityKey: selected.identityKey, expiresAt: Math.min(original.expiresAt, selected.expiresAt), ready: true });
+    } catch { respond(false, undefined, { code: 'UNAVAILABLE', message: 'This exact selected account is not available to the dedicated agent. No fallback account was selected.' }); }
+  }, { scope: 'operator.read' });
   api.registerGatewayMethod('e3.accounts.snapshot', async ({ params, respond }) => {
     try {
       current(); const input = chatGptAccountSnapshotSchema.parse(params);

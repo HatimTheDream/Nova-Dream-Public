@@ -1,6 +1,9 @@
 import { AssistantPlans } from './assistant-plans.js';
-import { assertOrdinaryAssistant, createDirectAgentConversation } from './direct-agent.js';
-import { directAgentMessageAuthor } from '../../packages/domain/direct-agent.js';
+import { assertOrdinaryAssistant, admitDirectAgentConversation } from './direct-agent.js';
+import { directAgentMessageAuthor, captureDirectAgentTurn, assertDirectAgentOperation } from '../../packages/domain/direct-agent.js';
+import { DirectAgentOwner, type DirectSessionObservation } from './direct-agent-owner.js';
+import { prepareDirectAgentRequest, directAgentAcknowledgement, directAgentMessage } from './direct-agent-dispatch.js';
+import { z } from 'zod';
 import { AssistantResearchProgress } from './assistant-research-progress.js';
 import { workProjectDiffSchema } from '../../packages/domain/work-project.js';
 import { assistantSpace, spaceDraftId, spaceInstructions } from '../../packages/domain/assistant-space.js';
@@ -50,6 +53,30 @@ const object = (value: unknown): Record<string, any> => value && typeof value ==
 const inputReceiptRuntimes = new Set(['2026.9.6', '2026.9.8']);
 const inputReceiptLimit = 50;
 type ReconciliationHistory = ConversationHistory & { inputReceipts?: unknown };
+type DirectConnection = {
+  format: 1; requestId: string; deviceId: string; epoch: string; conversationId: string; conversationRevision: number;
+  nativeKey: string; generation: string; state: 'preparing' | 'dispatching' | 'ready' | 'failed' | 'unknown'; nativeId: string | null;
+  // Absent on legacy/interrupted records: absence is never proof of no send.
+  dispatchStarted?: boolean; continuationRequestId?: string;
+  noDispatch?: { kind: 'confirmed-before-native-create'; requestId: string; at: string };
+};
+const directConnectInput = z.object({ requestId: z.uuid(), epoch: z.uuid(), conversationId: z.uuid(),
+  expectedRevision: z.number().int().positive() }).strict();
+const continueDirectInput = directConnectInput.extend({ action: z.literal('continue-unsent'),
+  originalRequestId: z.uuid(), expectedSetupSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const confirmedUnsent = (setup: DirectConnection, conversation: Conversation, device: string, epoch: string) =>
+  setup.format === 1 && setup.state === 'failed' && setup.dispatchStarted === false && setup.nativeId === null
+  && setup.deviceId === device && setup.epoch === epoch && setup.conversationId === conversation.id
+  && setup.conversationRevision === conversation.revision && setup.nativeKey === conversation.nativeKey
+  && setup.noDispatch?.kind === 'confirmed-before-native-create'
+  && setup.noDispatch.requestId === (setup.continuationRequestId ?? setup.requestId)
+  && z.iso.datetime().safeParse(setup.noDispatch.at).success;
+type DirectPreparation = {
+  format: 1; id: string; requestId: string; deviceId: string; epoch: string; input: z.infer<typeof submitSchema>;
+  conversationId: string; conversationRevision: number; nativeId: string; nativeKey: string; generation: string;
+  sourceDigest: string; source: { input: string; manifest: ContextManifest };
+  state: 'preparing' | 'prepared' | 'failed'; createdAt: string;
+};
 const hasInputReceipt = (receipts: unknown, runId: string) => {
   if (!Array.isArray(receipts) || receipts.length > inputReceiptLimit) return false;
   const matches = receipts.map(object).filter(receipt => receipt.runId === runId);
@@ -98,6 +125,16 @@ export class AssistantService {
   private artifactRetries = new Map<string, number>();
   private accountRouter?: (conversation: Conversation) => Promise<Conversation['accountSelection']>;
   private accountValidator?: (profileId: string) => Promise<void>;
+  private directOwner?: DirectAgentOwner;
+  private directPreparations = new Map<string, Promise<AssistantOperation>>();
+  setDirectAgentOwner(owner: DirectAgentOwner) {
+    if (this.directOwner || this.closed) throw Error('The original direct-agent owner cannot be replaced.');
+    this.directOwner = owner;
+  }
+  private requireDirectOwner() {
+    if (this.closed || !this.directOwner) throw new Fault(409, 'direct_agent_runtime_unavailable', 'The dedicated connection is unavailable. This chat and its draft are kept.');
+    return this.directOwner;
+  }
   setAccountRouter(route: (conversation: Conversation) => Promise<Conversation['accountSelection']>, validate: (profileId: string) => Promise<void>) { this.accountRouter = route; this.accountValidator = validate; }
   async selectAccount(device: string, raw: unknown) {
     const input = conversationAccountSchema.parse(raw);
@@ -116,23 +153,33 @@ export class AssistantService {
   }
   async prepareAccount(id: string, history?: ConversationHistory) {
     assertOrdinaryAssistant(this.conversation(id));
+    return this.prepareAccountFor(id, history);
+  }
+  private async prepareAccountFor(id: string, history?: ConversationHistory, direct = false) {
+    const check = (conversation: Conversation) => {
+      if (!direct) return this.assertConnection(conversation);
+      this.requireDirectOwner().current(); return this.assertTransport(conversation);
+    };
     if (!this.accountRouter) return history;
     const conversation = this.conversation(id), epoch = this.store.epoch;
-    this.assertConnection(conversation);
+    check(conversation);
     const before = history ?? await this.history(id);
     const model = conversation.model ?? before.nativeSettings?.model;
     const selection = await this.accountRouter({ ...conversation, model: model ?? null });
     if (!selection) return history;
+    const originalProfile = conversation.preferredAccountId ?? conversation.accountSelection?.profileId;
+    if (direct && originalProfile && selection.profileId !== originalProfile)
+      throw new Fault(409, 'direct_agent_account_unavailable', 'The original selected account is unavailable. This agent turn will not use a backup account.');
     if (before.activeRunIds === null || before.activeRunIds.length || before.inFlightRun) throw new Fault(409, 'account_busy', 'The current reply must finish before switching accounts.');
     if (!model) throw new Fault(409, 'account_model_unknown', 'Choose a model before selecting this account.');
     const captured = this.conversation(id);
-    this.assertConnection(captured);
+    check(captured);
     if (this.closed || epoch !== this.store.epoch || captured.revision !== conversation.revision || captured.nativeId !== conversation.nativeId || captured.nativeKey !== conversation.nativeKey || captured.pendingSettings || captured.deleted || captured.archived) throw new Fault(409, 'account_unconfirmed', 'This chat changed before its account could be selected. Your message is kept.');
     const result = await this.gateway.request<{ entry?: Record<string, unknown> }>('sessions.patch', { key: conversation.nativeKey, expectedSessionId: conversation.nativeId, model: `${model.replace(/@[^@]+$/, '')}@${selection.profileId}` });
-    this.assertConnection(conversation);
+    check(conversation);
     const current = this.conversation(id);
     if (this.closed || epoch !== this.store.epoch || current.revision !== conversation.revision || current.nativeId !== conversation.nativeId || result.entry?.sessionId !== conversation.nativeId || result.entry?.authProfileOverride !== selection.profileId) throw new Fault(409, 'account_unconfirmed', 'The account switch could not be confirmed. Your message is kept.');
-    this.saveConversation({ ...current, accountSelection: selection });
+    this.saveConversation({ ...current, accountSelection: selection, ...(direct ? { model: model.replace(/@[^@]+$/, '') } : {}) });
     return this.history(id);
   }
   private pendingCompletions = new Map<string, { nextCheck: number; lastActive: number }>();
@@ -152,6 +199,8 @@ export class AssistantService {
   private historyVersions: Record<string, number> = {};
   private interruptedOperations: AssistantOperation[] = [];
   private interruptedConversations: Conversation[] = [];
+  private interruptedDirectPreparations: DirectPreparation[] = [];
+  private interruptedDirectConnections: DirectConnection[] = [];
   private reconnectPending = false;
   private restoringVisibility = new Set<string>();
   constructor(private store: Store, private gateway: AssistantTransport, artifactExchange?: typeof fetch, private accessControl?: Pick<SessionSettingsControl, 'request'>, private responseControl?: Pick<SessionSettingsControl, 'request'>) {
@@ -168,13 +217,31 @@ export class AssistantService {
     } });
     this.interruptedOperations = this.operations().filter(op => !terminal.has(op.state) && (op.state !== 'unknown' || !op.error));
     this.interruptedConversations = this.conversations().filter(conversation => conversation.state === 'creating');
+    this.interruptedDirectPreparations = this.store.internalList<DirectPreparation>('assistant:direct-preparation:').filter(value => value.state === 'preparing');
+    this.interruptedDirectConnections = this.store.internalList<DirectConnection>('assistant:direct-connection:').filter(value => ['preparing', 'dispatching'].includes(value.state));
     this.recoverInterrupted();
     this.stopListening = gateway.subscribe(event => { void this.event(event).catch(() => undefined); });
     this.queueTimer = setInterval(() => this.runAutomaticQueues(), 750); this.queueTimer.unref?.();
   }
-  close() { this.continuations.close(); this.removals.close(); this.closed = true; this.researchProgress.close(); clearInterval(this.queueTimer); this.stopListening(); this.artifactReader.close(); void this.officeReader.close(); }
+  close() { this.directOwner?.close(); this.continuations.close(); this.removals.close(); this.closed = true; this.researchProgress.close(); clearInterval(this.queueTimer); this.stopListening(); this.artifactReader.close(); void this.officeReader.close(); }
   private recoverInterrupted() {
-    if (this.closed || this.store.updateMaintenanceHeld) return;
+    if (this.closed || this.store.updateMaintenanceHeld || this.store.recoveryEffectsPaused) return;
+    if (!this.store.recoveryEffectsPaused) for (const value of this.interruptedDirectPreparations.splice(0)) {
+      const key = `assistant:direct-preparation:${value.requestId}`;
+      if (canonical(this.store.internalRead(key)) === canonical(value)) this.store.internalWrite(key, { ...value, state: 'failed' });
+    }
+    if (!this.store.recoveryEffectsPaused) for (const value of this.interruptedDirectConnections.splice(0)) {
+      const key = `assistant:direct-connection:${value.conversationId}`;
+      if (canonical(this.store.internalRead(key)) !== canonical(value)) continue;
+      const state = value.state === 'preparing' ? 'failed' : 'unknown';
+      this.store.internalWrite(key, { ...value, state });
+      const conversation = this.conversations().find(item => item.id === value.conversationId);
+      if (conversation?.directAgent && !conversation.nativeId && conversation.nativeKey === value.nativeKey
+        && conversation.revision === value.conversationRevision)
+        this.saveConversation({ ...conversation, state, error: state === 'failed'
+          ? 'Connection preparation was interrupted before sending. The original chat is kept.'
+          : 'The original connection is unconfirmed. Check its status; setup will not be sent again.' });
+    }
     // Capture only records present at startup. A deferred recovery must neither
     // replace an existing unknown explanation nor overwrite a later native receipt.
     for (const op of this.interruptedOperations.splice(0)) if (canonical(this.store.internalRead(operationKey(op.id))) === canonical(op)) this.saveOperation({ ...op,
@@ -360,7 +427,22 @@ export class AssistantService {
     if (this.savedHistory().retainAttachment(this.conversation(input.conversationId), input, file)) this.historyVersions[input.conversationId] = (this.historyVersions[input.conversationId] ?? 0) + 1;
     return this.store.internalWrite(`assistant:output:${original.id}`, { ...prepared, file, state: 'ready' as const });
   }
-  state(): AssistantState { return { plans: this.plans.list(), removals: this.removals.list(), connection: this.gateway.status(), conversations: this.conversations(), operations: this.operations(), queue: this.queue(), pins: this.pins.list(), memory: this.memory.state(), historyVersions: { ...this.historyVersions } }; }
+  state(device?: string): AssistantState { return { plans: this.plans.list(), removals: this.removals.list(), connection: this.gateway.status(), conversations: this.conversations(), operations: this.operations(), queue: this.queue(), pins: this.pins.list(), memory: this.memory.state(), historyVersions: { ...this.historyVersions }, ...(device ? { directConnections: this.directConnectionStatuses(device) } : {}) }; }
+  private directConnectionStatuses(device: string): NonNullable<AssistantState['directConnections']> {
+    // Only the authenticated original device receives the small status summary.
+    // No policy RPC, admission, recovery, source read or saved-state write.
+    return this.conversations().filter(item => item.directAgent).flatMap(conversation => {
+      const setup = this.store.internalRead<DirectConnection>(`assistant:direct-connection:${conversation.id}`);
+      if (!setup || setup.deviceId !== device || setup.epoch !== this.store.epoch
+        || !z.uuid().safeParse(setup.requestId).success || !Number.isSafeInteger(setup.conversationRevision)
+        || !['preparing', 'dispatching', 'ready', 'failed', 'unknown'].includes(setup.state)) return [];
+      return [{ conversationId: conversation.id, originalRequestId: setup.requestId, setupSha256: digest(setup),
+        setupRevision: setup.conversationRevision, conversationRevision: conversation.revision, state: setup.state,
+        canContinueUnsent: !this.closed && !this.store.updateMaintenanceHeld && !this.store.recoveryEffectsPaused
+          && !conversation.nativeId && !conversation.archived && !conversation.deleted && !conversation.nativeRestorePending
+          && confirmedUnsent(setup, conversation, device, this.store.epoch) }];
+    }).slice(0, 100);
+  }
   private saveConversation(value: Conversation) {
     if (this.closed || this.removals.removed(value.id) || this.removals.pending(value.id)) return value;
     const current = this.store.internalRead<Conversation>(conversationKey(value.id));
@@ -388,7 +470,8 @@ export class AssistantService {
     if (terminal.has(value.state) || value.state === 'unknown') value = { ...value, ...(value.tools ? { tools: value.tools.map(tool => tool.state === 'running' ? { ...tool, state: 'unknown' as const } : tool) } : {}) };
     if (current && terminal.has(current.state) && canonical(value) === canonical(current)) return current;
     const saved = this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: observedAt });
-    this.plans.observe(saved);
+    if (saved.context.directAgent && (terminal.has(saved.state) || saved.cancelRequested)) this.directOwner?.end(saved.id);
+    if (!saved.context.directAgent) this.plans.observe(saved);
     this.researchProgress?.changed();
     const conversation = this.store.internalRead<Conversation>(conversationKey(value.conversationId));
     if (conversation && !conversation.deleted && this.savedHistory().observeOperation(conversation, saved)) this.historyVersions[value.conversationId] = (this.historyVersions[value.conversationId] ?? 0) + 1;
@@ -406,7 +489,7 @@ export class AssistantService {
     return value;
   }
   private currentOperation(captured: AssistantOperation, conversation: Conversation): AssistantOperation | undefined {
-    if (conversation.directAgent) return;
+    if (conversation.directAgent) { try { assertDirectAgentOperation(conversation, captured); } catch { return; } }
     if (this.closed || captured.epoch !== this.store.epoch || this.removals.removed(conversation.id)) return;
     const status = this.gateway.status(), currentConversation = this.store.internalRead<Conversation>(conversationKey(conversation.id));
     if (status.state !== 'ready' || !status.grantedScopes.includes('operator.read') || status.generation !== conversation.connectionGeneration || !currentConversation || currentConversation.deleted
@@ -420,6 +503,9 @@ export class AssistantService {
   }
   private assertConnection(conversation?: Conversation, write = true, allowPendingRestore = false) {
     assertOrdinaryAssistant(conversation);
+    return this.assertTransport(conversation, write, allowPendingRestore);
+  }
+  private assertTransport(conversation?: Conversation, write = true, allowPendingRestore = false) {
     if (conversation) this.removals.assertAvailable(conversation.id);
     if (write && conversation?.nativeRestorePending && !allowPendingRestore) throw new Fault(409, 'restore_pending', 'This chat is restored. Check its status after reconnecting before starting new work.');
     if (write && conversation?.pendingResume) throw new Fault(409, 'continuation_pending', 'Check this chat’s pending connection before starting new work. Your draft is kept.');
@@ -432,10 +518,22 @@ export class AssistantService {
   private assertTeamCheckout(folder:string|undefined, teamId?:string) {
     if(folder && this.store.internalList<{id:string;folder:string;state:string;epoch:string}>('team:run:').some(team=>team.epoch===this.store.epoch && team.folder===folder && team.id!==teamId && ['running','stopping'].includes(team.state)))throw new Fault(409,'team_checkout_busy','The team is working in this checkout. Pause the workflow before starting another coding task there.');
   }
+  private assertHistoryConnection(conversation: Conversation) {
+    if (!conversation.directAgent) return this.assertConnection(conversation, false);
+    this.requireDirectOwner().current();
+    return this.assertTransport(conversation, false);
+  }
   async create(device: string, raw: unknown, teamId?:string): Promise<Conversation> {
     this.store.assertUpdateAdmission();
     const input = createConversationSchema.parse(raw);
-    if (input.recipient) return createDirectAgentConversation(this.store, device, input, teamId);
+    if (input.recipient) {
+      const admitted = admitDirectAgentConversation(this.store, device, input, teamId);
+      if (!admitted.fresh) return admitted.conversation;
+      // A3a local-only recipients remain valid saved work. Only this fresh
+      // original creation may attempt setup; repeated receipts never do.
+      if (!this.directOwner) return admitted.conversation;
+      return this.setupDirect(admitted.conversation, input.requestId, device);
+    }
     const status = this.assertConnection();
     const admitted = this.store.admit(device, input, { type: 'conversation.create', ...input }, () => {
       const project = input.projectId ? this.store.readEntity('project', input.projectId) : undefined;
@@ -473,6 +571,100 @@ export class AssistantService {
       const notSent = error instanceof Fault && ['access_not_sent', 'response_not_sent'].includes(error.code);
       const rejected = worktreeSpace || notSent || error instanceof GatewayClientRequestError && ['INVALID_REQUEST', 'FORBIDDEN'].includes(error.gatewayCode);
       return this.saveConversation({ ...original, state: rejected ? 'failed' : 'unknown', error: worktreeSpace ? 'Not enough free disk space for a separate Git worktree. Use a Local Project or free space before starting again.' : notSent ? error.message : rejected ? 'OpenClaw rejected conversation setup. The draft is kept; review the name and access before starting another chat.' : 'OpenClaw has not confirmed session creation. The original identity is retained; use Check status.' });
+    }
+  }
+  /** Explicit connection for an A3a local-only chat. The old create receipt is
+   * never repurposed as permission to create a native session. */
+  async connectDirect(device: string, raw: unknown) {
+    const input = z.union([directConnectInput, continueDirectInput]).parse(raw);
+    const admitted = this.store.admit(device, input, { type: 'conversation.direct-connect', ...input }, () => {
+      this.store.assertUpdateAdmission();
+      const conversation = this.conversation(input.conversationId), key = `assistant:direct-connection:${conversation.id}`;
+      if (!conversation.directAgent || conversation.revision !== input.expectedRevision || conversation.nativeId
+        || conversation.deleted || conversation.archived || conversation.nativeRestorePending)
+        throw new Fault(409, 'direct_agent_connection_exists', 'Check the original direct-agent connection. A new setup cannot replace it.');
+      const runtime = this.requireDirectOwner().current(), previous = this.store.internalRead<DirectConnection>(key);
+      if ('action' in input) {
+        if (!previous || !confirmedUnsent(previous, conversation, device, input.epoch)
+          || previous.requestId !== input.originalRequestId || digest(previous) !== input.expectedSetupSha256)
+          throw new Fault(409, 'direct_agent_unsent_changed', 'Only the exact confirmed unsent connection can be continued. Check its original status.');
+        const historyKey = `assistant:direct-connection-attempt:${conversation.id}:${input.requestId}`;
+        if (this.store.internalRead(historyKey)) throw new Fault(409, 'direct_agent_attempt_exists', 'The original continuation is already kept.');
+        const { noDispatch: _proof, ...kept } = previous;
+        const setup: DirectConnection = { ...kept, state: 'preparing', generation: runtime.generation,
+          dispatchStarted: false, continuationRequestId: input.requestId };
+        // This exact failed snapshot and its successor are in the same original
+        // admission transaction. A partial restart cannot invent a no-send proof.
+        this.store.internalWrite(historyKey, { format: 1, continuationRequestId: input.requestId,
+          expectedSetupSha256: input.expectedSetupSha256, failed: previous });
+        this.store.internalWrite(key, setup);
+        return { conversationId: conversation.id, setup };
+      }
+      if (previous) throw new Fault(409, 'direct_agent_connection_exists', 'Check the original direct-agent connection. A new setup cannot replace it.');
+      return { conversationId: conversation.id, setup: undefined };
+    });
+    const conversation = this.conversation(admitted.value.conversationId);
+    return admitted.fresh ? this.setupDirect(conversation, admitted.value.setup?.requestId ?? input.requestId, device, admitted.value.setup) : conversation;
+  }
+  private assertDirectSetupSources(conversation: Conversation) {
+    const binding = conversation.directAgent, agent = binding && this.store.readEntity('agent', binding.recipient.agentId);
+    const project = conversation.projectId ? this.store.readEntity('project', conversation.projectId) : undefined;
+    if (!binding || !agent || agent.value.archived || agent.revision < binding.recipient.agentRevision
+      || conversation.projectId && (!project || this.store.projectIsDeleted(conversation.projectId)
+        || assistantSpace(project.value) !== 'chat' || project.value.workspace))
+      throw new Fault(409, 'direct_agent_sources_changed', 'The original agent or Chat Project is unavailable. Your writing is kept.');
+  }
+  private async setupDirect(original: Conversation, requestId: string, deviceId: string, continued?: DirectConnection) {
+    const key = `assistant:direct-connection:${original.id}`;
+    let setup: DirectConnection | undefined = continued;
+    try {
+      const owner = this.requireDirectOwner(), runtime = owner.current();
+      this.store.assertUpdateAdmission();
+      if (!original.directAgent || original.nativeId || original.revision !== this.conversation(original.id).revision
+        || original.deleted || original.archived || original.nativeRestorePending
+        || (continued ? canonical(this.store.internalRead(key)) !== canonical(continued) : !!this.store.internalRead(key)))
+        throw new Fault(409, 'direct_agent_setup_changed', 'The original direct-agent setup is already kept.');
+      setup ??= { format: 1, requestId, deviceId, epoch: this.store.epoch, conversationId: original.id,
+        conversationRevision: original.revision, nativeKey: original.nativeKey, nativeId: null,
+        generation: runtime.generation, state: 'preparing', dispatchStarted: false };
+      if (!continued) this.store.internalWrite(key, setup);
+      this.assertDirectSetupSources(original);
+      const observation = await owner.observe(original);
+      if (observation.policy.session) throw new Fault(409, 'direct_agent_session_exists', 'The original native key already exists. Review it without creating another session.');
+      owner.assertCurrent(observation);
+      const current = this.conversation(original.id);
+      if (this.closed || setup.epoch !== this.store.epoch || current.revision !== original.revision
+        || current.nativeKey !== original.nativeKey || current.nativeId || current.archived || current.deleted || current.nativeRestorePending
+        || canonical(this.store.internalRead(key)) !== canonical(setup))
+        throw new Fault(409, 'direct_agent_setup_changed', 'This chat changed before its connection was started.');
+      this.assertDirectSetupSources(current);
+      this.store.assertUpdateAdmission();
+      setup = this.store.internalWrite(key, { ...setup, state: 'dispatching' as const, dispatchStarted: true });
+      this.saveConversation({ ...current, state: 'creating' });
+      const result = await this.gateway.request<{ key: string; sessionId?: string; runStarted?: boolean; entry?: Record<string, unknown> }>('sessions.create', {
+        key: original.nativeKey, idempotencyKey: requestId, label: original.title,
+        ...(original.model ? { model: original.model } : {}), ...(nativeThinking(original.thinking) ? { thinkingLevel: nativeThinking(original.thinking) } : {}),
+        ...(original.fastMode != null ? { fastMode: original.fastMode } : {}), permissionMode: 'read-only', emitCommandHooks: false,
+      });
+      if (result.key !== original.nativeKey || !z.uuid().safeParse(result.sessionId).success || result.runStarted !== false
+        || result.entry?.sessionId !== result.sessionId || result.entry?.permissionMode !== 'read-only' || result.entry?.permissionModePending)
+        throw Error('The exact direct-agent session was not confirmed.');
+      const actual = await owner.observe({ nativeKey: original.nativeKey, nativeId: result.sessionId! });
+      owner.assertCurrent(actual);
+      if (this.closed || setup.epoch !== this.store.epoch || canonical(this.store.internalRead(key)) !== canonical(setup)
+        || this.conversation(original.id).revision !== original.revision) throw Error('The original setup owner changed.');
+      this.store.internalWrite(key, { ...setup, state: 'ready', nativeId: result.sessionId });
+      return this.saveConversation({ ...this.conversation(original.id), nativeId: result.sessionId!, connectionGeneration: setup.generation,
+        model: actual.policy.session?.model ?? original.model, state: 'ready', error: undefined });
+    } catch (error) {
+      if (this.closed || setup && setup.epoch !== this.store.epoch) return original;
+      if (setup && canonical(this.store.internalRead(key)) !== canonical(setup)) return this.conversation(original.id);
+      const state = setup?.dispatchStarted === true || setup?.state === 'dispatching' ? 'unknown' : 'failed';
+      if (setup) this.store.internalWrite(key, { ...setup, state, ...(setup.dispatchStarted === false
+        ? { noDispatch: { kind: 'confirmed-before-native-create' as const, requestId: setup.continuationRequestId ?? setup.requestId, at: now() } } : {}) });
+      return this.saveConversation({ ...this.conversation(original.id), state,
+        error: state === 'unknown' ? 'The original connection is unconfirmed. Check its status; setup will not be sent again.'
+          : error instanceof Fault ? error.message : 'The dedicated connection could not be prepared. This chat and its writing are kept.' });
     }
   }
   async fork(device: string, raw: unknown): Promise<Conversation> {
@@ -617,24 +809,24 @@ export class AssistantService {
     let conversation = this.conversation(id);
     const epoch = this.store.epoch;
     if (conversation.forkSource && !conversation.forkSource.resolved) throw new Fault(409, 'fork_unconfirmed', 'The runtime has not confirmed this branch identity. The original chat and revised draft are kept.');
-    this.assertConnection(conversation, false);
+    this.assertHistoryConnection(conversation);
     if (!this.subscribed.has(conversation.nativeKey) && this.gateway.status().methods.includes('sessions.messages.subscribe')) {
       await this.gateway.request('sessions.messages.subscribe', { key: conversation.nativeKey });
-      this.assertConnection(conversation, false);
+      this.assertHistoryConnection(conversation);
       this.subscribed.add(conversation.nativeKey);
     }
     // The public API permits sessionId only for an exact message anchor.
     // Ordinary history reads verify the returned incarnation before use.
     let result = await this.gateway.request<Record<string, any>>('chat.history', { sessionKey: conversation.nativeKey, ...(options.messageId && conversation.nativeId ? { sessionId: options.nativeId ?? conversation.nativeId } : {}), limit: 100, maxChars: 300000, ...(options.messageId ? { messageId: options.messageId } : {}), ...(options.offset !== undefined ? { offset: options.offset } : {}), ...(options.inputRunIds?.length ? { inputRunIds: options.inputRunIds } : {}) });
     if (options.resume && options.messageId) result = await locateHistoryPosition(result, options.messageId, async offset => {
-      this.assertConnection(conversation, false);
+      this.assertHistoryConnection(conversation);
       const page = await this.gateway.request<Record<string, any>>('chat.history', { sessionKey: conversation.nativeKey, limit: 100, maxChars: 300000, offset });
-      this.assertConnection(conversation, false); return page;
+      this.assertHistoryConnection(conversation); return page;
     });
     const nativeId = typeof result.sessionId === 'string' ? result.sessionId : typeof result.sessionInfo?.sessionId === 'string' ? result.sessionInfo.sessionId : null;
     if (!nativeId || ((options.nativeId ?? conversation.nativeId) && nativeId !== (options.nativeId ?? conversation.nativeId))) throw new Fault(409, 'session_replaced', 'The native conversation was replaced. Existing work is kept; open a new conversation.');
     if (this.closed) throw new Fault(503, 'service_closed', 'The workspace service is closing.');
-    this.assertConnection(conversation, false);
+    this.assertHistoryConnection(conversation);
     const currentBinding = this.conversation(id);
     if (epoch !== this.store.epoch || currentBinding.nativeKey !== conversation.nativeKey || currentBinding.nativeId !== conversation.nativeId || currentBinding.connectionGeneration !== conversation.connectionGeneration) throw new Fault(409, 'session_replaced', 'The conversation changed while its history was being checked. Existing work is kept.');
     if (this.store.updateMaintenanceHeld) {
@@ -759,7 +951,8 @@ export class AssistantService {
         if (!run || !['user', 'assistant'].includes(message.role)) return plain;
         try {
           const author = directAgentMessageAuthor(conversation, run, message.role as 'user' | 'assistant');
-          return { ...plain, operationId: run.id, ...(author ? { author } : {}) };
+          return { ...plain, operationId: run.id, ...(author ? { author } : {}),
+            ...(message.role === 'user' && message.text === directAgentMessage(run) ? { authoredText: run.input } : {}) };
         } catch { return plain; }
       }
       const owners = message.role === 'user' ? matching.filter(op => matchesOwnerMessage(op, message.text)) : [];
@@ -777,7 +970,7 @@ export class AssistantService {
     const history = this.store.internalRead<ConversationHistory>(`assistant:history:${id}`);
     return history ? { ...history, messages: this.authoredMessages(conversation, history.nativeId, history.messages) } : undefined;
   }
-  private context(device: string, draftId: string, draftRevision: number, projectRevision: number, conversation: Conversation, includeProjectFiles = true) {
+  private context(device: string, draftId: string, draftRevision: number, projectRevision: number, conversation: Conversation, includeProjectFiles = true, direct = false) {
     if (draftId !== spaceDraftId(device, assistantSpace(conversation)) && draftId !== `draft:${device}:${conversation.id}`) throw new Fault(403, 'draft_branch', 'Send only from your own conversation draft.');
     const draft = this.store.readEntity('draft', draftId);
     if (draft?.value.conversationId && draft.value.conversationId !== conversation.id || draft?.value.space !== undefined && assistantSpace(draft.value) !== assistantSpace(conversation)) throw new Fault(409, 'conversation_changed', 'The draft belongs to another conversation.');
@@ -793,6 +986,19 @@ export class AssistantService {
     if (files.length > 10) throw new Fault(409, 'attachment_limit', 'A message can include up to 10 files, including Project sources. Remove a draft attachment or update Project sources before sending. Your draft is kept.');
     const attachmentIssue = assistantAttachmentsIssue(files);
     if (attachmentIssue) throw new Fault(400, 'unsupported_attachment', attachmentIssue);
+    if (direct) {
+      if (!conversation.directAgent || assistantSpace(conversation) !== 'chat' || conversation.workspace
+        || conversation.resumeContext || draft.value.refineSource || draft.value.workMode && draft.value.workMode !== 'chat'
+        || project?.value.workspace || project && this.store.projectIsDeleted(project.id))
+        throw new Fault(409, 'direct_agent_scope', 'This direct agent accepts read-only Chat with its original saved sources.');
+      for (const file of files) if (canonical(this.store.blobMetadata(file.id)) !== canonical(file))
+        throw new Fault(409, 'attachment_changed', 'A captured source changed or is missing.');
+      const plain = { space: 'chat' as const, project: project ? { id: project.id, revision: project.revision,
+        name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}),
+        ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null,
+        attachments: files, draftId: draft.id, draftRevision };
+      return { input: draft.value.text, manifest: { ...plain, digest: digest(plain) } as ContextManifest };
+    }
     const memory = this.memory.capture(conversation.projectId);
     const manifest = { brandVersion: 1 as const, computerControlGuidance, space: assistantSpace(conversation), ...(draft.value.workMode === 'research' && assistantSpace(conversation) === 'chat' ? { researchWorkflow: 'chat-research-v1' as const, researchProgressGuidance } : {}), planning: true as const, ...(draft.value.workMode === 'goal' ? { goalReporting: true as const } : {}), ...(conversation.autoTitle ? { messageVersion: 2 as const } : {}), ...(memory ? { memory } : {}), ...(draft.value.workMode && draft.value.workMode !== 'chat' ? { workMode: draft.value.workMode } : {}), ...(draft.value.refineSource ? { refineSource: draft.value.refineSource } : {}), project: project ? { id: project.id, revision: project.revision, name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}), ...(project.value.workspace ? { workspace: conversation.workspace ?? project.value.workspace } : {}), ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null, attachments: files, draftId: draft.id, draftRevision };
     for (const attachment of manifest.attachments) if (canonical(this.store.blobMetadata(attachment.id)) !== canonical(attachment)) throw new Fault(409, 'attachment_changed', 'A required attachment changed or is missing.');
@@ -842,6 +1048,95 @@ export class AssistantService {
     });
     if (admitted.fresh) void this.dispatch(admitted.value.id);
     return this.operation(admitted.value.id);
+  }
+  /** The normal API uses the same operation engine. Direct preparation is
+   * asynchronous because its account must be confirmed before immutable turn
+   * capture. Its original admission is durable before any native patch. */
+  async submitRequest(device: string, raw: unknown): Promise<AssistantOperation> {
+    const input = submitSchema.parse(raw), conversation = this.conversation(input.conversationId);
+    if (!conversation.directAgent) return this.submit(device, input);
+    const key = `assistant:direct-preparation:${input.requestId}`;
+    const admitted = this.store.admit(device, input, { type: 'assistant.submit', ...input }, (): DirectPreparation => {
+      this.store.assertUpdateAdmission(); this.requireDirectOwner().current(); this.assertTransport(conversation);
+      if (conversation.revision !== input.conversationRevision || conversation.archived || conversation.deleted
+        || conversation.state !== 'ready' || conversation.pendingSettings || conversation.pendingResume || !conversation.nativeId
+        || this.voiceBusy(conversation.id) || this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state))
+        || this.store.internalList<DirectPreparation>('assistant:direct-preparation:').some(item => item.epoch === this.store.epoch
+          && item.conversationId === conversation.id && item.state === 'preparing'))
+        throw new Fault(409, 'direct_agent_busy', 'Finish or check the original direct-agent request before sending.');
+      const context = this.context(device, input.draftId, input.draftRevision, input.projectRevision, conversation, true, true);
+      const preparation: DirectPreparation = { format: 1, id: randomUUID(), requestId: input.requestId, deviceId: device,
+        epoch: input.epoch, input, conversationId: conversation.id, conversationRevision: conversation.revision,
+        nativeId: conversation.nativeId, nativeKey: conversation.nativeKey, generation: conversation.connectionGeneration,
+        sourceDigest: digest(context), source: structuredClone(context), state: 'preparing', createdAt: now() };
+      return this.store.internalWrite(key, preparation);
+    });
+    const preparation = this.store.internalRead<DirectPreparation>(key);
+    if (!preparation || preparation.id !== admitted.value.id || preparation.epoch !== input.epoch
+      || preparation.deviceId !== device || canonical(preparation.input) !== canonical(input))
+      throw new Fault(409, 'direct_agent_preparation_changed', 'The original preparation is unavailable. Keep the original input for review.');
+    const operation = this.store.internalRead<AssistantOperation>(operationKey(preparation.id));
+    if (operation) return this.operation(operation.id);
+    const running = this.directPreparations.get(input.requestId);
+    if (running) return running;
+    if (!admitted.fresh) throw new Fault(409, 'direct_agent_preparation_unconfirmed', 'The original preparation did not confirm a send. Its saved input is kept; it will not be repeated.');
+    const pending = this.finishDirectPreparation(preparation);
+    this.directPreparations.set(input.requestId, pending);
+    try { return await pending; } finally { if (this.directPreparations.get(input.requestId) === pending) this.directPreparations.delete(input.requestId); }
+  }
+  private async finishDirectPreparation(preparation: DirectPreparation): Promise<AssistantOperation> {
+    const input = preparation.input, key = `assistant:direct-preparation:${input.requestId}`, owner = this.requireDirectOwner();
+    const current = () => {
+      this.store.assertUpdateAdmission(); owner.current();
+      const conversation = this.conversation(input.conversationId);
+      this.assertTransport(conversation);
+      if (this.closed || this.store.epoch !== preparation.epoch || conversation.revision !== preparation.conversationRevision
+        || conversation.nativeId !== preparation.nativeId || conversation.nativeKey !== preparation.nativeKey
+        || conversation.connectionGeneration !== preparation.generation || conversation.archived || conversation.deleted
+        || conversation.pendingSettings || conversation.pendingResume || conversation.nativeRestorePending
+        || canonical(this.store.internalRead(key)) !== canonical(preparation)
+        || this.operations().some(op => op.conversationId === conversation.id && !terminal.has(op.state)))
+        throw new Fault(409, 'direct_agent_preparation_changed', 'This chat changed while the original message was being prepared. The draft is kept.');
+      const context = this.context(preparation.deviceId, input.draftId, input.draftRevision, input.projectRevision, conversation, true, true);
+      if (digest(context) !== preparation.sourceDigest) throw new Fault(409, 'direct_agent_sources_changed', 'The original writing or sources changed. Nothing was sent.');
+      return { conversation, context };
+    };
+    try {
+      let { conversation } = current();
+      await owner.observe(conversation);
+      current();
+      await this.prepareAccountFor(conversation.id, await this.history(conversation.id), true);
+      const captured = current(); conversation = captured.conversation;
+      const observation = await owner.observe(conversation);
+      const final = current(), session = observation.policy.session;
+      owner.assertCurrent(observation);
+      if (!session?.accountId || !session.model || session.id !== conversation.nativeId
+        || session.accountId !== final.conversation.accountSelection?.profileId || session.model !== final.conversation.model)
+        throw new Fault(409, 'direct_agent_account_unconfirmed', 'The selected account and model have not been confirmed for this exact agent session. Nothing was sent.');
+      const at = now(), turn = captureDirectAgentTurn(final.conversation, {
+        id: preparation.id, requestId: input.requestId, deviceId: preparation.deviceId, epoch: preparation.epoch,
+        account: { profileId: session.accountId, model: session.model, identityKey: observation.account?.identityKey },
+        sources: { projectId: final.conversation.projectId, projectRevision: input.projectRevision,
+          draftId: input.draftId, draftRevision: input.draftRevision, attachments: final.context.manifest.attachments,
+          projectAttachments: final.context.manifest.project?.attachments ?? [] }, capturedAt: at,
+      }, this.store.readEntity('agent', final.conversation.directAgent!.recipient.agentId), this.store.readEntity('profile', 'profile:owner'));
+      const { digest: _digest, ...plain } = final.context.manifest;
+      const context = { ...plain, directAgent: turn };
+      const operation: AssistantOperation = { id: preparation.id, requestId: input.requestId, deviceId: preparation.deviceId,
+        epoch: preparation.epoch, conversationId: conversation.id, conversationRevision: conversation.revision,
+        connectionGeneration: conversation.connectionGeneration, nativeKey: conversation.nativeKey, nativeId: conversation.nativeId,
+        nativeRunId: null, state: 'prepared', input: final.context.input, context: { ...context, digest: digest(context) },
+        model: session.model, thinking: conversation.thinking, fastMode: conversation.fastMode ?? null,
+        accountSelection: final.conversation.accountSelection, createdAt: at, updatedAt: at, text: '', lastSequence: 0 };
+      this.saveOperation(operation);
+      this.store.internalWrite(key, { ...preparation, state: 'prepared' });
+      void this.dispatch(operation.id);
+      return this.operation(operation.id);
+    } catch (error) {
+      if (!this.closed && preparation.epoch === this.store.epoch && canonical(this.store.internalRead(key)) === canonical(preparation))
+        this.store.internalWrite(key, { ...preparation, state: 'failed' });
+      throw error;
+    }
   }
   queue() { return this.store.internalList<QueuedMessage>('assistant:queue:').sort((a, b) => (a.position ?? Date.parse(a.createdAt)) - (b.position ?? Date.parse(b.createdAt)) || a.id.localeCompare(b.id)); }
   private queued(id: string) {
@@ -948,6 +1243,7 @@ export class AssistantService {
     let operation = this.operation(id);
     try {
       const conversation = this.conversation(operation.conversationId);
+      if (conversation.directAgent) { await this.dispatchDirect(operation, conversation); return; }
       this.assertConnection(conversation);
       // Prepare bounded Office readings before history and the final admission
       // fences. No asynchronous parsing occurs at the native send boundary.
@@ -1026,6 +1322,51 @@ export class AssistantService {
       const beforeSend = operation.state === 'prepared';
       this.saveOperation({ ...operation, state: beforeSend || rejected ? 'failed' : 'unknown', error: beforeSend ? error instanceof Fault ? error.message : 'The Assistant could not prepare this reply. Your message was not sent. Review the saved input and try again.' : rejected ? 'OpenClaw rejected this request before admission. The original input is kept for review.' : 'OpenClaw has not confirmed the outcome. Check the original run; it will not be sent again.' });
     }
+  }
+  private async dispatchDirect(original: AssistantOperation, conversation: Conversation) {
+    const owner = this.requireDirectOwner();
+    this.assertTransport(conversation);
+    const attachments = original.context.attachments.map(source => {
+      const file = this.store.download(source.id);
+      if (canonical(file.metadata) !== canonical(source)) throw new Fault(409, 'attachment_changed', 'The captured source changed.');
+      const policy = this.gateway.attachmentPolicy(), image = assistantAttachmentMime(source.name)?.startsWith('image/');
+      const maximum = image ? policy.maxImageBytes : policy.maxBytes;
+      if (maximum && file.bytes.length > maximum) throw new Fault(413, 'gateway_attachment_limit', 'A captured attachment exceeds the current native limit.');
+      return { source, bytes: file.bytes };
+    });
+    const history = await this.history(conversation.id);
+    if (history.activeRunIds === null || history.activeRunIds.length || history.inFlightRun)
+      throw new Fault(409, 'direct_agent_activity_unknown', 'Confirm that the original direct-agent session is idle before sending.');
+    const observation = await owner.observe(conversation), session = observation.policy.session;
+    if (!session?.accountId || !session.model) throw new Fault(409, 'direct_agent_session_unconfirmed', 'The original session and account are unavailable.');
+    const operation = this.operation(original.id), current = this.conversation(conversation.id);
+    this.assertTransport(current); owner.assertCurrent(observation);
+    if (operation.requestId !== original.requestId || canonical(operation.context) !== canonical(original.context)
+      || current.revision !== operation.conversationRevision
+      || operation.context.project && this.store.readEntity('project', operation.context.project.id)?.revision !== operation.context.project.revision)
+      throw new Fault(409, 'direct_agent_admission_changed', 'The original turn or Project changed. Nothing was sent.');
+    const agent = this.store.readEntity('agent', current.directAgent!.recipient.agentId);
+    if (!agent) throw new Fault(409, 'direct_agent_missing', 'The original saved agent is unavailable.');
+    const params = prepareDirectAgentRequest({ conversation: current, operation, currentAgent: agent, epoch: this.store.epoch,
+      session: { ...session, accountId: session.accountId, model: session.model, activeRunIds: history.activeRunIds },
+      runtime: { version: observation.runtime.version, generation: observation.runtime.generation,
+        configuration: observation.runtime.configuration, policySha256: observation.runtime.sourcePolicySha256 }, attachments });
+    const ceiling = this.gateway.attachmentPolicy().maxPayload;
+    if (ceiling && Buffer.byteLength(JSON.stringify(params)) + 1024 > ceiling)
+      throw new Fault(413, 'gateway_payload_limit', 'This direct-agent message exceeds the current native payload limit. Its input is kept.');
+    // No asynchronous boundary between final source/account/runtime admission,
+    // the durable original send marker, and the single native agent request.
+    this.store.assertUpdateAdmission();
+    owner.admit(operation, current, observation);
+    this.saveOperation({ ...operation, state: 'dispatching' });
+    const reply = await this.gateway.request('agent', params);
+    if (this.closed) return;
+    if (directAgentAcknowledgement(current, operation, reply) !== 'accepted') throw Error('Original direct-agent acceptance is unconfirmed.');
+    const latest = this.currentOperation(operation, current);
+    if (!latest || terminal.has(latest.state) || latest.nativeRunId && latest.nativeRunId !== operation.requestId) return;
+    if (!latest.nativeRunId) this.saveOperation({ ...latest, nativeRunId: operation.requestId, state: 'accepted', error: undefined });
+    for (const event of this.earlyEvents.get(operation.requestId) ?? []) await this.event(event);
+    this.earlyEvents.delete(operation.requestId);
   }
   /** Bulk organization never hides an unresolved request or its recovery route. */
   assertCleanupReady(conversation: Conversation) {
@@ -1175,18 +1516,41 @@ export class AssistantService {
   }
   async cancel(device: string, input: { requestId: string; epoch: string; operationId: string }) {
     const original = this.operation(input.operationId);
-    assertOrdinaryAssistant(this.conversation(original.conversationId));
+    const conversation = this.conversation(original.conversationId);
+    if (conversation.directAgent) {
+      assertDirectAgentOperation(conversation, original); this.requireDirectOwner().current();
+    } else assertOrdinaryAssistant(conversation);
     if (!original.nativeRunId) throw new Fault(409, 'run_identity_unknown', 'The exact native run is not known yet. Check its status first.');
     const admitted = this.store.admit(device, input, { type: 'assistant.cancel', ...input }, () => this.saveOperation({ ...original, cancelRequested: true }));
     if (admitted.fresh && !terminal.has(original.state)) {
-      try { this.assertConnection(this.conversation(original.conversationId), true, true); await this.gateway.request('chat.abort', { sessionKey: original.nativeKey, runId: original.nativeRunId, preserveSideRuns: true }); }
+      try {
+        if (conversation.directAgent) this.assertTransport(this.conversation(original.conversationId), true, true);
+        else this.assertConnection(this.conversation(original.conversationId), true, true);
+        await this.gateway.request('chat.abort', { sessionKey: original.nativeKey, runId: original.nativeRunId, preserveSideRuns: true });
+      }
       catch { this.saveOperation({ ...this.operation(original.id), state: 'unknown', error: 'Cancellation has not been confirmed. Check the original run.' }); }
     }
     return this.operation(original.id);
   }
   async reconcile(id: string) {
-    const conversation = this.conversation(id);
-    assertOrdinaryAssistant(conversation);
+    let conversation = this.conversation(id);
+    if (conversation.directAgent) {
+      this.requireDirectOwner().current();
+      if (!conversation.nativeId) {
+        const key = `assistant:direct-connection:${id}`, setup = this.store.internalRead<DirectConnection>(key);
+        if (!setup || setup.epoch !== this.store.epoch || setup.conversationId !== id || setup.nativeKey !== conversation.nativeKey
+          || !['dispatching', 'unknown'].includes(setup.state))
+          throw new Fault(409, 'direct_agent_connection_unconfirmed', 'No native connection was confirmed. The saved chat and original setup are kept.');
+        const observed = await this.requireDirectOwner().observe(conversation);
+        if (!observed.policy.session || setup.generation !== observed.runtime.generation
+          || this.closed || canonical(this.store.internalRead(key)) !== canonical(setup)
+          || this.conversation(id).revision !== conversation.revision || this.conversation(id).nativeId)
+          throw new Fault(409, 'direct_agent_connection_unconfirmed', 'The original native connection remains unconfirmed. Setup was not repeated.');
+        this.store.internalWrite(key, { ...setup, state: 'ready', nativeId: observed.policy.session.id });
+        conversation = this.saveConversation({ ...conversation, nativeId: observed.policy.session.id,
+          connectionGeneration: setup.generation, state: 'ready', model: observed.policy.session.model ?? conversation.model, error: undefined });
+      }
+    } else assertOrdinaryAssistant(conversation);
     const operations = this.operations().filter(op => op.conversationId === id && (!terminal.has(op.state) || !op.effectiveModel));
     const recoverInputs = !this.store.updateMaintenanceHeld && inputReceiptRuntimes.has(this.gateway.serviceInfo?.().version ?? '');
     const inputRunIds = recoverInputs ? [...new Set(operations.filter(op => !op.nativeRunId && ['dispatching', 'unknown'].includes(op.state)
@@ -1283,7 +1647,9 @@ export class AssistantService {
       if (this.operations().some(op => op.state === 'dispatching')) { const events = this.earlyEvents.get(runId) ?? []; if (events.length < 100) this.earlyEvents.set(runId, [...events, event]); if (this.earlyEvents.size > 20) this.earlyEvents.delete(this.earlyEvents.keys().next().value!); }
       return;
     }
-    if (operation.context.directAgent || this.conversations().find(c => c.id === operation.conversationId)?.directAgent) return;
+    if (operation.context.directAgent || this.conversations().find(c => c.id === operation.conversationId)?.directAgent) {
+      if (this.operations().filter(op => op.nativeRunId === runId).length !== 1 || !this.directOwner?.acceptsEvent(operation, data)) return;
+    }
     if (operation.epoch !== this.store.epoch || operation.connectionGeneration !== this.gateway.status().generation || (data.sessionKey && data.sessionKey !== operation.nativeKey)) return;
     if (event.event === 'agent') {
       if (!Number.isInteger(data.seq) || data.seq <= operation.lastSequence && !['tool', 'plan'].includes(data.stream)) return;

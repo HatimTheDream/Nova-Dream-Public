@@ -75,6 +75,12 @@ export class DirectAgentReadAuthority {
     });
     if (canonical(current) !== canonical(origin)) throw Error('The original read authority was replaced.');
   }
+  /** Recheck permission after an outer asynchronous admission without reading
+   * the requested record again or creating any durable/native effect. */
+  assertCurrentRead(raw: unknown) {
+    const { origin, read } = readRequest.parse(raw);
+    this.original(origin, read);
+  }
   async read(raw: unknown) {
     const { origin, read } = readRequest.parse(raw);
     this.original(origin, read);

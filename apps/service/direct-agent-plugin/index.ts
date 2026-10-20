@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import {
   DirectAgentToolCalls, directReadInputSchema, directReadTool, directRuntimeAgent,
   type DirectExecutionContext, type TrustedDirectCall,
 } from '../direct-agent-tool-calls.js';
-import { assertDirectConfiguration, directPluginId, directToolPolicyId } from '../direct-agent-runtime-policy.js';
+import { assertDirectConfiguration, assertDirectConfigurationShape, directConfigurationHash, directPluginId, directToolPolicyId } from '../direct-agent-runtime-policy.js';
 
 // Exact public 2026.9.8 SDK subset. Registration alone is not runtime admission.
 export type DirectPluginApi = {
@@ -11,8 +12,12 @@ export type DirectPluginApi = {
   runtime: {
     version: string; config: { current(): unknown };
     agent: { session: { getSessionEntry(input: { agentId: string; sessionKey: string; readConsistency: 'latest' }):
-      { sessionId?: string; permissionMode?: string; permissionModePending?: boolean; authProfileOverride?: string } | undefined } };
+      { sessionId?: string; permissionMode?: string; permissionModePending?: boolean; authProfileOverride?: string;
+        lifecycleRevision?: string | null; model?: string; modelProvider?: string } | undefined } };
   };
+  registerGatewayMethod(name: string, handler: (input: {
+    params: unknown; respond(ok: boolean, result?: unknown, error?: { code: string; message: string }): void;
+  }) => void, options: { scope: 'operator.read' }): void;
   registerTrustedToolPolicy(policy: { id: string; description: string; evaluate(
     event: { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string },
     context: TrustedDirectCall): Promise<{ block: boolean; blockReason?: string } | void> }): void;
@@ -38,14 +43,41 @@ export function registerDirectAgentTools(api: DirectPluginApi) {
   const url = new URL(config.url);
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/workspace/direct'
     || url.search || url.hash || url.username || url.password) throw Error('Direct reads require the owning loopback service.');
-  const current = () => assertDirectConfiguration(api.runtime.config.current(), config.policySha256);
+  const initial = api.runtime.config.current();
+  assertDirectConfigurationShape(initial);
+  const policySha256 = directConfigurationHash(initial), registrationId = randomUUID();
+  let disposed = false;
+  const current = () => {
+    if (disposed) throw Error('The original direct-agent registration is closed.');
+    assertDirectConfiguration(api.runtime.config.current(), policySha256);
+  };
   current();
-  const calls = new DirectAgentToolCalls({ epoch: config.epoch, policySha256: config.policySha256 }, current);
+  const calls = new DirectAgentToolCalls({ epoch: config.epoch, policySha256 }, current);
+  api.registerGatewayMethod('e3.direct.policy', ({ params, respond }) => {
+    try {
+      current();
+      const input = z.object({ epoch: z.uuid(), nativeKey: z.string().regex(/^agent:edition3-direct:e3:[a-f0-9-]{36}$/),
+        nativeId: z.uuid().nullable() }).strict().parse(params);
+      if (input.epoch !== config.epoch) throw Error('Workspace replaced.');
+      const entry = api.runtime.agent.session.getSessionEntry({ agentId: directRuntimeAgent, sessionKey: input.nativeKey, readConsistency: 'latest' });
+      if (input.nativeId && entry?.sessionId !== input.nativeId) throw Error('Original session replaced.');
+      const session = entry ? {
+        key: input.nativeKey, id: z.uuid().parse(entry.sessionId),
+        lifecycleRevision: z.string().min(1).max(512).nullable().parse(entry.lifecycleRevision ?? null),
+        permissionMode: entry.permissionMode, permissionModePending: entry.permissionModePending === true,
+        accountId: entry.authProfileOverride ?? null,
+        model: typeof entry.model === 'string' ? entry.model.includes('/') ? entry.model : entry.modelProvider ? `${entry.modelProvider}/${entry.model}` : null : null,
+      } : null;
+      current();
+      respond(true, { format: 1, epoch: config.epoch, agentId: directRuntimeAgent, registrationId,
+        sourcePolicySha256: config.policySha256, policySha256, nativeKey: input.nativeKey, session });
+    } catch { respond(false, undefined, { code: 'INVALID_REQUEST', message: 'The original direct-agent policy or session is unavailable.' }); }
+  }, { scope: 'operator.read' });
   const bridge = async (path: '/policy' | '/read', body: unknown, signal: AbortSignal) => {
     signal.throwIfAborted();
     const response = await fetch(config.url + path, {
       method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.token },
-      body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(path === '/policy' ? 5000 : 30000)]),
+      body: JSON.stringify({ registrationId, request: body }), signal: AbortSignal.any([signal, AbortSignal.timeout(path === '/policy' ? 5000 : 30000)]),
     });
     // Bound the stream before parsing; no oversized unauthorized data is retained.
     const reader = response.body?.getReader();
@@ -83,7 +115,7 @@ export function registerDirectAgentTools(api: DirectPluginApi) {
       const check = () => {
         context.assertInvocationCurrent();
         if (typeof context.getRuntimeConfig !== 'function') throw Error('Current tool policy is unavailable.');
-        assertDirectConfiguration(context.getRuntimeConfig(), config.policySha256);
+        assertDirectConfiguration(context.getRuntimeConfig(), policySha256);
         if (!context.sessionKey || !context.sessionId) throw Error('The original native session is unavailable.');
         const entry = api.runtime.agent.session.getSessionEntry({ agentId: directRuntimeAgent, sessionKey: context.sessionKey, readConsistency: 'latest' });
         if (entry?.sessionId !== context.sessionId || entry.permissionMode !== 'read-only' || entry.permissionModePending)
@@ -123,7 +155,10 @@ export function registerDirectAgentTools(api: DirectPluginApi) {
     },
   });
   api.lifecycle.registerRuntimeLifecycle({
-    id: 'nova-direct-call-authority', cleanup: context => calls.cleanup(context), dispose: () => calls.dispose(),
+    id: 'nova-direct-call-authority', cleanup: context => {
+      if (!context.sessionKey && !context.runId) disposed = true;
+      calls.cleanup(context);
+    }, dispose: () => { disposed = true; calls.dispose(); },
   });
 }
 export default { id: directPluginId, name: 'Nova Dream direct-agent reads', register: registerDirectAgentTools };

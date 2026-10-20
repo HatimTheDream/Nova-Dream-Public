@@ -11,8 +11,9 @@ function fixture() {
   const pluginConfig = { epoch, bundlePath: '/owned/direct-plugin', url: 'http://127.0.0.1:4383/workspace/direct', token: 'a'.repeat(64), policySha256: '' };
   const config = {
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: pluginConfig } } },
-    agents: { entries: { [directRuntimeAgent]: { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
-    gateway: { controlUi: { enabled: false } },
+    cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } }, models: { catalogRefresh: { enabled: false } },
+    agents: { defaults: { heartbeat: { every: '0m' } }, entries: { [directRuntimeAgent]: { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
+    gateway: { bind: 'loopback', controlUi: { enabled: false } },
   };
   pluginConfig.policySha256 = directConfigurationHash(config);
   let policy!: Parameters<DirectPluginApi['registerTrustedToolPolicy']>[0];
@@ -21,10 +22,12 @@ function fixture() {
   let terminal!: Parameters<DirectPluginApi['agent']['events']['registerAgentEventSubscription']>[0];
   let after!: Parameters<DirectPluginApi['on']>[1];
   let active = true;
+  let observe!: Parameters<DirectPluginApi['registerGatewayMethod']>[1];
   const session = { sessionId, permissionMode: 'read-only', permissionModePending: false, authProfileOverride: 'original-account' };
   const api: DirectPluginApi = {
     registrationMode: 'full', pluginConfig, runtime: { version: '2026.9.8', config: { current: () => config },
       agent: { session: { getSessionEntry: () => session } } },
+    registerGatewayMethod(name, callback, options) { assert.equal(name, 'e3.direct.policy'); assert.equal(options.scope, 'operator.read'); observe = callback; },
     registerTrustedToolPolicy: value => { policy = value; }, registerTool: (value, options) => {
       assert.equal(value.contextVersion, 2); assert.deepEqual(options.names, [directReadTool]); factory = value;
     }, on: (name, value) => { assert.equal(name, 'after_tool_call'); after = value; },
@@ -39,11 +42,11 @@ function fixture() {
   const execution = { ...context, getRuntimeConfig: () => config, assertInvocationCurrent: () => { if (!active) throw Error('stale invocation'); } };
   const reply = (request: any) => ({ epoch, operationId: randomUUID(), requestId: runId, conversationId,
     agentId: directRuntimeAgent, sessionKey: context.sessionKey, sessionId, runId, toolCallId: context.toolCallId,
-    generation: 'managed-generation', accountId: 'original-account', policySha256: pluginConfig.policySha256, inputSha256: request.inputSha256 });
+    generation: 'managed-generation', accountId: 'original-account', policySha256: pluginConfig.policySha256, inputSha256: (request.request ?? request).inputSha256 });
   return { api, config, pluginConfig, session, context, event, execution, read, controller, reply,
     stale: () => { active = false; },
     get policy() { return policy; }, get factory() { return factory; }, get lifecycle() { return lifecycle; },
-    get terminal() { return terminal; }, get after() { return after; } };
+    get terminal() { return terminal; }, get after() { return after; }, get observe() { return observe; } };
 }
 test('exact public version2 policy and execution contract performs only the original authenticated read', async t => {
   const f = fixture(), requests: { url: string; body: any }[] = [];
@@ -60,9 +63,9 @@ test('exact public version2 policy and execution contract performs only the orig
   const result: any = await tool.execute('call-one', f.read, f.controller.signal);
   assert.deepEqual(result.details, { task: { title: 'Saved' } });
   assert.equal(requests.length, 2);
-  assert.equal(requests[1].body.origin.runId, f.context.runId);
-  assert.equal(requests[1].body.origin.toolCallId, 'call-one');
-  assert.deepEqual(requests[1].body.read, f.read);
+  assert.equal(requests[1].body.request.origin.runId, f.context.runId);
+  assert.equal(requests[1].body.request.origin.toolCallId, 'call-one');
+  assert.deepEqual(requests[1].body.request.read, f.read);
   f.after(f.event, f.context);
   await assert.rejects(tool.execute('call-one', f.read));
   assert.equal(requests.length, 2);

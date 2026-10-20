@@ -87,6 +87,7 @@ POST /api/assistant/conversation/fork
 POST /api/assistant/conversation/recover-settings
 POST /api/assistant/conversation/remove
 POST /api/assistant/conversations
+POST /api/assistant/conversation/direct-connect
 POST /api/assistant/dictation/audio
 POST /api/assistant/dictation/caption
 POST /api/assistant/dictation/end

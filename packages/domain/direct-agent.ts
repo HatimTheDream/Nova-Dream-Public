@@ -31,7 +31,7 @@ export const directAgentTurnSchema = z.object({
   agent: z.object({ id: z.string(), revision, value: agentSchema }).strict(),
   profile: z.object({ id: z.literal('profile:owner'), revision, value: profileSchema }).strict().nullable(),
   native: z.object({ key: textId, id: uuid, generation: textId }).strict(),
-  account: z.object({ profileId: textId, model: textId }).strict(),
+  account: z.object({ profileId: textId, model: textId, identityKey: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
   sources: turnSourcesSchema,
   readAccess: readAccessSchema, capturedAt: z.string().datetime(),
 }).strict();

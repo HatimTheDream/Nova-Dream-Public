@@ -1,4 +1,5 @@
 import { ConversationCleanup } from './conversation-cleanup.js';
+import { DirectAgentOwner } from './direct-agent-owner.js';
 import { SpeechGatewayControl } from './speech-control.js';
 import { SpeechPlayback } from './read-aloud.js';
 import { TeamWorkService } from './team-work.js';
@@ -196,6 +197,8 @@ export async function startServer(options: { directory: string; port: number; pr
   const conversationCleanup = new ConversationCleanup(store, assistant);
   const moduleToken = randomBytes(32).toString('hex');
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
+  const directAgentOwner = runtime ? new DirectAgentOwner(store, gateway, () => runtime.directIdentity()) : undefined;
+  if (directAgentOwner) assistant.setDirectAgentOwner(directAgentOwner);
   const backups = new WorkspaceBackups(store, options.version ?? 'development', options.nativeBackup ?? (runtime ? new ManagedNativeBackup(runtime) : undefined), () => assistant.captureSavedHistories());
   const recovery = new WorkspaceRecovery(store);
   const recoveryServices = new Map<string, { origin: string; close: () => Promise<void> }>();
@@ -289,9 +292,16 @@ export async function startServer(options: { directory: string; port: number; pr
       if (request.headers['sec-fetch-site'] === 'cross-site' && !ownerLanding) throw new Fault(403, 'origin_rejected', 'Cross-site access is not allowed.');
       if (store.recoveryHeld && request.method === 'POST' && url.pathname !== '/api/session') throw new Fault(409, 'recovery_held', 'This is a recovered copy for review. Changes and connected services are paused; your current workspace is separate.');
       if (!store.recoveryHeld && store.recoveryEffectsPaused && request.method === 'POST' && !recoveredLocalRoutes.has(url.pathname)) throw new Fault(409, 'recovery_connections_paused', 'Connected services and automated work remain paused in this recovered workspace. Local records can be edited.');
-      if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy', '/workspace/research-progress'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
+      if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy', '/workspace/research-progress', '/workspace/direct/policy', '/workspace/direct/read'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
         const supplied=Buffer.from(request.headers.authorization??''),expected=Buffer.from('Bearer '+moduleToken);
         if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected))throw new Fault(403,'workspace_tool_auth','Use the connected Assistant for workspace tools.');
+        if (url.pathname === '/workspace/direct/policy' || url.pathname === '/workspace/direct/read') {
+          if (!directAgentOwner) throw new Fault(409, 'direct_agent_runtime_unavailable', 'The original managed direct-agent owner is unavailable.');
+          const input = await commandBody(request, 49152);
+          const result = url.pathname.endsWith('/policy') ? await directAgentOwner.authorize(input) : await directAgentOwner.read(input);
+          if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw new Fault(413, 'workspace_result_large', 'Narrow this original read.');
+          return json(200, result);
+        }
         if (url.pathname === '/workspace/plan') return json(200, assistant.plans.propose(await commandBody(request, 150000)));
         if (url.pathname === '/workspace/research-progress') {
           const body = await commandBody(request, 50000), controller = new AbortController();
@@ -739,7 +749,7 @@ export async function startServer(options: { directory: string; port: number; pr
           return json(result.running ? 202 : 200, result);
         }
         if (url.pathname === '/api/assistant/state' && request.method === 'GET') {
-          const current = observations.withHints(assistant.state()), ids = new Set(current.conversations.map(conversation => conversation.id)), state = approvals.state();
+          const current = observations.withHints(assistant.state(device)), ids = new Set(current.conversations.map(conversation => conversation.id)), state = approvals.state();
           // Assignments have their own review surface. Their IDs cannot be
           // selected as ordinary conversations by the Assistant sidebar.
           return json(200, { ...current, approvals: { ...state, items: state.items.filter(item => ids.has(item.conversationId)) }, questions: questions.state() });
@@ -783,13 +793,14 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/conversation/resume' && request.method === 'POST') return json(200, await assistant.continuations.resume(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversation/resume/check' && request.method === 'POST') return json(200, await assistant.continuations.recover(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversations' && request.method === 'POST') return json(200, await assistant.create(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/conversation/direct-connect' && request.method === 'POST') return json(200, await assistant.connectDirect(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/plan/approve' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/plan/amend' && request.method === 'POST') return json(200, assistant.plans.decide(device, await commandBody(request), true));
         if (url.pathname === '/api/assistant/plan/hold' && request.method === 'POST') return json(200, assistant.plans.hold(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/plan/cancel' && request.method === 'POST') return json(200, assistant.plans.hold(device, await commandBody(request), true));
         if (url.pathname === '/api/assistant/submit' && request.method === 'POST') {
           if (gateway.status().state === 'unconfigured') throw new Fault(503, 'assistant_unverified', 'Assistant execution is not configured. The draft remains saved; nothing was dispatched.');
-          return json(200, assistant.submit(device, await commandBody(request)));
+          return json(200, await assistant.submitRequest(device, await commandBody(request)));
         }
         if (url.pathname === '/api/assistant/conversation/edit' && request.method === 'POST') return json(200, await assistant.edit(device, await commandBody(request)));
         if (url.pathname === '/api/projects/organize' && request.method === 'POST') return json(200, store.organizeProject(device, await commandBody(request)));

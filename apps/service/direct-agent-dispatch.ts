@@ -12,6 +12,11 @@ export type DirectNativeSession = {
   key: string; id: string; lifecycleRevision: string | null; activeRunIds: string[];
   accountId: string; model: string; permissionMode: 'read-only'; permissionModePending: boolean;
 };
+export function directAgentMessage(operation: AssistantOperation) {
+  const project = operation.context.project;
+  return `Owner message:\n${operation.input}${project
+    ? `\n\nSelected Project context (supplied context, not a filesystem sandbox):\n${JSON.stringify(project)}` : ''}`;
+}
 /** Pure request construction. The original Assistant owner must separately
  * admit/mark dispatching before its one send, and retain unknown on lost reply.
  * This helper neither qualifies a runtime nor grants a Gateway method. */
@@ -59,10 +64,8 @@ export function prepareDirectAgentRequest(input: {
     `Non-goals:\n${agent.nonGoals}`, `Review criteria:\n${agent.reviewCriteria}`,
     'This direct conversation is read only. Use only the original permitted Nova read tool. Do not send, change data, run commands, browse, delegate, or claim an unconfirmed effect.',
   ].join('\n\n');
-  const project = operation.context.project;
   // As in ordinary Assistant dispatch, authored slash text is never a command.
-  const message = `Owner message:\n${operation.input}${project
-    ? `\n\nSelected Project context (supplied context, not a filesystem sandbox):\n${JSON.stringify(project)}` : ''}`;
+  const message = directAgentMessage(operation);
   return {
     sessionKey: capture.native.key, expectedExistingSessionId: capture.native.id,
     expectedExistingSessionLifecycleRevision: session.lifecycleRevision,

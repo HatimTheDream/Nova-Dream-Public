@@ -3,7 +3,7 @@ import type { Store } from './store.js';
 // New execution is denied by default. These methods observe existing work or
 // finish an existing call. Resolving a question/approval positively can restart
 // native execution, so only explicit cancellation/rejection passes the hold.
-const reads = new Set(['e3.workspace.policy', 'e3.accounts.snapshot', 'usage.status', 'usage.cost', 'sessions.diff', 'e3.assignments.capabilities', 'e3.assignments.status', 'models.list', 'models.authStatus', 'sessions.describe', 'sessions.list', 'sessions.search', 'sessions.subscribe', 'sessions.messages.subscribe', 'chat.history', 'agent.wait', 'artifacts.download', 'talk.catalog', 'skills.status', 'skills.proposals.list', 'skills.proposals.inspect', 'skills.proposals.events.list', 'question.list', 'question.get', 'approval.get']);
+const reads = new Set(['e3.direct.policy', 'e3.accounts.direct-profile', 'e3.workspace.policy', 'e3.accounts.snapshot', 'usage.status', 'usage.cost', 'sessions.diff', 'e3.assignments.capabilities', 'e3.assignments.status', 'models.list', 'models.authStatus', 'sessions.describe', 'sessions.list', 'sessions.search', 'sessions.subscribe', 'sessions.messages.subscribe', 'chat.history', 'agent.wait', 'artifacts.download', 'talk.catalog', 'skills.status', 'skills.proposals.list', 'skills.proposals.inspect', 'skills.proposals.events.list', 'question.list', 'question.get', 'approval.get']);
 const settling = new Set(['chat.abort', 'e3.assignments.stop', 'talk.client.close', 'talk.client.transcript', 'talk.session.close', 'talk.session.appendAudio']);
 export function maintenanceGatewayKind(method: string, params: unknown): 'read' | 'settling' | 'effect' {
   if (method === 'system.info' || method === 'gateway.suspend.status') return 'read';
@@ -72,6 +72,8 @@ export function updateMaintenanceBlockers(store: Store, additional: Record<strin
     for (const row of list(prefix)) { const value = select(row); if (!value || typeof value.state !== 'string' || !terminal.includes(value.state)) add(kind); }
   };
   const conversations = list('assistant:conversation:'), assignments = list('assignments:summary:'), operations = list('assistant:operation:');
+  states('assistant:direct-preparation:', 'assistant', ['prepared', 'failed']);
+  states('assistant:direct-connection:', 'assistant-context', ['ready', 'failed']);
   for (const operation of operations) if (!terminalOperation(operation.state) && !retainedAssistant(operation, operations, conversations, store.epoch)) add('assistant');
   for (const conversation of conversations) if (['creating', 'unknown'].includes(conversation.state) || conversation.pendingSettings || conversation.pendingResume) add('assistant-context');
   states('assistant:removal:', 'assistant-context', ['completed', 'rejected']);

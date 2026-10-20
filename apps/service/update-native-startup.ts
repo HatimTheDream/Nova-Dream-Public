@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { qualifyDirectRuntimeConfiguration } from './direct-agent-runtime-config.js';
+import { directPluginId } from './direct-agent-runtime-policy.js';
 
 const record=z.record(z.string(),z.any());
 const schemaVersions={'2026.9.2':{agent:19,shared:15},'2026.9.6':{agent:23,shared:18},'2026.9.8':{agent:24,shared:19}} as const;
@@ -41,13 +43,16 @@ export function qualifyNativeUpdateStartup(root:string, serviceDirectory:string,
     const schemas=schemaVersions[version];if(!schemas)throw Error('Unreviewed native version.');
     directory(root);const config=stagedConfig===undefined?json(join(root,'openclaw.json')):record.parse(stagedConfig);
     regular(join(root,'edition3-runtime.identity'));if(readFileSync(join(root,'edition3-runtime.identity'),'utf8')!=='edition3-owned-gateway\n')throw Error('Runtime owner.');
+    const direct=qualifyDirectRuntimeConfiguration(config,root,serviceDirectory,version);
+    const admittedPlugins=new Set(plugins);if(direct)admittedPlugins.add(directPluginId);
     if(config.$include||config.session?.store||config.agents?.list||config.agents?.defaults?.heartbeat?.every!=='0m'||config.cron?.enabled!==false||config.hooks&&Object.keys(config.hooks).length||config.channels&&Object.keys(config.channels).length||config.bindings?.length||config.gateway?.bind!=='loopback'||config.gateway?.controlUi?.enabled!==false)throw Error('Autonomous ingress.');
     if(config.update?.checkOnStart!==false||config.update?.auto?.enabled!==false||config.models?.catalogRefresh?.enabled!==false)throw Error('Automatic runtime changes.');
     for(const agent of Object.values(record.parse(config.agents?.entries??{}))){if(agent.heartbeat&&agent.heartbeat.every!=='0m'||agent.hooks||agent.channel)throw Error('Agent automation.');}
-    if(!Array.isArray(config.plugins?.allow)||config.plugins.allow.some((id:unknown)=>typeof id!=='string'||!plugins.has(id)))throw Error('Unverified plugin.');
+    if(!Array.isArray(config.plugins?.allow)||config.plugins.allow.some((id:unknown)=>typeof id!=='string'||!admittedPlugins.has(id)))throw Error('Unverified plugin.');
     const knownLoads=new Set(['worker-plugin','module-plugin','source-plugin','account-plugin'].map(name=>resolve(serviceDirectory,name)));
+    if(direct)knownLoads.add(resolve(serviceDirectory,'direct-agent-plugin'));
     for(const path of config.plugins?.load?.paths??[])if(typeof path!=='string'||!knownLoads.has(resolve(path)))throw Error('Unverified plugin path.');
-    for(const [id,entry]of Object.entries(record.parse(config.plugins?.entries??{})))if(entry.enabled!==false&&!plugins.has(id))throw Error('Unverified plugin entry.');
+    for(const [id,entry]of Object.entries(record.parse(config.plugins?.entries??{})))if(entry.enabled!==false&&!admittedPlugins.has(id))throw Error('Unverified plugin entry.');
     const state=join(root,'state');directory(state);
     if(existsSync(join(state,'sessions','sessions.json')))throw Error('Legacy session store.');
     const agents=join(state,'agents');const agentPaths=new Set<string>();
