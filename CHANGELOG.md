@@ -1,3 +1,10 @@
+## [2.9.16] — 2026-10-19
+
+### Fixed
+
+- Make organization links in Contacts easier to tap on phones while keeping compact desktop spacing.
+- Show the correct singular organization count in the directory and filtered results.
+
 ## [2.9.15] — 2026-10-19
 
 ### Improved

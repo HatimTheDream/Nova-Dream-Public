@@ -149,3 +149,9 @@
  .contacts-compact .contact-person-activity { grid-column:1; grid-row:1; }
  .contacts-compact .contact-person-context { grid-column:2; grid-row:1; border-inline-start:1px solid var(--line); padding-inline-start:22px; }
 }
+
+/* Organization links keep their text styling with reachable action targets. */
+:root .contacts-compact .crm-organization-links > button.crm-text-button { min-height:32px!important; }
+@media (pointer:coarse), (max-width:800px) {
+ :root .contacts-compact .crm-organization-links > button.crm-text-button { min-height:44px!important; }
+}
