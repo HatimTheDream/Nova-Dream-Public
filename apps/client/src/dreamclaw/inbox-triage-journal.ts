@@ -29,7 +29,7 @@ export function createInboxTriageJournal(scope:{epoch:string;deviceId:string;win
     const record=store.getState().records[id];
     try {
       const plan=await send(action,payload);
-      if(plan.epoch!==scope.epoch||plan.writerId!==record.prepare.writerId||(record.plan&&(plan.id!==record.plan.id||plan.digest!==record.plan.digest||plan.revision<record.plan.revision)))throw new Error('The returned review does not match the saved action. Keep the original review and check again.');
+      if(plan.action!==record.prepare.action||plan.epoch!==scope.epoch||plan.writerId!==record.prepare.writerId||(record.plan&&(plan.id!==record.plan.id||plan.digest!==record.plan.digest||plan.revision<record.plan.revision)))throw new Error('The returned review does not match the saved action. Keep the original review and check again.');
       update(id,{...record,plan,pending:undefined,error:undefined});return plan;
     }catch(error) {
       const definitive=error instanceof ApiError&&(error.status??0)>=400&&(error.status??0)<500&&error.status!==408&&error.status!==429;

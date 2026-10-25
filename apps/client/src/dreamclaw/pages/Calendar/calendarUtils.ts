@@ -64,6 +64,16 @@ export function getWeekDates(d: Date, weekStart: number): Date[] {
   });
 }
 
+export function calendarPeriodTitle(date:Date,view:'day'|'week'|'month',weekStart:number):string{
+  if(view==='week'){
+    const days=getWeekDates(date,weekStart),format=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',calendar:'gregory'});
+    return format.formatRange(days[0],days[6]);
+  }
+  return new Intl.DateTimeFormat('en-US',view==='day'
+    ?{weekday:'long',month:'long',day:'numeric',year:'numeric',calendar:'gregory'}
+    :{month:'long',year:'numeric',calendar:'gregory'}).format(date);
+}
+
 // ── Locale-aware names (via Intl — no hardcoded strings) ──
 
 /** Get localized day name. dayIndex: 0=Sun..6=Sat */

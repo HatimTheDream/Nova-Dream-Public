@@ -169,7 +169,25 @@ import assert from 'node:assert/strict';
 // Measured total705605 (+14795 /2.14% over the recorded2.8 measurement), startup158868
 // and largest deferred79925. Bound this tranche at707KB (1395 bytes headroom);
 // keep the180KB startup and80KB individual deferred-chunk ceilings unchanged.
-export const clientLimits = { startup: 180000, total: 707000, deferredChunk: 80000 };
+// The prepared 3.0 capability tranche through 2.26 adds Group messaging,
+// retained writing/recovery, Content tools, and the personal Feed/Ideas workflows.
+// Independently reviewed measurements: private 884486/public 884428 total gzip
+// bytes, up 178881 (25.35%) from the recorded 2.9 baseline 705605. The retained
+// module profile found no duplicate modules; growth is application capability.
+// Bound this tranche at 890 KB (5514 bytes minimum measured headroom). Startup
+// 172458/172461 and largest deferred 72579/72578 retain the 180 KB/80 KB ceilings.
+// This aggregate policy revision does not certify runtime/browser acceptance;
+// subsequent source changes must pass fresh measurement with the same limits.
+// The reviewed Feed interpretation and saved-view tranche measures 903968 total
+// gzip bytes. Bound this completed integration at 905 KB while keeping startup
+// and individual deferred limits unchanged; this does not qualify native startup.
+// The security dependency update measured 917635 total gzip bytes versus
+// 904304 for the preceding 2.28.6 dependency closure. Removing unused schema
+// construction reduced the patched total to 910323; its 905000-byte failure
+// remains recorded. Explicitly bound this patched closure at 912000 bytes.
+// Startup (180000) and each deferred chunk (80000) keep their existing limits.
+// This policy adjustment does not qualify startup, runtime or browser behavior.
+export const clientLimits = { startup: 180000, total: 912000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

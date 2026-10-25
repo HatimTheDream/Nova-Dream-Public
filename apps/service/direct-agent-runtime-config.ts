@@ -4,6 +4,7 @@ import { canonical } from '../../packages/domain/contracts.js';
 import { directConfigurationHash, directPluginId, directRuntimePolicy, assertDirectConfigurationShape } from './direct-agent-runtime-policy.js';
 import { directRuntimeAgent } from './direct-agent-tool-calls.js';
 import { directPluginFiles } from './direct-agent-runtime-files.js';
+import { assertGroupConfiguration, groupRuntimeAgent, groupRuntimePolicy } from './group-runtime-policy.js';
 
 const object = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('The managed direct-agent configuration is unavailable.');
@@ -36,7 +37,29 @@ export function assertDirectWorkspace(root: string) {
   // a new turn rather than silently becoming persona/source authority.
   if (readdirSync(workspace).length) throw Error('The direct-agent workspace contains unqualified content.');
 }
-export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string, bundlePath: string, bridge: { url: string; token: string }) {
+export const groupWorkspaceMarker = 'edition3-group-workspace\n';
+export function groupRuntimePaths(root: string) {
+  return { workspace: join(root, 'group-workspace'), agentDir: join(root, 'state', 'agents', groupRuntimeAgent, 'agent') };
+}
+export function prepareGroupWorkspace(root: string) {
+  const { workspace } = groupRuntimePaths(root), marker = join(root, 'group-workspace.identity');
+  if (!existsSync(workspace)) {
+    if (existsSync(marker)) throw Error('The original Group workspace is missing.');
+    mkdirSync(workspace);
+    writeFileSync(marker, groupWorkspaceMarker, { flag: 'wx', mode: 0o600 });
+  }
+  assertGroupWorkspace(root);
+}
+export function assertGroupWorkspace(root: string) {
+  const { workspace } = groupRuntimePaths(root), marker = join(root, 'group-workspace.identity');
+  const folder = lstatSync(workspace), identity = lstatSync(marker);
+  if (!folder.isDirectory() || folder.isSymbolicLink() || realpathSync(workspace) !== resolve(workspace)
+    || !identity.isFile() || identity.isSymbolicLink() || identity.nlink !== 1
+    || identity.size !== Buffer.byteLength(groupWorkspaceMarker) || readFileSync(marker, 'utf8') !== groupWorkspaceMarker)
+    throw Error('The original empty Group workspace changed.');
+  if (readdirSync(workspace).length) throw Error('The Group workspace contains unqualified content.');
+}
+export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string, bundlePath: string, bridge: { url: string; token: string }, options: { group?: boolean } = {}) {
   const config = structuredClone(object(raw)), plugins = object(config.plugins), agents = object(config.agents);
   const prior = plugins.entries?.[directPluginId], paths = directRuntimePaths(root);
   if (plugins.enabled !== true || prior?.enabled === false || agents.list || config.$include)
@@ -46,6 +69,13 @@ export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string,
   if (existing && canonical(existing) !== canonical(expectedAgent))
     throw Error('The existing direct-agent configuration must be reviewed before replacement.');
   agents.entries = { ...agents.entries, [directRuntimeAgent]: expectedAgent };
+  if (options.group) {
+    const expectedGroup = { ...structuredClone(groupRuntimePolicy), ...groupRuntimePaths(root) };
+    const priorGroup = agents.entries[groupRuntimeAgent];
+    if (priorGroup && canonical(priorGroup) !== canonical(expectedGroup))
+      throw Error('The existing Group configuration must be reviewed before replacement.');
+    agents.entries[groupRuntimeAgent] = expectedGroup;
+  }
   plugins.allow = [...new Set([...(plugins.allow ?? []), directPluginId])];
   plugins.load = { ...plugins.load, paths: [...new Set([...(plugins.load?.paths ?? []).filter((path: string) => path !== prior?.config?.bundlePath), bundlePath])] };
   plugins.entries = { ...plugins.entries, [directPluginId]: { enabled: true, config: {
@@ -53,6 +83,7 @@ export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string,
   } } };
   assertDirectConfigurationShape(config);
   plugins.entries[directPluginId].config.policySha256 = directConfigurationHash(config);
+  if (agents.entries[groupRuntimeAgent]) assertGroupConfiguration(config, plugins.entries[directPluginId].config.policySha256);
   return config;
 }
 /** Additional startup case, not a broader plugin exemption. Original native
@@ -77,6 +108,13 @@ export function qualifyDirectRuntimeConfiguration(raw: unknown, root: string, se
     || !config.plugins.load.paths.includes(settings.bundlePath))
     throw Error('The original plugin source selection changed.');
   assertDirectWorkspace(root);
+  if (config.agents.entries[groupRuntimeAgent]) {
+    assertGroupConfiguration(config, settings.policySha256);
+    const group = config.agents.entries[groupRuntimeAgent], expected = groupRuntimePaths(root);
+    if (group.workspace !== expected.workspace || group.agentDir !== expected.agentDir)
+      throw Error('The original Group paths changed.');
+    assertGroupWorkspace(root);
+  }
   directPluginFiles(serviceDirectory);
   const manifest = JSON.parse(readFileSync(join(settings.bundlePath, 'openclaw.plugin.json'), 'utf8'));
   const pkg = JSON.parse(readFileSync(join(settings.bundlePath, 'package.json'), 'utf8'));

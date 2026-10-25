@@ -12,7 +12,7 @@ const key = Symbol.for('nova.test.home-ideas-interactions');
 const react = pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
 const loader = registerHooks({
  resolve(specifier, context, next) {
-  if (/\/apps\/client\/src\/(?:HomeIdeas|HomeSourcePicker|HomeLibrary)\./.test(context.parentURL ?? '')) {
+  if (/\/apps\/client\/src\/(?:HomeIdeas|HomeSourcePicker|HomeLibrary|useIdeaPursuits)\./.test(context.parentURL ?? '')) {
    if (specifier === 'react') return { url: 'nova-ideas-test:react', shortCircuit: true };
    if (specifier === './api') return { url: 'nova-ideas-test:api', shortCircuit: true };
    if (specifier === './useWorkspace') return { url: 'nova-ideas-test:window', shortCircuit: true };
@@ -21,7 +21,7 @@ const loader = registerHooks({
  },
  load(url, context, next) {
   const f = `const f=()=>globalThis[Symbol.for('nova.test.home-ideas-interactions')];`;
-  if (url === 'nova-ideas-test:react') return { format: 'module', shortCircuit: true, source: `export * from ${JSON.stringify(react)};${f}export const useState=v=>f().state(v);export const useRef=v=>f().ref(v);export const useId=()=>f().id();export const useEffect=(fn,deps)=>f().effect(fn,deps);` };
+  if (url === 'nova-ideas-test:react') return { format: 'module', shortCircuit: true, source: `export * from ${JSON.stringify(react)};${f}export const useMemo=(fn,deps)=>f().memo(fn,deps);export const useState=v=>f().state(v);export const useRef=v=>f().ref(v);export const useId=()=>f().id();export const useEffect=(fn,deps)=>f().effect(fn,deps);` };
   if (url === 'nova-ideas-test:api') return { format: 'module', shortCircuit: true, source: `${f}export class ApiError extends Error{};export const readLocal=k=>f().read(k);export const saveLocal=(k,v)=>f().save(k,v);export const request=(p,d)=>f().request(p,d);` };
   if (url === 'nova-ideas-test:window') return { format: 'module', shortCircuit: true, source: `export const retainedWindowId='ideas-test-window';` };
   if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
@@ -36,6 +36,8 @@ const instances = new Set<Hooks>();
 class Hooks {
  slots: any[] = []; index = 0; effects: (() => void)[] = [];
  storage = new Map<string, string>(); failStorage = false; failReadbackOnce = false; readFailures = 0; storageWrites: string[] = []; requests: Deferred[] = [];
+ memo(make:()=>any,deps:unknown[]){const i=this.index++,old=this.slots[i];if(!old||deps.some((value,k)=>!Object.is(value,old.deps[k])))this.slots[i]={value:make(),deps};return this.slots[i].value;}
+ ideaReceipts=new Map<string,unknown>();ideaCommands:any[]=[];
  state(initial: any) { const i = this.index++;if (!(i in this.slots)) this.slots[i] = typeof initial === 'function' ? initial() : initial;return [this.slots[i], (value: any) => { this.slots[i] = typeof value === 'function' ? value(this.slots[i]) : value; }]; }
  ref(value: unknown) { return this.slots[this.index++] ??= { current: value }; }
  id() { return this.slots[this.index++] ??= 'ideas-source-search'; }
@@ -44,7 +46,16 @@ class Hooks {
  get(name: string) { if (this.readFailures > 0) { this.readFailures--;throw Error('Synthetic readback failure'); }return this.storage.get(name) ?? null; }
  write(name: string, raw: string) { if (this.failStorage) throw Error('Synthetic storage full');this.storageWrites.push(name);this.storage.set(name, raw);if (this.failReadbackOnce) { this.failReadbackOnce = false;this.readFailures++; } }
  save(name: string, value: unknown) { try { this.write(name, JSON.stringify(value));return true; } catch { return false; } }
- request(path: string, input: unknown) { assert.equal(path, 'home/context', 'No provider or send route is allowed');return new Promise<HomeSourceCapture>((resolve, reject) => this.requests.push({ path, input, resolve, reject })); }
+ request(path: string, input: any) {
+  if(path==='home/ideas'&&input===undefined)return Promise.resolve({epoch,rows:[],next:null});
+  if(path==='home/ideas'){
+   assert.equal(input.type,'create');this.ideaCommands.push(input);
+   const receipt={command:input,state:'saved',entryId:input.entryId,pursuit:{id:input.id,epoch:input.epoch,starterId:input.handoff.ideaId,title:input.handoff.title,revision:1,createdAt:'2026-10-20T05:00:00Z',updatedAt:'2026-10-20T05:00:00Z',initialEntryId:input.entryId,reviewed:false}};
+   this.ideaReceipts.set(input.requestId,receipt);return Promise.resolve(receipt);
+  }
+  if(path==='home/ideas/receipt')return Promise.resolve(this.ideaReceipts.get(input.requestId)??{command:input,state:'unknown'});
+  assert.equal(path, 'home/context', 'No provider or send route is allowed');return new Promise<HomeSourceCapture>((resolve, reject) => this.requests.push({ path, input, resolve, reject }));
+ }
  render<T>(fn: () => T) { instances.add(this);(globalThis as any)[key] = this;this.index = 0;this.effects = [];const tree = fn();for (const effect of this.effects) effect();return tree; }
  dispose() { for (const slot of this.slots) slot?.cleanup?.();instances.delete(this); }
 }
@@ -63,7 +74,7 @@ test.after(() => {
 const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
 const text = (node: any): string => typeof node === 'string' || typeof node === 'number' ? String(node) : !node || typeof node !== 'object' ? '' : [node.props?.children].flat(Infinity).map(text).join('');
 function button(tree: any, name: string) { const found = nodes(tree).find(n => n.type === 'button' && (n.props['aria-label'] === name || text(n) === name));assert.ok(found, name);return found; }
-const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+const settle = async () => { for (let i = 0; i < 24; i++) await Promise.resolve(); };
 const epoch = '11111111-1111-4111-8111-111111111111', device = 'device:ideas';
 const viewKey = `e3:home-ideas-view:${device}:${epoch}:ideas-test-window`;
 const scopeKey = ideaScopeKey(device, epoch, 'draft-notes');
@@ -88,7 +99,7 @@ function directions(tree: any) { const found = nodes(tree).find(n => n.type === 
 function picker(tree: any) { const found = nodes(tree).find(n => n.type === HomeSourcePicker);assert.ok(found);return found; }
 function capture(f: ReturnType<typeof fixture>, index = 0, changed = false): HomeSourceCapture {
  const request = f.hooks.requests[index];assert.ok(request);
- return { id: 'capture:original', epoch: request.input.epoch, createdAt: source.updatedAt, sources: request.input.references.map((reference: HomeResource['reference']) => ({ ...source, reference: changed ? { ...reference, revision: reference.revision + 1 } : reference })) };
+ return { id: '22222222-2222-4222-8222-222222222222', epoch: request.input.epoch, createdAt: source.updatedAt, sources: request.input.references.map((reference: HomeResource['reference']) => ({ ...source, reference: changed ? { ...reference, revision: reference.revision + 1 } : reference })) };
 }
 
 test('failed retention keeps visible writing, blocks departure and retries the same scope only', () => {
@@ -161,7 +172,9 @@ test('handoff validates source identity, retains direction and opens only the ex
  assert.equal(f.hooks.requests[1].input.requestId, f.hooks.requests[0].input.requestId, 'The original capture request is reconciled');
  f.hooks.requests[1].resolve(capture(f, 1));await settle();
  assert.equal(f.handoffs.length, 1);const handed = f.handoffs[0];
- assert.equal(handed.sourceCaptureId, 'capture:original');assert.deepEqual(handed.sourceRefs, [source.reference]);
+ assert.equal(handed.authoredDirections,'Keep this exact direction');
+ assert.equal(f.hooks.ideaCommands.length,1);assert.equal(handed.idea?.pursuitId,f.hooks.ideaCommands[0].id);assert.equal(handed.idea?.entryId,f.hooks.ideaCommands[0].entryId);
+ assert.equal(handed.sourceCaptureId, '22222222-2222-4222-8222-222222222222');assert.deepEqual(handed.sourceRefs, [source.reference]);
  assert.equal(handed.ideaId, 'draft-notes');assert.match(handed.text, /Keep this exact direction/);assert.match(handed.text, /Exact saved source body/);
  assert.deepEqual(f.writes, []);assert.equal(f.hooks.requests.every(r => r.path === 'home/context'), true);
  assert.equal(f.hooks.read(scopeKey).instructions, 'Keep this exact direction');

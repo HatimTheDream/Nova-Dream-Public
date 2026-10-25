@@ -1,5 +1,5 @@
 import type { Entity, Task } from './contracts.js';
-import { dayInZone, sortTasks, type Occurrence, type Routine, type TaskEvent, type TaskPresentation, type TaskState } from './tasks.js';
+import { dayInZone, inTaskView, sortTasks, type Occurrence, type Routine, type TaskEvent, type TaskPresentation, type TaskState } from './tasks.js';
 export type TaskSort = 'planned' | 'priority' | 'deadline' | 'newest' | 'title';
 export function taskSearch(task: Task, query: string, project = '') {
   const text = [task.title, task.notes, task.waitReason, project, ...(task.checklist ?? []).map(i => i.text), ...(task.sources ?? []).map(s => s.label)].join(' ').toLocaleLowerCase();
@@ -20,7 +20,7 @@ export function taskDateLabel(date: string, today: string) {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', ...(date.slice(0, 4) !== today.slice(0, 4) ? { year: 'numeric' } : {}), timeZone: 'UTC' }).format(new Date(date + 'T12:00:00Z'));
 }
 
-export const taskDestinations = ['Today', 'Scheduled', 'Completed'] as const;
+export const taskDestinations = ['Today', 'All Open', 'Scheduled', 'Unsorted', 'Anytime', 'Completed'] as const;
 export type TaskDestination = typeof taskDestinations[number];
 export const cadenceGroups = ['Daily', 'Weekly', 'Every two weeks', 'Monthly', 'Yearly', 'Custom'] as const;
 export type CadenceGroup = typeof cadenceGroups[number];
@@ -112,6 +112,8 @@ export function inTaskDestination(task: Entity<Task>, destination: TaskDestinati
   const t = task.value, finished = ['done', 'skipped'].includes(t.status);
   if (destination === 'Completed') return finished;
   if (!finished && isHistoricalDailyOccurrence(task, context)) return false;
+  if (destination === 'All Open') return !finished;
+  if (destination === 'Unsorted' || destination === 'Anytime') return !finished && inTaskView(t, destination === 'Unsorted' ? 'Capture' : 'Anytime', today);
   const planningDay = taskPlanningDay(task, today, context);
   if (destination === 'Scheduled') return t.planned > planningDay;
   if (finished) return completedToday(task, today, timezone, context);

@@ -241,6 +241,7 @@ function ConnectedInbox({ snapshot, searchRequest, openSettings, openCalendar, o
       async apply(input) { return actionResult(await triage.act(input.planId,'apply',input.digest)); },
       async undo(input) { return actionResult(await triage.act(input.receiptId,'undo',input.digest)); },
       async cancel(input) { return actionResult(await triage.act(input.planId,'cancel',input.digest)); },
+      async continue(input) { return actionResult(await triage.act(input.planId,'continue',input.digest)); },
       async acknowledge(input) { return actionResult(await triage.act(input.planId,'acknowledge',input.digest)); },
       async check(input) { return actionResult(await triage.checkPlan(input.planId)); },
     } },

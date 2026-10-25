@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { Suspense } from 'react';
 import type { Snapshot, Entity, Task } from '../packages/domain/contracts';
 import type { LocalCalendarDetail } from '../packages/domain/calendar';
 import { preparedReminderReturnMatches, readReminderView, reminderViewKey, retainReminderReturn, type PreparedReminderReturn, type ReminderReturn } from '../apps/client/src/reminder-workspace';
@@ -31,9 +32,15 @@ const hooks = registerHooks({
   },
 });
 const { Reminders } = await import('../apps/client/src/Reminders');
-const { TaskWorkspace } = await import('../apps/client/src/TaskWorkspace');
+const { TaskWorkspace: TaskWorkspaceSurface } = await import('../apps/client/src/TaskWorkspace');
 const { retainedWindowId } = await import('../apps/client/src/useWorkspace');
 hooks.deregister();
+// The callback checks exercise the real editor props inside its loading boundary.
+// The loading boundary's own guarded close is exercised separately below.
+function TaskWorkspace(props: Parameters<typeof TaskWorkspaceSurface>[0]) {
+  const tree = TaskWorkspaceSurface(props) as any;
+  return tree?.type === Suspense ? tree.props.children : tree;
+}
 const nodes = (value: any): any[] => Array.isArray(value) ? value.flatMap(nodes) : value?.props ? [value, ...nodes(value.props.children)] : [];
 function globals(t: any, values: Record<PropertyKey, unknown>) {
   for (const key of Reflect.ownKeys(values)) {
@@ -134,13 +141,29 @@ test('actual future-schedule callbacks return through the same occurrence and re
   const render=()=>TaskWorkspace({workspace:{state:c.state,task:c.selected,controller:c,close:()=>c.close(),futureSchedule:(token:string)=>c.futureSchedule(token),occurrence:(token:string)=>c.occurrence(token)} as any,snapshot,async refresh(){},openOrigin(){},
     canClose(){try{retainReminderReturn(original,scope,4,storage);return true;}catch{return false;}},closed(origin){assert.deepEqual(origin.reminderReturn,original);returned++;}}) as any;
   const oldTask=render();oldTask.props.openFutureSchedule();const schedule=render();
-  assert.equal(schedule.type.name,'RoutineEditor');assert.equal(schedule.props.routine,routine);assert.equal(schedule.props.occurrenceTitle,task.value.title);
+  assert.equal(typeof schedule.props.saved,'function');assert.equal(schedule.props.routine,routine);assert.equal(schedule.props.occurrenceTitle,task.value.title);
   oldTask.props.close();assert.equal(c.state?.active,true);assert.ok(c.state?.routine);
   refuse=true;schedule.props.close();assert.ok(c.state?.routine);assert.equal(returned,0);
   refuse=false;schedule.props.close();assert.equal(c.state?.routine,undefined);assert.equal(c.frame?.section,'history');assert.equal(c.frame?.scroll,137);
   const occurrenceToken=c.state!.token;schedule.props.saved({...routine,revision:8},true);assert.equal(c.state?.token,occurrenceToken);
   render().props.close();assert.equal(returned,1);assert.equal(c.state?.active,false);
   const kept=readReminderView(records.get(reminderViewKey(scope)),scope);assert.equal(kept.tab,'history');assert.equal(kept.positions.history.scroll,271);assert.equal(kept.original?.token,original.token);
+});
+
+test('deferred task loading preserves the original close guard and refuses a stale loading callback', () => {
+  const task = { id: 'task:original', revision: 1, value: { title: 'Kept Task' } } as Entity<Task>;
+  const state = { active: true, token: 'loading-original', origin: { route: 'home' as const, label: 'Reminders' },
+    frames: [{ taskId: task.id, section: 'details', scroll: 0 }] };
+  let current = state, allowed = false, checks = 0, closed = 0;
+  const workspace = { state, task, controller: { get state() { return current; } }, close() { closed++; current.active = false; return true; } } as any;
+  const boundary = TaskWorkspaceSurface({ workspace, snapshot: {} as Snapshot, async refresh() {}, openOrigin() {}, closed() {},
+    canClose() { checks++; return allowed; } }) as any;
+  assert.equal(boundary.type, Suspense);
+  const loading = boundary.props.fallback;
+  loading.props.close(); assert.equal(closed, 0); assert.equal(checks, 1);
+  current = { ...state, token: 'loading-newer' }; allowed = true;
+  loading.props.close(); assert.equal(closed, 0); assert.equal(checks, 1);
+  current = state; loading.props.close(); assert.equal(closed, 1); assert.equal(checks, 2);
 });
 
 test('late Calendar lookup cannot open a replaced target, and exact epoch/date/return identity is required', async () => {

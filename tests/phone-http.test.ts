@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { canonical } from '../packages/domain/contracts.js';
 import { request as httpRequest } from 'node:http';
 import { startServer } from '../apps/service/http.js';
 import { PhoneHost } from '../apps/service/phone-host.js';
@@ -264,4 +265,24 @@ test('paired phone reads complete team handoffs through the same bounded owner r
   assert.equal((await f.phone('work/team/handoff', {})).data.code, 'desktop_required');
   await call(f.service.origin, 'phone/revoke', { ...f.command(), deviceId: f.phoneId }, f.ownerHeaders);
   assert.equal((await f.phone(path)).status, 401);
+});
+
+test('pairing HTTP rejection binds exact original request without cookie or workspace authority', async t => {
+  const f = await pairedWorkflow(t), input = { requestId: randomUUID(), code: '12345678', name: 'Original', expiresAt: Date.now() + 300000 };
+  const result = await call(f.service.phoneHost.localOrigin, 'pair', input, remote);
+  assert.equal(result.status, 401); assert.equal(result.cookie, undefined);
+  assert.deepEqual(result.data.current, { format: 1, requestId: input.requestId, sha256: createHash('sha256').update(canonical(input)).digest('hex'), state: 'rejected', reason: 'code_unavailable' });
+  assert.deepEqual((await call(f.service.phoneHost.localOrigin, 'pair', input, remote)).data.current, result.data.current);
+  assert.equal((await call(f.service.phoneHost.localOrigin, 'pair', { ...input, name: 'Other' }, remote)).data.code, 'request_reused');
+  assert.equal((await call(f.service.phoneHost.localOrigin, 'snapshot', undefined, remote)).status, 401);
+});
+
+test('access context explains only the matching revoked phone session and does not reveal the workspace epoch', async t => {
+  const f = await pairedWorkflow(t);
+  await call(f.service.origin, 'phone/revoke', { ...f.command(), deviceId: f.phoneId }, f.ownerHeaders);
+  const known = await f.phone('access/context'), unknown = await call(f.service.phoneHost.localOrigin, 'access/context', undefined, remote);
+  assert.equal(known.data.requiresPairing, true); assert.equal(known.data.pairingReason, 'revoked');
+  assert.equal(known.data.epoch, undefined); assert.equal(known.data.workspaceEpoch, undefined);
+  assert.equal(unknown.data.pairingReason, 'required');
+  assert.equal((await call(f.service.origin, 'access/context', undefined, f.ownerHeaders)).data.pairingReason, undefined);
 });

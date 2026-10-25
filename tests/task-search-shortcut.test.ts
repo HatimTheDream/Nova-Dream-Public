@@ -27,7 +27,7 @@ test('empty search and unrelated keys do not reset selection or consume the key'
   }
 });
 
-function fixture() {
+function fixture(reveal?: () => void) {
   class Element {
     isConnected = true; hidden = false; visible = true; visibility = 'visible';
     isContentEditable = false; writing = false; disabled = false; readOnly = false;
@@ -44,7 +44,7 @@ function fixture() {
     addEventListener: (_: string, callback: (event: any) => void) => listeners.add(callback),
     removeEventListener: (_: string, callback: (event: any) => void) => listeners.delete(callback) };
   let current: Element | null = input;
-  const close = bindTaskSearchShortcut(() => current as unknown as HTMLInputElement | null, owner as unknown as Window);
+  const close = bindTaskSearchShortcut(() => current as unknown as HTMLInputElement | null, owner as unknown as Window, reveal ? { trigger: () => body as unknown as HTMLElement, open: reveal } : undefined);
   const press = (options: Record<string, unknown> = {}) => {
     const event = { key: '/', target: body, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...options };
     for (const listener of listeners) listener(event);
@@ -97,4 +97,11 @@ test('missing, detached, disabled, read-only or hidden search never consumes the
     assert.equal(h.press().defaultPrevented, false); assert.equal(h.input.focused, 0); h.close();
   }
   const h = fixture(); h.remove(); assert.equal(h.press().defaultPrevented, false); h.close();
+});
+
+test('slash reveals a mounted closed search without changing writing or stealing from an overlay', () => {
+ let reveals=0;const h=fixture(()=>reveals++);h.input.hidden=true;
+ assert.equal(h.press().defaultPrevented,true);assert.equal(reveals,1);assert.equal(h.input.value,'kept search');assert.equal(h.input.focused,0);
+ const overlay=new h.Element();h.document.overlays.push(overlay);assert.equal(h.press().defaultPrevented,false);assert.equal(reveals,1);
+ h.document.overlays=[];h.body.hidden=true;assert.equal(h.press().defaultPrevented,false);assert.equal(reveals,1);h.body.hidden=false;h.input.isConnected=false;assert.equal(h.press().defaultPrevented,false);assert.equal(reveals,1);h.close();
 });

@@ -45,6 +45,16 @@ export function verifyCandidate(workspace) {
     assert.equal(JSON.parse(bytes.get(plugin + 'openclaw.plugin.json')).id, 'edition3-direct-agent');
     assert.deepEqual(JSON.parse(bytes.get(plugin + 'package.json')).openclaw?.extensions, ['./index.js']);
   }
+  if (pkg.edition3.schemaVersion >= 59) {
+    for (const path of ['assistant-group-execution.js', 'group-execution-gateway.js', 'group-execution-owner.js',
+      'group-execution-request.js', 'group-runtime-policy.js', 'direct-agent-runtime-config.js', 'direct-agent-runtime-files.js',
+      'account-plugin/index.js', 'account-plugin/openclaw.plugin.json', 'account-plugin/package.json']
+      .map(name => 'dist/service/apps/service/' + name).concat(['dist/service/packages/domain/assistant-group-execution.js',
+        'dist/service/packages/domain/assistant-group-conversation.js']))
+      assert.ok(bytes.has(path), `Rebuild before starting: Group execution artifact is missing: ${path}`);
+    assert.equal(JSON.parse(bytes.get('dist/service/apps/service/account-plugin/openclaw.plugin.json')).id, 'edition3-accounts');
+    assert.deepEqual(JSON.parse(bytes.get('dist/service/apps/service/account-plugin/package.json')).openclaw?.extensions, ['./index.js']);
+  }
   const id = sha(Buffer.concat([pkgBytes, manifestBytes]));
   return { root, id, manifest, bytes };
 }

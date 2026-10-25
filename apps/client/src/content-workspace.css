@@ -79,3 +79,49 @@
 .content-template-preview li { overflow-wrap:anywhere; }
 .content-studio .content-inspector :is(input,select,textarea),
 .content-studio .content-draft-field textarea { font-size:16px; }
+
+.content-studio-main { min-width:0; }
+.content-retention-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:12px; color:var(--muted); }
+.content-retention-status > button { flex:0 0 auto; width:fit-content; padding:4px 8px; }
+.content-conflict-cue { font-size:13px; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.content-recovery-open:has(.content-recovery-panel:not(.content-recovery-focused)) { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,380px); align-items:start; gap:22px; }
+/* The focused panel must use the viewport, not the editor's query containment. */
+.content-recovery-open:has(.content-recovery-focused) { container-type:normal; }
+.content-recovery-panel { min-width:0; position:sticky; top:16px; max-height:calc(100dvh - 48px); display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; background:var(--surface); overflow:hidden; }
+.content-recovery-panel > header { flex:0 0 auto; padding:14px; border-bottom:1px solid var(--line); }
+.content-recovery-panel h2 { margin:10px 0 0; font-size:17px; }
+.content-recovery-body { min-height:0; padding:16px; overflow:auto; overscroll-behavior:contain; }
+.content-recovery-body p { line-height:1.55; overflow-wrap:anywhere; }
+.content-recovery-body button { flex:0 0 auto; width:fit-content; max-width:100%; }
+.content-readable-copy { min-width:0; margin-block:20px; }
+.content-readable-copy h3 { font-size:14px; }
+.content-readable-copy h4 { font-size:15px; overflow-wrap:anywhere; }
+.content-readable-copy pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:14px; line-height:1.7; max-height:360px; overflow:auto; border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--canvas); }
+.content-readable-copy dl { font-size:12px; }
+.content-readable-copy dd { margin:4px 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.content-recovery-focused { position:fixed; z-index:400; inset:0; width:100%; height:100dvh; max-height:none; border:0; border-radius:0; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.content-recovery-focused .content-recovery-body { padding:16px; }
+.content-recovery-focused button { min-height:44px; }
+.content-recovery-focused :is(input,textarea,select) { font-size:16px; }
+.content-draft-field[hidden] { display:none; }
+.content-tools-panel { position:fixed; z-index:390; top:64px; right:20px; width:min(620px,calc(100vw - 40px)); box-shadow:0 12px 48px #0002; background:var(--surface); }
+.content-studio > .content-tools-panel:not(.content-recovery-focused) { position:sticky; top:16px; right:auto; width:auto; box-shadow:none; }
+.content-tools-panel.content-recovery-focused { position:fixed; inset:0; width:100%; z-index:400; }
+.content-tools { min-width:0; }
+.content-tools form,.content-tools fieldset { display:grid; gap:14px; min-width:0; }
+.content-tools fieldset { border:0; padding:0; margin:0; }
+.content-tools :is(input,textarea,select) { min-width:0; max-width:100%; }
+.content-tools pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; max-height:400px; overflow:auto; }
+.content-tools button { width:fit-content; max-width:100%; }
+.content-tools .compact-actions { gap:8px; flex-wrap:wrap; }
+.content-tools .content-library-list button { white-space:normal; text-align:start; }
+.content-tools .content-library-list article { min-width:0; }
+.content-tools dd { margin:3px 0 12px; overflow-wrap:anywhere; }
+.content-tools-panel .content-recovery-body { overscroll-behavior:contain; }
+@media (max-width:800px),(pointer:coarse) {
+ .content-tools-panel button { min-height:44px; }
+ .content-tools-panel :is(input,textarea,select) { font-size:16px; }
+}
+@media (pointer:coarse) {
+ .content-retention-status button,.content-conflict-cue button { min-height:44px; }
+}

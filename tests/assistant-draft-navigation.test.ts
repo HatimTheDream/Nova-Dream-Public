@@ -189,6 +189,9 @@ test('actual Editor source preview, History and Back keep the original conversat
 });
 
 
+// Inspect the exact bound lazy children; their real navigation callbacks are unchanged.
+const isProjectManager=(n:any)=>n.type?.name==='PreparedModule'&&typeof n.props.openFile==='function'&&typeof n.props.close==='function'&&'draftId' in n.props&&Array.isArray(n.props.conversations);
+const isConversationReader=(n:any)=>n.type?.name==='PreparedModule'&&!!n.props.target?.conversationId&&typeof n.props.change==='function'&&!!n.props.controller;
 test('actual Projects panel refuses archived, pin, saved-version and conversation navigation while its writer cannot retain',t=>{
   const f=fixture(t),controller=f.renderAssistant(),time='2026-10-20T12:00:00Z';
   const conversation={id:'original',nativeId:'native',nativeKey:'key',connectionGeneration:'generation',revision:1,title:'Original',state:'ready',projectId:null,archived:false,model:null,thinking:null,createdAt:time,updatedAt:time};
@@ -201,13 +204,13 @@ test('actual Projects panel refuses archived, pin, saved-version and conversatio
   const outer=f.renderer(()=>Assistant(props))(),renderBranch=f.renderer(()=>(outer.type as any)(outer.props));let branch=renderBranch();
   const renderEditor=f.renderer(()=>(branch.type as any)(branch.props));const nodes=(node:any):any[]=>Array.isArray(node)?node.flatMap(nodes):node?.props?[node,...nodes(node.props.children)]:[];
   const render=()=>{branch=renderBranch();return nodes(renderEditor());};let controls=render();
-  controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();assert.ok(controls.some(isProjectManager));
   let allowed=false;const unregister=registerRecordDraftNavigation(()=>allowed);t.after(unregister);
-  const tools=controls.find(n=>n.type?.name==='ConversationHeaderTools');tools.props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));assert.equal(controls.some(n=>n.type?.name==='ConversationReader'),false);
-  tools.props.openPin({conversationId:archived.id,nativeId:archived.nativeId,messageId:'message',messageHash:'a'.repeat(64),role:'assistant'});controls=render();assert.ok(controls.some(n=>n.type?.name==='ProjectManager'));
+  const tools=controls.find(n=>n.type?.name==='ConversationHeaderTools');tools.props.openVersion(archived);controls=render();assert.ok(controls.some(isProjectManager));assert.equal(controls.some(isConversationReader),false);
+  tools.props.openPin({conversationId:archived.id,nativeId:archived.nativeId,messageId:'message',messageHash:'a'.repeat(64),role:'assistant'});controls=render();assert.ok(controls.some(isProjectManager));
   controls.find(n=>n.type?.name==='AssistantSidePanel').props.close();controls=render();assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.visible,true);
   assert.equal(controller.select('other'),false);assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);assert.equal(f.storage.has('e3:reading:device'),false);
-  allowed=true;controls.find(n=>n.type?.name==='ConversationHeaderTools').props.openVersion(archived);controls=render();assert.ok(controls.some(n=>n.type?.name==='ConversationReader'));assert.equal(controls.some(n=>n.type?.name==='ProjectManager'),false);assert.equal(branch.props.journal.value.text,'Original writing');assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);
+  allowed=true;controls.find(n=>n.type?.name==='ConversationHeaderTools').props.openVersion(archived);controls=render();assert.ok(controls.some(isConversationReader));assert.equal(controls.some(isProjectManager),false);assert.equal(branch.props.journal.value.text,'Original writing');assert.equal(f.renderAssistant().selectedId,'original');assert.equal(calls,0);
 });
 
 
@@ -220,15 +223,15 @@ test('actual Project preview returns to its exact Project and refuses losing a h
   const nodes=(node:any):any[]=>Array.isArray(node)?node.flatMap(nodes):node?.props?[node,...nodes(node.props.children)]:[];
   const render=()=>{branch=renderBranch();return nodes(renderEditor());};let controls=render();
   controls.find(n=>n.type==='button'&&n.props.children==='Manage').props.onClick();controls=render();
-  controls.find(n=>n.type?.name==='ProjectManager').props.openFile(file,'origin-project');controls=render();
+  controls.find(isProjectManager).props.openFile(file,'origin-project');controls=render();
   let panel=controls.find(n=>n.type?.name==='AssistantSidePanel');const previewId=panel.props.active;
-  assert.ok(controls.some(n=>n.type?.name==='ProjectManager'),'original manager stays mounted behind its preview');
+  assert.ok(controls.some(isProjectManager),'original manager stays mounted behind its preview');
   assert.equal(panel.props.tabs.find((tab:any)=>tab.id===previewId).view.returnProjectId,'origin-project');
   let allowed=false;const unregister=registerRecordDraftNavigation(()=>allowed);t.after(unregister);
   controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
   assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.active,previewId,'a hidden writer still guards return');
   allowed=true;controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
-  assert.deepEqual(controls.find(n=>n.type?.name==='ProjectManager').props.request.target,{kind:'project',id:'origin-project',tab:'sources'});
+  assert.deepEqual(controls.find(isProjectManager).props.request.target,{kind:'project',id:'origin-project',tab:'sources'});
   panel=controls.find(n=>n.type?.name==='AssistantSidePanel');panel.props.select(previewId);controls=render();panel=controls.find(n=>n.type?.name==='AssistantSidePanel');panel.props.closeTab('projects');controls=render();
   controls.find(n=>n.type==='button'&&n.props.className==='text-button workspace-file-return').props.onClick();controls=render();
   assert.equal(controls.find(n=>n.type?.name==='AssistantSidePanel').props.visible,false,'a deliberately closed origin returns to the conversation');
@@ -253,4 +256,41 @@ test('combined ordinary and direct selection honor all draft owners before commi
   assert.equal(controller.selectRetained(null,'chat',view),true);assert.equal(accepted,1);
   assert.equal(f.storage.get(viewKey),'null');assert.equal(f.storage.get('e3:conversation:device'),'null');
   assert.equal(f.renderAssistant().selectedId,null);assert.equal(calls,0);
+});
+
+
+test('setup reload seeds the exact original Work selection without adopting a newer shared pointer or dispatching', t => {
+  const f = fixture(t); f.storage.set('e3:assistant-space:epoch:device', JSON.stringify('chat'));
+  f.storage.set('e3:conversation:device:work', JSON.stringify('changed-pointer'));
+  let calls = 0; t.mock.method(globalThis, 'fetch', async () => { calls++; throw Error('No setup auto-dispatch'); });
+  const render = f.renderer(() => useAssistant(f.snapshot, false, { id: 'original-work', space: 'work' }));
+  const controller = render(); assert.equal(controller.selectedId, 'original-work'); assert.equal(controller.space, 'work');
+  assert.equal(calls, 0); assert.equal(f.storage.get('e3:conversation:device:work'), JSON.stringify('changed-pointer'));
+});
+
+test('actual Editor exposes the original Retry save after reload without a transient network error', async t => {
+  const f = fixture(t), controller = f.renderAssistant(), time = '2026-10-21T00:00:00Z';
+  const conversation = { id: 'original', nativeId: 'native', nativeKey: 'key', connectionGeneration: 'generation', revision: 1, title: 'Original', state: 'ready', projectId: null, archived: false, model: null, thinking: null, createdAt: time, updatedAt: time };
+  const first = { ...emptyDraft, conversationId: 'original', text: 'Original proposal' };
+  const pending = { kind: 'draft', entityId: f.id, requestId: randomUUID(), epoch: f.snapshot.epoch, expectedRevision: 1, payload: first };
+  f.storage.set(f.journalKey, JSON.stringify({ value: { ...first, text: 'Newer kept writing' }, revision: 1, epoch: f.snapshot.epoch, dirty: true, pending }));
+  const calls: { path: string; raw: string }[] = []; let resolve!: (response: Response) => void;
+  t.mock.method(globalThis, 'fetch', async (path: any, init: RequestInit) => { calls.push({ path, raw: String(init.body) }); return new Promise<Response>(done => { resolve = done; }); });
+  const props = { appIcon: 'red', snapshot: { ...f.snapshot, records: {}, drafts: [{ id: f.id, deviceId: 'device', revision: 1, value: first, updatedAt: time }] },
+    controller: { ...controller, conversation, conversations: [conversation], connection: { state: 'ready', generation: 'generation', methods: [], grantedScopes: ['operator.write'] }, statusRead: 'ready' },
+    voice: { subscribe: () => () => {}, getSnapshot: () => ({ phase: 'idle', turns: [] }) }, contentActions: {}, refreshWorkspace: async () => {}, openSettings() {}, newProject() {}, editProject() {},
+  } as unknown as Parameters<typeof Assistant>[0];
+  const outer = f.renderer(() => Assistant(props))(), renderBranch = f.renderer(() => (outer.type as any)(outer.props)); let branch = renderBranch();
+  const renderEditor = f.renderer(() => (branch.type as any)(branch.props));
+  const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
+  const render = () => { branch = renderBranch(); return nodes(renderEditor()); };
+  let controls = render(); assert.equal(branch.props.journal.networkError, false); assert.equal(calls.length, 0);
+  const status = controls.find(n => n.props.className === 'composer-save-error'); assert.ok(status); assert.match(nodes(status).find(n => n.type === 'span').props.children, /save is unconfirmed/);
+  const retry = controls.find(n => n.type === 'button' && n.props.children === 'Retry save'); assert.ok(retry); assert.equal(retry.props.disabled, false);
+  retry.props.onClick(); controls = render(); assert.equal(calls.length, 1); assert.equal(calls[0].path, '/api/commands'); assert.equal(calls[0].raw, JSON.stringify(pending));
+  assert.equal(controls.find(n => n.type === 'button' && n.props.children === 'Retry save')?.props.disabled ?? true, true);
+  resolve(Response.json({ id: f.id, deviceId: 'device', revision: 2, value: first, updatedAt: time }));
+  for (let tick = 0; tick < 30; tick++) await Promise.resolve();
+  controls = render(); assert.equal(calls.length, 1); assert.equal(branch.props.journal.pending, undefined); assert.equal(branch.props.journal.dirty, true);
+  assert.equal(controls.find(n => n.type === 'textarea').props.value, 'Newer kept writing');
 });

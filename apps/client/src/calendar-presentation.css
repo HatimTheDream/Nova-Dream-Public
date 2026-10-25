@@ -114,3 +114,23 @@
  .calendar-module .dc-calendar-period-nav { flex: 1 1 100%; }
  .calendar-module .dc-calendar-view { width: 100%; margin-inline-start: 0; }
 }
+
+/* The current period supplies context; the global shell already names Calendar. */
+.calendar-module { --calendar-neutral-face:#fff; }
+:root[data-theme=dark] .calendar-module { --calendar-neutral-face:var(--raised); }
+.calendar-module .dc-calendar-toolbar { padding:12px 16px; }
+.calendar-module .dc-calendar-heading { align-items:center; margin-bottom:10px; }
+.calendar-module .dc-calendar-title h1 { font-size:22px; line-height:1.3; overflow-wrap:anywhere; }
+.calendar-module .dc-calendar-actions > button,.calendar-module .dc-calendar-period-nav > button { flex:0 0 auto; }
+:root .calendar-module .dc-calendar-period-nav > button,
+:root .calendar-module .dc-calendar-actions > button:not(:first-child),
+:root .calendar-module .dc-calendar-view > button[aria-pressed=false] { background:var(--calendar-neutral-face); }
+@container calendar-page (max-width:800px) {
+ :root .calendar-module :is(.dc-calendar-period-nav,.dc-calendar-actions,.dc-calendar-view) > button { min-width:44px; min-height:44px; }
+ .calendar-module :is(input:not([type=checkbox]):not([type=radio]),textarea,select) { font-size:16px; }
+}
+@container calendar-page (max-width:540px) {
+ .calendar-module .dc-calendar-toolbar { padding:10px 12px; }
+ .calendar-module .dc-calendar-title h1 { font-size:20px; }
+ .calendar-module .dc-calendar-heading { flex-wrap:wrap; gap:8px; }
+}

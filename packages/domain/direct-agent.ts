@@ -5,26 +5,26 @@ import { canonical, type Entity } from './contracts.js';
 import type { AssistantOperation, Conversation, ConversationMessage } from './assistant.js';
 import { attachmentSchema } from './attachments.js';
 
-const revision = z.number().int().positive();
-const uuid = z.string().uuid();
-const textId = z.string().min(1).max(200);
-export const directAgentRecipientSchema = z.object({ agentId: z.string().regex(/^agent:[a-zA-Z0-9:_-]+$/).max(100), agentRevision: revision }).strict();
-export const directAgentBindingSchema = z.object({
+const revision = /* @__PURE__ */ (() => (z.number().int().positive()))();
+const uuid = /* @__PURE__ */ (() => (z.string().uuid()))();
+const textId = /* @__PURE__ */ (() => (z.string().min(1).max(200)))();
+export const directAgentRecipientSchema = /* @__PURE__ */ (() => (z.object({ agentId: z.string().regex(/^agent:[a-zA-Z0-9:_-]+$/).max(100), agentRevision: revision }).strict()))();
+export const directAgentBindingSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), recipient: directAgentRecipientSchema, design: agentSchema,
   createdBy: z.object({ requestId: uuid, deviceId: textId, epoch: uuid }).strict(),
-}).strict().refine(value => !value.design.archived, 'The original recipient must be an active saved agent.');
+}).strict().refine(value => !value.design.archived, 'The original recipient must be an active saved agent.')))();
 export type DirectAgentBinding = z.infer<typeof directAgentBindingSchema>;
 export const directAgentNativeKey = (conversationId: string) => `agent:edition3-direct:e3:${conversationId}`;
 
-const readAccessSchema = z.partialRecord(z.enum(agentModules), z.literal('read'));
-const turnSourcesSchema = z.object({
+const readAccessSchema = /* @__PURE__ */ (() => (z.partialRecord(z.enum(agentModules), z.literal('read'))))();
+const turnSourcesSchema = /* @__PURE__ */ (() => (z.object({
   projectId: z.string().min(1).max(100).nullable(), projectRevision: z.number().int().nonnegative(),
   draftId: z.string().min(1).max(200), draftRevision: revision, attachments: z.array(attachmentSchema).max(10),
   projectAttachments: z.array(attachmentSchema).max(100),
 }).strict().refine(value => value.projectId === null
   ? value.projectRevision === 0 && value.projectAttachments.length === 0
-  : value.projectRevision > 0, 'Captured Project identity and revision must agree.');
-export const directAgentTurnSchema = z.object({
+  : value.projectRevision > 0, 'Captured Project identity and revision must agree.')))();
+export const directAgentTurnSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), recipient: directAgentRecipientSchema,
   conversationId: uuid, conversationRevision: revision, operationId: uuid, requestId: uuid,
   deviceId: textId, epoch: uuid,
@@ -34,14 +34,14 @@ export const directAgentTurnSchema = z.object({
   account: z.object({ profileId: textId, model: textId, identityKey: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
   sources: turnSourcesSchema,
   readAccess: readAccessSchema, capturedAt: z.string().datetime(),
-}).strict();
+}).strict()))();
 export type DirectAgentTurn = z.infer<typeof directAgentTurnSchema>;
-export const directAgentAuthorSchema = z.object({
+export const directAgentAuthorSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), role: z.enum(['user', 'assistant']),
   conversationId: uuid, operationId: uuid, requestId: uuid, epoch: uuid,
   recordId: textId.nullable(), revision: revision.nullable(),
   name: z.string().min(1).max(240), appearance: profileSchema.shape.appearance,
-}).strict();
+}).strict()))();
 export type DirectAgentAuthor = z.infer<typeof directAgentAuthorSchema>;
 
 /** This is a read ceiling, never an execution permission or a native policy. */

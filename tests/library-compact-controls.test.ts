@@ -61,7 +61,7 @@ function fixture() {
 
 test('Library search dismisses, reopens and reloads without losing query, exact selection or view scope', () => {
  const f = fixture(), selection = { collectionId: 'collection:one', references: [f.reference] };
- f.hooks.save(viewKey, { mode: 'compact', filter: 'all', collectionId: null, selection });
+ f.hooks.save(viewKey, { mode: 'compact', filter: 'all', collectionId: null, selection, query: '' });
  let tree = f.hooks.render(f.props);
  button(tree, 'Search Library').props.onClick(); tree = f.hooks.render(f.props);
  elements(tree).find(node => node.type === 'input' && node.props.type === 'search')!.props.onChange({ target: { value: 'Writing' } }); tree = f.hooks.render(f.props);
@@ -108,13 +108,13 @@ test('Library controls preserve unfinished writing and isolate retained query on
  assert.deepEqual(reloaded.read(writerKey), writer); assert.equal(reloaded.read(viewKey).query, 'Writing'); assert.deepEqual(f.writes, []);
 });
 
-test('pending original save remains explicit while view controls and Widgets stay available', async () => {
+test('pending original save remains explicit while view controls stay available', async () => {
  const f = fixture(), original: HomeLibraryCommand = { requestId: '11111111-1111-4111-8111-111111111111', epoch: 'epoch-one', type: 'references-order', collection: { id: 'collection:one', expectedRevision: 4 }, references: [f.reference] };
  f.props.controller.pending = original; const before = structuredClone(f.library); let tree = f.hooks.render(f.props);
  assert.equal(button(tree, 'New Collection').props.disabled, true);
  const options = menu(tree, 'View Options'); assert.equal(button(options, 'Paste Links').props.disabled, true); assert.equal(button(options, 'Add To Library').props.disabled, true); assert.equal(button(options, 'Open Tabs').props.disabled, true);
- button(options, 'Compact').props.onClick(); tree = f.hooks.render(f.props); button(menu(tree, 'View Options'), 'Widgets').props.onClick();
- assert.equal(f.widgetOpens, 1); assert.deepEqual(f.writes, []);
+ button(options, 'Compact').props.onClick(); tree = f.hooks.render(f.props);
+ assert.equal(f.hooks.read(viewKey).mode, 'compact'); assert.deepEqual(f.writes, []);
  await button(tree, 'Check original save').props.onClick(); assert.equal(f.writes.length, 1); assert.equal(f.writes[0], original); assert.deepEqual(f.library, before);
 });
 

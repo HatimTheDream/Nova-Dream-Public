@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gatewayRequest } from '../deploy/vercel/gateway.mjs';
+import middleware from '../deploy/vercel/middleware.js';
+
 
 const env = { VERCEL_ENV: 'production', NOVA_GATEWAY_ENABLED: 'verified', NOVA_PUBLIC_ORIGIN: 'https://nova-owner.vercel.app', NOVA_ORIGIN: 'https://nova-vps.example.com', NOVA_PROXY_KEY: 'ab'.repeat(32) };
 test('gateway is disabled until explicitly configured for the exact production owner URL', () => {
@@ -40,4 +42,51 @@ test('gateway keeps hostile paths on the configured origin and preserves binary 
   assert.equal(result.headers.get('content-type'), 'application/octet-stream');
   assert.equal(upload.bodyUsed, false);
   assert.deepEqual(new Uint8Array(await upload.arrayBuffer()), bytes);
+});
+
+
+test('installed Vercel middleware rewrites with only approved upstream headers and never reads the upload body', () => {
+  const saved = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, env);
+    const request = new Request(env.NOVA_PUBLIC_ORIGIN + '/api/storage/backups/upload?q=a%2Fb&repeat=1&repeat=2', {
+      method: 'POST', body: new Uint8Array([17, 0, 255, 53]), headers: {
+        'Content-Type': 'application/octet-stream', Origin: env.NOVA_PUBLIC_ORIGIN,
+        'X-Edition3-Candidate': 'c'.repeat(64), 'X-Edition3-Epoch': 'epoch', 'X-Edition3-Transfer': 'bound-transfer',
+        Authorization: 'Bearer forged', 'X-Nova-Proxy-Key': 'forged', 'X-Middleware-Rewrite': 'https://evil.example/',
+        'X-Middleware-Override-Headers': 'authorization', 'X-Middleware-Request-Authorization': 'Bearer forged',
+        Cookie: '_vercel_jwt=private-vercel-cookie; __Host-e3_session_abc123_web=owned-session; other=foreign',
+      },
+    });
+    const expected = gatewayRequest(request, env);
+    const response = middleware(request);
+    assert.equal(response.status, 200);
+    assert.equal(response.body, null);
+    assert.equal(request.bodyUsed, false);
+    assert.equal(response.headers.get('x-middleware-rewrite'), expected.destination.href);
+    assert.deepEqual(response.headers.get('x-middleware-override-headers').split(','), [...expected.headers.keys()]);
+    const expectedNames = ['x-middleware-rewrite', 'x-middleware-override-headers'];
+    for (const [name, value] of expected.headers) {
+      const forwarded = 'x-middleware-request-' + name;
+      expectedNames.push(forwarded);
+      assert.equal(response.headers.get(forwarded), value);
+    }
+    assert.deepEqual([...response.headers.keys()].sort(), expectedNames.sort());
+    assert.equal(response.headers.get('x-middleware-request-cookie'), '__Host-e3_session_abc123_web=owned-session');
+    assert.equal(response.headers.get('x-middleware-request-x-nova-proxy-key'), env.NOVA_PROXY_KEY);
+    for (const name of ['authorization', 'x-middleware-rewrite', 'x-middleware-request-authorization']) {
+      assert.equal(response.headers.has('x-middleware-request-' + name), false);
+    }
+    delete process.env.NOVA_GATEWAY_ENABLED;
+    const denied = middleware(request);
+    assert.equal(denied.status, 503);
+    assert.equal(denied.headers.get('cache-control'), 'no-store');
+    assert.equal(denied.headers.has('x-middleware-rewrite'), false);
+    assert.equal(request.bodyUsed, false);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

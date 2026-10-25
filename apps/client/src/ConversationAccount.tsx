@@ -42,7 +42,7 @@ export function useConversationAccount({ snapshot, conversation, blocked, onChan
   return { status, conversation, blocked: blocked || busy, stale, error, onChange: (profileId: string | null) => void change(profileId) };
 }
 
-export function ConversationAccountPanel(props: ReturnType<typeof useConversationAccount>) {
+export function ConversationAccountPanel(props: ReturnType<typeof useConversationAccount> & { openAccounts?: () => void }) {
   return <div className="conversation-account-panel">
     <span className="menu-heading">ChatGPT Account</span>
     <ConversationAccountSelect {...props}/>
@@ -55,6 +55,7 @@ export function ConversationAccountPanel(props: ReturnType<typeof useConversatio
         return `${allowanceLabel(window.label)}: ${left === null ? 'Unavailable' : `${Math.round(left)}% Left`}`;
       }).join(' · ')}</span></div>;
     })}</div>
+    {props.openAccounts && <button onClick={props.openAccounts}>Manage Accounts</button>}
     {props.error && <p className="field-error" role="alert">{props.error}</p>}
   </div>;
 }

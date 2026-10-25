@@ -31,7 +31,7 @@ test('schema 10 upgrade keeps encrypted account and mail records and fences olde
     const epoch=store.epoch,kept={draft:'Existing provider draft',revision:7};store.internalWrite('mail:delivery:fixture',kept);store.close();
     const before=new DatabaseSync(join(directory,'workspace.sqlite'));before.exec('PRAGMA user_version=10');before.close();
     store=new Store(directory);assert.equal(store.epoch,epoch);assert.deepEqual(store.internalRead('mail:delivery:fixture'),kept);
-    const after=new DatabaseSync(join(directory,'workspace.sqlite'));assert.equal((after.prepare('PRAGMA user_version').get() as {user_version:number}).user_version,56);after.close();
+    const after=new DatabaseSync(join(directory,'workspace.sqlite'));try{assert.equal((after.prepare('PRAGMA user_version').get() as {user_version:number}).user_version,60);}finally{after.close();}
   }finally{store.close();rmSync(directory,{recursive:true,force:true});}
 });
 function fixture(provider:'google'|'microsoft') {
@@ -44,13 +44,13 @@ function fixture(provider:'google'|'microsoft') {
   const add=(id:string,draft=false)=>messages.set(id,provider==='google'?{id,threadId:'thread',labelIds:draft?['DRAFT']:['INBOX','UNREAD'],internalDate:String(now),payload:{headers:[{name:'Subject',value:'Studio planning'},{name:'From',value:'maya@example.test'}]}}:{id,conversationId:'thread',isDraft:draft,isRead:false,flag:{flagStatus:'notFlagged'},categories:[],parentFolderId:'inbox-id',changeKey:'1','@odata.etag':'W/"1"',subject:'Studio planning',from:{emailAddress:{address:'maya@example.test'}},receivedDateTime:new Date(now).toISOString()});
   add('m1');add('m2');add('draft',true);
   const writes:{id:string;path:string;body:any;headers:Headers}[]=[];
-  let failId='',loseId='',losePath='',page=false,evil=false,noEtag=false,onWrite:((id:string)=>void)|undefined;
+  let failId='',failPath='',loseId='',losePath='',missingFolder='',page=false,evil=false,noEtag=false,onWrite:((id:string)=>void)|undefined;
   const providers=new Providers((async(raw:any,init:RequestInit={})=>{
     const url=new URL(String(raw)),path=url.pathname,id=decodeURIComponent(path.match(/\/messages\/([^/]+)/)?.[1]??'');
     const method=init.method??'GET';
     if(method==='GET') {
       if(path.endsWith('/labels'))return json({labels:[{id:'Label_1',name:'Studio',type:'user'}]});
-      if(path.includes('/mailFolders/'))return json({id:path.includes('deleteditems')?'trash-id':'archive-id'});
+      if(path.includes('/mailFolders/')){const name=decodeURIComponent(path.split('/mailFolders/')[1]),folder=name==='deleteditems'?'trash-id':name==='archive'?'archive-id':name;if(folder===missingFolder)return json({},404);return json({id:folder,displayName:folder});}
       if(path.endsWith('/threads/thread'))return json({id:'thread',messages:[...messages.values()]});
       if(id){const value=structuredClone(messages.get(id));if(!value)return json({},404);if(noEtag)delete value['@odata.etag'];return json(value);}
       if(path.endsWith('/messages')) {
@@ -60,7 +60,7 @@ function fixture(provider:'google'|'microsoft') {
       throw Error('Unexpected read '+path);
     }
     const body=init.body?JSON.parse(String(init.body)):{},m=messages.get(id);writes.push({id,path,body,headers:new Headers(init.headers)});
-    if(id===failId)return json({},403);
+    if(id===failId&&(!failPath||path.endsWith(failPath)))return json({},403);
     onWrite?.(id);
     if(provider==='google') {
       const labels=new Set<string>(m.labelIds);
@@ -78,8 +78,8 @@ function fixture(provider:'google'|'microsoft') {
   }) as typeof fetch);
   let accounts=new Accounts(store,providers),service=new MailTriageService(store,accounts,()=>now);
   const input=(action:MailTriageAction)=>({epoch:store.epoch,requestId:randomUUID(),writerId:randomUUID(),action,...(action.includes('organization')||action==='organize'?{organization:'Studio'}:{}),targets:[{provider:provider==='google'?'gmail' as const:'microsoft' as const,accountId:account.id,generation:account.generation,threadId:'thread'}]});
-  const confirm=(plan:MailTriagePlan,decision:'apply'|'cancel'|'undo'|'acknowledge'='apply')=>({epoch:store.epoch,requestId:randomUUID(),planId:plan.id,expectedRevision:plan.revision,digest:decision==='undo'?plan.receipt!.undo.digest!:plan.digest,decision});
-  return {account,messages,writes,input,confirm,add,get store(){return store;},get service(){return service;},set failId(value:string){failId=value;},set loseId(value:string){loseId=value;},set losePath(value:string){losePath=value;},set page(value:boolean){page=value;},set evil(value:boolean){evil=value;},set noEtag(value:boolean){noEtag=value;},set onWrite(value:((id:string)=>void)|undefined){onWrite=value;},advance(ms:number){now+=ms;},
+  const confirm=(plan:MailTriagePlan,decision:'apply'|'cancel'|'undo'|'acknowledge'|'continue'='apply')=>({epoch:store.epoch,requestId:randomUUID(),planId:plan.id,expectedRevision:plan.revision,digest:decision==='undo'?plan.receipt!.undo.digest!:plan.digest,decision});
+  return {account,messages,writes,input,confirm,add,get store(){return store;},get service(){return service;},set failId(value:string){failId=value;},set failPath(value:string){failPath=value;},set missingFolder(value:string){missingFolder=value;},set loseId(value:string){loseId=value;},set losePath(value:string){losePath=value;},set page(value:boolean){page=value;},set evil(value:boolean){evil=value;},set noEtag(value:boolean){noEtag=value;},set onWrite(value:((id:string)=>void)|undefined){onWrite=value;},advance(ms:number){now+=ms;},
     async restart(){await service.close();await accounts.close();store.close();store=new Store(directory);accounts=new Accounts(store,providers);service=new MailTriageService(store,accounts,()=>now);},
     async close(){await service.close();await accounts.close();store.close();rmSync(directory,{recursive:true,force:true});}};
 }
@@ -186,4 +186,125 @@ test('rendered-mail rejection and response loss keep durable results without rep
   f.failId='m2';const denied=await f.service.displayed('device',{...input,requestId:randomUUID(),messageIds:['m2']});assert.equal(denied.plan?.outcomes[0].state,'failed');
   assert.ok(f.messages.get('m2').labelIds.includes('UNREAD'));
  }finally{await f.close();}
+});
+
+
+for(const [provider,folder] of [['google','inbox'],['google','archive'],['microsoft','inbox-id'],['microsoft','archive-id'],['microsoft','project-id']] as const)
+test(`${provider} Restore after Undo expiry returns to exact ${folder} and preserves unrelated mail fields`,async()=>{
+  const f=fixture(provider);try {
+    for(const m of f.messages.values())if(m.id!=='draft'){if(provider==='google'&&folder==='archive')m.labelIds=m.labelIds.filter((id:string)=>id!=='INBOX');else if(provider==='microsoft')m.parentFolderId=folder;}
+    const deleted=await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const original=structuredClone(f.store.internalRead('mail:triage:head:'+deleted.id)),originalDraft=structuredClone(f.messages.get('draft'));
+    f.advance(16*60000);assert.equal(f.service.read('device',{epoch:f.store.epoch,planId:deleted.id}).canUndo,false);
+    await assert.rejects(f.service.confirm('device',f.confirm(deleted,'undo')),/available to undo/);
+    for(const m of f.messages.values())if(m.id!=='draft'){if(provider==='google'){m.labelIds.push('Unrelated','STARRED');m.labelIds=m.labelIds.filter((id:string)=>id!=='UNREAD');}else{m.categories.push('Unrelated');m.isRead=true;}}
+    const prepared=await f.service.prepare('device',f.input('restore'));assert.equal(prepared.action,'restore');assert.equal(prepared.messageCount,2);assert.equal(f.writes.length,2);
+    assert.equal(f.store.internalRead('mail:triage:head:'+prepared.id),undefined,'Older service head lookup cannot operate a new Restore');
+    assert.ok(f.store.internalRead('mail:restore:head:'+prepared.id));
+    const command=f.confirm(prepared),restored=await f.service.confirm('device',command);assert.equal(restored.status,'completed');assert.equal(restored.canUndo,false);
+    assert.ok(restored.outcomes.every(row=>row.state==='applied'&&row.completedSteps===row.totalSteps));
+    const writes=f.writes.length;await f.service.confirm('device',command);assert.equal(f.writes.length,writes);
+    await f.restart();assert.equal(f.service.read('device',{epoch:f.store.epoch,planId:prepared.id}).status,'completed');
+    assert.deepEqual(f.store.internalRead('mail:triage:head:'+deleted.id),original,'Original Delete receipt and Undo deadline stay byte-equivalent');
+    assert.deepEqual(f.messages.get('draft'),originalDraft);
+    for(const m of f.messages.values())if(m.id!=='draft'){if(provider==='google'){assert.equal(m.labelIds.includes('TRASH'),false);assert.equal(m.labelIds.includes('INBOX'),folder==='inbox');assert.ok(m.labelIds.includes('Unrelated'));assert.ok(m.labelIds.includes('STARRED'));assert.equal(m.labelIds.includes('UNREAD'),false);}else{assert.equal(m.parentFolderId,folder);assert.deepEqual(m.categories,['Unrelated']);assert.equal(m.isRead,true);}}
+  }finally{await f.close();}
+});
+
+test('Restore refuses outside-Nova Trash, other device provenance and missing original folder without guessing Inbox',async()=>{
+  const external=fixture('google');try{for(const m of external.messages.values())if(m.id!=='draft')m.labelIds=['TRASH'];await assert.rejects(external.service.prepare('device',external.input('restore')),/no confirmed Delete/);assert.equal(external.writes.length,0);}finally{await external.close();}
+  const f=fixture('microsoft');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    await assert.rejects(f.service.prepare('other-device',f.input('restore')),/no confirmed Delete/);assert.equal(f.writes.length,2);
+    f.missingFolder='inbox-id';await assert.rejects(f.service.prepare('device',f.input('restore')));assert.equal(f.writes.length,2);
+  }finally{await f.close();}
+});
+
+for(const path of ['/untrash','/modify'])test(`lost Restore ${path} response stays original and observation never repeats a step`,async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore')),command=f.confirm(prepared);f.loseId='m1';f.losePath=path;
+    const result=await f.service.confirm('device',command),row=result.outcomes.find(o=>o.messageId==='m1')!;assert.equal(row.state,'uncertain');assert.equal(result.canContinue,false);assert.equal(row.completedSteps,path==='/modify'?1:0);
+    const writes=f.writes.length;await f.restart();const observed=await f.service.reconcile('device',{epoch:f.store.epoch,planId:prepared.id});
+    assert.equal(observed.outcomes.find(o=>o.messageId==='m1')?.state,'observed');assert.equal(observed.canContinue,false);assert.equal(f.writes.length,writes);
+    await f.service.confirm('device',command);assert.equal(f.writes.length,writes);
+    await assert.rejects(f.service.confirm('device',f.confirm(observed,'continue')),/proven stopped/);assert.equal(f.writes.length,writes);
+  }finally{await f.close();}
+});
+
+test('a proven rejected second Restore step survives restart and continues only that exact remaining step',async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore'));f.failId='m1';f.failPath='/modify';
+    const partial=await f.service.confirm('device',f.confirm(prepared));assert.equal(partial.canContinue,true);assert.match(partial.resultMessage!,/stopped/);
+    assert.equal(partial.outcomes.find(o=>o.messageId==='m1')?.completedSteps,1);assert.equal(f.writes.filter(w=>w.id==='m1'&&w.path.endsWith('/untrash')).length,1);
+    await f.restart();f.failId='';const current=f.service.read('device',{epoch:f.store.epoch,planId:prepared.id}),command=f.confirm(current,'continue');
+    const complete=await f.service.confirm('device',command);assert.equal(complete.status,'completed');assert.equal(complete.canContinue,false);
+    assert.equal(f.writes.filter(w=>w.id==='m1'&&w.path.endsWith('/untrash')).length,1);assert.equal(f.writes.filter(w=>w.id==='m1'&&w.path.endsWith('/modify')).length,2);
+    const writes=f.writes.length;await f.service.confirm('device',command);assert.equal(f.writes.length,writes);
+  }finally{await f.close();}
+});
+
+test('Restore guards current permissions, original ownership, source revision and competing plans before any new write',async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const a=await f.service.prepare('device',f.input('restore')),b=await f.service.prepare('device',f.input('restore'));
+    await assert.rejects(f.service.confirm('wrong-device',f.confirm(a)),/unavailable/);
+    await assert.rejects(f.service.confirm('device',{...f.confirm(a),epoch:randomUUID()}),/recovery/);
+    await assert.rejects(f.service.confirm('device',{...f.confirm(a),digest:'f'.repeat(64)}),/changed/);
+    f.store.internalWrite('accounts:item:'+f.account.id,{...f.account,scopes:['https://www.googleapis.com/auth/gmail.readonly']});
+    await assert.rejects(f.service.confirm('device',f.confirm(a)),/permission/i);assert.equal(f.writes.length,2);
+    f.store.internalWrite('accounts:item:'+f.account.id,f.account);
+    const complete=await f.service.confirm('device',f.confirm(a));assert.equal(complete.status,'completed');const writes=f.writes.length;
+    await assert.rejects(f.service.confirm('device',f.confirm(b)),/already has a Restore/);assert.equal(f.writes.length,writes);
+  }finally{await f.close();}
+});
+
+test('a newer Delete cycle determines the Restore origin and never reuses the older consumed one',async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('restore'))));
+    for(const m of f.messages.values())if(m.id!=='draft')m.labelIds=m.labelIds.filter((id:string)=>id!=='INBOX');f.advance(1);
+    const second=await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore'));
+    const items=f.store.internalList<any>('mail:triage:items:'+prepared.id+':');assert.ok(items.every(item=>item.restoreOrigin.planId===second.id));
+    const restored=await f.service.confirm('device',f.confirm(prepared));assert.equal(restored.status,'completed');
+    for(const m of f.messages.values())if(m.id!=='draft'){assert.equal(m.labelIds.includes('TRASH'),false);assert.equal(m.labelIds.includes('INBOX'),false);}
+  }finally{await f.close();}
+});
+
+test('Restore stops at the confirmed cursor when account generation changes between Gmail steps',async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore'));
+    f.onWrite=id=>{if(id==='m1')f.store.internalWrite('accounts:item:'+f.account.id,{...f.account,generation:randomUUID()});};
+    const partial=await f.service.confirm('device',f.confirm(prepared)),row=partial.outcomes.find(o=>o.messageId==='m1')!;
+    assert.equal(row.completedSteps,1);assert.equal(row.state,'failed');assert.equal(f.writes.filter(w=>w.id==='m1'&&w.path.endsWith('/modify')).length,0);
+    const writes=f.writes.length;await assert.rejects(f.service.confirm('device',f.confirm(partial,'continue')),/connection changed/);assert.equal(f.writes.length,writes);
+  }finally{await f.close();}
+});
+
+test('Restore continuation preserves a touched field changed after its first confirmed step',async()=>{
+  const f=fixture('google');try{
+    await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore'));f.failId='m1';f.failPath='/modify';
+    const partial=await f.service.confirm('device',f.confirm(prepared));assert.equal(partial.outcomes.find(o=>o.messageId==='m1')?.completedSteps,1);
+    await f.restart();f.failId='';f.messages.get('m1').labelIds.push('SPAM');const writes=f.writes.length;
+    const checked=await f.service.confirm('device',f.confirm(f.service.read('device',{epoch:f.store.epoch,planId:prepared.id}),'continue'));
+    assert.equal(checked.outcomes.find(o=>o.messageId==='m1')?.state,'failed');assert.equal(checked.outcomes.find(o=>o.messageId==='m1')?.completedSteps,1);
+    assert.equal(f.writes.length,writes);assert.ok(f.messages.get('m1').labelIds.includes('SPAM'));
+  }finally{await f.close();}
+});
+
+for(const changed of ['folder','draft','source'] as const)test(`Restore refuses ${changed} changed after review without a provider write`,async()=>{
+  const f=fixture('microsoft');try{
+    const deleted=await f.service.confirm('device',f.confirm(await f.service.prepare('device',f.input('delete'))));
+    const prepared=await f.service.prepare('device',f.input('restore')),writes=f.writes.length;
+    if(changed==='folder')f.missingFolder='inbox-id';
+    else if(changed==='draft')f.messages.get('m1').isDraft=true;
+    else {const item=f.store.internalList<any>('mail:triage:items:'+deleted.id+':')[0];item.outcome.undo='undone';f.store.internalWrite('mail:triage:items:'+deleted.id+':'+item.id,item);}
+    if(changed==='source')await assert.rejects(f.service.confirm('device',f.confirm(prepared)),/original Delete changed/);
+    else {const result=await f.service.confirm('device',f.confirm(prepared));assert.equal(result.status,'partial');assert.ok(result.outcomes.every(row=>row.state==='failed'));}
+    assert.equal(f.writes.length,writes);
+  }finally{await f.close();}
 });

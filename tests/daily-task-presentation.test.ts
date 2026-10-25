@@ -154,3 +154,19 @@ test('daily order uses the same current and historical-completed membership as p
     assert.equal(snapshot.tasks.length, 4); assert.equal(snapshot.taskState!.earnedXp, 10);
   } finally { f.close(); }
 });
+
+test('All Open, Unsorted and Anytime reuse existing task placement without carrying daily history forward', () => {
+ const f=fixture();try {
+  const ordinary=f.task();f.routine();const oldDaily=f.snapshot().tasks.find(t=>t.id!==ordinary.id)!;
+  f.now+=86400000;const snapshot=f.snapshot(),context=taskPresentationContext(snapshot.taskState,snapshot.routines,f.now);
+  const select=(task:Entity<Task>,view:'All Open'|'Unsorted'|'Anytime')=>inTaskDestination(task,view,'2026-03-08',zone,context);
+  assert.equal(select(ordinary,'All Open'),true);assert.equal(select(oldDaily,'All Open'),false);
+  const unsorted={...ordinary,value:{...ordinary.value,planned:'',bucket:'capture' as const}};
+  assert.equal(select(unsorted,'Unsorted'),true);assert.equal(select(unsorted,'Anytime'),false);
+  const anytime={...unsorted,value:{...unsorted.value,bucket:'anytime' as const}};
+  assert.equal(select(anytime,'Anytime'),true);assert.equal(select(anytime,'Unsorted'),false);
+  assert.equal(select({...anytime,value:{...anytime.value,status:'done'}},'All Open'),false);
+  assert.equal(select({...anytime,value:{...anytime.value,status:'done'}},'Anytime'),false);
+  assert.equal(f.store.readEntity('task',ordinary.id)?.value.planned,'2026-03-06');
+ } finally {f.close();}
+});

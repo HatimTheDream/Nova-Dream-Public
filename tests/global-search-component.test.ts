@@ -72,18 +72,25 @@ function snapshot(): Snapshot {
 }
 function fixture(respond: (path: string, init: RequestInit) => unknown | Promise<unknown> = () => ({ epoch: scope.epoch, items: [], collections: [], resources: [], ideaPreferences: { revision: 0, saved: [], hidden: [] } })) {
   const storage = new Map<string, string>(), calls: { path: string; init: RequestInit }[] = [], owners: { close(): void }[] = [];
+  let searchWidth = 1280;
+  const mediaListeners = new Set<() => void>();
   let fail: (key: string) => boolean = () => false, failRead: (key: string) => boolean = () => false;
   const values: Record<PropertyKey, unknown> = {
+    HTMLElement: class {},
     window: Object.assign(new EventTarget(), { innerWidth: 1280 }),
     document: Object.assign(new EventTarget(), { hidden: false, documentElement: { dataset: {} }, querySelector: () => null, activeElement: null }),
-    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    matchMedia: (query: string) => query === '(max-width: 1150px)' ? {
+      get matches() { return searchWidth <= 1150; },
+      addEventListener(_event: string, listener: () => void) { mediaListeners.add(listener); },
+      removeEventListener(_event: string, listener: () => void) { mediaListeners.delete(listener); },
+    } : { matches: false, addEventListener() {}, removeEventListener() {} },
     localStorage: { getItem: (key: string) => { if (failRead(key)) throw Error('Synthetic read refusal'); return storage.get(key) ?? null; }, setItem: (key: string, value: string) => { if (fail(key)) throw Error('Synthetic storage refusal'); storage.set(key, value); }, removeItem: (key: string) => storage.delete(key) },
     requestAnimationFrame: (run: () => void) => { run(); return 1; },
     fetch: async (path: string, init: RequestInit) => { calls.push({ path, init }); return new Response(JSON.stringify(await respond(path, init))); },
   };
   const originals = Reflect.ownKeys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   for (const key of Reflect.ownKeys(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: values[key] });
-  function mount(component: (props: any) => any, initial: any) {
+  function mount(component: (props: any) => any, initial: any, bindRefs?: (tree: any) => void) {
     let props = initial, cursor = 0, dirty = true, tree: any, closed = false;
     const cells: any[] = [], effects: (() => void)[] = [];
     const hooks = {
@@ -95,7 +102,7 @@ function fixture(respond: (path: string, init: RequestInit) => unknown | Promise
     };
     const owner = {
       get tree() { return tree; },
-      async flush() { for (let pass = 0; pass < 24; pass++) { if (dirty && !closed) { dirty = false; cursor = 0; (globalThis as any)[symbol] = hooks; tree = component(props); while (effects.length) effects.shift()!(); } for (let tick = 0; tick < 10; tick++) await Promise.resolve(); } },
+      async flush() { for (let pass = 0; pass < 24; pass++) { if (dirty && !closed) { dirty = false; cursor = 0; (globalThis as any)[symbol] = hooks; tree = component(props); bindRefs?.(tree); while (effects.length) effects.shift()!(); } for (let tick = 0; tick < 10; tick++) await Promise.resolve(); } },
       async update(next: any) { props = { ...props, ...next }; dirty = true; await owner.flush(); },
       find(predicate: (node: any) => boolean) { const found = nodes(tree).find(predicate); assert.ok(found, 'Expected rendered control'); return found; },
       button(label: string) { return owner.find(node => node.type === 'button' && (node.props['aria-label'] === label || text(node).trim() === label)); },
@@ -103,18 +110,52 @@ function fixture(respond: (path: string, init: RequestInit) => unknown | Promise
     };
     owners.push(owner); return owner;
   }
-  return { storage, calls, mount, refuse: (check: typeof fail) => { fail = check; }, refuseRead: (check: typeof failRead) => { failRead = check; }, close() { owners.reverse().forEach(owner => owner.close()); for (const [key, descriptor] of originals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); Reflect.deleteProperty(globalThis, symbol); } };
+  return { storage, calls, mount, resize(width: number) { searchWidth = width; for (const listener of mediaListeners) listener(); }, refuse: (check: typeof fail) => { fail = check; }, refuseRead: (check: typeof failRead) => { failRead = check; }, close() { owners.reverse().forEach(owner => owner.close()); for (const [key, descriptor] of originals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); Reflect.deleteProperty(globalThis, symbol); } };
 }
 const appProps = (data = snapshot()) => ({ snapshot: data, online: true, refresh: async () => {}, reconnect: async () => {}, dismissFrontendUpdate() {} });
+// Commit actual component refs to small focus/scroll hosts. These exercise the
+// component effects and retained controller, not browser layout or CSS geometry.
+function searchHosts() {
+  const hosts = new Map<string, any>();
+  let oldRefs: any[] = [];
+  const host = (key: string) => {
+    if (!hosts.has(key)) {
+      const value = { key, scrollTop: 0, focusOptions: undefined as unknown,
+        focus(options?: unknown) { value.focusOptions = options; (document as any).activeElement = value; },
+        scrollTo({ top }: { top: number }) { value.scrollTop = top; } };
+      hosts.set(key, value);
+    }
+    return hosts.get(key);
+  };
+  const bind = (tree: any) => {
+    for (const ref of oldRefs) if (typeof ref === 'function') ref(null); else ref.current = null;
+    oldRefs = [];
+    for (const node of nodes(tree)) {
+      const ref = node.props.ref;
+      if (!ref) continue;
+      const key = node.props.className === 'global-search-result' ? `row:${node.key}`
+        : node.props.className?.includes('global-search-back') ? 'back'
+          : node.props['aria-label'] === 'Search saved work' ? 'input'
+            : node.props['aria-label'] === 'Search results' ? 'list' : `control:${text(node)}`;
+      oldRefs.push(ref);
+      if (typeof ref === 'function') ref(host(key)); else ref.current = host(key);
+    }
+  };
+  return { host, bind };
+}
 const currentRoute = (app: ReturnType<ReturnType<typeof fixture>['mount']>) => app.find(node => node.props['data-route']).props['data-route'];
 const searchElement = (app: ReturnType<ReturnType<typeof fixture>['mount']>) => app.find(node => node.type === SearchWorkspace);
 async function select(app: ReturnType<ReturnType<typeof fixture>['mount']>, target: SearchTarget) {
   searchElement(app).props.search.update({ selected: target, detail: true }); await app.flush();
 }
+// App now defers GeneralSettings. Keep its real App callbacks when mounting the
+// actual module, without assuming the lazy element equals the eager export.
+const generalElement = (node: any) => nodes(node.props.general).find(child =>
+  typeof child.props.saveShared === 'function' && typeof child.props.onDraftState === 'function' && child.props.currentLayout);
 async function settingsSearch(f: ReturnType<typeof fixture>) {
   const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Settings').props.onClick(); await app.flush();
-  const settings = app.find(node => nodes(node.props.general).some(child => child.type === GeneralSettings));
-  const general = f.mount(GeneralSettings, nodes(settings.props.general).find(node => node.type === GeneralSettings).props); await general.flush();
+  const settings = app.find(generalElement);
+  const general = f.mount(GeneralSettings, generalElement(settings).props); await general.flush();
   general.find(node => node.props['aria-label'] === 'Color Theme').props.onChange({ target: { value: 'dark' } }); await general.flush(); await app.flush();
   app.button('Search saved work').props.onClick(); await app.flush();
   return { app, general };
@@ -126,7 +167,7 @@ test('actual Settings departure remains visible, then retries the exact complete
     const { app, general } = await settingsSearch(f), target: SearchTarget = { kind: 'contact', id: 'contact:first', revision: 2 };
     await select(app, target); searchElement(app).props.open(target); await app.flush(); await general.flush();
     assert.equal(currentRoute(app), 'settings'); assert.equal(nodes(app.tree).some(node => node.type === SearchWorkspace), false);
-    const settings = app.find(node => nodes(node.props.general).some(child => child.type === GeneralSettings));
+    const settings = app.find(generalElement);
     assert.equal(nodes(app.tree).find(node => node.props.className === 'global-search-origin' && nodes(node).includes(settings))?.props.hidden, false);
     assert.equal(general.find(node => node.type === Dialog).props.title, 'Unsaved Settings');
     assert.equal(f.storage.has(recordIndexKey(scope.deviceId, 'contact', scope.windowId)), false);
@@ -306,6 +347,86 @@ test('actual Search batches beyond the hundredth result and retains selection, s
     const preserved = JSON.parse(f.storage.get(searchKey(scope))!);
     owner.close(); const reopened = f.mount(({ data }) => useGlobalSearch(data), { data }); await reopened.flush();
     assert.deepEqual(reopened.tree.view, preserved); assert.equal(reopened.tree.view.query, 'Launch');
+  } finally { f.close(); }
+});
+
+for (const width of [960, 390]) test(`Search preview and Back/Escape retain the exact result and writing at ${width}px`, async () => {
+  const f = fixture(), data = snapshot(), dom = searchHosts();
+  try {
+    f.resize(width);
+    f.storage.set('unrelated-writing', 'Exact unfinished writing 雪');
+    const owner = f.mount(({ data }) => useGlobalSearch(data), { data }); await owner.flush();
+    owner.tree.begin({ route: 'content', label: 'Content' }); await owner.flush();
+    owner.tree.update({ query: 'Person', filters: { type: 'contact', project: 'all', status: 'active', sort: 'recent' }, batch: 40, scroll: 437 }); await owner.flush();
+    const ui = f.mount(SearchWorkspace, { search: owner.tree, snapshot: data, open() {}, close() {}, queryIn() {} }, dom.bind); await ui.flush();
+    assert.equal(document.activeElement, dom.host('input'));
+    const result = ui.find(node => node.props.className === 'global-search-result' && text(node).includes('Second Person'));
+    const resultHost = dom.host(`row:${result.key}`);
+    resultHost.focus(); result.props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(document.activeElement, dom.host('back'));
+    const kept = structuredClone(owner.tree.view);
+    dom.host('list').scrollTop = 0;
+    ui.find(node => node.props['aria-label'] === 'Search results').props.onScroll({ currentTarget: dom.host('list') }); await owner.flush();
+    assert.equal(owner.tree.view.scroll, 437, 'Hiding results must not erase their scroll position');
+    ui.button('Back To Results').props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(document.activeElement, resultHost);
+    assert.deepEqual(resultHost.focusOptions, { preventScroll: true });
+    assert.equal(dom.host('list').scrollTop, 437);
+    assert.deepEqual(owner.tree.view, { ...kept, detail: false });
+    ui.find(node => node.key === result.key).props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    let prevented = false;
+    ui.tree.props.onKeyDown({ key: 'Escape', defaultPrevented: false, nativeEvent: { isComposing: false }, preventDefault() { prevented = true; } });
+    await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(prevented, true); assert.equal(document.activeElement, resultHost);
+    assert.deepEqual(owner.tree.view, { ...kept, detail: false });
+    assert.equal(f.storage.get('unrelated-writing'), 'Exact unfinished writing 雪');
+    assert.ok(f.calls.every(call => call.init.method === 'GET'));
+  } finally { f.close(); }
+});
+
+test('Search keeps desktop result focus and moves it when the preview becomes focused at the width boundary', async () => {
+  const f = fixture(), data = snapshot(), dom = searchHosts();
+  try {
+    f.resize(1920);
+    const owner = f.mount(({ data }) => useGlobalSearch(data), { data }); await owner.flush(); owner.tree.begin({ route: 'home', label: 'Home' }); await owner.flush();
+    const ui = f.mount(SearchWorkspace, { search: owner.tree, snapshot: data, open() {}, close() {}, queryIn() {} }, dom.bind); await ui.flush();
+    const result = ui.find(node => node.props.className === 'global-search-result'), resultHost = dom.host(`row:${result.key}`);
+    resultHost.focus(); result.props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(document.activeElement, resultHost, 'Split preview does not steal focus from the results');
+    f.resize(960); await ui.flush(); assert.equal(document.activeElement, dom.host('back'));
+    f.resize(1920); await ui.flush(); assert.equal(document.activeElement, resultHost, 'The hidden narrow Back control cannot keep focus');
+  } finally { f.close(); }
+});
+
+test('Search retains focus on refusal and falls back to the query when the original result disappears', async () => {
+  const f = fixture(), data = snapshot(), dom = searchHosts();
+  try {
+    f.resize(390);
+    const owner = f.mount(({ data }) => useGlobalSearch(data), { data }); await owner.flush(); owner.tree.begin({ route: 'home', label: 'Home' }); await owner.flush();
+    const ui = f.mount(SearchWorkspace, { search: owner.tree, snapshot: data, open() {}, close() {}, queryIn() {} }, dom.bind); await ui.flush();
+    const result = ui.find(node => node.props.className === 'global-search-result'), resultHost = dom.host(`row:${result.key}`);
+    resultHost.focus(); f.refuse(key => key === searchKey(scope)); result.props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(owner.tree.view.detail, false); assert.equal(document.activeElement, resultHost);
+    f.refuse(() => false); ui.find(node => node.key === result.key).props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    const selectedKey = owner.tree.view.selected.kind + ':' + owner.tree.view.selected.id;
+    await ui.update({ search: { ...owner.tree, rows: owner.tree.rows.filter((row: any) => row.target.kind + ':' + row.target.id !== selectedKey) } });
+    ui.button('Back To Results').props.onClick(); await owner.flush();
+    await ui.update({ search: { ...owner.tree, rows: owner.tree.rows.filter((row: any) => row.target.kind + ':' + row.target.id !== selectedKey) } });
+    assert.equal(document.activeElement, dom.host('input'));
+    assert.equal(owner.tree.view.selected.kind + ':' + owner.tree.view.selected.id, selectedKey, 'Missing originals keep their exact saved reference');
+  } finally { f.close(); }
+});
+
+test('a restored narrow Search preview starts on Back and returns to its retained selected result', async () => {
+  const f = fixture(), data = snapshot(), dom = searchHosts();
+  try {
+    f.resize(960);
+    const owner = f.mount(({ data }) => useGlobalSearch(data), { data }); await owner.flush(); owner.tree.begin({ route: 'home', label: 'Home' }); await owner.flush();
+    owner.tree.update({ selected: { kind: 'contact', id: 'contact:second', revision: 2 }, detail: true, scroll: 82 }); await owner.flush();
+    const ui = f.mount(SearchWorkspace, { search: owner.tree, snapshot: data, open() {}, close() {}, queryIn() {} }, dom.bind); await ui.flush();
+    assert.equal(document.activeElement, dom.host('back'));
+    ui.button('Back To Results').props.onClick(); await owner.flush(); await ui.update({ search: owner.tree });
+    assert.equal(document.activeElement, dom.host('row:contact:contact:second')); assert.equal(dom.host('list').scrollTop, 82);
   } finally { f.close(); }
 });
 test('Conversation query handoff preserves current account/space and requires explicit message search', async () => {

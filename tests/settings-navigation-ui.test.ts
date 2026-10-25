@@ -1,4 +1,6 @@
 import test from 'node:test';
+import { randomUUID, createHash } from 'node:crypto';
+import { canonical } from '../packages/domain/contracts';
 import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -36,6 +38,8 @@ const hooks = registerHooks({
 });
 const { SettingsPage, SettingsPanel } = await import('../apps/client/src/SettingsPage');
 const { Connections } = await import('../apps/client/src/Connections');
+const { PhoneSettings, PhonePairingScreen } = await import('../apps/client/src/Phone');
+const { ApiError } = await import('../apps/client/src/api');
 const { GeneralSettings } = await import('../apps/client/src/GeneralSettings');
 const { Dialog } = await import('../apps/client/src/ui');
 const { mayLeaveSettingsDraft } = await import('../apps/client/src/settings-draft-navigation');
@@ -53,15 +57,20 @@ function host<P>(component: (props: P) => any, initial: P, respond: (path: strin
   let props = initial, cursor = 0, dirty = true, closed = false, tree: any, timerId = 0;
   const cells: any[] = [], pending: (() => (() => void))[] = [], calls: { path: string; init: RequestInit }[] = [];
   const timers = new Map<number, () => void>();
+  const nativeCrypto = globalThis.crypto, digestJobs = new Set<Promise<ArrayBuffer>>();
   activeStorage = { values: new Map(), failWrite: false, failRemove: false };
   const stored = activeStorage;
-  const document = Object.assign(new EventTarget(), { hidden: false, querySelector: () => null, documentElement: { dataset: {} } });
+  const document = Object.assign(new EventTarget(), { hidden: false, querySelector: () => null, querySelectorAll: () => [], documentElement: { dataset: {} } });
   const values: Record<PropertyKey, unknown> = {
     [key]: {
       state(value: any) { const i = cursor++; if (!cells[i]) cells[i] = { value: typeof value === 'function' ? value() : value }; return [cells[i].value, (next: any) => { const value = typeof next === 'function' ? next(cells[i].value) : next; if (!Object.is(value, cells[i].value)) { cells[i].value = value; dirty = true; } }]; },
       ref(value: any) { const i = cursor++; return cells[i] ??= { current: value }; },
       effect(run: () => void | (() => void), deps: unknown[]) { const i = cursor++, before = cells[i]; if (!before || deps.some((value, index) => !Object.is(value, before.deps[index]))) { cells[i] = { deps, cleanup: before?.cleanup }; pending.push(() => { cells[i].cleanup?.(); return () => { cells[i].cleanup = run(); }; }); } },
-    }, document, window: new EventTarget(), localStorage: storage,
+    }, document, window: new EventTarget(), localStorage: storage, sessionStorage: storage,
+    crypto: { randomUUID: () => nativeCrypto.randomUUID(), subtle: { digest(algorithm: AlgorithmIdentifier, data: BufferSource) {
+      const job = nativeCrypto.subtle.digest(algorithm, data); digestJobs.add(job);
+      void job.then(() => digestJobs.delete(job), () => digestJobs.delete(job)); return job;
+    } } },
     setTimeout: (run: () => void) => { const id = ++timerId; timers.set(id, run); return id; }, clearTimeout: (id: number) => timers.delete(id),
     fetch: async (path: string, init: RequestInit) => { calls.push({ path, init }); const value = await respond(path, init); return new Response(JSON.stringify(value), { status: 200 }); },
   };
@@ -71,6 +80,7 @@ function host<P>(component: (props: P) => any, initial: P, respond: (path: strin
   const flush = async () => { for (let pass = 0; pass < 24; pass++) { if (dirty) { dirty = false; cursor = 0; tree = component(props); const setup = pending.splice(0).map(cleanup => cleanup()); for (const run of setup) run(); } for (let tick = 0; tick < 10; tick++) await Promise.resolve(); } };
   return {
     calls, stored, get tree() { return tree; }, flush,
+    async finishDigest() { while (digestJobs.size) await Promise.all([...digestJobs]); },
     async update(next: Partial<P>) { props = { ...props, ...next }; dirty = true; await flush(); },
     find(match: (node: any) => boolean) { const node = nodes(tree).find(match); assert.ok(node, 'Expected actual component control'); return node; },
     button(label: string) { return this.find(node => node.type === 'button' && text(node) === label); },
@@ -278,5 +288,156 @@ test('Settings entry and section transitions focus the current context and resto
     app.tree.props.onScroll({ currentTarget: { scrollTop: 271 } });
     await app.update({ selected: 'index' }); assert.equal(focused.at(-1), 'card:Accounts');
     await app.update({ selected: 'accounts' }); assert.equal(scroller.scrollTop, 271); assert.equal(focused.at(-1), 'Accounts');
+  } finally { app.close(); }
+});
+
+
+test('lost setup acknowledgement keeps original fields locked and Check reads the receipt without another POST', async () => {
+  const data = snapshot(randomUUID()); let original: any, postCount = 0;
+  const app = host(Connections, { snapshot: data, online: true, openAssistant() {}, section: 'assistant', remoteHost: true }, (path, init) => {
+    if (init.method === 'POST') { original = JSON.parse(String(init.body)); postCount++; throw Error('Synthetic lost acknowledgement'); }
+    if (path.includes('/setup-request?')) return { requestId: original.requestId, epoch: original.epoch, kind: 'runtime-start', sha256: createHash('sha256').update(canonical(original)).digest('hex'), state: 'applied', revision: 2, message: 'Original command applied; readiness separate.' };
+    return reading(path);
+  });
+  try {
+    await app.flush(); app.button('Reconnect this host').props.onClick(); await app.finishDigest(); await app.flush();
+    assert.equal(postCount, 1); assert.equal(app.button('Reconnect this host').props.disabled, true);
+    const control = () => app.find(n => n.props.control?.journal).props.control;
+    assert.equal(control().journal.pending.reference.requestId, original.requestId);
+    await app.update({ section: 'accounts' }); await app.update({ section: 'assistant' }); assert.equal(postCount, 1);
+    await control().check(); await app.flush(); assert.equal(postCount, 1); assert.equal(control().journal.pending, undefined);
+    assert.equal(control().journal.value.result.state, 'applied');
+  } finally { app.close(); }
+});
+
+test('gateway input stays window-only; a full journal blocks dispatch, then exact retained request clears only the secret field', async () => {
+  const data = snapshot(randomUUID()); let original: any;
+  const app = host(Connections, { snapshot: data, online: true, openAssistant() {}, section: 'assistant', remoteHost: true }, (path, init) => {
+    if (init.method === 'POST') {
+      original = JSON.parse(String(init.body)); return { setupRequest: { requestId: original.requestId, epoch: original.epoch, kind: 'gateway-connect', sha256: createHash('sha256').update(canonical(original)).digest('hex'), state: 'working', revision: 1, message: 'Original setup admitted' } };
+    }
+    return reading(path);
+  });
+  try {
+    await app.flush(); app.find(n => n.type === 'input' && n.props.type === 'url').props.onChange({ target: { value: 'wss://fixture.invalid' } });
+    app.find(n => n.type === 'input' && n.props.type === 'password').props.onChange({ target: { value: 'private-fixture-token' } }); await app.flush();
+    app.stored.failWrite = true;
+    app.find(n => n.type === 'form').props.onSubmit({ preventDefault() {} }); await app.finishDigest(); await app.flush();
+    assert.equal(app.calls.filter(c => c.init.method === 'POST').length, 0);
+    assert.equal(app.find(n => n.type === 'input' && n.props.type === 'password').props.value, 'private-fixture-token');
+    assert.ok([...app.stored.values.values()].every(value => !value.includes('private-fixture-token')));
+    app.stored.failWrite = false; app.find(n => n.props.control?.journal).props.control.retain(); await app.flush();
+    assert.equal(app.find(n => n.props.control?.journal).props.control.journal.pending.dispatched, false);
+    assert.equal(app.calls.filter(c => c.init.method === 'POST').length, 0, 'Restoring retention never dispatches setup');
+  } finally { app.close(); }
+});
+
+test('gateway dispatch retains fingerprint before POST, clears password and never stores credentials in browser metadata', async () => {
+  const data = snapshot(randomUUID()); let posted = 0;
+  const app: ReturnType<typeof host> = host(Connections, { snapshot: data, online: true, openAssistant() {}, section: 'assistant', remoteHost: true }, (path, init) => {
+    if (init.method !== 'POST') return reading(path);
+    posted++; const original = JSON.parse(String(init.body));
+    const kept = [...app.stored.values.values()].map(value => JSON.parse(value)).find(value => value.reference);
+    assert.equal(kept.reference.requestId, original.requestId); assert.equal(kept.dispatched, true);
+    assert.equal(original.token, 'private-fixture-token');
+    return { setupRequest: { ...kept.reference, revision: 1, state: 'working', message: 'Original admitted' } };
+  });
+  try {
+    await app.flush(); app.find(n => n.type === 'input' && n.props.type === 'url').props.onChange({ target: { value: 'wss://fixture.invalid' } });
+    app.find(n => n.type === 'input' && n.props.type === 'password').props.onChange({ target: { value: 'private-fixture-token' } }); await app.flush();
+    app.find(n => n.type === 'form').props.onSubmit({ preventDefault() {} }); await app.finishDigest(); await app.flush();
+    assert.equal(posted, 1); assert.equal(app.find(n => n.type === 'input' && n.props.type === 'password').props.value, '');
+    assert.equal(app.find(n => n.type === 'input' && n.props.type === 'url').props.disabled, true);
+    assert.ok([...app.stored.values.values()].every(value => !value.includes('private-fixture-token')));
+  } finally { app.close(); }
+});
+
+function enterPairing(app: ReturnType<typeof host>) {
+  app.find(n => n.type === 'input' && n.props.autoComplete === 'one-time-code').props.onChange({ target: { value: '1234-5678' } });
+}
+const submitPairing = (app: ReturnType<typeof host>) => app.find(n => n.type === 'form').props.onSubmit({ preventDefault() {} });
+
+test('pairing unknown HTTP failure keeps original fields locked and explicit check uses identical request bytes', async () => {
+  const app = host(PhonePairingScreen, { paired: async () => assert.fail('Unverified access') }, () => { throw new ApiError('unknown', 'Unconfirmed original', undefined, 409); });
+  try {
+    await app.flush(); enterPairing(app); await app.flush(); submitPairing(app); await app.finishDigest(); await app.flush();
+    const first = app.calls.find(c => c.init.method === 'POST')!; assert.ok(first);
+    assert.equal(app.find(n => n.type === 'input' && n.props.autoComplete === 'one-time-code').props.disabled, true);
+    assert.equal(nodes(app.tree).some(n => n.type === 'button' && text(n) === 'Review New Pairing Code'), false);
+    submitPairing(app); await app.finishDigest(); await app.flush();
+    assert.equal(app.calls.length, 2); assert.equal(app.calls[1].init.body, first.init.body);
+    const kept = JSON.parse(app.stored.values.get('e3:phone-pair:v2')!);
+    assert.equal(kept.current.request.requestId, JSON.parse(String(first.init.body)).requestId);
+  } finally { app.close(); }
+});
+
+test('matching pairing rejection permits explicit new-code review only after archiving the original', async () => {
+  let original: any;
+  const app = host(PhonePairingScreen, { paired: async () => {} }, (_path, init) => {
+    original = JSON.parse(String(init.body));
+    throw new ApiError('phone_pair_rejected', 'Original rejected', { format: 1, requestId: original.requestId, sha256: createHash('sha256').update(canonical(original)).digest('hex'), state: 'rejected', reason: 'code_unavailable' } as any, 401);
+  });
+  try {
+    await app.flush(); enterPairing(app); await app.flush(); submitPairing(app); await app.finishDigest(); await app.flush();
+    assert.equal(app.calls.length, 1); assert.equal(app.find(n => n.type === 'input' && n.props.autoComplete === 'one-time-code').props.disabled, true);
+    app.button('Review New Pairing Code').props.onClick(); await app.flush();
+    const kept = JSON.parse(app.stored.values.get('e3:phone-pair:v2')!);
+    assert.equal(kept.history[0].request.requestId, original.requestId); assert.equal(kept.current, undefined);
+    assert.equal(app.find(n => n.type === 'input' && n.props.autoComplete === 'one-time-code').props.value, '');
+    assert.equal(app.calls.length, 1, 'Reviewing never dispatches a new request');
+  } finally { app.close(); }
+});
+
+test('full pairing storage blocks dispatch and retaining it later never sends automatically', async () => {
+  const app = host(PhonePairingScreen, { paired: async () => {} }, () => assert.fail('No dispatch without retention'));
+  try {
+    await app.flush(); enterPairing(app); await app.flush(); app.stored.failWrite = true;
+    submitPairing(app); await app.finishDigest(); await app.flush(); assert.equal(app.calls.length, 0);
+    app.stored.failWrite = false; app.button('Retry Keeping Original Pairing').props.onClick(); await app.flush();
+    assert.equal(app.calls.length, 0); assert.equal(JSON.parse(app.stored.values.get('e3:phone-pair:v2')!).current.state, 'pending');
+    assert.equal(app.button('Check Original Pairing').props.disabled, false);
+  } finally { app.close(); }
+});
+
+test('lost pairing acknowledgement retention preserves known success in memory and never repeats pairing', async () => {
+  let checked = 0;
+  const app: ReturnType<typeof host> = host(PhonePairingScreen, { paired: async () => { checked++; } }, () => {
+    app.stored.failWrite = true; return { deviceId: randomUUID(), apiVersion: 1 };
+  });
+  try {
+    await app.flush(); enterPairing(app); await app.flush(); submitPairing(app); await app.finishDigest(); await app.flush();
+    assert.equal(app.calls.length, 1); assert.equal(checked, 0);
+    app.stored.failWrite = false; app.button('Retry Keeping Original Pairing').props.onClick(); await app.flush();
+    assert.equal(app.calls.length, 1); assert.equal(JSON.parse(app.stored.values.get('e3:phone-pair:v2')!).current.state, 'confirmed');
+    app.button('Check Workspace Access').props.onClick(); await app.flush(); assert.equal(checked, 1); assert.equal(app.calls.length, 1);
+  } finally { app.close(); }
+});
+
+const phoneState = { enabled: true, route: { state: 'ready', message: 'Synthetic route' }, devices: [] };
+test('owner phone commands retain unknown rejection and exact original request across explicit checking', async () => {
+  const app = host(PhoneSettings, { epoch: randomUUID(), deviceId: randomUUID() }, (_path, init) => {
+    if (init.method === 'POST') throw new ApiError('unknown', 'Unconfirmed original', undefined, 409);
+    return phoneState;
+  });
+  try {
+    await app.flush(); app.button('Create code').props.onClick(); await app.flush();
+    const original = app.calls.find(c => c.init.method === 'POST')!;
+    assert.equal(app.button('Create code').props.disabled, true);
+    app.button('Check Original Change').props.onClick(); await app.flush();
+    const posts = app.calls.filter(c => c.init.method === 'POST');
+    assert.equal(posts.length, 2); assert.equal(posts[1].init.body, original.init.body);
+  } finally { app.close(); }
+});
+
+test('late owner phone response cannot install an old code in another workspace', async () => {
+  let finish!: (value: unknown) => void;
+  const app = host(PhoneSettings, { epoch: randomUUID(), deviceId: randomUUID() }, (_path, init) =>
+    init.method === 'POST' ? new Promise(resolve => { finish = resolve; }) : phoneState);
+  try {
+    await app.flush(); app.button('Create code').props.onClick(); await app.flush();
+    await app.update({ epoch: randomUUID(), deviceId: randomUUID() });
+    finish({ code: '9876-5432', expiresAt: Date.now() + 300000 }); await app.flush();
+    assert.doesNotMatch(text(app.tree), /9876-5432/); assert.equal(app.button('Create code').props.disabled, false);
+    assert.equal(app.calls.filter(c => c.init.method === 'POST').length, 1);
   } finally { app.close(); }
 });

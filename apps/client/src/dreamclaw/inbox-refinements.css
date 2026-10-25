@@ -60,3 +60,36 @@
 .dreamclaw-module .dc-inbox-split[data-reading-layout=reader] > .dc-inbox-reader-pane { display:flex !important; grid-column:1; padding-inline-start:0; }
 .dreamclaw-module .dc-inbox-split[data-reading-layout] .dc-inbox-mobile-back { display:inline-flex; }
 :root .dreamclaw-module .dc-inbox-reading-pane-toggle { width:auto; min-width:0; white-space:nowrap; }
+
+/* Refine the existing workspace without replacing its reader or navigation. */
+.dreamclaw-module { --mail-neutral-face:#fff; }
+:root[data-theme=dark] .dreamclaw-module { --mail-neutral-face:var(--raised); }
+.dreamclaw-module .dc-inbox-page-heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 8px; }
+.dreamclaw-module .dc-inbox-page-status { display:inline-flex; }
+:root .dreamclaw-module .dc-inbox-reader-actions > button,
+:root .dreamclaw-module .dc-inbox-thread-menu > button,
+:root .dreamclaw-module .dc-inbox-workspace .dc-mail-row-actions > button { background:var(--mail-neutral-face); border:1px solid var(--line); flex:0 0 auto; }
+.dreamclaw-module .dc-inbox-reader-actions { gap:4px; max-width:100%; }
+.dreamclaw-module .inbox-host-notice { padding:6px 12px; gap:8px; font-size:12px; }
+.dreamclaw-module .inbox-host-notice > span { min-width:0; overflow-wrap:anywhere; }
+.dreamclaw-module .inbox-host-notice > button { flex:0 0 auto; }
+@container mail-list (max-width:480px) {
+ .dreamclaw-module .dc-mail-row-content { display:grid; grid-template-columns:20px minmax(0,1fr); gap:4px 8px; --dc-mail-row-action-height:44px; }
+ .dreamclaw-module .dc-mail-row-content > button[data-inbox-thread] { grid-column:2; grid-row:1; width:100%; }
+ .dreamclaw-module [data-inbox-row][data-density=compact] .dc-mail-subject-line { padding-inline-end:0; min-height:0; }
+ .dreamclaw-module .dc-mail-row-content > .dc-mail-row-actions,
+ .dreamclaw-module [data-inbox-row][data-density=compact] .dc-mail-row-actions { position:static; grid-column:2; justify-self:end; }
+ :root .dreamclaw-module .dc-inbox-workspace .dc-mail-row-actions > button { width:44px; min-width:44px; }
+}
+@container inbox-main (max-width:800px) {
+ :root .dreamclaw-module .dc-inbox-reader-header :is(.dc-inbox-reader-navigation,.dc-inbox-reader-actions,.dc-inbox-thread-menu) > button { flex:0 0 auto; width:44px; min-width:44px; height:44px; min-height:44px; }
+ .dreamclaw-module .dc-inbox-main :is(input:not([type=checkbox]):not([type=radio]),textarea,select) { font-size:16px; }
+}
+@media(pointer:coarse) {
+ :root .dreamclaw-module .dc-inbox-reader-header :is(.dc-inbox-reader-navigation,.dc-inbox-reader-actions,.dc-inbox-thread-menu) > button { flex:0 0 auto; width:44px; min-width:44px; height:44px; min-height:44px; }
+ :root .dreamclaw-module .dc-inbox-workspace .dc-mail-row-actions > button { width:44px; min-width:44px; }
+ .dreamclaw-module [data-inbox-row][data-density=compact] .dc-mail-subject-line { padding-inline-end:142px; }
+}
+@container mail-list (max-width:480px) {
+ .dreamclaw-module [data-inbox-row][data-density=compact] .dc-mail-subject-line { padding-inline-end:0; }
+}

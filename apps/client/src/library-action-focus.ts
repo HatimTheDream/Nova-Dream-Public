@@ -5,10 +5,10 @@ export function captureLibraryActionFocus(root: HTMLElement | null, current: () 
  const row = origin?.closest<HTMLElement>('.home-library-resource');
  return () => {
   requestAnimationFrame(() => {
-   if (!current() || !root.isConnected) return;
+   if (!current() || !root.isConnected || root.closest('[hidden],[inert]')) return;
    const active = document.activeElement;
    if (active && active !== document.body && active !== origin) return;
-   const usable = (node: HTMLElement | null | undefined): node is HTMLElement => !!node && node.isConnected && root.contains(node) && !node.matches(':disabled');
+   const usable = (node: HTMLElement | null | undefined): node is HTMLElement => !!node && node.isConnected && root.contains(node) && !node.matches(':disabled') && !node.closest('[hidden],[inert]');
    const fallback = row?.querySelector<HTMLElement>('.home-library-inspect') ?? root.querySelector<HTMLElement>('.home-library-title h1');
    const target = usable(origin) ? origin : usable(fallback) ? fallback : root.querySelector<HTMLElement>('.home-library-title h1');
    if (usable(target)) target.focus({ preventScroll: true });

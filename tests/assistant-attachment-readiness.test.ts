@@ -60,7 +60,7 @@ hooks.deregister();
 function fixture(t: any, assistant = true, recovered: PendingFile[] = [], uploadEnabled?: boolean) {
   const snapshot = { deviceId: 'device', epoch: 'epoch' } as Snapshot;
   const original = { id: 'original', name: 'kept.txt', size: 4, sha256: 'a'.repeat(64) };
-  let draft = { attachments: [original] }, reads = 0, changes = 0;
+  let draft = { attachments: [original] }, reads = 0, changes = 0, retaining = true;
   const staged = new Map(recovered.map(file => [file.id, file]));
   const requests: any[] = [], writes: string[] = [];
   const state = {
@@ -84,9 +84,9 @@ function fixture(t: any, assistant = true, recovered: PendingFile[] = [], upload
   }
   const render = () => {
     state.index = 0; state.firstRender = state.values.length === 0;
-    return useAttachments(snapshot, draft, update => { changes++; draft = update(draft); return true; }, 'draft:device', 'draft', { assistant, uploadEnabled });
+    return useAttachments(snapshot, draft, update => { changes++; if(!retaining)return false;draft = update(draft); return true; }, 'draft:device', 'draft', { assistant, uploadEnabled });
   };
-  return { render, staged, writes, requests, state, draft: () => draft, reads: () => reads, changes: () => changes };
+  return { render, staged, writes, requests, state, draft: () => draft, reads: () => reads, changes: () => changes,retaining(value:boolean){retaining=value;},epoch(value:string){snapshot.epoch=value;} };
 }
 const files = (...names: string[]) => names.map(name => new File(['kept'], name)) as unknown as FileList;
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -139,4 +139,21 @@ test('ordinary default recovery still uploads and links its exact staged file', 
   const f = fixture(t, true, [oldFile]); f.render(); for (const effect of f.state.effects) effect(); await settle();
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0].input.requestId, oldFile.id);
   assert.deepEqual(f.writes, ['delete']); assert.equal(f.draft().attachments[1].name, oldFile.name);
+});
+test('uploaded bytes with an unretained draft link preserve staging and retry the exact original request',async t=>{
+ const oldFile={id:'original-upload',draftId:'draft:device',epoch:'epoch',deviceId:'device',name:'source.txt',base64:'a2VwdA=='};
+ const f=fixture(t,false,[oldFile]);f.retaining(false);f.render();for(const effect of f.state.effects)effect();await settle();
+ assert.deepEqual(f.staged.get(oldFile.id),oldFile);assert.equal(f.draft().attachments.length,1);assert.deepEqual(f.writes,[]);
+ assert.match(f.render().errors[oldFile.id],/Uploaded bytes are safe.*cannot save/);
+ f.retaining(true);await f.render().retry(oldFile);assert.equal(f.staged.size,0);assert.equal(f.draft().attachments.length,2);
+ assert.equal(f.requests.length,2);assert.deepEqual(f.requests[0],f.requests[1]);assert.equal(f.requests[0].input.requestId,oldFile.id);
+});
+test('a late upload cannot link into a different restored workspace',async t=>{
+ const oldFile={id:'late-original',draftId:'draft:device',epoch:'epoch',deviceId:'device',name:'source.txt',base64:'a2VwdA=='};
+ const f=fixture(t,false,[oldFile]);let resolve:(a:Attachment)=>void=()=>{};
+ f.state.request=async(endpoint,input)=>{f.requests.push({endpoint,input});return new Promise<Attachment>(accept=>{resolve=accept;});};
+ f.render();for(const effect of f.state.effects)effect();await settle();f.epoch('restored-epoch');f.render();
+ resolve({id:oldFile.id,name:oldFile.name,size:4,sha256:'b'.repeat(64)});await settle();
+ assert.equal(f.draft().attachments.length,1);assert.deepEqual(f.staged.get(oldFile.id),oldFile);assert.deepEqual(f.writes,[]);
+ assert.match(f.render().errors[oldFile.id],/upload is kept/i);
 });

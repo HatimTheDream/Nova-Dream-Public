@@ -1,0 +1,11 @@
+.idea-pursuits { min-width:0; }
+.idea-pursuit-detail { display:grid; gap:16px; min-width:0; }
+.idea-pursuit-detail section,.idea-pursuit-detail article { display:grid; gap:8px; min-width:0; }
+.idea-pursuit-detail article + article { padding-top:12px; border-top:1px solid var(--border); }
+.idea-pursuit-detail pre { white-space:pre-wrap; overflow-wrap:anywhere; max-width:100%; font:inherit; }
+.idea-pursuit-detail textarea,.idea-pursuits textarea { width:100%; min-height:120px; font:inherit; }
+.idea-pursuit-detail button { justify-self:start; }
+@media (max-width:800px),(pointer:coarse) {
+ .idea-pursuit-detail textarea,.idea-pursuits textarea { font-size:16px; }
+ .idea-pursuit-detail button,.idea-pursuits button { min-height:44px; }
+}

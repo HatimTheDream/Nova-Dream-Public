@@ -3,6 +3,7 @@ import { createMascotAppearance, editableMascotAppearance, mascotOptions, resolv
 import { readLocal, saveLocal } from '../../api';
 import { MascotSvg } from './MascotSvg';
 import { creatorChoices, creatorColors, creatorLabels as labels, creatorPresets, normalizeCreatorLocks, shuffleCreatorAppearance, type CreatorChoice, type CreatorColor, type CreatorLocks } from './creator-state';
+import { creatorColorPosition } from './creator-position';
 import './mascot-creator.css';
 
 type AppearanceValue = Record<string, unknown> | null;
@@ -72,10 +73,17 @@ export function SquareLynxCreator({value,change,name,savedValue=null,onSaveLook,
  const updateColor=(key:CreatorColor,color:string)=>{if(!hex.test(color))return;if(!colorBefore.current)colorBefore.current={value:copy(valueRef.current)};emit(recipe({...editableMascotAppearance(valueRef.current),[key]:color.toLowerCase()}));};
  useLayoutEffect(()=>{
   if(!activeColor)return;
-  const place=()=>{const target=triggers.current[activeColor]?.getBoundingClientRect(), popup=panel.current?.getBoundingClientRect();if(!target||!popup)return;setPosition({left:Math.max(4,Math.min(target.left,window.innerWidth-popup.width-4)),top:Math.max(4,Math.min(target.bottom+6,window.innerHeight-popup.height-4))});};
+  const viewport=window.visualViewport;
+  const place=()=>{const target=triggers.current[activeColor]?.getBoundingClientRect(), popup=panel.current?.getBoundingClientRect();if(!target||!popup)return;
+   const left=viewport?.offsetLeft??0,top=viewport?.offsetTop??0;
+   const bounds={left,top,right:left+(viewport?.width??window.innerWidth),bottom:top+(viewport?.height??window.innerHeight)};
+   const next=creatorColorPosition(target,popup,bounds,host.current?.closest('.dialog,.workspace')?.getBoundingClientRect());
+   if(next)setPosition(next);else closeColor(false);
+  };
   place();const observer=new ResizeObserver(place);if(host.current)observer.observe(host.current);window.addEventListener('resize',place);window.addEventListener('scroll',place,true);
+  viewport?.addEventListener('resize',place);viewport?.addEventListener('scroll',place);
   const selected=panel.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')??panel.current?.querySelector<HTMLButtonElement>('[data-color-preset]');selected?.focus();
-  return()=>{observer.disconnect();window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);};
+  return()=>{observer.disconnect();window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);viewport?.removeEventListener('resize',place);viewport?.removeEventListener('scroll',place);};
  },[activeColor]);
  useEffect(()=>{if(!activeColor)return;const outside=(event:PointerEvent)=>{const target=event.target as Node;if(!panel.current?.contains(target)&&!triggers.current[activeColor]?.contains(target))closeColor(false);};document.addEventListener('pointerdown',outside);return()=>document.removeEventListener('pointerdown',outside);},[activeColor]);
  const allLocked=[...creatorChoices,...creatorColors].every(key=>locks[key]);
@@ -89,10 +97,12 @@ export function SquareLynxCreator({value,change,name,savedValue=null,onSaveLook,
     </div>
    </div>
    <div className="mc-choices">{creatorChoices.map(key=>{
-    const index=(mascotOptions[key] as readonly string[]).indexOf(appearance[key]);
     const colors=key==='glasses'&&appearance.glasses==='none'?[]:rowColors[key];
     return <div key={key} className="mc-choice-block" role="group" aria-label={labels[key]}>
-     <div className="mc-cycle"><div className="mc-choice-current" title={appearance[key]==='none'?'No Glasses':`${labels[key]} ${key==='glasses'?index:index+1} · ${labels[appearance[key]]}`}><strong>{key==='glasses'&&appearance.glasses==='none'?'No Glasses':`${labels[key]} ${key==='glasses'?index:index+1}`}</strong>{appearance[key]!=='none'&&<span>{labels[appearance[key]]}</span>}</div><div className="mc-arrows"><button type="button" aria-label={`Previous ${labels[key]}`} onClick={()=>cycle(key,-1)}><Icon kind="previous"/></button><button type="button" aria-label={`Next ${labels[key]}`} onClick={()=>cycle(key,1)}><Icon kind="next"/></button></div></div>
+     <div className="mc-cycle"><label className="mc-choice-current"><span className="mc-sr-only">{labels[key]} Style</span><select aria-label={`${labels[key]} Style`} value={appearance[key]} onChange={event=>{
+      const next=event.target.value;if(!(mascotOptions[key] as readonly string[]).includes(next))return;
+      closeColor(false);pick({[key]:next} as Partial<MascotAppearance>,`${labels[key]}: ${labels[next]}.`);
+     }}>{mascotOptions[key].map(option=><option key={option} value={option}>{labels[key]} · {labels[option]}</option>)}</select></label><div className="mc-arrows"><button type="button" aria-label={`Previous ${labels[key]}`} onClick={()=>cycle(key,-1)}><Icon kind="previous"/></button><button type="button" aria-label={`Next ${labels[key]}`} onClick={()=>cycle(key,1)}><Icon kind="next"/></button></div></div>
      {lockButton(key)}
      {colors.length>0&&<div className="mc-row-colors" aria-label={`${labels[key]} Colors`}>{colors.map(color=><span className="mc-color-pair" key={color}><button type="button" className="mc-color-trigger" ref={node=>{if(node)triggers.current[color]=node;else delete triggers.current[color];}} aria-label={`${labels[color]} Color`} aria-expanded={activeColor===color} aria-haspopup="dialog" onClick={()=>{finishColor();setActiveColor(activeColor===color?null:color);}}><span className="mc-chip" style={{backgroundColor:appearance[color]}} aria-hidden="true"/><span>{labels[color]}</span></button>{lockButton(color,true)}</span>)}</div>}
     </div>;

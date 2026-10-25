@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { dirname, join, resolve, isAbsolute, delimiter } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import {feedRuntimeFingerprint,type FeedRuntimeFiles} from './feed-runtime-files.js';
 import { Fault, Store } from './store.js';
 import { Gateway } from './gateway.js';
 import { BrowserNetwork } from './browser-network.js';
@@ -11,7 +12,8 @@ import { withWorkerPlugin } from './worker-runtime-config.js';
 import { withModulePlugin } from './module-runtime-config.js';
 import { withSourcePlugin } from './source-runtime-config.js';
 import { withAccountPlugin } from './account-runtime-config.js';
-import { withDirectAgentPlugin, prepareDirectWorkspace, qualifyDirectRuntimeConfiguration } from './direct-agent-runtime-config.js';
+import { withDirectAgentPlugin, prepareDirectWorkspace, prepareGroupWorkspace, qualifyDirectRuntimeConfiguration } from './direct-agent-runtime-config.js';
+import { assertGroupConfiguration } from './group-runtime-policy.js';
 import { directPluginFiles } from './direct-agent-runtime-files.js';
 import { directConfigurationHash, assertDirectConfiguration, directPluginId } from './direct-agent-runtime-policy.js';
 import type { DirectRuntimeIdentity } from './direct-agent-owner.js';
@@ -22,6 +24,7 @@ import type { ChatGptSignInMethod } from '../../packages/domain/sign-in.js';
 export type { RuntimeStatus } from '../../packages/domain/runtime.js';
 
 type RuntimeConfiguration = { port: number; token: string; entry: string };
+type FeedSpawnObservation=Readonly<{files:Readonly<FeedRuntimeFiles>;fingerprint:string;runtimeConfiguration:string}>;
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 // Chromium appends its own directory and SingletonSocket to TMPDIR. Recovered
 // workspaces can exceed Linux's 108-byte Unix socket limit before that suffix.
@@ -33,6 +36,42 @@ export class ManagedRuntime {
   private childVersion?: '2026.9.2' | '2026.9.6' | '2026.9.8';
   private childEntry?: string;
   private directPluginSha256?: string;
+  // Per-request Feed identity is separate from candidate retained-startup
+  // qualification. Only an actual owned spawn can establish this observation.
+  #feedObservation?:Readonly<{id:string;child:ChildProcess;identity:string;runtimeConfiguration:string;gatewayRevision:number;files:Readonly<FeedRuntimeFiles>;fingerprint:string}>;
+  #feedRevoked=false;
+  #feedBeforeSpawn(entry:string,serviceDirectory:string,version:string):FeedSpawnObservation|undefined{
+    this.#feedObservation=undefined;this.#feedRevoked=false;
+    try{
+      const files=Object.freeze({root:join(this.store.directory,'openclaw-runtime'),serviceDirectory,entry,epoch:this.store.epoch,version});
+      const runtimeConfiguration=JSON.stringify(this.store.internalRead('runtime:configuration'));
+      if(typeof runtimeConfiguration!=='string')throw Error('Feed runtime configuration is missing');
+      return Object.freeze({files,fingerprint:feedRuntimeFingerprint(files),runtimeConfiguration});
+    }catch{return undefined;}
+  }
+  #feedAfterReady(pending:FeedSpawnObservation|undefined,child:ChildProcess,generation:number){
+    if(!pending||this.child!==child||generation!==this.generation||this.stopping)return;
+    try{
+      const identity=this.updateIdentity(),revision=this.store.internalGatewayConfigurationRevision();
+      if(!identity||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1||pending.runtimeConfiguration!==JSON.stringify(this.store.internalRead('runtime:configuration'))||
+        pending.fingerprint!==feedRuntimeFingerprint(pending.files))return;
+      const bound=Object.freeze({...pending,child,identity:JSON.stringify(identity),gatewayRevision:revision});
+      const id=createHash('sha256').update(JSON.stringify({format:1,kind:'feed-owned-runtime',fingerprint:bound.fingerprint,identity,boundConfiguration:bound.runtimeConfiguration,gatewayRevision:revision})).digest('hex');
+      this.#feedObservation=Object.freeze({...bound,id});
+    }catch{/* Missing or changing files leave Feed native work unavailable. */}
+  }
+  /** Stable during the original worker's activity. No idle/database scan and no
+   * caller-provided proof; observed drift permanently revokes this child. */
+  feedQualification():{id:string;available:boolean}{
+    const saved=this.#feedObservation;if(!saved)return {id:'feed-native-unavailable',available:false};
+    if(!this.#feedRevoked)try{
+      if(this.child!==saved.child||JSON.stringify(this.updateIdentity())!==saved.identity||
+        JSON.stringify(this.store.internalRead('runtime:configuration'))!==saved.runtimeConfiguration||
+        this.store.internalGatewayConfigurationRevision()!==saved.gatewayRevision||
+        feedRuntimeFingerprint(saved.files)!==saved.fingerprint)this.#feedRevoked=true;
+    }catch{this.#feedRevoked=true;}
+    return {id:saved.id,available:!this.#feedRevoked};
+  }
   private browserNetwork=new BrowserNetwork();
   private shortTemporaryDirectory?:string;
   private launching?: Promise<RuntimeStatus>;
@@ -88,6 +127,12 @@ export class ManagedRuntime {
     const pluginSha256 = directPluginFiles(serviceDirectory);
     if (pluginSha256 !== this.directPluginSha256) return;
     return { ...identity, sourcePolicySha256, pluginSha256, configuration };
+  }
+  groupIdentity(): DirectRuntimeIdentity | undefined {
+    const identity = this.directIdentity();
+    if (!identity) return;
+    assertGroupConfiguration(identity.configuration, identity.sourcePolicySha256);
+    return identity;
   }
   updateStartupBlockers() {
     try { const entry=this.entry(), version=this.childVersion??JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version; const serviceDirectory=dirname(fileURLToPath(import.meta.url)); return qualifyNativeUpdateStartup(join(this.store.directory,'openclaw-runtime'),import.meta.url.endsWith('.ts')?resolve(serviceDirectory,'../../dist/service/apps/service'):serviceDirectory,undefined,version); }
@@ -202,10 +247,11 @@ export class ManagedRuntime {
       const stagedConfig = withAccountPlugin(withSourcePlugin(withWorkerPlugin(parsedConfig, this.store.epoch, bundlePath, join(root, 'assignment-receipts')), this.store.epoch, join(dirname(bundlePath), 'source-plugin'), join(root, 'source-cache')), this.store.epoch, join(dirname(bundlePath), 'account-plugin'), entry);
       const sessionBindings = this.store.internalList<import('../../packages/domain/assistant.js').Conversation>('assistant:conversation:').flatMap(conversation => conversation.nativeId && !conversation.deleted ? [{nativeKey:conversation.nativeKey,nativeId:conversation.nativeId}] : []);
       const moduleConfig = this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig;
-      const directSupported = this.moduleBridge && JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version === '2026.9.8';
-      if (directSupported) prepareDirectWorkspace(root);
+      const nativeVersion=JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version;
+      const directSupported = this.moduleBridge && nativeVersion === '2026.9.8';
+      if (directSupported) { prepareDirectWorkspace(root); prepareGroupWorkspace(root); }
       const updatedConfig = JSON.stringify(directSupported ? withDirectAgentPlugin(moduleConfig, this.store.epoch, root,
-        join(dirname(bundlePath), 'direct-agent-plugin'), this.moduleBridge!()) : moduleConfig, null, 2);
+        join(dirname(bundlePath), 'direct-agent-plugin'), this.moduleBridge!(), { group: true }) : moduleConfig, null, 2);
       this.directPluginSha256 = directSupported ? directPluginFiles(dirname(bundlePath)) : undefined;
       if (this.store.updateMaintenanceHeld) {
         const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig),JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version);
@@ -226,8 +272,9 @@ export class ManagedRuntime {
       // Keep the verified CLI in the IPC-owned process. Native respawning would
       // detach its lifetime from that descriptor. Supply its Windows stack flag
       // here; disable ambient compile-cache respawns in this managed launch only.
+      const feedPending=this.#feedBeforeSpawn(entry,dirname(bundlePath),nativeVersion);
       const child = spawn(this.nodePath(), [...(process.platform === 'win32' ? ['--stack-size=8192'] : []), ownerEntry, entry, '--profile', 'edition3', 'gateway', 'run', '--port', String(config.port), '--bind', 'loopback', '--auth', 'token', '--tailscale', 'off'], { cwd: root, env: { ...this.environment(config, root, configPath), OPENCLAW_NO_RESPAWN: '1', NODE_DISABLE_COMPILE_CACHE: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, shell: false });
-      this.childEntry = realpathSync(entry); this.childVersion = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')).version;
+      this.childEntry = realpathSync(entry); this.childVersion = nativeVersion;
       this.child = child;this.childStartedAt=Date.now();
       const append = (buffer: Buffer) => { log = (log + buffer.toString()).slice(-500000); };
       child.stdout?.on('data', append); child.stderr?.on('data', append);
@@ -253,7 +300,8 @@ export class ManagedRuntime {
             const connection = this.gateway.status(), url = `ws://127.0.0.1:${config.port}`;
             if (connection.state !== 'ready' || connection.url !== url) await this.gateway.configure(url, config.token);
           }
-          assertCurrent(); this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Nova Dream’s isolated OpenClaw runtime is running.' }; return this.status();
+          assertCurrent(); this.current = { ...this.current, state: 'running', phase: 'ready', readyAt: Date.now(), message: 'Nova Dream’s isolated OpenClaw runtime is running.' };
+          this.#feedAfterReady(feedPending,child,generation);return this.status();
         }
         const slow = Date.now() >= deadline;
         if (slow) this.current = { ...this.current, message: 'OpenClaw is taking longer to start. Still checking this workspace’s process…' };
@@ -265,7 +313,7 @@ export class ManagedRuntime {
   }
   stop() {
     if (this.stopPromise) return this.stopPromise;
-    this.stopping = true; ++this.generation;
+    this.stopping = true; ++this.generation;this.#feedRevoked=true;
     const child = this.child, launching = this.launching;
     this.current = { ...this.current, state: 'stopped', phase: 'stopping', message: 'Stopping this workspace’s Assistant runtime…' };
     this.stopPromise = (async () => {

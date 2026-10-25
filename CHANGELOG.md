@@ -1,3 +1,235 @@
+## [2.28.8] - 2026-10-25
+
+- Mark side-effect-free schema construction so unused validation code can be omitted without changing validation behavior. Defer the saved-source preview with accessible loading and failure dialogs that retain its original reference and close behavior.
+- Set an explicit 912,000-byte total client budget for the patched security dependency closure after removing unused code; keep the 180,000-byte startup and 80,000-byte deferred-chunk limits unchanged.
+- Replace the gateway's broad Vercel Functions dependency with the official standalone Edge rewrite helper, preserving native streaming and filtered upstream headers while removing the vulnerable CLI/Zod dependency chain.
+- Preserve plugin order when the same worker configuration is applied again, so a valid composed runtime passes its unchanged exact identity check.
+- Local candidate preparation only; final local checks, retained-state startup and genuine provider acceptance remain pending. Deployment is deferred.
+
+## [2.28.7] - 2026-10-25
+
+- Update mailparser, Nodemailer and Zod to the smallest compatible patched versions for the reported address-parsing and oversized-validation vulnerabilities. Keep exact dependency versions and existing validation and authorization gates.
+- Align local regression fixtures with current schema, retained-save status and explicit test-runner output while preserving saved-request and no-dispatch checks.
+- Local candidate preparation only; full quality, retained-state startup and genuine provider acceptance remain pending. Deployment is deferred.
+
+## [2.28.6] - 2026-10-25
+
+- Pin the official JavaScript-based TypeScript 6.0.3 compiler for portable type checking and service builds, preserving the existing strict compiler settings and quality gates.
+- Align the release validator with the existing workspace schema 60 while retaining strict schema checks.
+- Complete the Feed account-routing observation using existing connection and saved order state, so account changes invalidate stale preparations without triggering runtime setup.
+- Correct strict types for retained-work guards, Idea handoffs and model fixtures; preserve existing validation, capacity and recovery behavior.
+- Local candidate preparation only; complete build, retained-state startup and genuine provider acceptance remain pending. Deployment is deferred.
+
+## [2.28.5] - 2026-10-24
+
+- Integrate the reviewed task storage and held-recovery fixes into the local candidate, preserving task relationships, history and receipts when restoring with a new workspace key.
+- Correct singular count labels and protect original conversation identities during removal. Track model reads and reserve native result storage using the actual encrypted size.
+- Join the reviewed Feed interface to its authenticated service routes, preserve original requests across restart, and keep shutdown ownership until work settles. Add the missing read-only phone authentication recheck. Wire Feed preparation, start and observation to the managed runtime with exact worker identity checks; missing or changed worker files keep native execution unavailable. Actual runtime acceptance remains pending the service build.
+- Advance semantic story matching and permitted activity learning while Feed is visible, using saved originals for restart recovery and duplicate prevention. Reconcile exact local Close/learning receipts after persistence failures and keep errors visible.
+- Synchronize the candidate with ordinary workspace schema 60. Local source preparation only; compiler, retained-state startup and genuine provider acceptance remain pending. Deployment is deferred.
+
+## [2.28.4] - 2026-10-21
+
+- Give Mail reader navigation and action buttons consistent 44-pixel touch targets on narrow screens and touch devices, including More Actions. Preserve compact desktop controls.
+- Local preparation only; compiler, native startup, genuine provider workflows and full quality acceptance remain pending. Deployment is deferred.
+
+## [2.28.3] - 2026-10-21
+
+- Use singular labels for one selected Library source, one exported link address and one attached Content file.
+- Local preparation only. Existing file-transfer behavior is unchanged; compiler, native startup, genuine provider workflows and complete quality acceptance remain pending. Deployment is deferred.
+
+## [2.28.2] - 2026-10-20
+
+- Hold an unconfirmed draft save instead of repeatedly retrying it in the background. Keep the exact original request available through edits and reload until explicit Retry checks its outcome.
+- Show Assistant's Retry control after reload and preserve newer unsent writing when the original save is acknowledged.
+- Give the Feed reader's Open Original link its intended touch target on narrow screens.
+- Local candidate only; compiler, native startup, genuine provider workflows and complete quality acceptance remain pending. Deployment is deferred.
+
+## [2.28.1] - 2026-10-20
+
+- Correct singular recipient, source, earlier-message and reply counts when recovering Group writing.
+- Preserve independently verified closed-window recovery, separate recipient drafts and original unconfirmed save requests.
+- Local candidate only; final native, compiler and full-quality acceptance remain pending. Deployment is deferred.
+
+## [2.28.0] - 2026-10-20
+
+- Add reviewed Restore controls to Trash rows, reader actions and selection actions. Restore messages deleted through Nova to their captured original folders, including Archive, without guessing Inbox.
+- Keep the original Delete receipt and fifteen-minute Undo deadline unchanged. A separate Restore review verifies current account permission, exact message state and saved Delete history before changing mail.
+- Record each confirmed Restore step durably. Continue only a proven stopped step from its original saved review; lost responses remain inspectable without repeating uncertain actions.
+- Preserve unrelated mail fields and drafts, refresh partially restored rows, and reject changed folders, account connections, competing operations and stale source history.
+- Local candidate only. Provider acceptance, native retained-state startup, compiler/type checks and final full quality remain pending. Deployment is deferred.
+## [2.27.1] - 2026-10-20
+
+- Keep unsent Content review feedback and agent directions copyable when browser storage fails. Guard tab, close and record changes until writing is retained or explicitly discarded from this window.
+- Preserve original malformed or competing draft bytes, keep recovery Details and existing work check/stop controls accessible, and prevent late replies from clearing newer writing.
+- Allow leaving an unreadable old draft without overwriting it; retain explicit window-only recovery choices. Enforce immediate access denial while protecting writing during an authorized workspace replacement.
+- Correct Device Draft counts and use Back To Content when templates are opened from the Content index.
+- Local candidate only. Full quality, actual native startup and provider acceptance remain pending; deployment is deferred.
+
+## [2.27.0] - 2026-10-20
+
+- Give Tasks compact Plan Today, Filters, Search and Add controls. Keep unfinished quick-add writing and search text when controls close; restore keyboard focus and preserve child-task and duplicate actions.
+- Keep Today, All Open, Upcoming, Unsorted, Anytime, Completed, Daily History and Trash reachable from the task filters. Missed daily routines stay in history while ordinary unfinished work remains actionable.
+- Restore narrow Search preview and Back/Escape focus to the exact result without losing query, filters, selection or scroll. Keep the desktop split view and content-sized controls.
+- Let existing Group replies be checked or stopped during temporary account cooldown or expiry while new replies still require readiness. Offer an explicit bounded continuation only for a stop proven never dispatched; preserve unknown and older stop attempts without replay.
+- Apply system title capitalization and compact Assistant starter widths without rewriting saved names or writing.
+- Local candidate preparation only. Native startup, real provider replies, final types and complete quality/security acceptance remain open. Deployment is deferred.
+## [2.26.0] - 2026-10-20
+
+- Restore a visible Flag control in the Mail reader while preserving row Flag, Pin and Move To Trash, read state, navigation, Reply All, sender capabilities and reviewed provider actions.
+- Preserve the retained Reply All choice when reopening a reply. Derive recipients from the actual participants, exclude connected sender identities and invalid display-name fragments, and address original recipients when replying to your own sent mail.
+- Keep Mail folder/count context together, compact dismissible notices and content-sized neutral controls. Give narrow row actions their own visible space and 44-pixel targets without changing received subjects or writing.
+- Use the selected day, week range or month as Calendar workspace heading, respecting the configured week start. Keep date navigation, Month/Week/Day, selected-day counts, Sources And Filters and retained event editing.
+- Preserve existing shell and workspace breakpoints with white light-mode and raised dark-mode controls, system title capitalization and 16-pixel narrow-screen form text.
+- Local source preparation only. Browser geometry/provider acceptance, final types, independent review and coherent full quality/security remain open. Existing reviewed Undo preserves original folders within its maintained deadline; broader Restore remains unfinished. No deployment.
+
+## [2.25.0] - 2026-10-20
+
+- Connect optional Feed learning to Ideas explicitly submitted while Ideas learning is enabled. Use separately saved personal directions/questions and exact original entry/attempt identities; exclude captured source bodies and private replies.
+- Require the saved authored writing to remain present in the actual edited submission. Do not backfill earlier work or treat starter opens, unsent briefs and repeated attempts within one pursuit as independent interests.
+- Rejoin current pursuit/entry/hash and original run links before using evidence. Respect pause, Instructions Only, source withdrawal, reset, explicit scope and decay without deleting saved Ideas.
+- Refuse oversized serialized Idea requests before sending while keeping the original writing, including JSON-escaped content that exceeds the transport limit.
+- Local source preparation only; type, independent, native/retained startup/browser and coherent full quality/security acceptance remain open. No deployment.
+
+## [2.24.0] - 2026-10-20
+
+- Offer optional automatic checks of enabled public Feed sources every 6, 12 or 24 hours, staged with the complete brief and off by default. Skip missed intervals and queue new stories without moving current reading.
+- Keep each scheduled intent before fetching, observe the same original request after interruption, and pause uncertain checks instead of replaying them. Saving a reviewed brief starts a new future interval while keeping earlier intents.
+- Show scheduling state and the retained-check limit. Preserve the 512 original-check and 8 MiB cache safeguards; full history pauses checks without deleting results.
+- Track source fetches during update preparation, hold new checks during maintenance/recovery, and prevent late results from writing to a held, closed or replaced workspace.
+- Local source preparation only. Final type, independent, retained startup, native/browser and coherent full quality/security verification remain open; no deployment.
+
+## [2.23.0] - 2026-10-20
+
+- Keep each Idea pursuit separate from its reusable starter, with its complete original brief, captured source versions and individual follow-up questions.
+- Review a kept brief in Assistant before sending. Preserve existing writing, refuse mixing different pursuit briefs, and link the exact edited submission to its original pursuit and attempt.
+- Browse older pursuits, briefs and attempts through bounded history pages. Read complete recorded replies, saved outputs and source evidence without starting work or marking it reviewed.
+- Keep question writing through Back and reload, preserve newer typing during a save, and retain original requests through lost replies, failed storage or conflicting windows. Check reads the original receipt; explicit retry preserves its identity.
+- Separate personal Reviewed from Assistant completion, Content saves, task completion and publication. Preserve unavailable source and removed-work identities without substituting current records.
+- Clear a consumed Idea binding after acknowledged submission so unrelated later messages are not attributed to the earlier pursuit.
+- Local source preparation only: final type checking, independent review, retained startup/native/browser acceptance and coherent full quality/security remain open. No deployment.
+
+## [2.22.1] - 2026-10-20
+
+- Make Check Original Change in Content read the saved request receipt without submitting work, stopping a run or applying a result again. Explicit retry preserves the original request identity.
+- Keep unknown HTTP failures and lost acknowledgements recoverable. Preserve legacy requests and refuse corrupt, failed-import, conflicting-window or wrong-workspace recovery instead of clearing it.
+- Record known local refusals after complete transaction rollback, so an old refused request cannot later become an unintended change.
+- Admit Content work/control effects once and keep native execution separate from the recorded request. Existing saved jobs, original attempts, review history and full results remain accessible.
+- Retain compact exact result references instead of duplicating complete writing and review histories into browser request recovery.
+- Preserve newer feedback, quotes and decision writing when older requests acknowledge. Fence late Content state reads and acknowledgements after a workspace or item changes.
+- Keep archive, restore, upload and new Content work blocked while an original request is unreadable or unconfirmed.
+- Local preparation only: final type checking is held by the recorded compiler quarantine; independent review, actual native/browser acceptance and full quality/security qualification remain open. No deployment.
+
+## [2.22.0] - 2026-10-20
+
+- Connect opt-in Feed reading and saved Library note/link learning with exact current-source evidence. No conversations, mail, calendar or fetched article bodies are collected.
+- Revalidate permitted source revisions and quotes before applying learned interests, including while learning is paused. First opens do not establish durable interests; explicit keep, stop, instructions-only and reset remain distinct.
+- Expose supporting activity in Why and Feed Settings. Source choices stay staged until the reviewed brief is applied, and reset keeps explicit preferences, story feedback and saved work.
+- Keep original reading-event requests through lost acknowledgements. Repeated original requests cannot manufacture extra activity, and disabled/paused reading does not record new events.
+- Apply reversible More/Less feedback to future related stories only after current eligibility checks. Reading order remains stable until New Stories is chosen.
+- Bound learning to 128 recent source contexts, 64 literal labels, 12,000-character excerpts, 512 evidence rows and eight independent supports per interest. Ideas learning remains unavailable until durable pursuits are connected.
+- Local source only: arbitrary prose interpretation, scheduled ingestion, independent review, actual browser/native acceptance, aggregate bundle reduction and full quality/security qualification remain outstanding. Deployment is deferred.
+
+## [2.21.0] - 2026-10-20
+
+- Restore Feed as a personal reading surface with attributable RSS, Atom and JSON Feed previews, exact topic matching, hard exclusions and a Following view that narrows current eligibility. Unsupported written directions remain Matching Pending instead of filling the edition with unrelated stories.
+- Retain staged Feed settings, complete raw writing, original requests and explicit local-versus-saved comparisons. Review the complete brief before applying it.
+- Keep public source fetching bounded and permission-aware: pinned public addresses, checked redirects, finite deadlines, cache limits, durable refusal receipts and original-request observation preserve the last usable reading.
+- Keep the current reading order, original preview, topic and Back position. New eligible stories wait behind New Stories; More/Less/neutral feedback and individual Hide/Undo remain distinct from publisher mutes and topic exclusions.
+- Save deliberately to a Library collection with canonical-link/reference reuse and complete source provenance. Discuss opens the existing retained, editable Assistant draft without sending or starting work.
+- Preserve existing exact task/work activity endpoints. Add the news surface through a deferred module, compact controls and the maintained 800px focused-panel behavior.
+- This local source tranche leaves actual activity learning disconnected and arbitrary prose interpretation pending. Independent review, real browser/native acceptance, the coherent full quality/security gate and deployment remain outstanding.
+
+## [2.20.0] - 2026-10-20
+
+- Deepen Content Templates and Brands with complete previews, separate Customize Copy and Use Template actions, independently retained edits, raw names/tags, and explicit newer-version comparison.
+- Preserve the exact original library save through lost replies. Check reads its receipt; Retry reuses its original request. Durable validation refusals cannot later turn into successful delayed saves.
+- Keep file-upload recovery attached to the Content editor across tools and tabs. Remove From Draft detaches only that reference, protects original sources and retains exact local Undo.
+- Keep Write, Preview and Split on one mounted writing field. Use a focused preview at widths up to 1100px while preserving the wider Split choice; retire stale formatting callbacks.
+- Move sustained Content tools into side panels above 800px and focused Back To Draft views below. Preserve the writing behind tools and refuse navigation if its library edits could not be retained.
+- Prepare exports from an explicitly clean saved version. Separate preparation from the browser download request; keep original draft bytes, assets, hashes, version-specific reviews and export-time Brand guidance.
+- Correct portable attachment links for complete file identities, including underscores, without changing external URLs or partial/unsupported paths.
+- Focused local recovery, component, file, package and access checks cover this source tranche. Actual browser/phone acceptance, native startup qualification, independent review and the coherent full quality gate remain pending. This source is not deployed.
+
+## [2.19.2] - 2026-10-20
+
+- Add named selectors for all 20 Face, Pattern, Outfit and Glasses choices while retaining the compact creator, arrows, ten independent Shuffle locks, six colors and Undo/Redo.
+- Cap selectors at 164px on desktop and 180px on ordinary phones, with an 8px gap before arrows. At 360px and below use the available-width selector with its lock; keep 44px touch targets and 16px phone select text.
+- Keep color controls inside the visible editor and viewport, including short or zoomed windows. The bounded picker scrolls when needed and retires when no usable editor area remains.
+- Preserve acknowledged Saved previews, explicit appearance-only Save Look, new-record Use Look and unrelated Profile/Agent writing. Previewing or changing locks never converts legacy recipes.
+- Verify all named choices, lock-aware explicit editing, raw legacy Undo, Saved/Editing separation, popup bounds and existing retained-save/recovery paths. Actual browser, physical-phone and independent acceptance remains pending.
+- Support an explicit sequential local quality run on memory-constrained machines, keeping every required check and the existing failure dependencies. Align release validation with the implemented schema 59 and reject stale or mismatched metadata.
+
+## [2.19.1] - 2026-10-20
+
+- Give task feedback its own compact footer below the scrolling workspace so pending changes, Undo and dismissal remain reachable without covering task or editor controls.
+- Bind Library Space focus return to the original opener or explicit Resume action. Hidden or changed Library routes cannot take focus after a late confirmation; checking the original save uses its current review origin.
+- Keep React and the existing transcript renderer in complete separate dependency groups. Assistant now fits the unchanged per-chunk budget, without a new component loading boundary or dependency. The total client size gate remains open.
+- Preserve original Library writing and command behavior, and strengthen focused tests for legacy fixtures, exact focus return and current accessible headings. Actual browser and independent acceptance remains pending.
+
+## [2.19.0] - 2026-10-20
+
+- Keep the complete original phone pairing request through lost acknowledgements, reloads and storage failures. Unknown errors cannot unlock a different request or discard its code.
+- Allow explicit new-code review only after the exact original pairing is confirmed or durably rejected. Preserve earlier attempts, enforce finite admission deadlines and refuse late rejected requests.
+- Scope owner device changes to the exact workspace and device with verified local retention. Late replies cannot replace another workspace's pairing code.
+- Explain known expired or removed phone access separately from an unreachable host. Keep private-network pairing separate from owner website sign-in and existing permissions.
+- Cover exact replay, negative fences, bounded retention, storage failures, HTTP access boundaries and component controls. Actual browser, native and independent acceptance remains pending.
+
+## [2.18.0] - 2026-10-20
+
+- Keep durable original receipts for Assistant host start and advanced Gateway setup before any effect. Duplicate requests observe the original; lost acknowledgements do not start another setup.
+- Retain only request identity, fingerprint and status in browser storage. Gateway credentials remain window-only until the explicit request reaches the existing private service; pending fields stay locked.
+- Add Check Original Setup and explicit closure of missing or interrupted requests. Closing an unadmitted request fences late copies; closing an unknown outcome does not claim success or interrupt a present owner.
+- Preserve setup workers through orderly service shutdown and include their activity in update-maintenance admission. Keep owner and paired-phone access boundaries unchanged.
+- Cover lost acknowledgement, restart uncertainty, late request fencing, credential exclusion, storage failure and authenticated route behavior. Native/browser and independent qualification remain pending.
+
+## [2.17.0] - 2026-10-20
+
+- Keep the original Assistant view mounted during Settings setup and return to its writing, focus and scroll. Retain exact workspace/window, conversation, Chat/Work selection and Settings section across reload; failed retention blocks departure safely.
+- Distinguish Assistant host readiness from missing or expired next-message accounts. Normal readiness stays quiet; Connection Details is available through the existing conversation menu and Manage Accounts through the desktop account control.
+- Match owner, Assistant and Group transcript avatar boxes at 36 pixels without changing participant chips, navigation logos or profile previews.
+- Preserve existing full preparation, paired-phone restrictions and original account preferences. Native setup receipt hardening, browser acceptance and independent qualification remain separate pending work.
+
+## [2.16.0] - 2026-10-20
+
+- Add contextual Content save and recovery details with separate saved-version, local-writing, offline, unconfirmed-save and window-only storage states.
+- Compare full readable writing and keep both original versions before preparing a resolution. Choosing writing does not save it; complete title/body/brief copy-out remains available.
+- Keep the editor mounted while Details is open, with a docked desktop panel and a focused narrow Back view, keyboard containment and return to the original writing.
+- Add contextual Undo Archive only for the exact confirmed archive revision. Preserve original receipts and block archive/Undo during dirty, pending or conflicting work.
+- Keep pending archived saves reconcilable, retain late-response ownership protections and cover failed acknowledgement storage. Browser and independent qualification remain pending; this is local preparation.
+
+## [2.15.0] - 2026-10-20
+
+- Recover complete Group message drafts from other or closed browser tabs while preserving the original writing, recipient scope and pending requests.
+- Inspect exact earlier messages, completed replies, captured sources and inherited context before including or sharing them.
+- Explicitly share reviewed earlier history with one current Group membership. Preview the complete dependency list, retain the original choice before submission and reconcile lost replies without sending again.
+- Add bounded storage, conflicting-window, unchanged-original, exact disclosure and recovery checks. Native, retained-startup, independent and browser qualification remain pending; this is local preparation.
+
+## [2.14.1] - 2026-10-20
+
+- Keep Stop This Reply available for a freshly checked original active run even when a read-only progress check is unconfirmed. Preserve the pending check and prevent another send.
+
+## [2.14.0] - 2026-10-20
+
+- Add explicit per-person Group reply controls: choose an account and model, set up the captured recipient, request a reply, check progress and stop that original reply.
+- Keep original requests through lost responses, navigation and reload. Continue only a verified unsent phase; uncertain requests are checked without sending again.
+- Distinguish partial activity, saved replies, failed or unknown outcomes and stop confirmation. Keep the selected account and original speaker bound to the prepared input.
+- Add exact authenticated execution projections and synchronous admission rejection proofs, with focused client/service recovery checks. Real native, retained-state and browser qualification remain pending; this is local preparation.
+
+## [2.13.0] - 2026-10-20
+
+- Add a compact Group composer with explicit responders, separately retained recipient drafts, saved-message history and original author presentation.
+- Keep saves and prepared inputs tied to their exact original request. Reconcile uncertain results and explicitly review verified rejections without silently replaying work.
+- Show per-person saved reply/stop states and deliberate earlier-message, reply and source context choices. Preserve newer writing and both conflict copies.
+- Prepare the Group native execution and prior-response backend. Actual retained-state/native/browser qualification and reply controls remain pending; this is local preparation, not a deployed release.
+- Separate conditional editors and Assistant panels from the initial JavaScript bundle, preserving the existing module-warming behavior and saved-work guards.
+
+## [2.12.1] - 2026-10-20
+
+- Recover unfinished Group names and member selections from another or closed browser tab, keeping the original writing.
+- Preserve the exact original save request during recovery; opening a draft never resends a Group change.
+- Keep replacement-responder selections tied to the current Group revision and simplify saved-change feedback.
+
 ## [2.12.0] - 2026-10-20
 
 - Open and manage saved Groups from Assistant, with named members, explicit default responders and accessible membership history.

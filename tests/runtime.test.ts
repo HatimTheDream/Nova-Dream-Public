@@ -31,9 +31,9 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   const connections: string[] = [];
   const gateway = {
     status: () => connection,
-    configure: async (url: string) => { assert.equal(runtime.status().phase, 'gateway'); assert.equal(runtime.status().state, 'starting'); assert.equal(runtime.status().readyAt, undefined); connections.push(url); connection = { ...connection, state: 'ready', url }; return connection; },
+    configure: async (url: string): Promise<AssistantConnection> => { assert.equal(runtime.status().phase, 'gateway'); assert.equal(runtime.status().state, 'starting'); assert.equal(runtime.status().readyAt, undefined); connections.push(url); connection = { ...connection, state: 'ready', url }; return connection; },
   };
-  const runtime = new ManagedRuntime(store, gateway);
+  const runtime: ManagedRuntime = new ManagedRuntime(store, gateway);
   try {
     const starting = runtime.start();
     assert.equal(runtime.status().phase, 'preparing');
@@ -154,7 +154,7 @@ test('stop during initial port allocation prevents a late process and permits a 
   writeFileSync(entry, `import {appendFileSync} from 'node:fs';import {createServer} from 'node:http';appendFileSync('starts.txt','start\\n');const s=createServer((q,r)=>r.end('ready'));s.listen(Number(process.env.OPENCLAW_GATEWAY_PORT),'127.0.0.1');process.on('SIGTERM',()=>s.close(()=>process.exit(0)));`);
   process.env.E3_OPENCLAW_ENTRY = entry; const store = new Store(join(directory, 'workspace')); let configurations = 0;
   const gateway = { status: (): AssistantConnection => ({ state: 'disconnected', message: '', methods: [], grantedScopes: [], modelAuthReady: false }), configure: async () => { configurations++; return gateway.status(); } };
-  const runtime = new ManagedRuntime(store, gateway);
+  const runtime: ManagedRuntime = new ManagedRuntime(store, gateway);
   try {
     const starting = runtime.start(), stopping = runtime.stop(); assert.equal(runtime.stop(), stopping); await Promise.all([starting, stopping]);
     assert.equal(runtime.status().state, 'stopped'); assert.equal(configurations, 0); assert.equal(existsSync(join(store.directory, 'openclaw-runtime/starts.txt')), false);
@@ -169,7 +169,7 @@ test('stop during readiness waits for the owned process and prevents a late Gate
   writeFileSync(entry, `import {writeFileSync} from 'node:fs';import {createServer} from 'node:http';const s=createServer(()=>{writeFileSync('request-started.txt','started')});s.listen(Number(process.env.OPENCLAW_GATEWAY_PORT),'127.0.0.1');process.on('SIGTERM',()=>{s.closeAllConnections();s.close(()=>process.exit(0))});`);
   process.env.E3_OPENCLAW_ENTRY = entry; const store = new Store(join(directory, 'workspace')); let configurations = 0;
   const gateway = { status: (): AssistantConnection => ({ state: 'disconnected', message: '', methods: [], grantedScopes: [], modelAuthReady: false }), configure: async () => { configurations++; return gateway.status(); } };
-  const runtime = new ManagedRuntime(store, gateway);
+  const runtime: ManagedRuntime = new ManagedRuntime(store, gateway);
   try {
     const starting = runtime.start(), marker = join(store.directory, 'openclaw-runtime/request-started.txt');
     // Hold readiness until stop; allow process startup under concurrent test load.
@@ -282,7 +282,7 @@ test('automatic resume never starts an unselected runtime or replaces another ho
     if (selection) store.internalWrite('gateway:configuration', selection);
     let configurations = 0;
     const gateway = { status: (): AssistantConnection => ({ state: 'disconnected', message: '', methods: [], grantedScopes: [], modelAuthReady: false }), configure: async () => { configurations++; return gateway.status(); } };
-    const runtime = new ManagedRuntime(store, gateway);
+    const runtime: ManagedRuntime = new ManagedRuntime(store, gateway);
     try { assert.equal((await runtime.resume()).state, 'stopped'); assert.equal(configurations, 0); assert.equal(existsSync(join(directory, 'openclaw-runtime')), false); assert.deepEqual(store.internalRead('gateway:configuration'), selection); }
     finally { await runtime.stop(); store.close(); rmSync(directory, { recursive: true, force: true }); }
   }

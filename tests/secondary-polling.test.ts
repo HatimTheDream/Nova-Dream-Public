@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { canonical } from '../packages/domain/contracts';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
@@ -33,14 +35,14 @@ function host(component: (props: any) => any, initial: any, respond: (path: stri
   const cells: any[] = [], pending: (() => void)[] = [], calls: { path: string; init: RequestInit }[] = [];
   const timers = new Map<number, { at: number; run: () => void }>();
   const document = Object.assign(new EventTarget(), { hidden: false, querySelector: () => null });
-  const window = new EventTarget();
+  const window = new EventTarget(), storage = new Map<string, string>();
   const values: Record<PropertyKey, unknown> = {
     [harnessKey]: {
       state(value: any) { const i = cursor++; if (!cells[i]) cells[i] = { value: typeof value === 'function' ? value() : value }; return [cells[i].value, (next: any) => { const value = typeof next === 'function' ? next(cells[i].value) : next; if (!Object.is(value, cells[i].value)) { cells[i].value = value; dirty = true; } }]; },
       ref(value: any) { const i = cursor++; return cells[i] ??= { current: value }; },
       effect(run: () => void | (() => void), deps: unknown[]) { const i = cursor++, before = cells[i]; if (!before || deps.some((value, index) => !Object.is(value, before.deps[index]))) { cells[i] = { deps, cleanup: before?.cleanup }; pending.push(() => { cells[i].cleanup?.(); cells[i].cleanup = run(); }); } },
     }, document, window,
-    localStorage: { getItem: () => null },
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     setTimeout: (run: () => void, delay: number) => { const id = ++timerId; timers.set(id, { at: now + delay, run }); return id; },
     clearTimeout: (id: number) => timers.delete(id),
     fetch: async (path: string, init: RequestInit) => { calls.push({ path, init }); const value = await respond(path, init); return new Response(JSON.stringify(value), { status: 200 }); },
@@ -69,7 +71,7 @@ function element(tree: any, match: (node: any) => boolean): any {
   if (match(tree)) return tree;
   return element(tree.props?.children, match);
 }
-const connectionProps = { snapshot: { epoch: 'epoch', deviceId: 'device' }, online: true, openAssistant() {} };
+const connectionProps = { snapshot: { epoch: '00000000-0000-4000-8000-000000000902', deviceId: 'device' }, online: true, openAssistant() {} };
 function connectionStatus(path: string) {
   if (path.endsWith('/state')) return { connection: { state: 'ready', modelAuthReady: true, generation: 'host', url: 'fixture' } };
   if (path.endsWith('/runtime')) return { state: 'running', phase: 'ready', canSignIn: true };
@@ -108,17 +110,21 @@ test('runtime startup and waiting sign-in stay responsive without polling the vo
   } finally { app.close(); }
 });
 
-test('starting a previously idle runtime rearms its status timer without repeating the Start request', async () => {
-  let starting = false;
-  const app = host(Connections, connectionProps, path => {
-    if (path.endsWith('/runtime/start')) { starting = true; return {}; }
+test('starting a previously idle runtime rearms its status timer without repeating the Start request', { timeout: 5000 }, async () => {
+  let starting = false, acknowledgeStart!: () => void;
+  const started = new Promise<void>(resolve => { acknowledgeStart = resolve; });
+  const app = host(Connections, connectionProps, (path, init) => {
+    if (path.endsWith('/runtime/start')) {
+      starting = true; const original = JSON.parse(String(init.body)); acknowledgeStart();
+      return { setupRequest: { requestId: original.requestId, epoch: original.epoch, kind: 'runtime-start', sha256: createHash('sha256').update(canonical(original)).digest('hex'), revision: 1, state: 'applied', message: 'Fixture original start admitted' } };
+    }
     if (path.endsWith('/runtime')) return { state: starting ? 'starting' : 'stopped', canSignIn: true };
     if (path.endsWith('/state')) return { connection: { state: starting ? 'connecting' : 'disconnected', modelAuthReady: false, generation: 'host', url: 'fixture' } };
     return connectionStatus(path);
   });
   try {
     await app.flush(); await app.advance(10000);
-    element(app.tree, node => node.type === 'button' && node.props.className === 'primary').props.onClick(); await app.flush();
+    element(app.tree, node => node.type === 'button' && node.props.className === 'primary').props.onClick(); await started; await app.flush();
     const runtimeReads = app.calls.filter(call => call.path.endsWith('/runtime')).length;
     await app.advance(2000);
     assert.equal(app.calls.filter(call => call.path.endsWith('/runtime')).length, runtimeReads + 1, 'Startup does not wait for the old 30 s deadline');

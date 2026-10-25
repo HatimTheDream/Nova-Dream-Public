@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSy
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { qualityPlan, runQualityPlan } from '../scripts/quality.mjs';
+import { qualityOptions, qualityPlan, runQualityPlan } from '../scripts/quality.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'nova-quality-'));
@@ -59,6 +59,36 @@ test('independent checks overlap while build dependencies finish in order', asyn
   const result = await runQualityPlan(plan, { cwd: root });
   assert.equal(result.passed, true); assert.equal(result.checks.length, 5);
   for (const name of ['test', 'typecheck', 'validate', 'build', 'audit']) assert.equal(existsSync(join(root, name + '-done')), true);
+});
+
+test('explicit serial mode keeps all checks and uses the same tests with two file workers', t => {
+  const root = fixture(t), npm = join(root, 'npm-cli.js'); writeFileSync(npm, 'fixture');
+  const options = qualityOptions(['--serial']);
+  const plan = qualityPlan(npm, options);
+  assert.deepEqual(options, { serial: true });
+  assert.deepEqual(qualityOptions([]), { serial: false });
+  assert.deepEqual(plan.map(lane => lane.map(check => check.id)), [['test'], ['typecheck', 'validate:release', 'build'], ['security:audit']]);
+  assert.deepEqual(plan[0][0].args, [npm, 'run', 'test']);
+  for (const args of [['--skip-build'], ['--serial', '--serial'], ['--serial', '--skip-audit']]) {
+    assert.throws(() => qualityOptions(args), /Usage:/);
+  }
+});
+
+test('serial lanes do not overlap and independent security still runs after a failed build', async t => {
+  const root = fixture(t);
+  const result = await runQualityPlan([
+    [command('test', fsImport + "await new Promise(ok=>setTimeout(ok,80));" + marker('test-done'))],
+    [command('typecheck', fsImport + "if(!existsSync('test-done'))throw Error('test still running');" + marker('typecheck-done')),
+      command('validate', fsImport + "if(!existsSync('typecheck-done'))throw Error('early validation');" + marker('validate-done')),
+      command('build', fsImport + "if(!existsSync('validate-done'))throw Error('early build');" + marker('build-done') + 'process.exitCode=7;'),
+      command('dependent', fsImport + marker('unexpected-dependent'))],
+    [command('audit', fsImport + "if(!existsSync('build-done'))throw Error('build still running');" + marker('audit-done'))],
+  ], { cwd: root, serial: true });
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.checks.map(check => check.state), ['passed', 'passed', 'passed', 'failed', 'blocked', 'passed']);
+  assert.equal(result.checks[3].exitCode, 7);
+  assert.equal(existsSync(join(root, 'audit-done')), true);
+  assert.equal(existsSync(join(root, 'unexpected-dependent')), false);
 });
 
 test('one failed check blocks its dependent build and waits for independent work', async t => {
@@ -144,7 +174,7 @@ test('the real tsx quality command schedules four isolated test files', async t 
   const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
   const output = [];
   const result = await runQualityPlan([[{ id: 'file-workers', file: process.execPath,
-    args: [tsx, '--test', '--test-concurrency=4', ...names] }]],
+    args: [tsx, '--test', '--test-reporter=tap', '--test-concurrency=4', ...names] }]],
     { cwd: root, env, emit: event => { if (event.type === 'output') output.push(event.content); } });
   const logs = Buffer.concat(output).toString('utf8');
   assert.equal(result.passed, true, logs); assert.match(logs, /# pass 4\b/);

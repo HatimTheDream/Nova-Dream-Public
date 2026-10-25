@@ -7,7 +7,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {Store} from '../apps/service/store';
 import {AssignmentService} from '../apps/service/assignments';
 import {ContentWorkspace} from '../apps/service/content-workspace';
-import {exportContentPackage,crc32} from '../apps/service/content-package';
+import {exportContentPackage,crc32,portableContentBody} from '../apps/service/content-package';
 import {WorkerTransport} from './fixtures/assignment-worker';
 import {blankRecord,type Content} from '../packages/domain/workspace-records';
 import type {ContentJob,ContentReview} from '../packages/domain/content-workspace';
@@ -33,6 +33,26 @@ test('archiving a brand does not prevent managing templates already linked to it
  const template={...base,id:'library:'+randomUUID(),type:'template',brandId:brand.id};await f.command({type:'library-save',expectedRevision:0,item:template});await f.command({type:'library-save',expectedRevision:1,item:{...brand,archived:true}});
  await f.command({type:'library-save',expectedRevision:1,item:{...template,archived:true}});assert.equal(f.content.library().find(i=>i.id===template.id)!.archived,true);
  await assert.rejects(f.command({type:'library-save',expectedRevision:0,item:{...template,id:'library:'+randomUUID()}}),/available brand/);
+}));
+test('library receipt observes the original save without mutation and binds device, epoch and complete intent',()=>fixture(async f=>{
+ const item={id:'library:'+randomUUID(),name:'Receipt template',type:'template',revision:1,archived:false,guidance:'',brief:'Complete brief',body:'Complete body',format:'markdown',assets:[],platform:'Document',collection:'',tags:[],brandId:null};
+ const input={type:'library-save',item,expectedRevision:0,requestId:randomUUID(),epoch:f.store.epoch};
+ assert.equal(f.content.libraryReceipt(f.device,input).state,'unknown');assert.equal(f.content.library().length,0);
+ const saved=await f.content.command(f.device,input);
+ assert.deepEqual(f.content.libraryReceipt(f.device,input),{command:input,state:'saved',item:saved});
+ assert.throws(()=>f.content.libraryReceipt(randomUUID(),input),/request/i);
+ assert.throws(()=>f.content.libraryReceipt(f.device,{...input,epoch:randomUUID()}),/workspace|epoch|restored|changed/i);
+ assert.throws(()=>f.content.libraryReceipt(f.device,{...input,item:{...item,body:'Different'}}),/request/i);
+ assert.equal(f.content.library()[0].revision,1);
+}));
+test('a terminal library rejection is retained and cannot later turn into a save',()=>fixture(async f=>{
+ const brand={id:'library:'+randomUUID(),name:'Future brand',type:'brand',revision:1,archived:false,guidance:'Voice',brief:'',body:'',platform:'Document',collection:'',tags:[],brandId:null};
+ const item={...brand,id:'library:'+randomUUID(),type:'template',brandId:brand.id},input={type:'library-save',item,expectedRevision:0,requestId:randomUUID(),epoch:f.store.epoch};
+ await assert.rejects(f.content.command(f.device,input),/available brand/);
+ const receipt=f.content.libraryReceipt(f.device,input);assert.equal(receipt.state,'rejected');assert.equal(f.content.library().length,0);
+ await f.command({type:'library-save',item:brand,expectedRevision:0});
+ await assert.rejects(f.content.command(f.device,input),/available brand/);assert.equal(f.content.library().length,1);assert.deepEqual(f.content.libraryReceipt(f.device,input),receipt);
+ await f.content.command(f.device,{...input,requestId:randomUUID()});assert.equal(f.content.library().length,2);
 }));
 test('templates retain verified original attachments and reject forged file identities',()=>fixture(async f=>{
  const file=f.store.upload(f.device,randomUUID(),f.store.epoch,'template.md',Buffer.from('Reusable source').toString('base64'));
@@ -107,8 +127,110 @@ test('ZIP exports contain exact saved bytes, collision-safe assets and verifiabl
  while(zip.readUInt32LE(at)===0x04034b50){const size=zip.readUInt32LE(at+18),nameLength=zip.readUInt16LE(at+26),extra=zip.readUInt16LE(at+28),name=zip.subarray(at+30,at+30+nameLength).toString(),body=zip.subarray(at+30+nameLength+extra,at+30+nameLength+extra+size);assert(!name.includes('..'));assert.equal(crc32(body),zip.readUInt32LE(at+14));entries.set(name,body);at+=30+nameLength+extra+size;}
  assert.equal(entries.get('draft.md')!.toString(),c.value.body);const manifest=JSON.parse(entries.get('manifest.json')!.toString());assert.deepEqual(entries.get(manifest.assets[0].path),bytes);assert.equal(manifest.portableDraft,'portable.md');assert(entries.get('portable.md')!.toString().includes(`[Asset](${manifest.assets[0].path})`));for(const file of manifest.files)assert.equal(createHash('sha256').update(entries.get(file.path)!).digest('hex'),file.sha256);assert.equal(manifest.revision,2);assert.equal(zip.readUInt32LE(zip.length-22),0x06054b50);
 }));
+test('portable copies preserve complete supported identities and never rewrite a partial ID or unsupported query',()=>{
+ const assets=[{id:'file:one_two-3',path:'assets/exact.txt'},{id:'short',path:'assets/short.txt'}];
+ const body='[Original](/api/attachments/file:one_two-3)\r\n![Preview](/api/attachments/file:one_two-3?preview=1)\n/api/attachments/short_other /api/attachments/short/path /api/attachments/short?download=1 /api/attachments/missing';
+ assert.equal(portableContentBody(body,assets),'[Original](assets/exact.txt)\r\n![Preview](assets/exact.txt)\n/api/attachments/short_other /api/attachments/short/path /api/attachments/short?download=1 /api/attachments/missing');
+ for(const url of ['https://outside.example/api/attachments/short','https://例.example/api/attachments/short','https://outside.example/?path=/api/attachments/short'])assert.equal(portableContentBody(`[External](${url})`,assets),`[External](${url})`);
+});
+test('export captures current Brand guidance while original agent work and saved UTF-8 writing remain unchanged',()=>fixture(async f=>{
+ const brand={id:'library:'+randomUUID(),name:'Shared voice',type:'brand',revision:1,archived:false,guidance:'First captured voice',brief:'',body:'',platform:'Document',collection:'',tags:[],brandId:null};
+ await f.command({type:'library-save',item:brand,expectedRevision:0});
+ const exact='Exact 🐈 writing\r\n\r\nKeep these line endings.\n',saved=f.save(f.item.id,{...f.item.value,brandId:brand.id,body:exact},1);
+ await f.command({type:'work',...f.source(),agentId:f.agent.id,mode:'draft',instructions:''});await pause();
+ await f.command({type:'library-save',item:{...brand,guidance:'New export voice'},expectedRevision:1});
+ const zip=exportContentPackage(f.store,saved.id,saved.revision).bytes,entries=new Map<string,Buffer>();let at=0;
+ while(zip.readUInt32LE(at)===0x04034b50){const size=zip.readUInt32LE(at+18),names=zip.readUInt16LE(at+26),extra=zip.readUInt16LE(at+28),start=at+30+names+extra;entries.set(zip.subarray(at+30,at+30+names).toString(),zip.subarray(start,start+size));at=start+size;}
+ assert.deepEqual(entries.get('draft.md'),Buffer.from(exact));const manifest=JSON.parse(entries.get('manifest.json')!.toString());
+ assert.equal(manifest.brand.revision,2);assert.equal(manifest.brand.guidance,'New export voice');
+ assert.equal(f.content.state(saved.id).jobs[0].brand!.guidance,'First captured voice');assert.equal(f.content.state(saved.id).jobs[0].brand!.revision,1);
+ assert.equal(f.store.readEntity('content',saved.id)!.value.body,exact);
+}));
 test('Content endpoints enforce session, origin, strict commands and exact version exports',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'e3-content-http-')),server=await startServer({port:0,directory:dir,version:'test'});try{const base=server.origin;assert.equal((await fetch(base+'/api/content/library')).status,401);const session=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,'Content-Type':'application/json','X-Edition3-Client':'1'},body:'{}'}),cookie=session.headers.get('set-cookie')!.split(';')[0],headers={Origin:base,'Content-Type':'application/json','X-Edition3-Client':'1',Cookie:cookie};
  assert.equal((await fetch(base+'/api/content/workspace',{method:'POST',headers:{...headers,Origin:'https://foreign.test'},body:'{}'})).status,403);assert.equal((await fetch(base+'/api/content/workspace',{method:'POST',headers,body:JSON.stringify({type:'review-request',requestId:randomUUID(),epoch:server.store.epoch,contentId:'content:x',expectedRevision:1,reviewerId:null,author:'forged'})})).status,400);assert.equal((await fetch(base+'/api/content/package?id=content:missing&revision=1',{headers})).status,404);
  }finally{await server.close();rmSync(dir,{recursive:true,force:true});}
 });
+test('Content receipt reads preserve original review identity and cannot apply or resend a change',()=>fixture(async f=>{
+ const input={type:'review-request',...f.source(),reviewerId:null,requestId:randomUUID(),epoch:f.store.epoch};
+ assert.equal(f.content.receipt(f.device,input).state,'unknown');assert.equal(f.content.state(f.item.id).reviews.length,0);
+ const saved=await f.content.command(f.device,input),receipt=f.content.receipt(f.device,input);
+ assert.equal(receipt.state,'recorded');assert('result'in receipt);
+ assert.equal((receipt.result as ContentReview).id,(saved as ContentReview).id);
+ assert.equal((receipt.result as ContentReview).revision,(saved as ContentReview).revision);
+ assert(!('comments'in (receipt.result as object)));
+ assert.deepEqual(new ContentWorkspace(f.store,f.assignments).receipt(f.device,input),receipt);
+ assert.equal(f.content.state(f.item.id).reviews.length,1);
+ assert.throws(()=>f.content.receipt(randomUUID(),input),/request|device/i);
+ assert.throws(()=>f.content.receipt(f.device,{...input,reviewerId:f.agent.id}),/request/i);
+}));
+test('a refused Content request remains refused after the missing dependency becomes available',()=>fixture(async f=>{
+ const agentId='agent:'+randomUUID(),input={type:'review-request',...f.source(),reviewerId:agentId,requestId:randomUUID(),epoch:f.store.epoch};
+ await assert.rejects(f.content.command(f.device,input),/active reviewer/);
+ const receipt=f.content.receipt(f.device,input);assert.equal(receipt.state,'rejected');
+ f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'agent',entityId:agentId,expectedRevision:0,payload:{...f.store.readEntity('agent',f.agent.id)!.value}});
+ await assert.rejects(f.content.command(f.device,input),/active reviewer/);
+ assert.deepEqual(f.content.receipt(f.device,input),receipt);assert.equal(f.content.state(f.item.id).reviews.length,0);
+}));
+test('reading or replaying an admitted work request never retries a failed start automatically',()=>fixture(async f=>{
+ const start=f.assignments.start.bind(f.assignments);let calls=0;
+ f.assignments.start=()=>{calls++;throw Error('Connection unavailable before native admission');};
+ const input={type:'work',...f.source(),agentId:f.agent.id,mode:'draft',instructions:'Keep this exact brief',requestId:randomUUID(),epoch:f.store.epoch};
+ const job=await f.content.command(f.device,input) as ContentJob;assert.equal(calls,1);assert(!job.attempt);
+ await f.content.command(f.device,input);const receipt=f.content.receipt(f.device,input);
+ assert.equal(calls,1);assert.equal(receipt.state,'recorded');assert.match(receipt.message,/does not confirm a completed reply/);
+ f.assignments.start=start;
+ await f.command({type:'work-control',jobId:job.id,action:'start'});await pause();
+ assert.equal(f.gateway.nativeCalls.length,1);
+}));
+test('duplicate controls and receipt reads never repeat an original asynchronous observation',()=>fixture(async f=>{
+ const job=await f.command({type:'work',...f.source(),agentId:f.agent.id,mode:'draft',instructions:''}) as ContentJob;await pause();
+ const attempt=f.content.state(f.item.id).jobs[0].attempt!,original=f.assignments.reconcile.bind(f.assignments);
+ let calls=0,finish!:(value:typeof attempt)=>void;
+ f.assignments.reconcile=async()=>{calls++;return new Promise(resolve=>{finish=resolve;});};
+ const input={type:'work-control',jobId:job.id,action:'check',requestId:randomUUID(),epoch:f.store.epoch};
+ const first=f.content.command(f.device,input);assert.equal(calls,1);
+ const receipt=f.content.receipt(f.device,input);assert.equal(receipt.state,'recorded');assert.match(receipt.message,/unconfirmed/);
+ await f.content.command(f.device,input);assert.equal(calls,1);
+ assert.equal(new ContentWorkspace(f.store,f.assignments).receipt(f.device,input).state,'recorded');
+ finish(attempt);await first;assert.match(f.content.receipt(f.device,input).message,/Native execution/);assert.equal(calls,1);
+ f.assignments.reconcile=original;
+}));
+test('a refused control is durable before any possible assignment effect',()=>fixture(async f=>{
+ const start=f.assignments.start.bind(f.assignments);f.assignments.start=()=>{throw Error('Not connected');};
+ const job=await f.command({type:'work',...f.source(),agentId:f.agent.id,mode:'draft',instructions:''}) as ContentJob;
+ const input={type:'work-control',jobId:job.id,action:'stop',requestId:randomUUID(),epoch:f.store.epoch};
+ await assert.rejects(f.content.command(f.device,input),/not started/);assert.equal(f.content.receipt(f.device,input).state,'rejected');
+ f.assignments.start=start;await f.command({type:'work-control',jobId:job.id,action:'start'});await pause();
+ await assert.rejects(f.content.command(f.device,input),/not started/);
+ assert.equal(f.content.state(f.item.id).jobs[0].attempt?.stopReason,undefined);
+}));
+test('Content receipt endpoint is authenticated, owner-origin checked and observes only the original request',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'e3-content-receipt-')),server=await startServer({port:0,directory:dir,version:'test'});
+ try{
+  const base=server.origin,route=base+'/api/content/workspace/receipt';
+  assert.equal((await fetch(route,{method:'POST',headers:{Origin:base,'Content-Type':'application/json','X-Edition3-Client':'1'},body:'{}'})).status,401);
+  const session=await fetch(base+'/api/session',{method:'POST',headers:{Origin:base,'Content-Type':'application/json','X-Edition3-Client':'1'},body:'{}'});
+  const cookie=session.headers.get('set-cookie')!.split(';')[0],headers={Origin:base,'Content-Type':'application/json','X-Edition3-Client':'1',Cookie:cookie};
+  const input={type:'review-request',contentId:'content:missing',expectedRevision:1,reviewerId:null,requestId:randomUUID(),epoch:server.store.epoch};
+  assert.equal((await fetch(route,{method:'POST',headers:{...headers,Origin:'https://foreign.test'},body:JSON.stringify(input)})).status,403);
+  const result=await fetch(route,{method:'POST',headers,body:JSON.stringify(input)});assert.equal(result.status,200);
+  assert.equal((await result.json() as {state:string}).state,'unknown');assert.deepEqual(server.store.internalList('content:review:'),[]);
+ }finally{await server.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('older admitted work controls remain observable without redispatch or invented completion',()=>fixture(async f=>{
+ const job=await f.command({type:'work',...f.source(),agentId:f.agent.id,mode:'draft',instructions:''}) as ContentJob;await pause();
+ const input={type:'work-control',jobId:job.id,action:'check',requestId:randomUUID(),epoch:f.store.epoch};
+ f.store.admit(f.device,input,{operation:'content.work-control',...input},()=>f.store.internalRead('content:job:'+job.id));
+ let checks=0;const original=f.assignments.reconcile.bind(f.assignments);f.assignments.reconcile=async()=>{checks++;throw Error('No repeat');};
+ const receipt=f.content.receipt(f.device,input);assert.equal(receipt.state,'recorded');assert.match(receipt.message,/effect outcome is unconfirmed/);
+ await f.content.command(f.device,input);assert.equal(checks,0);f.assignments.reconcile=original;
+}));
+test('restore receipts retain exact resulting versions without copying complete saved writing into recovery',()=>fixture(async f=>{
+ const original=f.item.value.body;f.save(f.item.id,{...f.item.value,body:'Later writing '.repeat(4000)},1);
+ const input={type:'restore',...f.source(),revision:1,requestId:randomUUID(),epoch:f.store.epoch};
+ const saved=await f.content.command(f.device,input) as Entity<Content>,receipt=f.content.receipt(f.device,input);
+ assert.equal(receipt.state,'recorded');assert('result'in receipt);
+ assert.deepEqual(receipt.result,{id:f.item.id,revision:saved.revision});assert.equal(f.store.readEntity('content',f.item.id)!.value.body,original);
+ assert.equal(f.store.readEntityVersion('content',f.item.id,2)!.value.body,'Later writing '.repeat(4000));
+}));

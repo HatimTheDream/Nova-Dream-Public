@@ -1,3 +1,4 @@
+import {ideaBindingSchema} from './idea-binding.js';
 import { assistantSpaceSchema } from './assistant-space.js';
 import { workModeSchema } from './work-mode.js';
 import { z } from 'zod';
@@ -46,7 +47,7 @@ export const taskSchema = /* @__PURE__ */ (() => z.object({ title: z.string().tr
   checklist: z.array(z.object({ id: z.string().uuid(), text: z.string().trim().min(1).max(300), done: z.boolean() }).strict()).max(500).refine(v => unique(v.map(i => i.id))).optional(),
   dependencies: z.array(id).max(20).refine(unique).optional(),
   sources: z.array(z.object({ label: z.string().trim().min(1).max(100), url: z.string().url().max(2000).refine(v => ['https:', 'http:'].includes(new URL(v).protocol)) }).strict()).max(10).optional() }).strict())();
-export const draftSchema = /* @__PURE__ */ (() => z.object({ space: assistantSpaceSchema.optional(), workMode: workModeSchema.optional(), title: z.string().max(150), text: z.string().max(100000), projectId: id.nullable(), conversationId: z.string().uuid().nullable().optional(), attachments: z.array(attachmentSchema).max(10), refineSource: z.object({ outputId: z.string().uuid(), version: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional() }).strict())();
+export const draftSchema = /* @__PURE__ */ (() => z.object({ idea: ideaBindingSchema.optional(), space: assistantSpaceSchema.optional(), workMode: workModeSchema.optional(), title: z.string().max(150), text: z.string().max(100000), projectId: id.nullable(), conversationId: z.string().uuid().nullable().optional(), attachments: z.array(attachmentSchema).max(10), refineSource: z.object({ outputId: z.string().uuid(), version: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional() }).strict())();
 export const projectWorkspaceSchema = /* @__PURE__ */ (() => z.object({ folder: z.string().trim().max(4000).refine(value => !/[\x00-\x1f]/.test(value)), environment: z.enum(['local', 'worktree']) }).strict())();
 export const projectSchema = /* @__PURE__ */ (() => z.object({ space: assistantSpaceSchema.optional(), instructions: z.string().max(10000).optional(), workspace: projectWorkspaceSchema.optional(), name: z.string().trim().min(1).max(100), purpose: z.string().max(10000), attachments: z.array(attachmentSchema).max(10).refine(files => unique(files.map(file => file.id))).optional() }).strict())();
 export type Task = z.infer<typeof taskSchema>;

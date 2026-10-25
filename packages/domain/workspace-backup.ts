@@ -9,7 +9,7 @@ const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const base64 = z.string().refine(isBase64, 'Invalid base64 encoding');
 export const retainedNativeSchema = z.object({ archive: base64, sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: integer.max(192 * 1024 * 1024) }).strict();
 export const backupSnapshotSchema = z.object({
-  format: z.literal(backupFormat), schema: z.union([z.literal(47), z.literal(48), z.literal(49), z.literal(50), z.literal(51), z.literal(52), z.literal(53), z.literal(54), z.literal(55), z.literal(56), z.literal(57), z.literal(58)]), version: z.string().max(40),
+  format: z.literal(backupFormat), schema: z.union([z.literal(47), z.literal(48), z.literal(49), z.literal(50), z.literal(51), z.literal(52), z.literal(53), z.literal(54), z.literal(55), z.literal(56), z.literal(57), z.literal(58), z.literal(59), z.literal(60)]), version: z.string().max(40),
   id: z.string().uuid(), createdAt: z.string().datetime(), epoch: z.string().uuid(), cursor: integer,
   entities: z.array(z.object({ id, kind: z.enum(['layout', 'task', 'draft', 'project', 'routine', 'contact', 'content', 'agent', 'assignment', 'profile']), revision: integer.min(1), deviceId: id, updatedAt: z.string().datetime(), value: z.unknown() }).strict()).max(100000),
   history: z.array(z.object({ cursor: integer.min(1), entityId: id, revision: integer.min(1), value: z.unknown() }).strict()).max(1000000),
@@ -20,6 +20,13 @@ export const backupSnapshotSchema = z.object({
   native: z.object({ status: z.enum(['included', 'not-configured', 'separate-host']), archive: base64.optional(), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), bytes: integer.optional(), notes: z.array(z.string().max(500)).max(20), retained: z.array(retainedNativeSchema).max(10).optional() }).strict(),
 }).strict();
 export type BackupSnapshot = z.infer<typeof backupSnapshotSchema>;
+/** Separate source-only schema61 route. Legacy 47-60 backups retain their exact
+ * shape. Service-side verification strictly parses every opaque history object. */
+export const historyBackupSnapshotSchema=backupSnapshotSchema.extend({schema:z.literal(61),
+  feedHistory:z.object({format:z.literal(1),objects:z.array(z.unknown())}).strict()}).strict();
+export type HistoryBackupSnapshot=z.infer<typeof historyBackupSnapshotSchema>;
+export const sealingBackupSnapshotSchema=historyBackupSnapshotSchema.extend({schema:z.literal(62)}).strict();
+export type SealingBackupSnapshot=z.infer<typeof sealingBackupSnapshotSchema>;
 export type BackupSummary = {
   id: string; createdAt: string; version: string; schema: number;
   counts: Record<string, number>; files: number; fileBytes: number; history: number;

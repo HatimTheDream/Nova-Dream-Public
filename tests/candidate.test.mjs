@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { stageCandidate } from '../scripts/candidate.mjs';
+import { stageCandidate, verifyCandidate } from '../scripts/candidate.mjs';
 const digest = text => createHash('sha256').update(text).digest('hex');
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'edition3-candidate-')));
@@ -51,6 +51,47 @@ test('an assignment-capable candidate requires the compiled worker and its actua
     const path = root + 'package.json', value = JSON.stringify({ openclaw: { extensions: ['./wrong.js'] } });
     f.put(path, value); f.manifest.artifacts.find(artifact => artifact.path === path).sha256 = digest(value); f.saveManifest();
     assert.throws(() => stageCandidate(f.root), /plugin entry is not paired/);
+  } finally { f.close(); }
+});
+
+test('schema59 candidate requires every Group policy, owner and exact-account artifact before admission', () => {
+  const f = fixture();
+  try {
+    f.pkg.edition3.schemaVersion = 59; f.manifest.schemaVersion = 59;
+    f.put('package.json', JSON.stringify(f.pkg));
+    const service = 'dist/service/apps/service/';
+    const files = {
+      ...Object.fromEntries(['worker-plugin/index.js', 'worker-plugin/identity.js', 'worker-plugin/journal.js',
+        'assignments.js', 'runtime-child.js', 'direct-agent-plugin/index.js', 'direct-agent-tool-calls.js',
+        'direct-agent-runtime-policy.js', 'direct-agent-owner.js'].map(name => [service + name, 'export {};'])),
+      [service + 'worker-plugin/openclaw.plugin.json']: JSON.stringify({ id: 'edition3-worker' }),
+      [service + 'worker-plugin/package.json']: JSON.stringify({ openclaw: { extensions: ['./index.js'] } }),
+      [service + 'direct-agent-plugin/openclaw.plugin.json']: JSON.stringify({ id: 'edition3-direct-agent' }),
+      [service + 'direct-agent-plugin/package.json']: JSON.stringify({ openclaw: { extensions: ['./index.js'] } }),
+      'dist/service/packages/domain/worker.js': 'export {};',
+    };
+    for (const [path, value] of Object.entries(files)) { f.put(path, value); f.manifest.artifacts.push({ path, sha256: digest(value) }); }
+    f.saveManifest();
+    assert.throws(() => verifyCandidate(f.root), /Group execution artifact is missing/);
+    const group = ['assistant-group-execution.js', 'group-execution-gateway.js', 'group-execution-owner.js',
+      'group-execution-request.js', 'group-runtime-policy.js', 'direct-agent-runtime-config.js', 'direct-agent-runtime-files.js',
+      'account-plugin/index.js', 'account-plugin/openclaw.plugin.json', 'account-plugin/package.json']
+      .map(name => service + name).concat(['dist/service/packages/domain/assistant-group-execution.js',
+        'dist/service/packages/domain/assistant-group-conversation.js']);
+    for (const path of group) {
+      const value = path.endsWith('openclaw.plugin.json') ? JSON.stringify({ id: 'edition3-accounts' })
+        : path.endsWith('package.json') ? JSON.stringify({ openclaw: { extensions: ['./index.js'] } }) : 'export {};';
+      f.put(path, value); f.manifest.artifacts.push({ path, sha256: digest(value) });
+    }
+    f.saveManifest(); assert.ok(verifyCandidate(f.root).id);
+    for (const path of group) {
+      const index = f.manifest.artifacts.findIndex(row => row.path === path), [kept] = f.manifest.artifacts.splice(index, 1);
+      f.saveManifest(); assert.throws(() => verifyCandidate(f.root), /Group execution artifact is missing/);
+      f.manifest.artifacts.splice(index, 0, kept);
+    }
+    f.saveManifest();
+    f.put(service + 'group-runtime-policy.js', '// unpaired replacement');
+    assert.throws(() => verifyCandidate(f.root), /group-runtime-policy.js changed/);
   } finally { f.close(); }
 });
 test('untrusted inventory paths, duplicates and symlinks cannot escape the owned build', () => {

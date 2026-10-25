@@ -7,6 +7,7 @@ import { Fault, Store } from './store.js';
 import { chatGptProfileIdSchema } from '../../packages/domain/chatgpt-accounts.js';
 import { maintenanceGatewayKind } from './update-maintenance.js';
 import { assertDirectGatewayRequest } from './direct-agent-gateway.js';
+import { isGroupGatewayRequest, assertGroupGatewayRequest } from './group-execution-gateway.js';
 
 type Configuration = { url: string; token: string; generation: string };
 type DeviceToken = { token: string; scopes: string[] };
@@ -22,17 +23,19 @@ export interface AssistantTransport {
   request<T = Record<string, unknown>>(method: string, params: unknown): Promise<T>;
   subscribe(listener: (event: EventFrame) => void): () => void;
   models(): Promise<AssistantModel[]>;
+  /** Scoped preparation must refuse a catalog already owned by another read. */
+  modelsWithAuthority?(authorize: () => void): Promise<AssistantModel[]>;
   attachmentPolicy(): { maxBytes?: number; maxImageBytes?: number; maxPayload?: number };
 }
 const initialStatus = (): AssistantConnection => ({ state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false });
-const allowedMethods = new Set(['agent', 'e3.direct.policy', 'e3.accounts.direct-profile', 'e3.workspace.policy', 'e3.accounts.snapshot', 'usage.status', 'usage.cost', 'sessions.diff', 'sessions.goal.update', 'sessions.goal.clear', 'e3.sources.stage', 'skills.status', 'e3.assignments.capabilities', 'e3.assignments.run', 'e3.assignments.stop', 'e3.assignments.status', 'models.list', 'models.authStatus', 'sessions.create', 'sessions.patch', 'sessions.delete', 'sessions.describe', 'sessions.fork', 'sessions.list', 'sessions.search', 'sessions.subscribe', 'sessions.messages.subscribe', 'chat.history', 'chat.send', 'chat.abort', 'agent.wait', 'artifacts.download', 'talk.catalog', 'talk.client.create', 'talk.client.close', 'talk.client.transcript', 'talk.client.toolCall', 'talk.client.steer', 'talk.session.create', 'talk.session.appendAudio', 'talk.session.close', 'talk.session.steer', 'talk.speak']);
+const allowedMethods = new Set(['e3.group.policy', 'e3.accounts.group-profile', 'e3.accounts.group-identity', 'agent', 'e3.direct.policy', 'e3.accounts.direct-profile', 'e3.workspace.policy', 'e3.accounts.snapshot', 'usage.status', 'usage.cost', 'sessions.diff', 'sessions.goal.update', 'sessions.goal.clear', 'e3.sources.stage', 'skills.status', 'e3.assignments.capabilities', 'e3.assignments.run', 'e3.assignments.stop', 'e3.assignments.status', 'models.list', 'models.authStatus', 'sessions.create', 'sessions.patch', 'sessions.delete', 'sessions.describe', 'sessions.fork', 'sessions.list', 'sessions.search', 'sessions.subscribe', 'sessions.messages.subscribe', 'chat.history', 'chat.send', 'chat.abort', 'agent.wait', 'artifacts.download', 'talk.catalog', 'talk.client.create', 'talk.client.close', 'talk.client.transcript', 'talk.client.toolCall', 'talk.client.steer', 'talk.session.create', 'talk.session.appendAudio', 'talk.session.close', 'talk.session.steer', 'talk.speak']);
 const questionMethods = new Set(['sessions.messages.subscribe', 'question.list', 'question.get', 'question.resolve']);
 const reviewMethods = new Set(['sessions.messages.subscribe', 'approval.get', 'approval.resolve']);
 const skillReadMethods = new Set(['skills.proposals.list', 'skills.proposals.inspect', 'skills.proposals.events.list']);
 const skillManagementMethods = new Set([...skillReadMethods, 'skills.proposals.create', 'skills.proposals.update', 'skills.proposals.revise', 'skills.proposals.apply', 'skills.proposals.reject']);
 // A cold native SDK can take nearly a minute before its first read returns.
 // Wait for that one read; never extend or retry a turn submission as a result.
-const preparationReadMethods = new Set(['e3.direct.policy', 'e3.accounts.direct-profile', 'models.list', 'chat.history', 'sessions.describe', 'sessions.messages.subscribe', 'question.list', 'question.get', 'approval.get', 'e3.workspace.policy']);
+const preparationReadMethods = new Set(['e3.group.policy', 'e3.accounts.group-profile', 'e3.accounts.group-identity', 'e3.direct.policy', 'e3.accounts.direct-profile', 'models.list', 'chat.history', 'sessions.describe', 'sessions.messages.subscribe', 'question.list', 'question.get', 'approval.get', 'e3.workspace.policy']);
 
 /** Supported, version-pinned Gateway transport. All credentials stay in host storage. */
 export class Gateway implements AssistantTransport {
@@ -44,6 +47,12 @@ export class Gateway implements AssistantTransport {
   private lifecycle = 0;
   private catalogEpoch = 0;
   private catalogRequest?: Promise<AssistantModel[]>;
+  private readonly catalogReads = new Set<Promise<AssistantModel[]>>();
+  private trackCatalog(pending: Promise<AssistantModel[]>) {
+    this.catalogReads.add(pending);
+    void pending.then(() => this.catalogReads.delete(pending), () => this.catalogReads.delete(pending));
+    return pending;
+  }
   private discoveredCatalog?: string;
   private resetModels() { ++this.catalogEpoch; this.catalogRequest = undefined; this.discoveredCatalog = undefined; }
   constructor(private store: Store, private version = 'development', private createClient: (options: GatewayClientOptions) => Client = options => new GatewayClient(options), private purpose: 'assistant' | 'skill-management' | 'permission-control' | 'response-control' | 'approval-review' | 'question-review' | 'browser-control' | 'account-control' | 'speech-playback' | 'update-control' = 'assistant') {}
@@ -121,7 +130,11 @@ export class Gateway implements AssistantTransport {
   }
   async request<T = Record<string, unknown>>(method: string, params: unknown): Promise<T> {
     if (this.store.recoveryEffectsPaused) throw new Fault(409, 'recovery_held', 'Assistant execution is paused in this recovered copy.');
-    if (['agent', 'e3.direct.policy', 'e3.accounts.direct-profile'].includes(method)) {
+    if (isGroupGatewayRequest(method, params)) {
+      if (this.purpose !== 'assistant') throw new Fault(403, 'gateway_method', 'Group requests belong to the original Assistant connection.');
+      try { assertGroupGatewayRequest(method, params); }
+      catch { throw new Fault(403, 'gateway_method', 'Only an exact original Group child request is allowed.'); }
+    } else if (['agent', 'e3.direct.policy', 'e3.accounts.direct-profile'].includes(method)) {
       if (this.purpose !== 'assistant') throw new Fault(403, 'gateway_method', 'Direct-agent requests belong to the original Assistant connection.');
       try { assertDirectGatewayRequest(method, params); }
       catch { throw new Fault(403, 'gateway_method', 'Only an exact original direct-agent request is allowed.'); }
@@ -170,17 +183,40 @@ export class Gateway implements AssistantTransport {
   }
   models(): Promise<AssistantModel[]> {
     if (this.catalogRequest) return this.catalogRequest;
-    const pending = this.readModels(); this.catalogRequest = pending;
+    const pending = this.trackCatalog(this.readModels()); this.catalogRequest = pending;
     void pending.finally(() => { if (this.catalogRequest === pending) this.catalogRequest = undefined; }).catch(() => undefined);
     return pending;
   }
-  private async readModels(): Promise<AssistantModel[]> {
+  modelsWithAuthority(authorize: () => void): Promise<AssistantModel[]> {
+    const check = () => {
+      if (typeof authorize !== 'function') throw new Fault(403, 'gateway_authority', 'Model preparation requires current synchronous authority.');
+      const result: unknown = authorize();
+      if (result !== undefined) {
+        // Invalid asynchronous ports are refused, but their rejection remains owned.
+        void Promise.resolve(result).catch(() => undefined);
+        throw new Fault(403, 'gateway_authority', 'Model preparation requires current synchronous authority.');
+      }
+    };
+    try {
+      check();
+      if (this.catalogReads.size) throw new Fault(409, 'gateway_catalog_held', 'An original model read is still held. Check again after it settles.');
+      const pending = this.trackCatalog(this.readModels(check)); this.catalogRequest = pending;
+      void pending.finally(() => { if (this.catalogRequest === pending) this.catalogRequest = undefined; }).catch(() => undefined);
+      return pending;
+    } catch (error) { return Promise.reject(error); }
+  }
+  private async readModels(authorize?: () => void): Promise<AssistantModel[]> {
     const epoch = this.catalogEpoch;
-    const check = () => { if (this.stopped || epoch !== this.catalogEpoch) throw new Fault(503, 'gateway_replaced', 'The model connection changed. Reload the current models.'); };
+    const check = () => {
+      authorize?.();
+      if (this.stopped || epoch !== this.catalogEpoch) throw new Fault(503, 'gateway_replaced', 'The model connection changed. Reload the current models.');
+    };
+    check();
     let result = await this.request<ModelCatalog>('models.list', { agentId: 'main' }); check();
     // A prepared native catalog can omit capabilities. Discover once for an
     // unchanged incomplete catalog; subsequent UI polling uses the cheap read.
     if (result.models?.some(model => model.available === true && model.reasoning === undefined && model.thinkingLevels === undefined) && catalogSignature(result) !== this.discoveredCatalog) {
+      check();
       result = await this.request<ModelCatalog>('models.list', { agentId: 'main', refresh: true }); check();
       this.discoveredCatalog = catalogSignature(result);
     }

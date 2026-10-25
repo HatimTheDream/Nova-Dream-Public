@@ -131,7 +131,7 @@ test('schema-one upgrade retains encrypted work; wrong keys cannot modify schema
     let db = new DatabaseSync(join(f.path, 'workspace.sqlite')); db.exec('PRAGMA user_version=1'); db.close();
     const key = readFileSync(join(f.path, 'preview.key')), before = readFileSync(join(f.path, 'workspace.sqlite'));
     writeFileSync(join(f.path, 'preview.key'), randomBytes(32)); assert.throws(() => new Store(f.path)); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
-    writeFileSync(join(f.path, 'preview.key'), key); const upgraded = new Store(f.path); assert.deepEqual(upgraded.readEntity('task', id)?.value, base); upgraded.close();
-    db = new DatabaseSync(join(f.path, 'workspace.sqlite')); assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, 56); db.close();
+    writeFileSync(join(f.path, 'preview.key'), key); const upgraded = new Store(f.path); try { assert.deepEqual(upgraded.readEntity('task', id)?.value, base); } finally { upgraded.close(); }
+    db = new DatabaseSync(join(f.path, 'workspace.sqlite')); try { assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, 60); } finally { db.close(); }
   } finally { if (!closed) f.store.close(); rmSync(f.path, { recursive: true, force: true }); }
 });

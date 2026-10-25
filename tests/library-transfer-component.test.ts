@@ -56,20 +56,20 @@ test('actual import component keeps failed writing on Close and Home departure, 
 test('actual known save with refused local acknowledgement cannot generate a second command; newer writing remains',async()=>{
  const f=new Hooks();f.seed();let commands=0, sent!:Extract<HomeLibraryCommand,{type:'items-capture'}>,resolve!:(v:HomeLibraryReceipt)=>void;
  const props={scope,controller:controller(async input=>{commands++;sent=input as typeof sent;return new Promise(done=>{resolve=done;});}),request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
- try {render();let tree=render();button(tree,'Save 1 Selected Sources').props.onClick();f.failWrite=true;nodes(tree).find(n=>n.type==='textarea').props.onChange({target:{value:'Newer proposal after original'}});resolve(reply(sent));await tick();tree=render();assert.equal(commands,1);assert.equal(nodes(tree).find(n=>n.type==='textarea').props.value,'Newer proposal after original');f.failWrite=false;button(tree,'Retry Keeping Review').props.onClick();tree=render();assert.equal(button(tree,'Save 0 Selected Sources').props.disabled,true);assert.equal(commands,1);assert.match(text(tree),/original save|newer review writing/i);}finally{f.close();}
+ try {render();let tree=render();button(tree,'Save 1 Selected Source').props.onClick();f.failWrite=true;nodes(tree).find(n=>n.type==='textarea').props.onChange({target:{value:'Newer proposal after original'}});resolve(reply(sent));await tick();tree=render();assert.equal(commands,1);assert.equal(nodes(tree).find(n=>n.type==='textarea').props.value,'Newer proposal after original');f.failWrite=false;button(tree,'Retry Keeping Review').props.onClick();tree=render();assert.equal(button(tree,'Save 0 Selected Sources').props.disabled,true);assert.equal(commands,1);assert.match(text(tree),/original save|newer review writing/i);}finally{f.close();}
 });
 test('actual original reconciliation passes the exact pending command and does nothing automatically on mount',async()=>{
  const f=new Hooks();f.seed();const owner=new LibraryTransferDraftOwner(f.io,scope,()=>true),original=owner.command(crypto.randomUUID())!,calls:HomeLibraryCommand[]=[];
  const ctl=controller(async input=>{calls.push(input);return reply(original);});ctl.pending=original;
  const props={scope,controller:ctl,request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
- try {render();let tree=render();assert.equal(calls.length,0);assert.equal(button(tree,'Save 1 Selected Sources').props.disabled,true);button(tree,'Check Original Save').props.onClick();await tick();assert.equal(calls.length,1);assert.equal(calls[0],original);ctl.lastSave={command:original,result:reply(original),undo:reply(original).undo};ctl.pending=undefined;render();tree=render();assert.equal(button(tree,'Save 0 Selected Sources').props.disabled,true);}finally{f.close();}
+ try {render();let tree=render();assert.equal(calls.length,0);assert.equal(button(tree,'Save 1 Selected Source').props.disabled,true);button(tree,'Check Original Save').props.onClick();await tick();assert.equal(calls.length,1);assert.equal(calls[0],original);ctl.lastSave={command:original,result:reply(original),undo:reply(original).undo};ctl.pending=undefined;render();tree=render();assert.equal(button(tree,'Save 0 Selected Sources').props.disabled,true);}finally{f.close();}
 });
 test('own import result keeps its destination current while a later external collection change still requires review',async()=>{
  const f=new Hooks();f.seed();let commands=0;
  const ctl=controller(async input=>{commands++;const result=reply(input as Extract<HomeLibraryCommand,{type:'items-capture'}>);ctl.state!.collections=result.collections;return result;});
  const props={scope,controller:ctl,request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
  try {
-  render();button(render(),'Save 1 Selected Sources').props.onClick();await tick();
+  render();button(render(),'Save 1 Selected Source').props.onClick();await tick();
   let tree=render();assert.equal(commands,1);assert.doesNotMatch(text(tree),/The destination changed/);
   dialog(tree).props.close();button(render(),'Resume Import Review').props.onClick();
   assert.doesNotMatch(text(render()),/The destination changed/);
@@ -96,7 +96,7 @@ test('late exact export response after close or selection change cannot offer a 
 test('retired import owner ignores a late confirmed save and cannot clear the original review',async()=>{
  const f=new Hooks();const key=f.seed();let sent!:Extract<HomeLibraryCommand,{type:'items-capture'}>,resolve!:(v:HomeLibraryReceipt)=>void;
  const props={scope,controller:controller(async input=>{sent=input as typeof sent;return new Promise(done=>{resolve=done;});}),request:request(),acceptText:()=>false,showPaste(){}};const render=()=>f.render(()=>LibraryTransfer(props));
- try{render();button(render(),'Save 1 Selected Sources').props.onClick();const before=f.values.get(key);f.close();resolve(reply(sent));await tick();assert.equal(f.values.get(key),before);}finally{f.close();}
+ try{render();button(render(),'Save 1 Selected Source').props.onClick();const before=f.values.get(key);f.close();resolve(reply(sent));await tick();assert.equal(f.values.get(key),before);}finally{f.close();}
 });
 test('actual file review selects only explicit portable rows and keeps full invalid writing without a save',async()=>{
  const f=new Hooks();let commands=0;

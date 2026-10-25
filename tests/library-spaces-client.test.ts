@@ -146,4 +146,31 @@ test('Space completion requests scoped focus only after its confirmed local ackn
   assert.equal(restores, 1);assert.equal(calls, 1);assert.equal(elements(render()).some(row => row.props.title === 'New Space'), false);
  } finally { f.close(); }
 });
+test('Space save returns to its original opener and does not recapture the disappearing Save control', async () => {
+ const f = new Hooks();let original = 0, recaptured = 0;
+ const props = { scope, shelves: shelves(), request: { ...scope, nonce: 'opener', draft: proposal(), restoreFocus: () => { original++; } },
+  prepareFocus: () => { recaptured++;return () => assert.fail('Wrong opener'); },
+  controller: controller(async input => result(input as ReturnType<typeof command>)) };
+ const render = () => f.render(() => LibrarySpaceEditor(props));
+ try {
+  render();elements(render()).find(row => row.type === 'form').props.onSubmit({ preventDefault() {} });
+  for (let n = 0; n < 6; n++) await Promise.resolve();
+  assert.equal(original, 1);assert.equal(recaptured, 0);
+  assert.equal(elements(render()).some(row => row.props.title === 'New Space'), false);
+ } finally { f.close(); }
+});
+test('keeping a Space name for later retires its opener; Resume captures the current action', async () => {
+ const f = new Hooks();let original = 0, resumed = 0, captured = 0;
+ const props = { scope, shelves: shelves(), request: { ...scope, nonce: 'opener', draft: proposal(), restoreFocus: () => { original++; } },
+  prepareFocus: () => { captured++;return () => { resumed++; }; },
+  controller: controller(async input => result(input as ReturnType<typeof command>)) };
+ const render = () => f.render(() => LibrarySpaceEditor(props));
+ try {
+  render();elements(render()).find(row => row.props.title === 'New Space').props.close();
+  elements(render()).find(row => row.type === 'button' && row.props.children === 'Resume Space Name').props.onClick();
+  elements(render()).find(row => row.type === 'form').props.onSubmit({ preventDefault() {} });
+  for (let n = 0; n < 6; n++) await Promise.resolve();
+  assert.equal(original, 0);assert.equal(resumed, 1);assert.equal(captured, 1);
+ } finally { f.close(); }
+});
 test.after(() => { loader.deregister();delete (globalThis as any)[symbol];delete (globalThis as any).localStorage; });

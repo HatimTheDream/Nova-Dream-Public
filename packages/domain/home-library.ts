@@ -102,4 +102,4 @@ export type HomeLibraryJournal = HomeLibraryJournalOwner & { format: 1; command:
 export const homeCaptureSchema = /* @__PURE__ */ (() => z.object({ ...envelope, references: z.array(homeReferenceSchema).max(20).refine(refs => new Set(refs.map(homeReferenceKey)).size === refs.length) }).strict())();
 export type HomeCaptureRequest = z.infer<typeof homeCaptureSchema>;
 export type HomeSourceCapture = { id: string; epoch: string; createdAt: string; sources: HomeResource[] };
-export type HomeAssistantHandoff = { title: string; text: string; space: 'chat' | 'work'; workMode?: WorkMode; projectId: string | null; sourceCaptureId?: string; handoffId?: string; sourceRefs: HomeReference[]; ideaId?: string; selectedTaskIds?: string[]; outputs?: string[] };
+export type HomeAssistantHandoff = { idea?: import('./idea-pursuits.js').IdeaBinding; title: string; text: string; space: 'chat' | 'work'; workMode?: WorkMode; projectId: string | null; sourceCaptureId?: string; handoffId?: string; sourceRefs: HomeReference[]; ideaId?: string; selectedTaskIds?: string[]; outputs?: string[]; authoredDirections?: string };

@@ -13,7 +13,7 @@ export function handleTaskSearchEscape(event: {
 }
 
 /** Only the mounted Tasks screen owns this shortcut; never redirect writing. */
-export function bindTaskSearchShortcut(search: () => HTMLInputElement | null, owner: Window = window) {
+export function bindTaskSearchShortcut(search: () => HTMLInputElement | null, owner: Window = window, reveal?: { trigger(): HTMLElement | null; open(): void }) {
   const document = owner.document;
   const element = (target: EventTarget | null): Element | null =>
     target && 'closest' in target ? target as Element : null;
@@ -28,7 +28,8 @@ export function bindTaskSearchShortcut(search: () => HTMLInputElement | null, ow
       || event.ctrlKey || event.metaKey || event.altKey || editing(event.target) || editing(document.activeElement)) return;
     if ([...document.querySelectorAll(overlays)].some(visible)) return;
     const input = search();
-    if (!input || input.disabled || input.readOnly || !visible(input)) return;
+    if (!input || !input.isConnected || input.disabled || input.readOnly) return;
+    if (!visible(input)) { const trigger = reveal?.trigger(); if (trigger && visible(trigger)) { reveal!.open(); event.preventDefault(); } return; }
     input.focus();
     if (document.activeElement === input) event.preventDefault();
   };

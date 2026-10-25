@@ -28,6 +28,10 @@ const loader = registerHooks({
   },
 });
 const { Tasks } = await import('../apps/client/src/Tasks');
+const { TaskTools } = await import('../apps/client/src/TaskTools');
+const tools = (tree: any) => elements(tree).find(node => node.type === TaskTools)!;
+const chooseView = (tree: any, value: string) => tools(tree).props.filters.props.chooseView(value);
+const searchField = (tree: any) => elements(tools(tree).props.search).find(node => node.type === 'input')!;
 const previousSession = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
 Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: { getItem: () => 'fixture-tab' } });
 class Hooks {
@@ -48,21 +52,21 @@ function fixture() {
     layout: { id: 'layout:fixture', revision: 1, deviceId: 'fixture', updatedAt: '2026-10-19T16:00:00Z', value: { ...structuredClone(defaultLayout), timezone: 'UTC' } },
     taskState: { occurrences, presentation: { 'missed-daily': { recurrence: { cadence: 'daily', interval: 1 } }, 'current-daily': { recurrence: { cadence: 'daily', interval: 1 } } }, events: [], routineEvents: [], focus: [], orders: [], earnedXp: 0 },
   };
-  const opened: Entity<Task>[] = [], changed: { task: Entity<Task>; status: Task['status'] }[] = [];
-  const props = { snapshot, routineTarget: null, clearRoutineTarget() {}, openCalendar() {}, newTask() {}, editTask(task: Entity<Task>) { opened.push(task); }, changeStatus(task: Entity<Task>, status: Task['status']) { changed.push({ task, status }); }, async refresh() {}, actions: { busy: false, state: { queue: [] }, async run() { throw Error('Unexpected write'); } } } as unknown as Parameters<typeof Tasks>[0];
-  return { hooks: new Hooks(), snapshot, props, opened, changed };
+  const created:Partial<Task>[]=[], opened: Entity<Task>[] = [], changed: { task: Entity<Task>; status: Task['status'] }[] = [];
+  const props = { snapshot, routineTarget: null, clearRoutineTarget() {}, openCalendar() {}, newTask(value:Partial<Task>) {created.push(value);}, editTask(task: Entity<Task>) { opened.push(task); }, changeStatus(task: Entity<Task>, status: Task['status']) { changed.push({ task, status }); }, async refresh() {}, actions: { busy: false, state: { queue: [] }, async run() { throw Error('Unexpected write'); } } } as unknown as Parameters<typeof Tasks>[0];
+  return { hooks: new Hooks(), snapshot, props, opened, changed, created };
 }
 
 test('Tasks opens exact incomplete daily history, exposes original metadata, and never changes it merely by navigating', () => {
   const f = fixture(), before = structuredClone(f.snapshot), initial = f.hooks.render(f.props);
   assert.deepEqual(elements(initial).filter(n => n.props?.className === 'task-open').map(n => n.props.title), ['ordinary', 'unknown-occurrence', 'current-daily']);
-  elements(initial).find(n => n.type === 'button' && text(n) === 'Daily History')!.props.onClick();
+  chooseView(initial, 'Daily History');
   const history = f.hooks.render(f.props), row = elements(history).find(n => n.props?.className === 'task-open')!;
   assert.equal(row.props.title, 'missed-daily'); row.props.onClick();
   assert.equal(f.opened[0], f.snapshot.tasks[1]); assert.equal(f.opened[0].value.status, 'blocked');
   const html = renderToStaticMarkup(history);
   assert.match(html, /Blocked/); assert.match(html, /dateTime="2026-10-18"/); assert.match(html, /Search daily history/);
-  assert.equal(elements(history).some(n => n.props?.['aria-label'] === 'Quick task title'), false);
+  assert.match(html, /id="task-add-disclosure"[^>]*hidden/); // Mounted writing stays hidden until explicitly opened.
   assert.deepEqual(f.changed, []); assert.deepEqual(f.snapshot, before);
   const reloaded = new Hooks(); reloaded.storage = f.hooks.storage;
   assert.deepEqual(elements(reloaded.render(f.props)).filter(n => n.props?.className === 'task-open').map(n => n.props.title), ['missed-daily']);
@@ -70,14 +74,14 @@ test('Tasks opens exact incomplete daily history, exposes original metadata, and
 
 test('history search stays scoped while global search can still retrieve the missed daily occurrence', () => {
   const f = fixture(); let tree = f.hooks.render(f.props);
-  elements(tree).find(n => n.type === 'button' && text(n) === 'Daily History')!.props.onClick(); tree = f.hooks.render(f.props);
-  elements(tree).find(n => n.type === 'input' && n.props['aria-label'] === 'Search daily history')!.props.onChange({ target: { value: 'ordinary' } }); tree = f.hooks.render(f.props);
+  chooseView(tree, 'Daily History'); tree = f.hooks.render(f.props);
+  searchField(tree).props.onChange({ target: { value: 'ordinary' } }); tree = f.hooks.render(f.props);
   assert.equal(elements(tree).filter(n => n.props?.className === 'task-open').length, 0);
-  elements(tree).find(n => n.type === 'button' && text(n) === 'Today')!.props.onClick(); tree = f.hooks.render(f.props);
+  chooseView(tree, 'Today'); tree = f.hooks.render(f.props);
   assert.deepEqual(elements(tree).filter(n => n.props?.className === 'task-open').map(n => n.props.title), ['ordinary']);
-  elements(tree).find(n => n.type === 'input' && n.props['aria-label'] === 'Search tasks')!.props.onChange({ target: { value: 'missed-daily' } }); tree = f.hooks.render(f.props);
+  searchField(tree).props.onChange({ target: { value: 'missed-daily' } }); tree = f.hooks.render(f.props);
   assert.deepEqual(elements(tree).filter(n => n.props?.className === 'task-open').map(n => n.props.title), ['missed-daily']);
-  assert.match(renderToStaticMarkup(tree), /Search results · all tasks/); assert.deepEqual(f.changed, []);
+  assert.match(renderToStaticMarkup(tree), /Search Results · All Tasks/); assert.deepEqual(f.changed, []);
 });
 
 test('a completed-today row remains in its group and row position with a reversible checkbox', () => {
@@ -101,7 +105,7 @@ test('Daily History reports all matching occurrences when its rendered page is l
     state.presentation![id] = { recurrence: { cadence: 'daily', interval: 1 } };
   }
   let tree = f.hooks.render(f.props);
-  elements(tree).find(n => n.type === 'button' && text(n) === 'Daily History')!.props.onClick(); tree = f.hooks.render(f.props);
+  chooseView(tree, 'Daily History'); tree = f.hooks.render(f.props);
   assert.equal(elements(tree).filter(n => n.props?.className === 'task-open').length, 50);
   assert.match(renderToStaticMarkup(tree), /61 occurrences/);
   assert.equal(elements(tree).find(n => n.type === 'h2' && text(n) === 'Daily History')!.props.className, 'sr-only');
@@ -111,3 +115,13 @@ test('Daily History reports all matching occurrences when its rendered page is l
 });
 
 test.after(() => { loader.deregister(); delete (globalThis as any)[symbol]; if (previousSession) Object.defineProperty(globalThis, 'sessionStorage', previousSession); else delete (globalThis as any).sessionStorage; });
+
+test('compact toolbar retains Add Child Task and Duplicate original row callbacks', () => {
+ const f=fixture(),tree=f.hooks.render(f.props),before=structuredClone(f.snapshot);
+ const buttons=elements(tree).filter(n=>n.type==='button');
+ buttons.find(n=>text(n)==='Add Child Task')!.props.onClick();
+ buttons.find(n=>text(n)==='Duplicate')!.props.onClick();
+ assert.equal(f.created[0].parentTaskId,'ordinary');assert.equal(f.created[0].timezone,'UTC');
+ assert.equal(f.created[1].title,'ordinary (copy)');assert.equal(f.created[1].status,'open');assert.equal(f.created[1].reminder,null);
+ assert.deepEqual(f.snapshot,before);assert.deepEqual(f.changed,[]);
+});

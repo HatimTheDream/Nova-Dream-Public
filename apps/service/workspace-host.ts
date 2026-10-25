@@ -1,3 +1,4 @@
+import { ServiceDrainPendingError } from './service-drain.js';
 import { existsSync, lstatSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
 import { join, resolve, relative, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,14 +45,18 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
   };
   let directory = readSelection(), port = options.port, error: string | undefined;
   let work: Promise<void> | undefined, closed = false;
+  let heldStart: ServiceDrainPendingError | undefined;
   let service: Awaited<ReturnType<typeof startServer>>;
   // Selection changes the saved workspace, not the root-verified application
   // candidate. Preview services still reject frontend delivery in startServer.
-  const launch = (path: string) => startServer({ ...options, directory: path, port, recoveryHost: control });
+  const launch = async (path: string) => {
+    try { return await startServer({ ...options, directory: path, port, recoveryHost: control }); }
+    catch (failure) { if (failure instanceof ServiceDrainPendingError) heldStart = failure; throw failure; }
+  };
   const control: RecoveryHost = {
     status: () => ({ active: directory !== root, switching: !!work, ...(error ? { error } : {}) }),
     async switchTo(target, restart = false, beforeSwitch) {
-      if (closed || work) throw new Error('A workspace switch is already in progress.');
+      if (closed || work || heldStart || service.drainStatus().closing) throw new Error('A workspace switch is already in progress.');
       const destination = target ? recoveryPath(relative(join(root, 'recovered-workspaces'), resolve(target))) : root;
       const unchanged = destination === directory && !restart;
       error = undefined;
@@ -77,12 +82,15 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
           }
           writeSelection(destination); directory = destination;
           if (!closed) service = await launch(directory);
-        } catch {
+        } catch (failure) {
+          // A partial destination still owns its Store and native work. Do not
+          // change selection or start a second workspace beneath it.
+          if (failure instanceof ServiceDrainPendingError) throw failure;
           writeSelection(previous); directory = previous;
           error = 'The recovered workspace could not open. Your previous workspace was kept and reopened.';
           if (!closed) service = await launch(previous);
         }
-      }).finally(() => { work = undefined; if (!closed) void service.finishWorkspaceSwitch(); });
+      }).finally(() => { work = undefined; if (!closed && !heldStart && !service.drainStatus().closing) void service.finishWorkspaceSwitch(); });
       // The status endpoint reports recoverable failures. A failed fallback is
       // surfaced by waitForSwitch/close instead of an unhandled rejection.
       void work.catch(() => { error = 'The workspace service could not restart. Both saved copies are kept.'; });
@@ -91,6 +99,7 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
   };
   try { service = await launch(directory); }
   catch (failure) {
+    if (failure instanceof ServiceDrainPendingError) throw failure;
     if (directory === root) throw failure;
     writeSelection(root); directory = root; error = 'The selected recovered copy could not open. The original workspace was reopened.';
     service = await launch(root);
@@ -100,6 +109,15 @@ export async function startWorkspaceHost(options: Parameters<typeof startServer>
     get origin() { return service.origin; }, get current() { return service; },
     status: control.status,
     async waitForSwitch() { await work; },
-    async close() { closed = true; try { await work; } finally { await service.close(); } },
+    async close() {
+      closed = true;
+      let switchFailure: unknown;
+      try { await work; } catch (failure) { switchFailure = failure; }
+      // A partial destination replaces only the close target, never the saved
+      // selection or the current service. Its original owner remains reachable.
+      if (heldStart) { await heldStart.owner.close(); throw heldStart.cause ?? heldStart; }
+      await service.close();
+      if (switchFailure && !(switchFailure instanceof ServiceDrainPendingError)) throw switchFailure;
+    },
   };
 }

@@ -31,16 +31,18 @@ describe('backup schema compatibility', () => {
     const summary = summarizeBackup(parsed);
     assert.equal(summary.schema, 47);
   });
-  it('accepts schemas 55, 56, 57 and current schema 58', () => {
+  it('accepts schemas 55, 56, 57, 58, 59 and current schema 60', () => {
     assert.equal(backupSnapshotSchema.parse(minimalBackup(55)).schema, 55);
     assert.equal(backupSnapshotSchema.parse(minimalBackup(56)).schema, 56);
     assert.equal(backupSnapshotSchema.parse(minimalBackup(57)).schema, 57);
     assert.equal(backupSnapshotSchema.parse(minimalBackup(58)).schema, 58);
+    assert.equal(backupSnapshotSchema.parse(minimalBackup(59)).schema, 59);
+    assert.equal(backupSnapshotSchema.parse(minimalBackup(60)).schema, 60);
   });
   it('rejects schema 46 (too old)', () => {
     assert.throws(() => backupSnapshotSchema.parse(minimalBackup(46)));
   });
-  it('rejects schema 59 (too new)', () => {
-    assert.throws(() => backupSnapshotSchema.parse(minimalBackup(59)));
+  it('rejects schema 61 (too new)', () => {
+    assert.throws(() => backupSnapshotSchema.parse(minimalBackup(61)));
   });
 });

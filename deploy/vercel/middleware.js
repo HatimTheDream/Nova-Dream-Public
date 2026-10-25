@@ -1,4 +1,4 @@
-import { rewrite } from '@vercel/functions';
+import { rewrite } from '@vercel/edge';
 import { gatewayRequest } from './gateway.mjs';
 
 export default function middleware(request) {

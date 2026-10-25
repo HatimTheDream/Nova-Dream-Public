@@ -116,11 +116,16 @@ test('Forecast cache stays bounded and commercial credentials remain in provider
 
 test('Weather HTTP reads require a session, reject foreign origins and arbitrary query parameters, and allow only narrow phone GET routes', async t => {
   const root = mkdtempSync(join(tmpdir(), 'nova-weather-http-')); let calls = 0;
+  // Retained widgets remain readable after startup preservation retires new widget writes.
+  const widget = createHomeWidget('weather'); widget.settings = { location, units: 'celsius' };
+  const seed = new Store(root);
+  try {
+    const layout = seed.readEntity('layout', 'layout')!;
+    seed.mutate('owner', { kind: 'layout', entityId: 'layout', requestId: randomUUID(), epoch: seed.epoch, expectedRevision: layout.revision, payload: { ...layout.value, widgets: [widget] } });
+  } finally { seed.close(); }
   const server = await startServer({ directory: root, port: 0, weatherFetch: async () => { calls++; return response(providerForecast()); } });
   t.after(async () => { await server.close(); rmSync(root, { recursive: true, force: true }); });
-  const widget = createHomeWidget('weather'); widget.settings = { location, units: 'celsius' };
-  const layout = server.store.readEntity('layout', 'layout')!;
-  server.store.mutate('owner', { kind: 'layout', entityId: 'layout', requestId: randomUUID(), epoch: server.store.epoch, expectedRevision: layout.revision, payload: { ...layout.value, widgets: [widget] } });
+  assert.deepEqual(server.store.readEntity('layout', 'layout')!.value.widgets, [widget]);
   const path = '/api/home/weather?widgetId=' + encodeURIComponent(widget.id);
   assert.equal((await fetch(server.origin + path)).status, 401);
   const login = await fetch(server.origin + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Edition3-Client': '1' }, body: '{}' });

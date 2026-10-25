@@ -22,14 +22,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
   border-radius: 8px;
   overflow: hidden;
 }
 .identity-user .transcript-identity-avatar { background: var(--raised); border: 1px solid var(--line); }
-.transcript-identity-avatar > .square-lynx { flex: none; transform: scale(.7); }
+.transcript-identity-avatar > .square-lynx { flex: none; transform: scale(.9); }
 .message-with-identity > .message-writing { min-width: 0; overflow-wrap: anywhere; }
 .message-with-identity.message-user > .message-writing {
   padding: 14px 18px;

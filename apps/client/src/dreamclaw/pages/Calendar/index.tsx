@@ -18,7 +18,7 @@ import clsx from 'clsx';
 import { PageTransition } from '@dreamclaw/components/shared/PageTransition';
 import { useCalendarEditor, useCalendarStore } from '@dreamclaw/stores/calendarStore';
 import { createGregorianMonthRange } from '@dreamclaw/services/calendar/monthQuery';
-import { eventsForDate, filterCalendarEvents, toDateStr } from './calendarUtils';
+import { eventsForDate, filterCalendarEvents, toDateStr, calendarPeriodTitle } from './calendarUtils';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
 import { DayView } from './DayView';
@@ -27,7 +27,6 @@ import { eventForDraft } from '@dreamclaw/calendar-editor';
 import { UpcomingEvents } from './UpcomingEvents';
 import { ALL_SOURCES, SOURCE_META, type CalendarEvent } from './calendarTypes';
 
-const ENGLISH_DATE = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', calendar: 'gregory' });
 const ENGLISH_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', calendar: 'gregory' });
 
 export default function CalendarPage({ backToReminders }: { backToReminders?: () => void }) {
@@ -35,7 +34,7 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
   const isRtl = i18n.dir() === 'rtl';
   const {
     events, operationalEvents, loading, error, selectedDate, view, activeRange, queryState,
-    syncMode, lastSyncedAt, sourceStates, filter, host, calendars = [], syncing = false, accountMessages = [],
+    syncMode, lastSyncedAt, sourceStates, filter, host, settings, calendars = [], syncing = false, accountMessages = [],
     setView, setSelectedDate, navigate, goToToday, loadMonth, cancelMonthLoad,
     setFilter,
   } = useCalendarStore();
@@ -100,7 +99,7 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
     return () => window.removeEventListener('keydown', handler);
   }, [showModal, editor.scopeEvent, editor.providerScope, isRtl, navigate, goToToday, setView, handleAddEvent]);
 
-  const viewTitle = view === 'day' ? ENGLISH_DAY.format(selectedDate) : ENGLISH_DATE.format(selectedDate);
+  const viewTitle = calendarPeriodTitle(selectedDate,view,settings.weekStartDay);
   const sourceFailures = sourceStates.filter((source) => source.status === 'error').length;
 
   return (
@@ -108,7 +107,7 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
       <div className="flex h-full min-h-0 flex-col bg-aegis-bg" lang="en" data-calendar-gregorian="true">
         <header className="dc-calendar-toolbar shrink-0 border-b border-aegis-border bg-aegis-surface-solid px-3 py-3 sm:px-5">
           <div className="dc-calendar-heading">
-            <div className="dc-calendar-title"><h1>Calendar</h1><p>{displayEvents.length} {displayEvents.length === 1 ? 'item' : 'items'} this month{syncing ? ' · Syncing calendars…' : ''}{lastSyncedAt && syncMode !== 'local-only' ? ` · Updated ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(lastSyncedAt))}` : ''}</p></div>
+            <div className="dc-calendar-title"><h1 dir="ltr">{viewTitle}</h1>{(syncing||!!lastSyncedAt&&syncMode!=='local-only')&&<p role="status">{syncing?'Syncing Calendars…':`Updated ${new Intl.DateTimeFormat('en-US', {hour:'numeric',minute:'2-digit'}).format(new Date(lastSyncedAt!))}`}</p>}</div>
             <div className="dc-calendar-actions flex items-center gap-2">
               <button type="button" onClick={() => handleAddEvent()} aria-label={editor.draft ? 'Continue Event Draft' : 'New Event'}
                 className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-aegis-primary px-3 text-[12px] font-semibold text-aegis-btn-primary-text shadow-sm transition-colors hover:bg-aegis-primary-hover">
@@ -134,7 +133,6 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
                 className="grid h-9 w-9 place-items-center rounded-xl border border-aegis-border bg-aegis-elevated text-aegis-text-muted transition-colors hover:border-aegis-primary/35 hover:text-aegis-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-aegis-primary">
                 {isRtl ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}
               </button>
-              <h2 dir="ltr">{viewTitle}</h2>
             </div>
               <div className="dc-calendar-view flex rounded-xl border border-aegis-border bg-aegis-elevated p-1" aria-label="Calendar View">
                 {(['day', 'week', 'month'] as const).map((item) => (
@@ -199,7 +197,7 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
 
             <details className="group rounded-xl border border-aegis-border bg-aegis-elevated lg:mt-4">
               <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[11px] font-semibold text-aegis-text-muted">
-                <Layers3 size={14} /><span className="flex-1">Sources and filters</span><ChevronDown size={13} className="text-aegis-text-dim transition-transform group-open:rotate-180" />
+                <Layers3 size={14} /><span className="flex-1">Sources And Filters</span><ChevronDown size={13} className="text-aegis-text-dim transition-transform group-open:rotate-180" />
               </summary>
               <div className="border-t border-aegis-border bg-aegis-surface-solid p-3">
                 {host.selectCalendar && <div className="mb-3 space-y-2">
@@ -213,7 +211,7 @@ export default function CalendarPage({ backToReminders }: { backToReminders?: ()
                   {accountMessages.filter(account => !calendars.some(calendar => calendar.accountId === account.accountId)).map(account => <p key={account.accountId} className="text-[11px] text-aegis-text-muted">{account.label}: {account.message}</p>)}
                   {calendars.length > 0 && !calendars.some(calendar => calendar.selected) && <p className="text-[11px] text-aegis-text-muted">Choose a calendar to show its events.</p>}
                   {calendarChoiceError && <p role="alert" className="text-[11px] text-aegis-text-muted">{calendarChoiceError}</p>}
-                  <button type="button" disabled={loading || syncing || choosingCalendar} onClick={() => void loadMonth(selectedDate, { force: true })} className="text-[11px] font-semibold text-aegis-primary disabled:opacity-50">Refresh calendar list</button>
+                  <button type="button" disabled={loading || syncing || choosingCalendar} onClick={() => void loadMonth(selectedDate, { force: true })} className="text-[11px] font-semibold text-aegis-primary disabled:opacity-50">Refresh Calendar List</button>
                 </div>}
                 <label className="flex items-center gap-2 rounded-lg border border-aegis-border bg-aegis-elevated px-2.5 py-2">
                   <Search size={13} className="text-aegis-text-dim" />

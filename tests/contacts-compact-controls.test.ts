@@ -131,13 +131,15 @@ test('organization query, exact selection and editing survive remount without re
 });
 
 test('organization pending writing reconciles its original command after the retained view returns', async () => {
- const f = fixture(), app = host(OrganizationDirectory, { snapshot: f.snapshot, refresh: async () => {}, open() {} }, path => { if (path === '/api/contacts/crm') return crm; throw new Error('Synthetic uncertain save'); });
- const draft = { ...organization.value, notes: 'Keep this exact organization writing' }, command = { requestId: 'original-organization-save', epoch: f.snapshot.epoch, id: organization.id, expectedRevision: 1, value: draft }, key = `e3:crm-org:fixture-device:${organization.id}:${retainedWindowId}`;
- app.storage.set(`e3:contact-organizations:fixture-device:${retainedWindowId}`, JSON.stringify({ query: 'Stud', selected: organization.id, creating: false, editing: true })); app.storage.set(key, JSON.stringify({ value: draft, revision: 1, pending: command }));
+ const f = fixture(); f.snapshot.epoch = '00000000-0000-4000-8000-000000000001';
+ const app = host(OrganizationDirectory, { snapshot: f.snapshot, refresh: async () => {}, open() {} }, path => { if (path === '/api/contacts/crm') return crm; throw new Error('Synthetic uncertain save'); });
+ const draft = { ...organization.value, notes: 'Keep this exact organization writing' }, command = { requestId: '00000000-0000-4000-8000-000000000002', epoch: f.snapshot.epoch, id: organization.id, expectedRevision: 1, value: draft }, key = `e3:crm-org:fixture-device:${organization.id}:${retainedWindowId}`;
+ const kept = { format: 1, kind: 'organization', id: organization.id, epoch: f.snapshot.epoch, dirty: true, value: draft, revision: 1, pending: command };
+ app.storage.set(`e3:contact-organizations:fixture-device:${retainedWindowId}`, JSON.stringify({ query: 'Stud', selected: organization.id, creating: false, editing: true })); app.storage.set(key, JSON.stringify(kept));
  try {
   await app.flush(); const editor = nodes(app.tree).find(node => node.type?.name === 'OrganizationEditor'); await app.mount(editor.type, { ...editor.props, saved: async () => {}, close() {} });
-  assert.match(text(app.tree), /Reconcile save/); app.tree.props.onSubmit({ preventDefault() {} }); await app.flush();
-  assert.deepEqual(app.calls.filter(call => call.path === '/api/contacts/organization').map(call => call.body), [command]); assert.deepEqual(JSON.parse(app.storage.get(key)!).pending, command);
+  assert.equal(button(app.tree, 'Check Original Save').props.disabled, false); app.tree.props.onSubmit({ preventDefault() {} }); await app.flush();
+  assert.deepEqual(app.calls.filter(call => call.path === '/api/contacts/organization').map(call => call.body), [command]); assert.deepEqual(JSON.parse(app.storage.get(key)!), kept);
   await app.mount(); assert.deepEqual(JSON.parse(app.storage.get(key)!).value, draft);
  } finally { app.close(); }
 });
@@ -203,15 +205,44 @@ test('deadline state uses the Task timezone and deadline time without changing i
 });
 
 test('returning to a pending activity keeps its original text, timestamp, revision and save envelope', async () => {
- const f = fixture(), key = `e3:crm-activity:fixture-device:${f.people[0].id}:new:${retainedWindowId}`, value = { kind: 'message', at, text: 'Keep this unsent activity writing', archived: false }, command = { requestId: 'original-activity', epoch: f.snapshot.epoch, id: 'activity:pending', expectedRevision: 0, value, contactId: f.people[0].id };
+ const f = fixture(); f.snapshot.epoch = '00000000-0000-4000-8000-000000000001';
+ const key = `e3:crm-activity:fixture-device:${f.people[0].id}:new:${retainedWindowId}`, value = { kind: 'message', at, text: 'Keep this unsent activity writing', archived: false }, command = { requestId: '00000000-0000-4000-8000-000000000003', epoch: f.snapshot.epoch, id: 'activity:pending', expectedRevision: 0, value, contactId: f.people[0].id };
+ const kept = { format: 1, kind: 'activity', id: command.id, epoch: f.snapshot.epoch, contactId: f.people[0].id, dirty: true, value, revision: 0, pending: command };
  const app = host(ContactTimeline, { contact: f.people[0], snapshot: f.snapshot, activities: [], items: [], refresh: async () => {} }, () => { throw new Error('Synthetic uncertain activity save'); });
- app.storage.set(key, JSON.stringify({ value, revision: 0, pending: command }));
+ app.storage.set(key, JSON.stringify(kept));
  try {
   await app.flush(); button(app.tree, 'Log activity').props.onClick(); await app.flush();
   const editor = nodes(app.tree).find(node => node.type?.name === 'ActivityEditor'); await app.mount(editor.type, { ...editor.props, saved: async () => {}, close() {} });
   assert.equal(nodes(app.tree).find(node => node.type === 'textarea').props.value, value.text); app.tree.props.onSubmit({ preventDefault() {} }); await app.flush();
-  assert.deepEqual(app.calls.map(call => call.body), [command]); assert.deepEqual(JSON.parse(app.storage.get(key)!), { value, revision: 0, pending: command }); await app.mount(); assert.equal(nodes(app.tree).find(node => node.type === 'textarea').props.value, value.text);
+  assert.deepEqual(app.calls.map(call => call.body), [command]); assert.deepEqual(JSON.parse(app.storage.get(key)!), kept); await app.mount(); assert.equal(nodes(app.tree).find(node => node.type === 'textarea').props.value, value.text);
  } finally { app.close(); }
+});
+
+test('unverifiable legacy organization and activity requests stay unchanged and cannot send through editor callbacks', async () => {
+ for (const kind of ['organization', 'activity'] as const) {
+  const f = fixture(), isOrganization = kind === 'organization';
+  const value = isOrganization ? { ...organization.value, notes: 'Keep invalid legacy organization writing' } : { kind: 'message', at, text: 'Keep invalid legacy activity writing', archived: false };
+  const command = { requestId: 'unverifiable-original', epoch: f.snapshot.epoch, id: isOrganization ? organization.id : 'activity:pending', expectedRevision: isOrganization ? 1 : 0, value, ...(!isOrganization ? { contactId: f.people[0].id } : {}) };
+  const slot = isOrganization ? `e3:crm-org:fixture-device:${organization.id}:${retainedWindowId}` : `e3:crm-activity:fixture-device:${f.people[0].id}:new:${retainedWindowId}`;
+  const raw = JSON.stringify({ value, revision: command.expectedRevision, pending: command });
+  const app = host(isOrganization ? OrganizationDirectory : ContactTimeline, isOrganization
+    ? { snapshot: f.snapshot, refresh: async () => {}, open() {} }
+    : { contact: f.people[0], snapshot: f.snapshot, activities: [], items: [], refresh: async () => {} }, reads);
+  app.storage.set(slot, raw);
+  if (isOrganization) app.storage.set(`e3:contact-organizations:fixture-device:${retainedWindowId}`, JSON.stringify({ query: 'Stud', selected: organization.id, creating: false, editing: true }));
+  try {
+   await app.flush(); if (!isOrganization) { button(app.tree, 'Log activity').props.onClick(); await app.flush(); }
+   const editor = nodes(app.tree).find(node => node.type?.name === (isOrganization ? 'OrganizationEditor' : 'ActivityEditor'));
+   await app.mount(editor.type, { ...editor.props, saved: async () => {}, close() {} });
+   assert.equal(nodes(app.tree).find(node => node.type?.name === 'CrmDraftStatus').props.form.blocked, true);
+   assert.equal(button(app.tree, isOrganization ? 'Save organization' : 'Save activity').props.disabled, true);
+   assert.equal(nodes(app.tree).find(node => node.type === 'textarea').props.value, isOrganization ? (value as { notes: string }).notes : (value as { text: string }).text);
+   app.tree.props.onSubmit({ preventDefault() {} }); await app.flush(); await app.mount();
+   assert.equal(app.storage.get(slot), raw);
+   assert.deepEqual(app.calls.filter(call => call.path !== '/api/contacts/crm'), []);
+   assert.equal(nodes(app.tree).find(node => node.type?.name === 'CrmDraftStatus').props.form.blocked, true);
+  } finally { app.close(); }
+ }
 });
 
 

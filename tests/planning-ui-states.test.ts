@@ -59,7 +59,7 @@ test('compact Home never presents incomplete or failed calendar reads as a confi
 
 test('Tasks explains each empty destination, preserves calendar uncertainty, and wires filter recovery', () => {
   const base = { searching: false, filtered: false, calendarStatus: 'ready' as const, clearFilters() {} };
-  for (const [destination, message] of [['Trash', 'Trash is empty.'], ['Completed Tasks', 'No completed tasks yet.'], ['Daily Routines', 'No daily tasks for today.'], ['To-Do', 'No to-dos for today.'], ['Daily History', 'No past daily occurrences yet.']]) {
+  for (const [destination, message] of [['Trash', 'Trash Is Empty.'], ['Completed Tasks', 'No Completed Tasks Yet.'], ['Daily Routines', 'No Daily Tasks For Today.'], ['To-Do', 'No To-Dos For Today.'], ['Daily History', 'No Past Daily Occurrences Yet.']]) {
     const markup = renderToStaticMarkup(createElement(TaskEmptyState, { ...base, destination }));
     assert.ok(markup.includes(message));
     assert.equal(nodes(markup).some(node => node.tag === 'button'), false);
@@ -68,13 +68,13 @@ test('Tasks explains each empty destination, preserves calendar uncertainty, and
     let cleared = 0;
     const tree = TaskEmptyState({ ...base, destination: 'Search results', searching: true, calendarStatus, clearFilters() { cleared++; } });
     const markup = renderToStaticMarkup(tree);
-    assert.match(markup, /No saved tasks match your search/);
+    assert.match(markup, /No Saved Tasks Match Your Search/);
     assert.ok(markup.includes(calendarStatus === 'loading' ? 'still loading' : 'could not be checked'));
     const clear = elements(tree).find(node => node.type === 'button')!;
     (clear.props.onClick as () => void)();
     assert.equal(cleared, 1);
   }
-  assert.match(renderToStaticMarkup(createElement(TaskEmptyState, { ...base, destination: 'Scheduled', filtered: true })), /No tasks match these filters/);
+  assert.match(renderToStaticMarkup(createElement(TaskEmptyState, { ...base, destination: 'Scheduled', filtered: true })), /No Tasks Match These Filters/);
 });
 
 test('repository picker distinguishes loading, accessible-empty, filter-empty and retry without losing repository choices', () => {

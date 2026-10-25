@@ -90,6 +90,7 @@
 .assistant-workspace .conversation-row-menu { flex: 0 0 36px; width: 36px; min-width: 36px; opacity: 0; }
 .assistant-workspace .conversation-row:is(:hover,:focus-within) .conversation-row-menu { opacity: 1; }
 .assistant-workspace .unread-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--violet); }
+.assistant-workspace .attention-dot { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--amber, #d97706); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber, #d97706) 25%, transparent); }
 @media (hover: none) { .assistant-workspace .conversation-row-menu { opacity: 1; min-width: 44px; } }
 .assistant-workspace .message-actions { display: flex; align-items: center; gap: 4px; margin-top: 8px; opacity: 0; }
 .assistant-workspace .chat-message:is(:hover,:focus-within) .message-actions { opacity: 1; }

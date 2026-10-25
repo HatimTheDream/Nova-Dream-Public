@@ -118,13 +118,14 @@ async function composer(f: ReturnType<typeof fixture>, options: { retained?: boo
 }
 
 for (const newer of [false, true]) test(`actual direct message Check joins the original operation using GET only and ${newer ? 'preserves newer writing' : 'clears only its exact captured text'}`, async () => {
-  let state: unknown; const f = fixture(() => state); let c: Awaited<ReturnType<typeof composer>> | undefined;
+  let state: unknown; const f = fixture(path => { if (path === '/api/assistant/groups') return { epoch: scope.epoch, view: 'groups', groups: [], next: null }; assert.equal(path, '/api/assistant/state'); return state; }); let c: Awaited<ReturnType<typeof composer>> | undefined;
   try {
     c = await composer(f, { newer }); state = { operations: [c.operation] };
-    assert.deepEqual(postCalls(f), []); c.editor.button('Check Original Message').props.onClick(); await c.editor.flush();
+    assert.deepEqual(f.calls.map(call => ({ path: call.path, method: call.init.method })), [{ path: '/api/assistant/groups', method: 'GET' }]);
+    const beforeCheck = f.calls.length; assert.deepEqual(postCalls(f), []); c.editor.button('Check Original Message').props.onClick(); await c.editor.flush();
     assert.equal(f.storage.has(c.key), false); assert.equal(c.value().text, newer ? 'Newer local writing' : '');
     assert.equal(f.storage.get(`${c.key}:confirmed:${c.pending.request.requestId}`), JSON.stringify(c.pending));
-    assert.equal(f.calls.length, 1); assert.match(f.calls[0].path, /assistant\/state$/); assert.deepEqual(postCalls(f), []);
+    assert.deepEqual(f.calls.slice(beforeCheck).map(call => ({ path: call.path, method: call.init.method })), [{ path: '/api/assistant/state', method: 'GET' }]); assert.deepEqual(postCalls(f), []);
   } finally { f.close(); c?.close(); }
 });
 

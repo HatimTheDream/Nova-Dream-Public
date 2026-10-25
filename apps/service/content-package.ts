@@ -4,6 +4,9 @@ import type {ContentReview,ContentLibraryItem} from '../../packages/domain/conte
 const safeName=(name:string)=>name.normalize('NFKC').replace(/[^\p{L}\p{N}._-]+/gu,'-').replace(/^[.-]+|[.-]+$/g,'').slice(0,120)||'file';
 const crcTable=Uint32Array.from({length:256},(_,n)=>{let c=n;for(let i=0;i<8;i++)c=c&1?0xedb88320^(c>>>1):c>>>1;return c>>>0;});
 export function crc32(bytes:Uint8Array){let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0;}
+export function portableContentBody(body:string,assets:{id:string;path:string}[]){
+ return body.replace(/(?<![^\s("'<>])\/api\/attachments\/([a-zA-Z0-9:_-]+)(?:\?preview=1)?(?![a-zA-Z0-9:_/?%&=.-])/g,(url,id:string)=>assets.find(a=>a.id===id)?.path??url);
+}
 /** A bounded, uncompressed ZIP with UTF-8 names; no platform utility or new dependency. */
 export function contentZip(files:{name:string;bytes:Buffer}[]){
  const locals:Buffer[]=[],central:Buffer[]=[];let offset=0;
@@ -20,7 +23,7 @@ export function exportContentPackage(store:Store,id:string,revision:number){
  let portableDraft:string|undefined;
  if(content.value.format==='markdown'){
   portableDraft='portable.md';
-  const portable=content.value.body.replace(/\/api\/attachments\/([a-zA-Z0-9:-]+)(?:\?preview=1)?/g,(url,id:string)=>assets.find(a=>a.id===id)?.path??url);
+  const portable=portableContentBody(content.value.body,assets);
   files.push({name:portableDraft,bytes:Buffer.from(portable)});
  }
  const brand=content.value.brandId?store.internalRead<ContentLibraryItem>('content:library:'+content.value.brandId):undefined;

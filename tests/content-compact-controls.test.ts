@@ -24,6 +24,7 @@ const loader = registerHooks({
 });
 const { default: RecordsPage } = await import('../apps/client/src/RecordsPage');
 const { ContentLibrary } = await import('../apps/client/src/ContentLibrary');
+const {ContentExport,cleanContentExport}=await import('../apps/client/src/ContentExport');
 const { retainedWindowId } = await import('../apps/client/src/useWorkspace');
 loader.deregister();
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
@@ -58,11 +59,11 @@ function host(initialComponent: (props: any) => any, initialProps: any, respond:
       id() { const i = cursor++; return (cells[i] ??= { value: `content-fixture-${i}` }).value; },
       memo(read: () => unknown, deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((value, n) => !Object.is(value, prior.deps[n]))) cells[i] = { deps, value: read() }; return cells[i].value; },
     },
-    window: { innerWidth: 1280 },
+    window: Object.assign(new EventTarget(), { innerWidth: 1280 }),
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
     requestAnimationFrame: (run: () => void) => { frames.push(run); return frames.length; },
     setInterval: (run: () => void) => { intervals.add(run); return run; }, clearInterval: (run: () => void) => intervals.delete(run),
-    fetch: async (path: string, init: RequestInit) => { const body = init.body ? JSON.parse(String(init.body)) : undefined; calls.push({ path, body }); return new Response(JSON.stringify(await respond(path, body))); },
+    fetch: async (path: string, init: RequestInit) => { const body = init.body ? JSON.parse(String(init.body)) : undefined; calls.push({ path, body });const value=await respond(path,body);return value instanceof Response?value:new Response(JSON.stringify(value)); },
   };
   const originals = Reflect.ownKeys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   for (const key of Reflect.ownKeys(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: values[key] });
@@ -89,7 +90,7 @@ test('Content preferences merge rapid search/filter/view changes and survive clo
   const saved = JSON.parse(app.storage.get(viewKey())!);
   assert.equal(saved.query, 'Launch'); assert.equal(saved.stage, 'drafting'); assert.equal(saved.view, 'calendar');
   assert.equal(text(nodes(app.tree).find(node => node.type === 'h1')), 'Drafting');
-  assert.match(text(app.tree), /1 saved/);
+  assert.match(text(app.tree), /1 Saved/);
   const planning = nodes(app.tree).find(node => node.type?.name === 'ContentPlanning');
   assert.deepEqual(planning.props.records, [f.snapshot.records!.content[0]]); assert.equal(planning.props.view, 'calendar');
   let prevented = false;
@@ -179,18 +180,90 @@ test('template preview reads actual saved writing and uses that exact item witho
 });
 
 test('opening Brands preserves a retained template editor and reconciles the exact pending library command', async () => {
- const f = fixture(), draft = { ...template, body: 'Unfinished template writing' }, original = { type: 'library-save', expectedRevision: 7, item: draft, requestId: 'original-request', epoch: f.snapshot.epoch };
+ const f = fixture();f.snapshot.epoch=crypto.randomUUID();const draft = { ...template, body: 'Unfinished template writing' }, original = { type: 'library-save', expectedRevision: 7, item: draft, requestId: crypto.randomUUID(), epoch: f.snapshot.epoch };
  const app = host(ContentLibrary, { snapshot: f.snapshot, initialSection: 'brands', close() {} }, path => { if (path === '/api/content/library') return [template, brand]; throw new Error('Synthetic uncertain response'); });
  const draftKey = `e3:content-library-draft:${f.snapshot.deviceId}:${f.snapshot.epoch}:${retainedWindowId}`, pendingKey = `e3:content-command:${f.snapshot.deviceId}:${f.snapshot.epoch}:library`;
  app.storage.set(draftKey, JSON.stringify(draft)); app.storage.set(pendingKey, JSON.stringify(original));
  try {
-  await app.flush(); assert.equal(app.tree.props.title, 'Edit Template'); const body = nodes(nodes(app.tree).find(node => node.type === 'label' && text(node).startsWith('Draft structure'))).find(node => node.type === 'textarea'); assert.equal(body.props.value, draft.body);
+  await app.flush(); assert.equal(app.tree.props.title, 'Edit Template'); const body = nodes(nodes(app.tree).find(node => node.type === 'label' && text(node).startsWith('Draft Structure'))).find(node => node.type === 'textarea'); assert.equal(body.props.value, draft.body);
   assert.equal(button(app.tree, 'Archive').props.disabled, true);
-  button(app.tree, 'Check original library save').props.onClick(); await app.flush();
-  const writes = app.calls.filter(call => call.path === '/api/content/workspace'); assert.equal(writes.length, 1); assert.deepEqual(writes[0].body, original);
+  button(app.tree, 'Check Original Library Save').props.onClick(); await app.flush();
+  const reads = app.calls.filter(call => call.path === '/api/content/library/receipt'); assert.equal(reads.length, 1); assert.deepEqual(reads[0].body, original);
+  assert.equal(app.calls.filter(call => call.path === '/api/content/workspace').length,0);
+  button(app.tree,'Retry Original Library Save').props.onClick();await app.flush();assert.deepEqual(app.calls.find(call=>call.path==='/api/content/workspace')!.body,original);
   assert.deepEqual(JSON.parse(app.storage.get(draftKey)!), draft); assert.deepEqual(JSON.parse(app.storage.get(pendingKey)!), original);
   await app.mount(); assert.deepEqual(JSON.parse(app.storage.get(draftKey)!), draft); assert.deepEqual(JSON.parse(app.storage.get(pendingKey)!), original);
  } finally { app.close(); }
+});
+test('switching templates and Brands keeps independent raw fields and reopens them after reload',async()=>{
+ const f=fixture(),app=host(ContentLibrary,{snapshot:f.snapshot,initialSection:'templates',close(){}},()=>[template,brand]);
+ const field=(label:string)=>nodes(nodes(app.tree).find(n=>n.type==='label'&&text(n).startsWith(label))).find(n=>n.type==='input'||n.type==='textarea');
+ try{
+  await app.flush();button(nodes(app.tree).find(n=>n.type==='article'&&text(n).includes(template.name)),'Edit').props.onClick();await app.flush();
+  field('Name').props.onChange({target:{value:'  My template  '}});field('Draft Structure').props.onChange({target:{value:'Independent template writing'}});await app.flush();
+  const tags=nodes(app.tree).find(n=>n.type?.name==='ContentTagsInput');tags.props.onRawChange('first,  second, ',['first','second']);await app.flush();
+  button(app.tree,'Back To Library').props.onClick();await app.flush();button(app.tree,'Brands').props.onClick();await app.flush();
+  button(nodes(app.tree).find(n=>n.type==='article'&&text(n).includes(brand.name)),'Edit').props.onClick();await app.flush();
+  field('Voice, Audience').props.onChange({target:{value:'Independent\nBrand guidance'}});await app.flush();button(app.tree,'Back To Library').props.onClick();await app.flush();
+  button(app.tree,'  My template  ').props.onClick();await app.flush();await app.mount();
+  assert.equal(field('Name').props.value,'  My template  ');assert.equal(field('Draft Structure').props.value,'Independent template writing');
+  assert.equal(nodes(app.tree).find(n=>n.type?.name==='ContentTagsInput').props.rawValue,'first,  second, ');
+  button(app.tree,'Back To Library').props.onClick();await app.flush();button(app.tree,brand.name).props.onClick();await app.flush();
+  assert.equal(field('Voice, Audience').props.value,'Independent\nBrand guidance');assert.equal(app.calls.some(c=>c.path==='/api/content/workspace'),false);
+ }finally{app.close();}
+});
+test('a recovered library acknowledgement updates its original base without replacing newer writing',async()=>{
+ const f=fixture();f.snapshot.epoch=crypto.randomUUID();let command:any,observed=false,stored=template;
+ const app=host(ContentLibrary,{snapshot:f.snapshot,initialSection:'templates',close(){}},(path,body)=>{
+  if(path==='/api/content/library')return [stored,brand];
+  if(path==='/api/content/workspace'){command=body;stored={...body.item,revision:body.expectedRevision+1};throw Error('Lost response');}
+  if(path==='/api/content/library/receipt')return observed?{command,state:'saved',item:stored}:{command,state:'unknown'};
+  throw Error(path);
+ });
+ const writing=()=>nodes(nodes(app.tree).find(n=>n.type==='label'&&text(n).startsWith('Draft Structure'))).find(n=>n.type==='textarea');
+ try{
+  await app.flush();button(nodes(app.tree).find(n=>n.type==='article'&&text(n).includes(template.name)),'Edit').props.onClick();await app.flush();
+  writing().props.onChange({target:{value:'First save'}});await app.flush();nodes(app.tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await app.flush();
+  assert(command);assert(button(app.tree,'Check Original Library Save'));writing().props.onChange({target:{value:'Newer unsaved writing'}});await app.flush();
+  observed=true;button(app.tree,'Check Original Library Save').props.onClick();await app.flush();assert.equal(writing().props.value,'Newer unsaved writing');
+  assert.equal(app.calls.filter(c=>c.path==='/api/content/workspace').length,1);assert.equal(button(app.tree,'Save Template').props.disabled,false);assert.match(text(app.tree),/Changes Kept/);
+ }finally{app.close();}
+});
+test('exports require the exact clean saved version and reject a package that finishes after editing resumes',async()=>{
+ const f=fixture(),entity=f.snapshot.records!.content[0];let allowed=true,finish:(r:Response)=>void=()=>{};
+ assert(cleanContentExport(entity,entity.value,entity.revision,false));assert(!cleanContentExport(entity,{...entity.value,body:'Changed'},entity.revision,false));
+ assert(!cleanContentExport(entity,entity.value,entity.revision,true));assert(!cleanContentExport(entity,entity.value,entity.revision+1,false));
+ const app=host(ContentExport,{entity,scope:f.snapshot.epoch,allowed:()=>allowed,close(){},fallbackFocus:()=>null},()=>new Promise<Response>(resolve=>{finish=resolve;}));
+ try{await app.flush();button(app.tree,'Prepare Draft And Assets').props.onClick();await app.flush();allowed=false;finish(new Response('original package',{headers:{'Content-Type':'application/zip'}}));await app.flush();
+  assert.equal(button(app.tree,'Download Prepared Package'),undefined);assert.match(text(app.tree),/draft changed while preparing/);
+ }finally{app.close();}
+});
+test('prepared exports request versioned exact files and become unavailable after a workspace change',async()=>{
+ const f=fixture(),entity=f.snapshot.records!.content[0],downloads:string[]=[],blobs:Blob[]=[];
+ const originalDocument=Object.getOwnPropertyDescriptor(globalThis,'document'),create=URL.createObjectURL,revoke=URL.revokeObjectURL;
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{body:{appendChild(){}},createElement(){return {href:'',download:'',click(){downloads.push(this.download);},remove(){}};}}});
+ URL.createObjectURL=(blob:Blob)=>{blobs.push(blob);return 'blob:synthetic';};URL.revokeObjectURL=()=>{};
+ const app=host(ContentExport,{entity,scope:f.snapshot.epoch,allowed:()=>true,close(){},fallbackFocus:()=>null},()=>new Response('exact synthetic ZIP bytes',{headers:{'Content-Type':'application/zip'}}));
+ try{
+  await app.flush();button(app.tree,'Download Text').props.onClick();await app.flush();assert.match(downloads[0],/-v3\.md$/);assert.equal(await blobs[0].text(),entity.value.body);assert.match(text(app.tree),/Download Requested/);
+  button(app.tree,'Prepare Draft And Assets').props.onClick();await app.flush();assert.equal(downloads.length,1);assert.match(text(app.tree),/Prepared ·/);
+  button(app.tree,'Download Prepared Package').props.onClick();await app.flush();assert.match(downloads[1],/-v3\.zip$/);assert.equal(await blobs[1].text(),'exact synthetic ZIP bytes');
+  await app.update({scope:'different-epoch'});assert.equal(button(app.tree,'Download Prepared Package').props.disabled,true);button(app.tree,'Download Prepared Package').props.onClick();assert.equal(downloads.length,2);
+ }finally{app.close();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');URL.createObjectURL=create;URL.revokeObjectURL=revoke;}
+});
+test('Use Template retains a separate complete draft and keeps the library open when its index cannot be retained',async()=>{
+ const f=fixture(),app=host(RecordsPage,f.props);
+ try{
+  await collection(app);button(app.tree,'New Content').props.onClick();await app.flush();button(app.tree,'Start With A Template').props.onClick();await app.flush();
+  const catalog=()=>nodes(app.tree).find(n=>n.props.initialSection==='templates'),before=structuredClone(f.snapshot.records!.content);
+  const storage=globalThis.localStorage,put=storage.setItem;
+  storage.setItem=(key,value)=>{if(key===indexKey())throw Error('Index full');put(key,value);};
+  catalog().props.useTemplate(template);await app.flush();assert(catalog());assert.deepEqual(f.snapshot.records!.content,before);
+  storage.setItem=put;catalog().props.useTemplate(template);await app.flush();assert.equal(catalog(),undefined);
+  const index=JSON.parse(app.storage.get(indexKey())!),kept=JSON.parse(app.storage.get(journalKey(index.selected))!).value;
+  assert.notEqual(index.selected,template.id);for(const key of ['brief','body','format','assets','platform','collection','tags','brandId'] as const)assert.deepEqual(kept[key],template[key]);
+  assert.equal(kept.title,template.name);assert.deepEqual(f.snapshot.records!.content,before);
+ }finally{app.close();}
 });
 
 

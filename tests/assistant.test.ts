@@ -13,6 +13,8 @@ import { AssistantService } from '../apps/service/assistant.js';
 import { computerControlGuidance } from '../packages/domain/computer-control.js';
 import { workModeInstructions } from '../packages/domain/work-mode.js';
 import { canonical, emptyDraft } from '../packages/domain/contracts.js';
+import {IdeaPursuits} from '../apps/service/idea-pursuits.js';
+import {HomeLibrary} from '../apps/service/home-library.js';
 
 class Transport implements AssistantTransport {
   generation = randomUUID();
@@ -1616,4 +1618,23 @@ test('a manual message in a reviewer conversation cannot acquire report or hando
   assert.equal(operation.context.teamReview, undefined);
   assert.equal(operation.context.teamHandoffs, undefined);
   await tick();
+}));
+
+test('an explicit Idea binding follows the exact edited saved draft into its original Assistant operation',()=>fixture(async f=>{
+ const ideas=new IdeaPursuits(f.store),capture=new HomeLibrary(f.store).capture(f.device,{requestId:randomUUID(),epoch:f.store.epoch,references:[]}),
+  id=randomUUID(),entryId=randomUUID();
+ ideas.command(f.device,{requestId:randomUUID(),epoch:f.store.epoch,type:'create',id,entryId,handoff:{title:'Pursuit',text:'Original starter brief',space:'chat',projectId:null,ideaId:'draft-notes',sourceCaptureId:capture.id,sourceRefs:[],outputs:['draft']}});
+ const draft=f.store.readEntity('draft',`draft:${f.device}`)!;
+ const changed=f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'draft',entityId:draft.id,expectedRevision:draft.revision,payload:{...draft.value,text:'My exact edited brief, reviewed before Send.',idea:{pursuitId:id,entryId}}});
+ const original={...submission(f),draftRevision:changed.revision},operation=f.service.submit(f.device,original);
+ assert.deepEqual(operation.context.idea,{pursuitId:id,entryId});assert.equal(operation.input,'My exact edited brief, reviewed before Send.');
+ assert.equal(ideas.runs(id).rows[0].operationId,operation.id);assert.equal(ideas.detail(id).pursuit.reviewed,false);
+ await tick();const repeated=f.service.submit(f.device,original);assert.equal(repeated.id,operation.id);assert.equal(ideas.runs(id).rows.length,1);
+ assert.equal(ideas.run(id,operation.id).operation!.context.draftRevision,changed.revision);
+}));
+test('a missing Idea binding refuses submission before creating an operation and preserves draft writing',()=>fixture(async f=>{
+ const draft=f.store.readEntity('draft',`draft:${f.device}`)!;
+ const changed=f.store.mutate(f.device,{requestId:randomUUID(),epoch:f.store.epoch,kind:'draft',entityId:draft.id,expectedRevision:draft.revision,payload:{...draft.value,idea:{pursuitId:randomUUID(),entryId:randomUUID()}}});
+ assert.throws(()=>f.service.submit(f.device,{...submission(f),draftRevision:changed.revision}),/original Idea/);
+ assert.equal(f.service.operations().length,0);assert.equal(f.store.readEntity('draft',draft.id)!.value.text,draft.value.text);
 }));

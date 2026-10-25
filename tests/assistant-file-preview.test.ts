@@ -75,11 +75,24 @@ test('late fetch for an old file is cancelled and cannot replace current saved t
   const oldBytes=utf8('old'),newBytes=utf8('current'),old=attachment('old.txt',oldBytes),current=attachment('current.txt',newBytes),wait=deferred<Response>(),app=host(old,url=>url.includes(old.id)?wait.promise:stream([newBytes]).response);
   try{await app.flush();await app.update(current);assert.equal(app.calls[0].init.signal!.aborted,true);const late=stream([oldBytes]);wait.resolve(late.response);await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'current');assert.equal(late.cancelled,1);assert.equal(app.created.length,0);}finally{app.close();}
 });
-test('same ID with a different saved hash/name fences old digest completion and image callbacks',async t=>{
-  const firstData=utf8('first'),nextData=utf8('next'),first=attachment('first.png',firstData),next={...attachment('next.txt',nextData),id:first.id},wait=deferred<ArrayBuffer>(),digest=crypto.subtle.digest.bind(crypto.subtle);let count=0;
-  t.mock.method(crypto.subtle,'digest',async(algorithm:AlgorithmIdentifier,data:BufferSource)=>{if(count++===0)return wait.promise;return digest(algorithm,data);});
+test('same ID with a different saved hash/name fences old digest completion and image callbacks',{timeout:5000},async t=>{
+  const firstData=utf8('first'),nextData=utf8('next'),first=attachment('first.png',firstData),next={...attachment('next.txt',nextData),id:first.id};
+  const firstStarted=deferred<void>(),nextStarted=deferred<void>(),firstDigest=deferred<ArrayBuffer>(),nextDigest=deferred<ArrayBuffer>();let count=0;
+  const digestBytes=(data:Uint8Array)=>Uint8Array.from(createHash('sha256').update(data).digest()).buffer;
+  t.mock.method(crypto.subtle,'digest',async(algorithm:AlgorithmIdentifier,data:BufferSource)=>{
+    assert.equal(algorithm,'SHA-256');const previous=count++===0;
+    assert.deepEqual(data,previous?firstData:nextData);(previous?firstStarted:nextStarted).resolve();
+    return(previous?firstDigest:nextDigest).promise;
+  });
   const app=host(first,()=>stream([count===0?firstData:nextData],{'content-type':count===0?'image/png':'application/octet-stream'}).response);
-  try{await app.flush();await app.update(next);assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');wait.resolve(await digest('SHA-256',firstData));await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');assert.equal(app.created.length,0);}finally{app.close();}
+  try{
+    await app.flush();await firstStarted.promise;await app.update(next);await nextStarted.promise;
+    assert.equal(count,2);assert.equal(nodes(app.tree).find(n=>n.type==='pre'),undefined,'current text waits for its own digest');
+    nextDigest.resolve(digestBytes(nextData));await app.flush();
+    assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');
+    firstDigest.resolve(digestBytes(firstData));await app.flush();
+    assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');assert.equal(app.created.length,0);
+  }finally{app.close();}
 });
 test('unmount aborts pending body, releases reader, and never publishes a preview afterward',async()=>{
   let cancelled=0;const body=new ReadableStream<Uint8Array>({pull(){},cancel(){cancelled++;}},{highWaterMark:0}),app=host(attachment('pending.txt',utf8('abc')),()=>new Response(body));

@@ -47,10 +47,13 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
     const info = sdk.resolveOpenAICodexAuthIdentity({ access: cred.access, ...(cred.accountId ? { accountId: cred.accountId } : {}), ...(cred.email ? { email: cred.email } : {}) });
     return info.accountId ? { accountId: info.accountId, identityKey: createHash('sha256').update(`${config.epoch}\0${info.accountId}`).digest('hex'), email: email(info.email) } : undefined;
   };
-  if (api.runtime.version === '2026.9.8') api.registerGatewayMethod('e3.accounts.direct-profile', async ({ params, respond }) => {
+  if (api.runtime.version === '2026.9.8') for (const [method, agentId] of [
+    ['e3.accounts.direct-profile', 'edition3-direct'], ['e3.accounts.group-profile', 'edition3-group'],
+    ['e3.accounts.group-identity', 'edition3-group'],
+  ] as const) api.registerGatewayMethod(method, async ({ params, respond }) => {
     try {
       current();
-      const input = z.object({ epoch: z.uuid(), agentId: z.literal('edition3-direct'), profileId: chatGptProfileIdSchema }).strict().parse(params);
+      const input = z.object({ epoch: z.uuid(), agentId: z.literal(agentId), profileId: chatGptProfileIdSchema }).strict().parse(params);
       if (api.runtime.version !== '2026.9.8' || input.epoch !== config.epoch || !api.runtime.config) throw Error('Original account scope unavailable.');
       const sdk = await (sdkPromise ??= sdkLoader(config.runtimeEntry)); current();
       const currentConfig = api.runtime.config.current();
@@ -59,9 +62,13 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
       const main = read('main'), direct = read(input.agentId), at = now();
       const exact = (native: NativeStore) => {
         const credential = native.profiles[input.profileId], info = identity(sdk, credential), stats = native.usageStats?.[input.profileId];
+        // Reading or cancelling an already admitted Group run needs the exact
+        // account identity, not eligibility to spend quota on a new reply.
+        if (!info) throw Error('Exact selected profile identity unavailable.');
+        if (method === 'e3.accounts.group-identity') return { identityKey: info.identityKey };
         const expires = finite(credential?.expires);
         const limits = [stats?.cooldownUntil, stats?.disabledUntil, stats?.blockedUntil];
-        if (!info || expires === null || expires <= at + 30000
+        if (expires === null || expires <= at + 30000
           || limits.some(value => value !== undefined && finite(value) === null)
           || Math.max(...limits.map(value => value ?? 0)) > at)
           throw Error('Exact selected profile is not ready.');
@@ -75,7 +82,8 @@ export function registerAccounts(api: AccountPluginApi, sdkLoader = loadSdk, now
       // No key resolution, token refresh, usage request or credential material
       // leaves this method. Missing dedicated access is never repaired here.
       respond(true, { format: 1, epoch: config.epoch, agentId: input.agentId, profileId: input.profileId,
-        identityKey: selected.identityKey, expiresAt: Math.min(original.expiresAt, selected.expiresAt), ready: true });
+        identityKey: selected.identityKey, ...(method === 'e3.accounts.group-identity' ? {}
+          : { expiresAt: Math.min(original.expiresAt!, selected.expiresAt!), ready: true }) });
     } catch { respond(false, undefined, { code: 'UNAVAILABLE', message: 'This exact selected account is not available to the dedicated agent. No fallback account was selected.' }); }
   }, { scope: 'operator.read' });
   api.registerGatewayMethod('e3.accounts.snapshot', async ({ params, respond }) => {

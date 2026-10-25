@@ -68,6 +68,7 @@ export async function resolveTriageResource(request:MailRequest,account:Connecte
   return organization;
 }
 export function triageChange(provider:ConnectedAccount['provider'],action:MailTriageAction,resource?:string):TriageChange {
+  if(action==='restore')throw new ProviderError('permission','Restore requires the original confirmed Delete record.');
   if(provider==='google') {
     const mapping:Partial<Record<MailTriageAction,Record<string,boolean>>>={'mark-read':{UNREAD:false},'mark-unread':{UNREAD:true},flag:{STARRED:true},unflag:{STARRED:false},archive:{INBOX:false},delete:{TRASH:true,INBOX:false,SPAM:false}};
     if(mapping[action])return {labels:mapping[action]};
@@ -114,4 +115,19 @@ export async function applyTriageStep(request:MailRequest,account:ConnectedAccou
   const state={...current,...(account.provider==='google'?{labels:result.labelIds??[]}:{isRead:result.isRead??current.isRead,flagStatus:result.flag?.flagStatus??current.flagStatus,categories:result.categories??current.categories,parentFolderId:result.parentFolderId??current.parentFolderId})};
   if((step.expected.isRead!==undefined&&result.isRead===undefined)||(step.expected.flagStatus&&result.flag===undefined)||(step.expected.category&&result.categories===undefined)||(step.expected.parentFolderId&&result.parentFolderId===undefined)||!matchesChange(state,step.expected))throw new ProviderError('invalid_response','The provider response did not confirm the reviewed state. Check this saved review.');
   return state;
+}
+
+/** Restore never guesses Inbox. Validate the captured destination with current
+ * account authority while preserving all unrelated message fields. */
+export async function restoreDestination(request:MailRequest,account:ConnectedAccount,original:TriageChange):Promise<string> {
+  if(account.provider==='google') {
+    const labels=original.labels;
+    if(!labels||labels.TRASH!==false||typeof labels.INBOX!=='boolean'||typeof labels.SPAM!=='boolean'||Object.keys(labels).some(k=>!['TRASH','INBOX','SPAM'].includes(k)))
+      throw new ProviderError('invalid_response','The original Gmail folder state cannot be verified. No mail was changed.');
+    return labels.SPAM?'Spam':labels.INBOX?'Inbox':'Archive';
+  }
+  if(!original.parentFolderId)throw new ProviderError('invalid_response','The original Outlook folder is unavailable. No Inbox fallback was used.');
+  const folder=valid(z.object({id,displayName:z.string().max(1000).optional()}),await request(`/mailFolders/${encodeURIComponent(original.parentFolderId)}?$select=id,displayName`));
+  if(folder.id!==original.parentFolderId)throw new ProviderError('invalid_response','Outlook returned a different original folder. No mail was changed.');
+  return folder.displayName||'Original Folder';
 }

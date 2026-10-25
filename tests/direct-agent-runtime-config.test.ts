@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { prepareDirectWorkspace, assertDirectWorkspace, withDirectAgentPlugin, qualifyDirectRuntimeConfiguration } from '../apps/service/direct-agent-runtime-config.js';
+import { prepareDirectWorkspace, assertDirectWorkspace, prepareGroupWorkspace, assertGroupWorkspace, groupRuntimePaths,
+  withDirectAgentPlugin, qualifyDirectRuntimeConfiguration } from '../apps/service/direct-agent-runtime-config.js';
 import { directConfigurationHash, directPluginId, assertDirectConfiguration } from '../apps/service/direct-agent-runtime-policy.js';
 import { directPluginFiles } from '../apps/service/direct-agent-runtime-files.js';
 import { qualifyNativeUpdateStartup } from '../apps/service/update-native-startup.js';
@@ -19,7 +20,7 @@ function fixture(_t: TestContext) {
     writeFileSync(join(service, name, 'package.json'), JSON.stringify({ openclaw: { extensions: ['./index.js'] } }));
     writeFileSync(join(service, name, 'openclaw.plugin.json'), JSON.stringify({ id: name === 'direct-agent-plugin' ? directPluginId : 'edition3-accounts' }));
   }
-  for (const name of ['direct-agent-tool-calls.js', 'direct-agent-runtime-policy.js'])
+  for (const name of ['direct-agent-tool-calls.js', 'direct-agent-runtime-policy.js', 'group-runtime-policy.js'])
     writeFileSync(join(service, name), '// Synthetic source fixture; never imported.\n');
   const original = {
     gateway: { bind: 'loopback', controlUi: { enabled: false } },
@@ -43,6 +44,45 @@ test('controlled startup adds only the exact dedicated case and preserves origin
   const before = JSON.stringify(f.config);
   assertDirectConfiguration(f.config, f.config.plugins.entries[directPluginId].config.policySha256);
   assert.equal(JSON.stringify(f.config), before);
+});
+
+test('one plugin owns separate empty Group and Direct workspaces and one complete configuration digest', t => {
+  const f = fixture(t); prepareGroupWorkspace(f.root);
+  const config = withDirectAgentPlugin(f.config, f.config.plugins.entries[directPluginId].config.epoch, f.root,
+    join(f.service, 'direct-agent-plugin'), { url: 'http://127.0.0.1:49122/workspace', token: 'a'.repeat(64) }, { group: true });
+  const entry = config.agents.entries['edition3-group'];
+  assert.deepEqual({ workspace: entry.workspace, agentDir: entry.agentDir }, groupRuntimePaths(f.root));
+  assert.notEqual(entry.workspace, config.agents.entries['edition3-direct'].workspace);
+  assert.deepEqual(entry.tools, { allow: [], deny: ['*'], elevated: { enabled: false } });
+  assert.equal(config.plugins.allow.filter((id: string) => id === directPluginId).length, 1);
+  assert.equal(config.plugins.entries[directPluginId].config.policySha256, directConfigurationHash(config));
+  assert.equal(qualifyDirectRuntimeConfiguration(config, f.root, f.service, '2026.9.8'), true);
+  assert.deepEqual(qualifyNativeUpdateStartup(f.root, f.service, config, '2026.9.8'), []);
+  const before = directPluginFiles(f.service);
+  writeFileSync(join(f.service, 'group-runtime-policy.js'), '// changed Group policy');
+  assert.notEqual(directPluginFiles(f.service), before);
+  const retained = join(f.root, 'group-workspace', 'AGENTS.md'); writeFileSync(retained, 'Unqualified Group content');
+  assert.throws(() => prepareGroupWorkspace(f.root)); assert.throws(() => assertGroupWorkspace(f.root));
+  assert.throws(() => qualifyDirectRuntimeConfiguration(config, f.root, f.service, '2026.9.8'));
+  assert.equal(readFileSync(retained, 'utf8'), 'Unqualified Group content');
+});
+
+test('Group workspace and agent policy cannot adopt shared paths, changed policy or an orphan marker', t => {
+  for (const change of ['workspace', 'agentDir', 'tools']) {
+    const f = fixture(t); prepareGroupWorkspace(f.root);
+    const config = withDirectAgentPlugin(f.config, f.config.plugins.entries[directPluginId].config.epoch, f.root,
+      join(f.service, 'direct-agent-plugin'), { url: 'http://127.0.0.1:49122/workspace', token: 'a'.repeat(64) }, { group: true });
+    if (change === 'tools') config.agents.entries['edition3-group'].tools.allow.push('nova_direct_read');
+    else config.agents.entries['edition3-group'][change] = config.agents.entries['edition3-direct'][change];
+    config.plugins.entries[directPluginId].config.policySha256 = directConfigurationHash(config);
+    assert.throws(() => qualifyDirectRuntimeConfiguration(config, f.root, f.service, '2026.9.8'));
+    assert.throws(() => withDirectAgentPlugin(config, config.plugins.entries[directPluginId].config.epoch, f.root,
+      join(f.service, 'direct-agent-plugin'), { url: 'http://127.0.0.1:49122/workspace', token: 'a'.repeat(64) }, { group: true }));
+  }
+  const root = mkdtempSync(join(tmpdir(), 'nova-group-partial-'));
+  writeFileSync(join(root, 'group-workspace.identity'), 'edition3-group-workspace\n');
+  assert.throws(() => prepareGroupWorkspace(root));
+  assert.deepEqual(readdirSync(root), ['group-workspace.identity']);
 });
 test('added policy contributors, arbitrary load paths and retargeted workspace are refused even if rehashed', t => {
   for (const mutate of [

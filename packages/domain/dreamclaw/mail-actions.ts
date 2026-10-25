@@ -2,6 +2,7 @@ import type { MailIndexProvider } from './mail-index.js';
 
 export type MailAssistantAction =
   | 'delete'
+  | 'restore'
   | 'archive'
   | 'mark-read'
   | 'mark-unread'

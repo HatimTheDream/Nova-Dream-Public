@@ -17,14 +17,14 @@ import { editConversation } from './conversation-edit';
 import { directChatStorage, keepDirectChatSelection, mayLeaveDirectChat, readDirectSelection, settleDirectSelection, type PreparedDirectView } from './direct-agent-chat';
 
 const initial: AssistantState = { connection: { state: 'unconfigured', message: 'Connect OpenClaw to use your ChatGPT account.', methods: [], grantedScopes: [], modelAuthReady: false }, conversations: [], operations: [] };
-export function useAssistant(snapshot: Snapshot, visible = true) {
+export function useAssistant(snapshot: Snapshot, visible = true, setupSelection?: { id: string | null; space: AssistantSpace }) {
   const [state, setState] = useState<AssistantState>(initial);
   const spaceKey = `e3:assistant-space:${snapshot.epoch}:${snapshot.deviceId}`;
   const [selectionRecovery] = useState(() => readDirectSelection(directChatStorage, snapshot.epoch, snapshot.deviceId));
-  const [space, setSpace] = useState<AssistantSpace>(() => selectionRecovery?.space ?? (readLocal<string>(spaceKey) === 'work' ? 'work' : 'chat'));
+  const [space, setSpace] = useState<AssistantSpace>(() => selectionRecovery?.space ?? setupSelection?.space ?? (readLocal<string>(spaceKey) === 'work' ? 'work' : 'chat'));
   const spaceRef = useRef(space); spaceRef.current = space;
   const selectionKey = (value: AssistantSpace) => `e3:conversation:${snapshot.deviceId}${value === 'work' ? ':work' : ''}`;
-  const [selectedId, setSelectedId] = useState<string | null>(() => selectionRecovery ? selectionRecovery.id : readLocal<string>(selectionKey(space)) ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => selectionRecovery ? selectionRecovery.id : setupSelection ? setupSelection.id : readLocal<string>(selectionKey(space)) ?? null);
   const [history, setHistory] = useState<ConversationHistory>();
   const [models, setModels] = useState<AssistantModel[]>([]);
   const [modelStatus, setModelStatus] = useState<'loading' | 'ready' | 'error' | 'offline'>('loading');

@@ -12,6 +12,8 @@ import { ComposerMenu } from './ComposerMenu';
 import { retainedWindowId } from './useWorkspace';
 import { registerHomeDraftNavigation } from './home-draft-navigation';
 import { homeIdeas as ideas, ideaCategories, emptySourcePickerView, ideaScopeKey, readIdeaScope, retainIdeaScope, readIdeasView, savedAssistantDrafts, type IdeaScope, type IdeasView, type IdeasViewState, type KeptIdeaScope } from './home-ideas-state';
+import {useIdeaPursuits} from './useIdeaPursuits';
+import {IdeaPursuits} from './IdeaPursuits';
 import './home-ideas.css';
 
 type Choices = { saved: string[]; hidden: string[] };
@@ -21,7 +23,8 @@ const ideaViews: IdeasView[] = ['explore', 'saved', 'drafts'];
 // Resolve browser storage inside the readers' guarded calls, including browsers
 // that throw while obtaining localStorage itself.
 const scopeStorage = { getItem: (key: string) => localStorage.getItem(key), setItem: (key: string, value: string) => localStorage.setItem(key, value) };
-export function HomeIdeas({ snapshot, controller, onAssistantHandoff, openDraft }: Props) {
+export function HomeIdeas({ snapshot, controller, onAssistantHandoff, openDraft, openResource }: Props) {
+ const pursuits=useIdeaPursuits(snapshot);
  const owner = useRef({ epoch: snapshot.epoch, deviceId: snapshot.deviceId });
  const viewKey = `e3:home-ideas-view:${owner.current.deviceId}:${owner.current.epoch}:${retainedWindowId}`;
  const [initial] = useState(() => readIdeasView(scopeStorage, viewKey));
@@ -88,7 +91,7 @@ export function HomeIdeas({ snapshot, controller, onAssistantHandoff, openDraft 
   finally { if (sameOwner() && ticket === previewSequence.current) setPreviewBusy(false); }
  };
  const start = async () => {
-  if (!idea || !editor || !onAssistantHandoff || !sameOwner() || flight.current || editor.kept.invalid || !retain()) return;
+  if (!idea || !editor || !onAssistantHandoff || !sameOwner() || flight.current || pursuits.busy || pursuits.journal.pending || pursuits.journal.invalid || editor.kept.invalid || !retain()) return;
   const value = currentEditor.current!.value;
   const { outputs, project, tasks, sources, instructions, from, to } = value;
   if (!outputs.length) { setError('Choose at least one requested output.');return; }
@@ -105,14 +108,19 @@ export function HomeIdeas({ snapshot, controller, onAssistantHandoff, openDraft 
    const requested = idea.outputs.filter(o => outputs.includes(o.id));
    const text = [`${idea.title}\n\n${idea.explanation}`, `Requested outputs:\n${requested.map(o => `- ${o.title}: ${o.detail}`).join('\n')}`, idea.needsTasks ? `Planning hours: ${from}–${to}, timezone ${snapshot.layout.value.timezone}. Treat these as proposal boundaries. Current calendar coverage has not been supplied here: ask for commitments or use supported current calendar tools before claiming that times are conflict-free. Do not change Tasks, mark them completed, or schedule automatically from this request.` : 'Prepare the requested work for review. Do not modify the original sources.', instructions.trim() ? `My directions:\n${instructions.trim()}` : '', `Captured Library context ${capture.id}:\n${homeQuote(capture)}`].filter(Boolean).join('\n\n');
    if (text.length > 100000) throw Error('The selected context is too large. Choose fewer sources; nothing was shortened.');
-   await latest.current.onAssistantHandoff!({ title: idea.title, text, space: scope.space, workMode: scope.workMode, projectId: scope.projectId, sourceCaptureId: capture.id, sourceRefs: refs, ideaId: idea.id, selectedTaskIds: tasks, outputs });
+   const id=crypto.randomUUID(),entryId=crypto.randomUUID();
+   const handoff={title:idea.title,text,space:scope.space,workMode:scope.workMode,projectId:scope.projectId,sourceCaptureId:capture.id,sourceRefs:refs,ideaId:idea.id,selectedTaskIds:tasks,outputs,authoredDirections:instructions};
+   const receipt=await pursuits.run({requestId:crypto.randomUUID(),epoch:snapshot.epoch,type:'create',id,entryId,handoff});
+   if(!sameOwner()||ticket!==sequence.current)return;
+   if(receipt?.state!=='saved')throw Error('The original pursuit request is kept. Open Drafts to check its result before starting another.');
    acknowledgeHomeCapture(snapshot, 'idea:' + idea.id);
+   await latest.current.onAssistantHandoff!({...handoff,handoffId:entryId,idea:{pursuitId:id,entryId}});
    if (sameOwner() && updateView({ selected: undefined })) publishEditor(undefined);
   } catch (reason) { if (sameOwner()) setError(reason instanceof Error ? reason.message : 'The existing workflow could not open.'); }
   finally { flight.current = false;if (active.current) setBusy(false); }
  };
  const unavailableOwner = owner.current.epoch !== snapshot.epoch || owner.current.deviceId !== snapshot.deviceId;
- const disabled = busy || !!editor?.kept.invalid || unavailableOwner;
+ const disabled = busy || pursuits.busy || !!pursuits.journal.pending || pursuits.journal.invalid || !!editor?.kept.invalid || unavailableOwner;
  return <section className="home-ideas home-ideas-compact" aria-label="Ideas">
   {unavailableOwner && <p role="alert">The workspace changed. This original Idea writing remains in its own workspace. Keep it before leaving, then reopen Ideas.</p>}
   {(controller.error || controller.journalError) && <p role="alert">{controller.error || controller.journalError}</p>}
@@ -124,6 +132,7 @@ export function HomeIdeas({ snapshot, controller, onAssistantHandoff, openDraft 
   {error && !idea && <p role="alert">{error}</p>}
   <div id="idea-view-panel" role="tabpanel" aria-labelledby={`idea-tab-${view.view}`}>
   {view.view !== 'drafts' ? <><div className="home-ideas-gallery">{visibleIdeas.map(i => <article className="home-idea-card" key={i.id}><span className="home-idea-symbol" aria-hidden="true">{i.symbol}</span><p className="metadata">{i.category}</p><h2>{i.title}</h2><p>{i.summary}</p><div className="compact-actions"><button className="compact-action" disabled={unavailableOwner} onClick={() => open(i.id)}>Preview</button><button className="compact-action compact-utility" disabled={preferencesBlocked || unavailableOwner} aria-pressed={choices.saved.includes(i.id)} aria-label={`${choices.saved.includes(i.id) ? 'Unsave' : 'Save'} ${i.title}`} onClick={() => keep({ ...choices, saved: choices.saved.includes(i.id) ? choices.saved.filter(id => id !== i.id) : [...choices.saved, i.id] })}><Pin size={15}/>{choices.saved.includes(i.id) ? 'Saved' : 'Save'}</button></div></article>)}</div>{!visibleIdeas.length && <Empty title={view.view === 'saved' ? 'No Saved Ideas In This View' : 'No Ideas In This Category'}>Choose another category or save a starter from Explore.</Empty>}{choices.hidden.length > 0 && <button className="compact-action" disabled={preferencesBlocked} onClick={() => keep({ ...choices, hidden: [] })}>Restore Hidden Ideas</button>}</> : <div className="home-ideas-drafts">
+   <IdeaPursuits snapshot={snapshot} controller={pursuits} onAssistantHandoff={onAssistantHandoff} openResource={openResource} resources={controller.state?.epoch===snapshot.epoch?controller.state.resources:undefined}/>
    <section aria-label="Unfinished Idea Scopes"><h2>On This Device <small>{scopes.length}</small></h2><p className="metadata">Unfinished Idea context and directions. Opening a scope does not capture sources or send a message.</p>{scopes.map(row => <article className="home-idea-draft" key={row.idea.id}><div><h3>{row.idea.title}</h3><p>{row.kept.invalid ? 'Original Scope Needs Review' : `${row.kept.value.tasks.length + row.kept.value.sources.length} Selected Sources And Tasks`}</p></div><button className="compact-action" onClick={() => open(row.idea.id)}>Continue Scope</button></article>)}{!scopes.length && <p>No unfinished Idea scopes are kept on this device.</p>}</section>
    <section aria-label="Saved Assistant Drafts"><h2>Saved Assistant Drafts <small>{saved.length}</small></h2><p className="metadata">Saved Assistant writing from this workspace. Earlier drafts do not record which Idea created them.</p>{saved.map(d => <article className="home-idea-draft" key={d.id}><div><h3 className="preserve-case">{d.value.title || 'Untitled Draft'}</h3><p className="metadata">{d.value.space === 'work' ? 'Work' : 'Chat'} · Saved {new Date(d.updatedAt).toLocaleString()}</p></div><button className="compact-action" disabled={!openDraft || unavailableOwner} onClick={() => { if (retain() && sameOwner() && latest.current.snapshot.drafts.some(current => current.id === d.id && current.revision === d.revision)) latest.current.openDraft?.(d.id); }}>Open Saved Draft</button></article>)}{!saved.length && <p>No saved Assistant writing is available. Unsaved writing stays in its current Assistant editor.</p>}</section>
   </div>}

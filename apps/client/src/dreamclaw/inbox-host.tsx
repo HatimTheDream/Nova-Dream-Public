@@ -38,6 +38,7 @@ export type InboxHost = {
       undo(input: { receiptId: string; digest: string }): Promise<ActionResult & {plan:MailActionPlan}>;
       cancel(input: { planId: string; digest: string }): Promise<ActionResult & {plan:MailActionPlan}>;
       check(input: {planId:string}): Promise<ActionResult & {plan:MailActionPlan}>;
+      continue(input: {planId:string;digest:string}): Promise<ActionResult & {plan:MailActionPlan}>;
       acknowledge(input: {planId:string;digest:string}): Promise<ActionResult & {plan:MailActionPlan}>;
     };
   };

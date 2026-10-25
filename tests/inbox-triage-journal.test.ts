@@ -13,7 +13,7 @@ function fixture(){
   let plan:MailTriagePlan|undefined,lose=false,effects=0;const receipts=new Set<string>(),calls:{action:string;input:any}[]=[];
   const send=async(action:'prepare'|'confirm'|'read'|'reconcile',input:any):Promise<MailTriagePlan>=>{
     calls.push({action,input:structuredClone(input)});
-    if(action==='prepare')plan??={id:randomUUID(),epoch,writerId:input.writerId,digest:'a'.repeat(64),revision:1,request:'Flag',action:'flag',status:'awaiting_confirmation',destructive:false,summary:'Flag one conversation',targets:[],scopes:[],targetCount:1,messageCount:1,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600000).toISOString(),incompleteAccounts:[],outcomes:[]};
+    if(action==='prepare')plan??={id:randomUUID(),epoch,writerId:input.writerId,digest:'a'.repeat(64),revision:1,request:'Flag',action:input.action,status:'awaiting_confirmation',destructive:false,summary:'Flag one conversation',targets:[],scopes:[],targetCount:1,messageCount:1,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600000).toISOString(),incompleteAccounts:[],outcomes:[]};
     if(action==='confirm'&&!receipts.has(input.requestId)){if(input.expectedRevision!==plan!.revision)throw new ApiError('mail_triage_changed','Review changed',undefined,409);receipts.add(input.requestId);effects++;plan={...plan!,revision:plan!.revision+1,status:input.decision==='cancel'?'cancelled':'completed'};}
     if(lose){lose=false;throw Error('Lost response');}
     return structuredClone(plan!);
@@ -46,4 +46,23 @@ test('automatic read saves its exact request before dispatch and can recover a l
  const [id,record]=Object.entries(journal.store.getState().records)[0];assert.equal(record.pending,'prepare');
  await assert.rejects(make().check(id),/already read/);assert.deepEqual(calls[0],calls[1]);
  f.writable=false;await assert.rejects(make().displayed({target:f.payload.targets[0],messageIds:['m1']}),/saved/);assert.equal(calls.length,2);
+});
+
+
+test('Restore review and lost confirmation retain exact identity across reload without a replacement command',async()=>{
+ const f=fixture(),payload={...f.payload,action:'restore' as const},journal=f.make();
+ f.lose=true;await assert.rejects(journal.prepare(payload),/Lost/);const [id,kept]=Object.entries(journal.store.getState().records)[0];
+ assert.equal(kept.prepare.action,'restore');const reloaded=f.make(),plan=await reloaded.check(id);
+ assert.deepEqual(f.calls[0].input,f.calls[1].input);assert.equal(plan.action,'restore');
+ f.lose=true;await assert.rejects(reloaded.act(plan.id,'apply',plan.digest),/Lost/);
+ const confirmation=Object.values(reloaded.store.getState().records)[0].confirmation;
+ const again=f.make();await assert.rejects(again.act(plan.id,'continue',plan.digest),/unconfirmed/);await again.checkPlan(plan.id);
+ assert.deepEqual(f.calls.filter(c=>c.action==='confirm').map(c=>c.input),[confirmation,confirmation]);assert.equal(f.effects,1);
+});
+
+test('Restore local retention failure blocks preparation and a mismatched action cannot replace its original review',async()=>{
+ const f=fixture();f.writable=false;await assert.rejects(f.make().prepare({...f.payload,action:'restore'}),/saved/);assert.equal(f.calls.length,0);
+ f.writable=true;const journal=createInboxTriageJournal(f.scope,async(action,input)=>({...await f.send(action,input),action:'delete'}),f.disk);
+ await assert.rejects(journal.prepare({...f.payload,action:'restore'}),/does not match/);
+ const record=Object.values(journal.store.getState().records)[0];assert.equal(record.prepare.action,'restore');assert.equal(record.plan,undefined);assert.equal(record.pending,'prepare');assert.equal(f.effects,0);
 });

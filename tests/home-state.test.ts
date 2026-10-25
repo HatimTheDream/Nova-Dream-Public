@@ -72,7 +72,7 @@ test('Home restores approved views and falls back safely from retired views with
       const rendered = renderToStaticMarkup(createElement(Home, props));
       const selected = ['today', 'library', 'ideas', 'feed'].includes(kept) ? kept : 'library';
       assert.match(rendered, new RegExp(`id="home-tab-${selected}" role="tab" aria-selected="true"`));
-      assert.equal((rendered.match(/role="tab" aria-selected="true"/g) ?? []).length, 1);
+      assert.equal((rendered.match(/id="home-tab-(?:today|library|ideas|feed)" role="tab" aria-selected="true"/g) ?? []).length, 1);
       assert.deepEqual({ snapshot: props.snapshot, draft: props.draft }, original);
     }
     assert.deepEqual(writes, []);

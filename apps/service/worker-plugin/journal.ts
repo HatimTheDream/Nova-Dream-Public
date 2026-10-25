@@ -5,6 +5,10 @@ import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:
 import { z } from 'zod';
 import { workerReceiptSchema, workerObservationSchema, isSettledWorkerObservation, type WorkerReceipt, type WorkerStatus } from '../../../packages/domain/worker.js';
 
+const outcomePlaintextLimit = 36 * 1024 * 1024;
+const outcomeCiphertextReservation = outcomePlaintextLimit + 12 + 16;
+const outcomeJournalLimit = 256 * 1024 * 1024;
+
 /** Native effect metadata plus encrypted, immutable terminal handoff records.
  * This owns no workspace entities and never modifies OpenClaw registry tables. */
 export class WorkerJournal {
@@ -46,8 +50,8 @@ export class WorkerJournal {
   hasCapacity() {
     const used = Number(this.db.prepare('SELECT coalesce(sum(bytes),0) AS n FROM outcomes').get()?.n);
     const pending = Number(this.db.prepare("SELECT count(*) AS n FROM receipts r LEFT JOIN outcomes o ON o.attempt_id=r.attempt_id WHERE o.attempt_id IS NULL AND json_extract(r.payload,'$.state')!='cancelled'").get()?.n);
-    // Reserve room for each admitted terminal envelope before another native effect.
-    return used + (pending + 1) * 36 * 1024 * 1024 <= 256 * 1024 * 1024;
+    // Reserve each complete encrypted envelope, including its IV and tag.
+    return used + (pending + 1) * outcomeCiphertextReservation <= outcomeJournalLimit;
   }
   outcome(receipt: WorkerReceipt) {
     const row = this.db.prepare('SELECT payload FROM outcomes WHERE attempt_id=?').get(receipt.attemptId);
@@ -63,7 +67,7 @@ export class WorkerJournal {
     if (value.runId !== receipt.runId || !isSettledWorkerObservation(value)) return undefined;
     const previous = this.outcome(receipt); if (previous) return previous;
     const text = Buffer.from(JSON.stringify(value));
-    if (text.length > 36 * 1024 * 1024) throw new Error('The complete native outcome exceeds its reserved storage.');
+    if (text.length > outcomePlaintextLimit) throw new Error('The complete native outcome exceeds its reserved storage.');
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv);
     cipher.setAAD(Buffer.from(`${receipt.epoch}:${receipt.hostId}:${receipt.attemptId}:${receipt.runId}`));
     const encrypted = Buffer.concat([cipher.update(text), cipher.final()]), payload = Buffer.concat([iv, cipher.getAuthTag(), encrypted]);

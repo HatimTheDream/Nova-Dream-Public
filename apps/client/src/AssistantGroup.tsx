@@ -11,6 +11,7 @@ import { GroupReader } from './assistant-group-reader';
 import { registerRecordDraftNavigation } from './record-draft-navigation';
 import type { GroupViewTarget } from './assistant-group-view';
 import './assistant-group.css';
+import { GroupMessaging } from './GroupMessaging';
 
 type Props = { snapshot: Snapshot; windowId: string; target: NonNullable<GroupViewTarget>;
   back: () => void; changed: () => void; refreshWorkspace: () => Promise<void>; sidebarControls: ReactNode; navigationCovered: boolean;
@@ -52,12 +53,15 @@ export function GroupEditor({ snapshot, scope, reader, update, load, back, chang
   const reviewedRejection = useRef<string | undefined>(undefined);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const initial = reader.detail ? { ...emptyGroupEditor(), title: reader.detail.group.title, projectId: reader.detail.group.projectId } : emptyGroupEditor();
-  const [journal] = useState(() => new GroupEditorJournal(groupStorage, scope, () => alive.current, initial));
+  const [journal] = useState(() => new GroupEditorJournal(groupStorage, scope, () => alive.current, initial, reader.detail ? 'group' : 'create'));
   const [panel, setPanel] = useState<'members' | 'history' | null>(reader.detail ? null : 'members');
   const [preview, setPreview] = useState<{ id: string; revision: number } | null>(null);
   const [notice, setNotice] = useState('');
   const [reviewing, setReviewing] = useState(false);
+  const [replacement, setReplacement] = useState<{ revision: number; defaultMemberId: string; memberId: string } | null>(null);
   const group = reader.detail?.group, members = reader.detail?.members ?? [], draft = journal.value.draft;
+  const replacementId = replacement?.revision === group?.revision && replacement?.defaultMemberId === group?.defaultMemberId
+    && members.some(member => member.id === replacement?.memberId && member.id !== group?.defaultMemberId) ? replacement?.memberId : undefined;
   const agents = snapshot.records?.agent ?? [], available = agents.filter(agent => !agent.value.archived);
   const pending = journal.value.pending, blocked = reviewing || journal.invalid || journal.busy || reader.busy || !!pending && !pending.receipt || !group && !!pending?.receipt;
   const metadataBlocked = blocked || !!group?.archived || !!group?.trashed;
@@ -85,7 +89,8 @@ export function GroupEditor({ snapshot, scope, reader, update, load, back, chang
   const refresh = async () => { if (await load()) changed(); };
   const afterReceipt = async () => {
     if (!alive.current) return;
-    setNotice('Group Change Saved.');
+    setNotice('');
+    setReplacement(null);
     await refresh();
   };
   const run = async (input: Omit<GroupCommand, 'requestId' | 'epoch' | 'groupId' | 'expectedRevision'> & Record<string, unknown>) => {
@@ -156,7 +161,7 @@ export function GroupEditor({ snapshot, scope, reader, update, load, back, chang
       defaultAgentId: members.length ? null : agent.id, shareEarlierHistory: false });
   };
   const remove = (member: GroupMember) => {
-    const replacement = members.find(other => other.agentId === draft.defaultAgentId && other.id !== member.id);
+    const replacement = members.find(other => other.id === replacementId && other.id !== member.id);
     if (group?.defaultMemberId === member.id && members.length > 1 && !replacement) return;
     void run({ action: 'remove-member', membershipId: member.id,
       replacementMembershipId: group?.defaultMemberId === member.id ? replacement?.id ?? null : null });
@@ -180,12 +185,10 @@ export function GroupEditor({ snapshot, scope, reader, update, load, back, chang
     </div>}
     <div className={`group-body ${panel ? 'group-panel-open' : ''}`}>
       <div className="group-conversation">
-        <div className="group-empty">
-          <Users size={32}/><h2>{group ? members.length ? 'Your Group Is Ready For Conversation Setup' : 'Add Members To Start' : 'Bring Your Agents Together'}</h2>
-          <p>{group ? 'Members and their history are saved. Messaging is unavailable in this local preparation build.' : 'Choose the people for this Group and its default responder. Earlier history stays private unless you explicitly share it.'}</p>
-          {group && <p className="metadata">Default Responder: {members.find(member => member.id === group.defaultMemberId)?.name ?? 'None'}</p>}
-          {group && <button onClick={() => void history()}>Group History</button>}
-        </div>
+        {group ? <GroupMessaging key={`${scope.epoch}:${scope.deviceId}:${scope.windowId}:${group.id}`} snapshot={snapshot} group={group} members={members} windowId={scope.windowId}/> : <div className="group-empty">
+          <Users size={32}/><h2>Bring Your Agents Together</h2>
+          <p>Choose the people for this Group and its default responder. Earlier history stays private unless you explicitly share it.</p>
+        </div>}
       </div>
       {panel && <aside id="assistant-group-members" className="group-members-panel" aria-label={preview ? 'Agent Profile' : panel === 'history' ? 'Group History' : 'Group Members'}>
         <header className={`group-panel-heading ${preview ? 'group-profile-heading' : ''}`}><button onClick={preview ? () => setPreview(null) : closePanel}><ArrowLeft size={17}/>{preview ? 'Back To Members' : 'Back To Group'}</button><h2 ref={panelTitle} tabIndex={-1}>{preview ? 'Agent Profile' : panel === 'history' ? 'Group History' : 'Members'}</h2><button className="icon-button" aria-label="Close Group Panel" onClick={closePanel}><X size={18}/></button></header>
@@ -210,8 +213,8 @@ export function GroupEditor({ snapshot, scope, reader, update, load, back, chang
             const current = available.find(agent => agent.id === member.agentId), isDefault = member.id === group?.defaultMemberId;
             return <li key={member.id}><div className="group-member-identity"><SquareLynx appearance={member.appearance} size="icon" accessibility={{ mode: 'decorative' }}/><button className="text-button" disabled={!current} onClick={() => openProfile(member)}>{member.name}</button><small>{isDefault ? 'Default Responder' : !current ? 'Unavailable' : 'Member'}</small></div>
               <div className="button-row">{!isDefault && <button disabled={metadataBlocked || !current} onClick={() => void run({ action: 'choose-default', membershipId: member.id })}>Make Default</button>}
-                {isDefault && members.length > 1 && <select aria-label={`Replacement For ${member.name}`} value={members.some(other => other.id !== member.id && other.agentId === draft.defaultAgentId) ? draft.defaultAgentId! : ''} onChange={event => change({ defaultAgentId: event.target.value || null })}><option value="">Choose Replacement</option>{members.filter(other => other.id !== member.id).map(other => <option key={other.id} value={other.agentId}>{other.name}</option>)}</select>}
-                <button disabled={metadataBlocked || isDefault && members.length > 1 && !members.some(other => other.id !== member.id && other.agentId === draft.defaultAgentId)} onClick={() => remove(member)}>Remove</button>
+                {isDefault && members.length > 1 && <select aria-label={`Replacement For ${member.name}`} value={replacementId ?? ''} onChange={event => setReplacement(event.target.value && group ? { revision: group.revision, defaultMemberId: member.id, memberId: event.target.value } : null)}><option value="">Choose Replacement</option>{members.filter(other => other.id !== member.id).map(other => <option key={other.id} value={other.id}>{other.name}</option>)}</select>}
+                <button disabled={metadataBlocked || isDefault && members.length > 1 && !replacementId} onClick={() => remove(member)}>Remove</button>
               </div></li>;
           })}</ul>}
           <h3>{group ? 'Add Members' : 'Choose Members'}</h3>

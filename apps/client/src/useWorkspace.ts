@@ -6,13 +6,14 @@ import type { DownloadProgress } from './download-progress';
 import { startPolling } from './polling';
 import { clientIdentity } from './client-identity';
 import { startFrontendUpdatePolling } from './frontend-update';
+import { mayLeaveRecordDrafts } from './record-draft-navigation';
 
 export function useWorkspace() {
   const [startupPhase, setStartupPhase] = useState<'connecting' | 'session' | 'workspace'>('connecting');
   const [download, setDownload] = useState<DownloadProgress>();
   const [access, setAccess] = useState<AccessContext>();
   const gated = useRef(false);
-  const denyPhone = useCallback(() => { gated.current = true; setAccess({ surface: 'phone', requiresPairing: true }); current.current = undefined; setSnapshot(undefined); setOnline(false); saveLocal('e3:snapshot', null); }, []);
+  const denyPhone = useCallback((context?: AccessContext) => { gated.current = true; setAccess(context ?? { surface: 'phone', requiresPairing: true }); current.current = undefined; setSnapshot(undefined); setOnline(false); saveLocal('e3:snapshot', null); }, []);
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const current = useRef<Snapshot | undefined>(undefined);
   const [online, setOnline] = useState(false);
@@ -31,15 +32,21 @@ export function useWorkspace() {
     try {
       const next = await fetchSnapshot(current.current ? undefined : progress => { if (!gated.current && !current.current) setDownload(progress); });
       if (gated.current) return;
-      if (current.current && next.epoch !== current.current.epoch) {
+      const replacingOwner=!!current.current&&(next.epoch!==current.current.epoch||next.deviceId!==current.current.deviceId);
+      if (replacingOwner) {
         // The selected workspace can change without this tab navigating. Update
         // access/recovery mode before mounting the new workspace's controls.
         const context = await request<AccessContext>('access/context');
-        if (context.requiresPairing) { denyPhone(); return; }
+        if (context.requiresPairing) { denyPhone(context); return; }
         if (context.workspaceEpoch && context.workspaceEpoch !== next.epoch) return;
         setAccess(context); saveLocal('e3:access', context);
       }
-      if (!current.current || next.epoch !== current.current.epoch || next.cursor >= current.current.cursor) {
+      // Access denial above always retires the old workspace immediately. Only
+      // an otherwise authorized replacement may wait for current writing.
+      if(replacingOwner&&!mayLeaveRecordDrafts()){
+        setOnline(false);setError('Keep or copy the current writing before opening the recovered workspace.');return;
+      }
+      if (!current.current || replacingOwner || next.cursor >= current.current.cursor) {
         current.current = next; setSnapshot(next); saveLocal('e3:snapshot', next);
       }
       failed.current = false; setOnline(true); setError('');
@@ -58,7 +65,7 @@ export function useWorkspace() {
     void request<AccessContext>('access/context').then(async context => {
       if (!alive) return;
       setAccess(context); saveLocal('e3:access', context);
-      if (context.requiresPairing) { denyPhone(); return; }
+      if (context.requiresPairing) { denyPhone(context); return; }
       setStartupPhase('session');
       await request('session', {}); if (alive && !gated.current) { setStartupPhase('workspace'); await refresh(); }
     }).catch(reason => {
@@ -82,7 +89,7 @@ export function useWorkspace() {
   const reconnect = async () => { try {
     setError(''); setDownload(undefined); setStartupPhase('connecting');
     const context = await request<AccessContext>('access/context'); setAccess(context);
-    if (context.requiresPairing) { denyPhone(); return; }
+    if (context.requiresPairing) { denyPhone(context); return; }
     setStartupPhase('session');
     await request('session', {}); setStartupPhase('workspace'); gated.current = false; await refresh();
   } catch (reason) { if (reason instanceof ApiError && reason.code === 'phone_pair_required') denyPhone(); else setError('The host is still unavailable. Your draft is kept.'); } };
@@ -96,7 +103,7 @@ type Journal<T> = { value: T; revision: number; epoch: string; dirty: boolean; p
 const tabId = (() => { try { const id = sessionStorage.getItem('e3:tab') ?? crypto.randomUUID(); sessionStorage.setItem('e3:tab', id); return id; } catch { return crypto.randomUUID(); } })();
 export const retainedWindowId = tabId;
 /** Durable local proposal + immutable retry envelope. Server acknowledgment is a separate state. */
-export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entity<T> | undefined, snapshot: Snapshot, refresh: () => Promise<void>, options: { autoSave?: boolean; initialJournal?: { value?: Journal<T> } } = {}) {
+export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entity<T> | undefined, snapshot: Snapshot, refresh: () => Promise<void>, options: { autoSave?: boolean; initialJournal?: { value?: Journal<T> }; onAcknowledged?: (command: Command, result: Entity<T>) => void } = {}) {
   const autoSave = options.autoSave !== false;
   const removedRevision = kind === 'draft' ? snapshot.draftRemovals?.find(item => item.draftId === id)?.revision ?? 0 : 0;
   const removal = useRef(removedRevision); removal.current = removedRevision;
@@ -107,6 +114,7 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     return { value: entity?.value ?? initial, revision: entity?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false };
   });
   const ref = useRef(journal);
+  const acknowledgement = useRef(options.onAcknowledged); acknowledgement.current = options.onAcknowledged;
   const [storageError, setStorageError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [networkError, setNetworkError] = useState(false);
@@ -172,6 +180,7 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
       // A response admitted before removal must never restore the removed draft.
       if (result.revision < removal.current) { await refresh(); return; }
       persist({ ...latest, revision: result.revision, pending: undefined, dirty: canonical(latest.value) !== canonical(command.payload), conflict: undefined });
+      acknowledgement.current?.(command, result);
       setNetworkError(false); await refresh(); if (stillOwns()) return result;
     } catch (error) {
       if (!stillOwns()) return;
@@ -209,8 +218,13 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     if (local.pending || local.dirty) throw Error('Your draft could not be saved yet. Your writing is kept; retry save before sending.');
     return { value: JSON.parse(captured) as T, revision: local.revision, epoch: local.epoch };
   }, [flush, ownerScope, snapshot.epoch]);
-  useEffect(() => { if (!autoSave) return; const timer = setTimeout(() => { void flush(); }, 600); return () => clearTimeout(timer); }, [journal.value, flush, autoSave]);
-  useEffect(() => { if (!autoSave) return; const timer = setInterval(() => { void flush(); }, 4000); return () => clearInterval(timer); }, [flush, autoSave]);
+  const autoFlush = useCallback(() => {
+    // Timers may start a first save, but only an explicit Retry reconciles an
+    // unconfirmed receipt. Read at firing time, including after edits/reload.
+    if (!ref.current.pending) void flush();
+  }, [flush]);
+  useEffect(() => { if (!autoSave) return; const timer = setTimeout(autoFlush, 600); return () => clearTimeout(timer); }, [journal.value, autoFlush, autoSave]);
+  useEffect(() => { if (!autoSave) return; const timer = setInterval(autoFlush, 4000); return () => clearInterval(timer); }, [autoFlush, autoSave]);
   // Another tab sharing the cookie is another editor, never a silent overwrite.
   useEffect(() => {
     const listener = (event: StorageEvent) => {
@@ -236,6 +250,6 @@ export function useRetained<T>(kind: Kind, id: string, initial: T, entity: Entit
     const host = conflictVersion && conflictVersion.revision > (entity?.revision ?? 0) ? conflictVersion : entity;
     return persist({ value: host?.value ?? initial, revision: host?.revision ?? removedRevision, epoch: snapshot.epoch, dirty: false });
   };
-  const status = storageError ? 'Kept in this window · browser storage is full' : journal.conflict ? 'Review needed · your changes are kept' : saving ? 'Saving to host…' : journal.dirty ? networkError ? 'On this device · waiting for host' : autoSave ? 'On this device · saving soon' : 'Edits kept on this device · save when ready' : journal.revision ? 'Saved on host' : 'Ready for a draft';
+  const status = storageError ? 'Kept in this window · browser storage is full' : journal.conflict ? 'Review needed · your changes are kept' : saving ? 'Saving to host…' : journal.pending ? 'On this device · save unconfirmed; retry save' : journal.dirty ? networkError ? 'On this device · waiting for host' : autoSave ? 'On this device · saving soon' : 'Edits kept on this device · save when ready' : journal.revision ? 'Saved on host' : 'Ready for a draft';
   return { value: journal.value, revision: journal.revision, epoch: journal.epoch, pending: journal.pending, change, retainForNavigation, retainNow, hasUnsentChanges: () => ref.current.dirty || !!ref.current.pending, status, saving, dirty: journal.dirty, conflict: journal.conflict, reapply, editProposal, discard, flush, flushForSubmit, submitBlocked: !!journal.conflict || !!journal.pending && !saving, storageError, networkError };
 }

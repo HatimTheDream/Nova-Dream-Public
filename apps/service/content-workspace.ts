@@ -1,14 +1,91 @@
 import {randomUUID} from 'node:crypto';
 import {canonical} from '../../packages/domain/contracts.js';
 import {TextDecoder} from 'node:util';
-import {contentWorkspaceCommandSchema,contentWorkBrief,type ContentLibraryItem,type ContentJob,type ContentReview,type ContentWorkspaceState} from '../../packages/domain/content-workspace.js';
+import {contentWorkspaceCommandSchema,contentWorkBrief,type ContentLibraryItem,type ContentLibraryCommand,type ContentLibraryReceipt,type ContentJob,type ContentReview,type ContentWorkspaceState,type ContentWorkspaceCommand,type ContentWorkspaceReceipt} from '../../packages/domain/content-workspace.js';
 import {Store,Fault} from './store.js';
 import {AssignmentService} from './assignments.js';
 type SavedJob=Omit<ContentJob,'attempt'>&{device:string;epoch:string;startId:string;stopId:string;ackId:string;projectRevision:number|null};
 const jobKey='content:job:',reviewKey='content:review:',libraryKey='content:library:';
+type LibraryRejection={kind:'content-library-rejection-v1';status:number;code:string;message:string};
+const isLibraryRejection=(value:ContentLibraryItem|LibraryRejection):value is LibraryRejection=>'kind' in value&&value.kind==='content-library-rejection-v1';
+type CommandRejection={kind:'content-command-rejection-v1';status:number;code:string;message:string};
+const isCommandRejection=(value:unknown):value is CommandRejection=>!!value&&typeof value==='object'&&'kind'in value&&value.kind==='content-command-rejection-v1';
+const intent=(input:ContentWorkspaceCommand)=>({operation:input.type==='work-control'?'content.work-control':'content.workspace',...input});
+const controlKey='content:control-request:';
+type ControlRecord={command:ContentWorkspaceCommand;device:string;state:'running'|'done'|'unknown';message:string;result?:ContentJob};
+function resultReference(value:unknown){
+ if(!value||typeof value!=='object'||!('id'in value))throw new Fault(409,'content_receipt_missing','The exact recorded result is unavailable.');
+ // Recovery needs the exact saved identity, not another copy of the complete
+ // Content body, review history or native transcript in browser storage.
+ const result:Record<string,unknown>={id:value.id};
+ for(const key of ['revision','contentId','sourceRevision','planId','reviewerId','reviewerName','state','mode','agentId'])
+  if(key in value)result[key]=(value as Record<string,unknown>)[key];
+ return result;
+}
 export class ContentWorkspace {
  constructor(private store:Store,private assignments:AssignmentService,private now=Date.now){}
  library(){return this.store.internalList<ContentLibraryItem>(libraryKey).sort((a,b)=>a.name.localeCompare(b.name));}
+ libraryReceipt(device:string,raw:unknown):ContentLibraryReceipt{
+  const input=contentWorkspaceCommandSchema.parse(raw);
+  if(input.type!=='library-save')throw new Fault(400,'content_library_receipt','Only an original library save can be checked here.');
+  const result=this.store.replayAdmission<ContentLibraryItem|LibraryRejection>(device,input,{operation:'content.workspace',...input});
+  return result===undefined?{command:input,state:'unknown'}:isLibraryRejection(result)
+   ?{command:input,state:'rejected',code:result.code,message:result.message}:{command:input,state:'saved',item:result};
+ }
+ /** Read original admission and stored control completion only. This does not
+  * start, stop, reconcile, acknowledge or apply an assignment. */
+ receipt(device:string,raw:unknown):ContentWorkspaceReceipt{
+  const input=contentWorkspaceCommandSchema.parse(raw);
+  if(input.type==='library-save'){
+   const result=this.libraryReceipt(device,input);
+   return result.state==='saved'?{command:input,state:'recorded',result:result.item,message:'The original library save was recorded.'}
+    :result.state==='rejected'?result:{command:input,state:'unknown',message:'The original library outcome is unconfirmed.'};
+  }
+  const original=this.store.replayAdmission<unknown>(device,input,intent(input));
+  if(original===undefined)return {command:input,state:'unknown',message:'The original request has no confirmed receipt. It has not been repeated.'};
+  if(isCommandRejection(original))return {command:input,state:'rejected',code:original.code,message:original.message};
+  if(input.type==='work-control'){
+   const record=this.store.internalRead<ControlRecord>(controlKey+input.requestId);
+   if(!record)return {command:input,state:'recorded',result:resultReference(this.publicJob(this.job(input.jobId))),
+    message:'This older control request was admitted, but its effect outcome is unconfirmed. Review the original run; this check has not repeated the control.'};
+   if(record.device!==device||canonical(record.command)!==canonical(input))throw new Fault(409,'content_control_identity','The original control identity changed.');
+   return {command:input,state:'recorded',result:resultReference(record.state==='done'?record.result:this.publicJob(this.job(input.jobId))),message:record.message};
+  }
+  return {command:input,state:'recorded',result:resultReference(original),message:input.type==='work'
+   ?'The original work request is recorded. Its current run state is shown separately; this does not confirm a completed reply.'
+   :'The original Content change was recorded.'};
+ }
+ private admitCommand<T>(device:string,input:ContentWorkspaceCommand,prepare:()=>T){
+  try{return this.store.admit<T|CommandRejection>(device,input,intent(input),prepare);}
+  catch(error){
+   // Store.admit rolls back the entire synchronous local preparation on error.
+   // Record only a known local refusal after that rollback, never an external
+   // operation failure. Conflicting identities still fail in Store.admit.
+   if(!(error instanceof Fault)||error.status<400||error.status>=500)throw error;
+   return this.store.admit<T|CommandRejection>(device,input,intent(input),()=>({kind:'content-command-rejection-v1',status:error.status,code:error.code,message:error.message}));
+  }
+ }
+ private saveLibrary(device:string,input:ContentLibraryCommand){
+  // All validation happens before the sole write. A known rejection is itself
+  // admitted under the original intent, so a delayed replay cannot later save it.
+  const result=this.store.admit<ContentLibraryItem|LibraryRejection>(device,input,{operation:'content.workspace',...input},()=>{
+   try{
+    const old=this.store.internalRead<ContentLibraryItem>(libraryKey+input.item.id);
+    if((old?.revision??0)!==input.expectedRevision||old&&old.type!==input.item.type)throw new Fault(409,'content_library_changed','This library item changed. Review the saved version before saving again.');
+    if(!old&&this.library().length>=300)throw new Fault(409,'content_library_limit','Archive and reuse existing library entries before adding more.');
+    if(input.item.type==='brand'&&input.item.brandId)throw new Fault(400,'content_brand','A brand cannot reference another brand.');
+    if(input.item.brandId&&!this.library().some(b=>b.id===input.item.brandId&&b.type==='brand'&&(!b.archived||old?.brandId===b.id)))throw new Fault(409,'content_brand','Choose an available brand.');
+    for(const file of input.item.assets??[])if(canonical(this.store.download(file.id).metadata)!==canonical(file))throw new Fault(409,'content_library_asset','A template attachment changed. Reopen the saved Content item.');
+   }catch(error){
+    if(error instanceof Fault&&['content_library_changed','content_library_limit','content_brand','content_library_asset','attachment_missing','attachment_corrupt'].includes(error.code))
+     return {kind:'content-library-rejection-v1',status:error.status,code:error.code,message:error.message};
+    throw error;
+   }
+   return this.store.internalWrite(libraryKey+input.item.id,{...input.item,revision:input.expectedRevision+1});
+  }).value;
+  if(isLibraryRejection(result))throw new Fault(result.status,result.code,result.message);
+  return result;
+ }
  private content(id:string,revision?:number){const c=this.store.readEntity('content',id);if(!c)throw new Fault(404,'content_missing','This Content item is unavailable.');if(revision!==undefined&&(c.revision!==revision||c.value.archived))throw new Fault(409,'content_changed','Save or review the current Content version first.',c);return c;}
  private job(id:string){const j=this.store.internalRead<SavedJob>(jobKey+id);if(!j||j.epoch!==this.store.epoch)throw new Fault(404,'content_job_missing','This Content run is unavailable.');return j;}
  private publicJob(j:SavedJob):ContentJob{const {device,epoch,startId,stopId,ackId,projectRevision,...item}=j;return {...item,attempt:this.assignments.state(j.planId).attempts.find(a=>a.assignmentId===j.planId)};}
@@ -16,22 +93,30 @@ export class ContentWorkspace {
  result(id:string){const job=this.job(id),attempt=this.assignments.state(job.planId).attempts.find(a=>a.assignmentId===job.planId);if(attempt?.state!=='returned'||!attempt.result||attempt.result.disposition!=='visible')throw new Fault(409,'content_result_pending','A complete visible result has not returned.');const file=this.store.download(attempt.result.file.id);if(file.bytes.length>400000)throw new Fault(413,'content_result_large','Download this result; it is too large for a Content draft.');let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(file.bytes);}catch{throw new Fault(400,'content_result_format','This result is not a text draft. Download the original file.');}if(text.length>100000)throw new Fault(413,'content_result_large','The result exceeds the Content draft limit. Download the original.');return {job:this.publicJob(job),text,file:attempt.result.file};}
  async command(device:string,raw:unknown){
   const input=contentWorkspaceCommandSchema.parse(raw);
+  if(input.type==='library-save')return this.saveLibrary(device,input);
   if(input.type==='work-control'){
-   const j=this.store.admit(device,input,{operation:'content.work-control',...input},()=>this.job(input.jobId)).value;
-   if(input.action==='start')this.start(j);
-   else {const attempt=this.assignments.state(j.planId).attempts.find(a=>a.assignmentId===j.planId);if(!attempt)throw new Fault(409,'content_not_started','This work has not started.');if(input.action==='check')await this.assignments.reconcile(attempt.id);else if(input.action==='stop')this.assignments.stop(device,{requestId:j.stopId,epoch:j.epoch,attemptId:attempt.id});else this.assignments.acknowledgeUnresolved(device,{requestId:j.ackId,epoch:j.epoch,attemptId:attempt.id,understandUnconfirmed:true});}
-   return this.publicJob(this.job(j.id));
-  }
-  const result=this.store.admit(device,input,{operation:'content.workspace',...input},()=>{
-   if(input.type==='library-save'){
-    const old=this.store.internalRead<ContentLibraryItem>(libraryKey+input.item.id);
-    if((old?.revision??0)!==input.expectedRevision||old&&old.type!==input.item.type)throw new Fault(409,'content_library_changed','This library item changed. Reload it before saving.');
-    if(!old&&this.library().length>=300)throw new Fault(409,'content_library_limit','Archive and reuse existing library entries before adding more.');
-    if(input.item.type==='brand'&&input.item.brandId)throw new Fault(400,'content_brand','A brand cannot reference another brand.');
-    if(input.item.brandId&&!this.library().some(b=>b.id===input.item.brandId&&b.type==='brand'&&(!b.archived||old?.brandId===b.id)))throw new Fault(409,'content_brand','Choose an available brand.');
-    for(const file of input.item.assets??[])if(canonical(this.store.download(file.id).metadata)!==canonical(file))throw new Fault(409,'content_library_asset','A template attachment changed. Reopen the saved Content item.');
-    return this.store.internalWrite(libraryKey+input.item.id,{...input.item,revision:input.expectedRevision+1});
+   const admitted=this.admitCommand(device,input,()=>{
+    const job=this.job(input.jobId);
+    if(input.action!=='start'&&!this.assignments.state(job.planId).attempts.some(a=>a.assignmentId===job.planId))throw new Fault(409,'content_not_started','This work has not started.');
+    this.store.internalWrite<ControlRecord>(controlKey+input.requestId,{command:input,device,state:'running',message:'The original control was admitted. Its outcome is still unconfirmed.'});
+    return job;
+   });
+   if(isCommandRejection(admitted.value))throw new Fault(admitted.value.status,admitted.value.code,admitted.value.message);
+   const j=admitted.value;
+   if(!admitted.fresh)return this.publicJob(this.job(j.id));
+   try{
+    if(input.action==='start')this.start(j);
+    else {const attempt=this.assignments.state(j.planId).attempts.find(a=>a.assignmentId===j.planId);if(!attempt)throw new Fault(409,'content_not_started','This work has not started.');if(input.action==='check')await this.assignments.reconcile(attempt.id);else if(input.action==='stop')this.assignments.stop(device,{requestId:j.stopId,epoch:j.epoch,attemptId:attempt.id});else this.assignments.acknowledgeUnresolved(device,{requestId:j.ackId,epoch:j.epoch,attemptId:attempt.id,understandUnconfirmed:true});}
+    if(this.store.epoch!==input.epoch)throw new Fault(409,'epoch_changed','The original workspace changed during this control.');
+    const result=this.publicJob(this.job(j.id));
+    this.store.internalWrite<ControlRecord>(controlKey+input.requestId,{command:input,device,state:'done',result,message:'The original control was recorded. Native execution and stop confirmation remain separate in the run state.'});
+    return result;
+   }catch(error){
+    if(this.store.epoch===input.epoch)this.store.internalWrite<ControlRecord>(controlKey+input.requestId,{command:input,device,state:'unknown',message:'The original control outcome remains unconfirmed. It has not been repeated.'});
+    throw error;
    }
+  }
+  const result=this.admitCommand(device,input,()=>{
    const c=this.content(input.contentId,input.expectedRevision);
    if(input.type==='restore'){
     const old=this.store.readEntityVersion('content',c.id,input.revision);if(!old)throw new Fault(404,'content_version_missing','This saved version is unavailable.');
@@ -81,7 +166,8 @@ export class ContentWorkspace {
    }
    return this.store.internalWrite(reviewKey+next.id,next);
   });
-  if(input.type==='work'){const job=this.job((result.value as ContentJob).id);this.start(job);return this.publicJob(this.job(job.id));}
+  if(isCommandRejection(result.value))throw new Fault(result.value.status,result.value.code,result.value.message);
+  if(input.type==='work'){const job=this.job((result.value as ContentJob).id);if(result.fresh)this.start(job);return this.publicJob(this.job(job.id));}
   return result.value;
  }
  private start(j:SavedJob){

@@ -1,15 +1,13 @@
 import { Resolver } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP } from 'node:net';
+import { isIP } from 'node:net';
+import { publicNetworkAddress as publicImageAddress } from './public-network-address.js';
+export { publicNetworkAddress as publicImageAddress } from './public-network-address.js';
 import { emailImageUrl } from '../../packages/domain/email-images.js';
 import { imagePreviewType } from './image-preview.js';
 import { fitEmailImage, MAX_EMAIL_IMAGE_BYTES } from './email-image-resize.js';
 export { MAX_EMAIL_IMAGE_BYTES } from './email-image-resize.js';
-
-const denied = new BlockList();
-for (const [address, prefix] of [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.0.0.0',24],['192.0.2.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4]] as const) denied.addSubnet(address, prefix, 'ipv4');
-export const publicImageAddress = (address: string) => isIP(address) === 4 && !denied.check(address, 'ipv4');
 
 /** GIFs need a bound across all frames, not just their logical canvas. */
 export function emailImageType(bytes: Buffer): string | undefined {

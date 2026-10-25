@@ -32,6 +32,7 @@ interface MailActionCardProps {
 function actionLabel(action: MailActionKind, organization?: string): string {
   switch (action) {
     case 'delete': return 'Move to trash';
+    case 'restore': return 'Restore To Original Folder';
     case 'archive': return 'Archive';
     case 'mark-read': return 'Mark as read';
     case 'mark-unread': return 'Mark as unread';
@@ -47,6 +48,7 @@ function actionLabel(action: MailActionKind, organization?: string): string {
 
 function ActionIcon({ action }: { action: MailActionKind }) {
   const props = { size: 18, emphasis: 'duotone' as const, decorative: true };
+  if (action === 'restore') return <Undo {...props} tone="sky" />;
   if (action === 'delete') return <Trash2 {...props} tone="coral" />;
   if (action === 'archive') return <Archive {...props} tone="sky" />;
   if (action === 'flag' || action === 'unflag') return <Flag {...props} tone="gold" />;
@@ -87,7 +89,7 @@ export function MailActionCard({ messageId, plan, onPlanChange, onSettled }: Mai
   };
 
   const [problem, setProblem] = useState('');
-  const run = async (action:'apply'|'undo'|'cancel'|'check'|'acknowledge') => {
+  const run = async (action:'apply'|'undo'|'cancel'|'check'|'acknowledge'|'continue') => {
     if (busy) return;
     const api=host.api?.mailAssistant;if(!api)return;
     setBusyAction(action);setProblem('');
@@ -240,7 +242,7 @@ export function MailActionCard({ messageId, plan, onPlanChange, onSettled }: Mai
 
         {problem && <p role="alert" className="px-4 py-2 text-[12px] text-aegis-danger">{problem}</p>}
         <details className="mail-outcomes mx-4 mb-3"><summary>Messages in this review ({plan.outcomes.length})</summary>
-          <ol>{plan.outcomes.map(outcome=><li key={`${outcome.accountId}:${outcome.messageId}`}><strong>{outcome.subject||'No subject'}</strong><span>{outcome.state}{outcome.undo?` · Undo ${outcome.undo}`:''}</span>{outcome.detail&&<p>{outcome.detail}</p>}</li>)}</ol>
+          <ol>{plan.outcomes.map(outcome=><li key={`${outcome.accountId}:${outcome.messageId}`}><strong>{outcome.subject||'No subject'}</strong><span>{outcome.state}{outcome.undo?` · Undo ${outcome.undo}`:''}</span>{outcome.completedSteps!==undefined&&<span> · {outcome.completedSteps}/{outcome.totalSteps} Restore Steps Confirmed</span>}{outcome.detail&&<p>{outcome.detail}</p>}</li>)}</ol>
         </details>
         {plan.canCheck && !applying && <details className="mx-4 mb-3 text-[12px]"><summary>Keep the current state instead</summary><p>This reads the remaining uncertain messages and releases their review. It does not repeat the action or undo an uncertain change.</p><button className="mail-triage-button" disabled={busy} onClick={()=>void run('acknowledge')}>Keep current state</button></details>}
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[rgb(var(--aegis-overlay)/0.07)] px-4 py-3">
@@ -250,6 +252,7 @@ export function MailActionCard({ messageId, plan, onPlanChange, onSettled }: Mai
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button className="mail-triage-button" disabled={busy} onClick={()=>void run('check')}>Check saved review</button>
+            {plan.canContinue && !applying && <button className="mail-triage-button" disabled={busy} onClick={()=>void run('continue')}>Continue Original Restore</button>}
             {!awaiting && plan.canUndo && (
               <button
                 onClick={() => void handleUndo()}

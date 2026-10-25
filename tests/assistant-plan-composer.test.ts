@@ -330,3 +330,17 @@ test('a storage-full Send consumes the feature locally while preserving writing 
   assert.equal(f.calls.length, 0); assert.equal(f.submitted.length, 0);
   assert.ok(nodes(f.render()).some(node => typeof node.props?.children === 'string' && node.props.children.includes('Free browser storage before sending')));
 });
+
+for(const kind of ['existing','queue','new'] as const)test(`an acknowledged Idea ${kind} submission clears only its consumed binding`,async t=>{
+ const f=fixture(t,kind,false,undefined,'chat'),idea={pursuitId:crypto.randomUUID(),entryId:crypto.randomUUID()};
+ f.edit({idea,text:'Exact reviewed pursuit question'});await f.send();
+ assert.deepEqual(f.submitted[0].idea,idea);await f.finish('accepted');
+ assert.equal(f.draft.idea,undefined);assert.equal(f.draft.text,'');
+ for(const draft of f.savedDrafts.values())if(!draft.text)assert.equal(draft.idea,undefined);
+});
+test('an uncertain Idea submission and newer writing retain their original pursuit binding',async t=>{
+ const f=fixture(t,'existing',false,undefined,'chat'),idea={pursuitId:crypto.randomUUID(),entryId:crypto.randomUUID()};
+ f.edit({idea});await f.send();await f.finish('unknown');assert.deepEqual(f.draft.idea,idea);
+ f.retry();f.edit({text:'Newer follow-up still being written'});await f.send();await f.finish('accepted');
+ assert.equal(f.draft.text,'Newer follow-up still being written');assert.deepEqual(f.draft.idea,idea);
+});

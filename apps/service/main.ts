@@ -1,3 +1,4 @@
+import { ServiceDrainPendingError, serviceShutdownObserver } from './service-drain.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -20,7 +21,20 @@ if (frontendValues.some(Boolean)) {
   if (manifest.frontendCompatibility?.format !== 2 || manifest.frontendCompatibility.eligibility !== 'client-behavior') throw Error('The service has no qualified frontend compatibility capsule.');
   frontendDelivery = { directory: frontendValues[0]!, publicKeyFile: frontendValues[1]!, publicKeySha256: frontendValues[2]!, candidateId, serviceInputsSha256: manifest.frontendCompatibility.serviceInputsSha256, apiVersion: pkg.edition3.apiVersion, schemaVersion: pkg.edition3.schemaVersion, version: pkg.version, buildVersion: pkg.edition3.buildVersion };
 }
-const service = await startWorkspaceHost({ directory: resolve(process.env.E3_DATA_DIR ?? resolve(root, '.data')), port, privateWeb: privateWebOptions(), clientDirectory: resolve(root, 'dist/client'), frontendDelivery, development: process.argv.includes('--dev'), developmentOrigin: process.env.E3_DEV_ORIGIN, version: pkg.version, buildVersion: pkg.edition3.buildVersion, schemaVersion: pkg.edition3.schemaVersion, candidateId, updateSocket: process.env.E3_UPDATE_SOCKET });
-console.log(`Nova Dream ${pkg.version} ready at ${service.origin}`);
-let closing = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { if (!closing) { closing = true; void service.close().then(() => process.exit(0)); } });
+let service: Awaited<ReturnType<typeof startWorkspaceHost>> | undefined;
+let pendingStart: ServiceDrainPendingError | undefined;
+try {
+  service = await startWorkspaceHost({ directory: resolve(process.env.E3_DATA_DIR ?? resolve(root, '.data')), port, privateWeb: privateWebOptions(), clientDirectory: resolve(root, 'dist/client'), frontendDelivery, development: process.argv.includes('--dev'), developmentOrigin: process.env.E3_DEV_ORIGIN, version: pkg.version, buildVersion: pkg.edition3.buildVersion, schemaVersion: pkg.edition3.schemaVersion, candidateId, updateSocket: process.env.E3_UPDATE_SOCKET });
+  console.log(`Nova Dream ${pkg.version} ready at ${service.origin}`);
+} catch (failure) {
+  if (!(failure instanceof ServiceDrainPendingError)) throw failure;
+  pendingStart = failure;
+  process.exitCode = 1;
+  console.error('Service startup failed while original work is still closing. The workspace owner is retained.');
+}
+const shutdown = serviceShutdownObserver(
+  () => pendingStart ? pendingStart.owner.close() : service!.close(),
+  () => process.exit(pendingStart ? 1 : 0),
+  failure => { process.exitCode = 1; console.error(failure instanceof ServiceDrainPendingError ? 'The workspace is still closing. Its original work and saved data remain owned.' : 'The service could not finish normally. Saved workspace ownership was preserved.'); },
+);
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void shutdown(); });

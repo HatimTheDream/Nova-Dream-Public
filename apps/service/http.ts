@@ -1,16 +1,24 @@
+import { ServiceDrain, ServiceDrainPendingError } from './service-drain.js';
+import {createFeedSemanticService} from './feed-semantic-service.js';
+import {isFeedSemanticPassivePost,feedSemanticPhoneRouteAllowed} from './feed-semantic-http.js';
+import { SetupRequests } from './setup-requests.js';
 import { ConversationCleanup } from './conversation-cleanup.js';
 import { DirectAgentOwner } from './direct-agent-owner.js';
 import { SpeechGatewayControl } from './speech-control.js';
 import { SpeechPlayback } from './read-aloud.js';
 import { TeamWorkService } from './team-work.js';
 import { HomeWeatherService } from './home-weather.js';
+import {IdeaPursuits} from './idea-pursuits.js';
 import { HomeLibrary } from './home-library.js';
 import { ProfileStudio } from './profile-studio.js';
 import { ProfileWeek, profileReadQuery } from './profile-week.js';
 import { ProfileWeekNotes } from './profile-week-note.js';
 import { AssistantGroups, groupReadQuery } from './assistant-groups.js';
 import { AssistantGroupPreparations, groupPreparationQuery } from './assistant-group-turns.js';
+import { AssistantGroupExecutions, groupExecutionQuery } from './assistant-group-execution.js';
+import { GroupExecutionOwner } from './group-execution-owner.js';
 import { HomeFeed } from './home-feed.js';
+import { NewsFeed } from './news-feed.js';
 import { HostBrowser } from './host-browser.js';
 import { browserInputSchema } from '../../packages/domain/host-browser.js';
 import { GitHubConnection } from './github.js';
@@ -101,9 +109,9 @@ const tokenFrom = (request: IncomingMessage, name: string) => request.headers.co
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.glb': 'model/gltf-binary', '.webmanifest': 'application/manifest+json; charset=utf-8' };
 
 const recoveredLocalRoutes = new Set([
-  '/api/transfers/start', '/api/transfers/piece',
+  '/api/transfers/start', '/api/transfers/piece', '/api/home/ideas/receipt',
   '/api/session', '/api/commands', '/api/attachments', '/api/contacts/photo',
-  '/api/profile/quests', '/api/profile/studio', '/api/profile/week/note', '/api/content/workspace', '/api/content/from-output', '/api/content/from-assignment',
+  '/api/profile/quests', '/api/profile/studio', '/api/profile/week/note', '/api/content/workspace', '/api/content/workspace/receipt', '/api/content/library/receipt', '/api/content/from-output', '/api/content/from-assignment',
   '/api/tasks/order', '/api/tasks/focus', '/api/tasks/history', '/api/tasks/reminders/action',
   '/api/records/history', '/api/records/follow-up', '/api/contacts/read', '/api/contacts/merge', '/api/contacts/restore',
   '/api/contacts/crm', '/api/contacts/activity', '/api/contacts/organization', '/api/agents/hub/layout', '/api/home/library', '/api/home/context', '/api/home/feed/open',
@@ -145,13 +153,14 @@ export async function startServer(options: { directory: string; port: number; pr
   const workRepositories = new WorkRepositories(store, github);
   const accounts = new Accounts(store, options.providers, undefined, options.privateWeb?.origin);
   const homeWeather = new HomeWeatherService(store, options.weatherFetch);
-  const homeLibrary = new HomeLibrary(store);
+  const homeLibrary = new HomeLibrary(store),ideaPursuits=new IdeaPursuits(store);
   const profileStudio = new ProfileStudio(store);
   const profileWeek = new ProfileWeek(store);
   const profileWeekNotes = new ProfileWeekNotes(store);
   const assistantGroups = new AssistantGroups(store);
   const assistantGroupPreparations = new AssistantGroupPreparations(store);
   const homeFeed = new HomeFeed(store);
+  const newsFeed = new NewsFeed(store);
   const calendar = new CalendarService(store, accounts);
   const calendarWrites = new CalendarWriteService(store, accounts, calendar);
   const calendarGroups = new CalendarGroups(store, accounts, calendar, calendarWrites);
@@ -205,10 +214,13 @@ export async function startServer(options: { directory: string; port: number; pr
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
   const directAgentOwner = runtime ? new DirectAgentOwner(store, gateway, () => runtime.directIdentity()) : undefined;
   if (directAgentOwner) assistant.setDirectAgentOwner(directAgentOwner);
+  const assistantGroupExecutions = new AssistantGroupExecutions(store, gateway,
+    new GroupExecutionOwner(store, gateway, () => runtime?.groupIdentity()));
   const backups = new WorkspaceBackups(store, options.version ?? 'development', options.nativeBackup ?? (runtime ? new ManagedNativeBackup(runtime) : undefined), () => assistant.captureSavedHistories());
   const recovery = new WorkspaceRecovery(store);
-  const recoveryServices = new Map<string, { origin: string; close: () => Promise<void> }>();
-  const recoveryOpening = new Map<string, Promise<{ origin: string; close: () => Promise<void> }>>();
+  const recoveryServices = new Map<string, { origin: string; close: (waitMs?: number) => Promise<void> }>();
+  const recoveryPendingOwners = new Map<string, ServiceDrain>();
+  const recoveryOpening = new Map<string, Promise<{ origin: string; close: (waitMs?: number) => Promise<void> }>>();
   const accountControl = new ChatGptAccountControl(gateway, gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'account-control') : undefined);
   const chatGptAccount = runtime ? new ChatGptAccount(runtime, undefined, Date.now, { store, gateway, control: accountControl, busy: () => assistant.operations().some(op => !['completed', 'failed', 'cancelled'].includes(op.state)) || store.internalList<{state:string}>('voice:attempt:').some(a => ['preparing','ready','connecting','active','ending','interrupted'].includes(a.state)) }) : undefined;
   if (chatGptAccount) assistant.setAccountRouter(async conversation => {
@@ -216,17 +228,19 @@ export async function startServer(options: { directory: string; port: number; pr
     return selected ? { profileId: selected.profileId, label: selected.label, reason: selected.reason, selectedAt: new Date(selected.checkedAt).toISOString() } : undefined;
   }, profileId => chatGptAccount.validatePreference(profileId));
   const signIn = runtime ? new ChatGptSignIn(store, runtime, undefined, chatGptAccount) : undefined;
+  const setupRequests = new SetupRequests(store);
   const assistantUsage = new AssistantUsage(gateway);
   const voice = new VoiceSetup(gateway);
   const dictation = new DictationService(store, gateway);
   const calls = new VoiceCalls(store, gateway, assistant, voice);
   let mutationRequests=0;
+  let feedSemantic:ReturnType<typeof createFeedSemanticService>|undefined;
   const nativeUpdateLease=runtime?new NativeUpdateLease(store,runtime,()=>new Gateway(store,options.version,undefined,'update-control'),Date.now,gateway):undefined;
   // Saved native admission may outlive a workspace process. Reconcile that
   // original lease before allowing the replacement process to dispatch work.
   if(updateHost&&nativeUpdateLease?.pendingJobIds().length)store.setUpdateMaintenanceHeld(true);
   const localUpdateBlockers=()=>{
-    const extra={requests:mutationRequests,accounts:accounts.updateMaintenanceBusy,backups:backups.updateMaintenanceBusy,voice:calls.updateMaintenanceBusy,dictation:dictation.updateMaintenanceBusy,'sign-in':signIn?.updateMaintenanceBusy??0,github:github.updateMaintenanceBusy,repositories:workRepositories.updateMaintenanceBusy,skills:skillManagement.updateMaintenanceBusy,recovery:store.recoveryEffectsPaused||!!options.recoveryHost?.status().switching||recoveryOpening.size>0};
+    const extra={requests:mutationRequests+setupRequests.updateMaintenanceBusy,accounts:accounts.updateMaintenanceBusy,backups:backups.updateMaintenanceBusy,voice:calls.updateMaintenanceBusy,dictation:dictation.updateMaintenanceBusy,'sign-in':signIn?.updateMaintenanceBusy??0,github:github.updateMaintenanceBusy,repositories:workRepositories.updateMaintenanceBusy,skills:skillManagement.updateMaintenanceBusy,recovery:store.recoveryEffectsPaused||!!options.recoveryHost?.status().switching||recoveryOpening.size>0,...(feedSemantic?.controller.maintenanceBlockers()??{'feed-composition':1})};
     const labels:Record<string,string>={assistant:'Waiting for the current Assistant work.',teams:'Waiting for the team to finish.',voice:'Finish the current voice chat before updating.',dictation:'Finish dictation before updating.', 'sign-in':'Finish account sign-in before updating.',backups:'Waiting for backup or recovery to finish.',recovery:'Finish workspace recovery before updating.',requests:'Waiting for the current change to finish.','automatic-queue':'Pause automatic queue processing before updating.','automatic-research':'Pause scheduled research before updating.','agent-routines':'Pause Assistant routines before updating.','automatic-contacts':'Pause automatic contact sync before updating.','contact-write':'Waiting for contact changes to finish.'};
     const blockers=updateMaintenanceBlockers(store,extra).map(item=>({code:item.kind,message:labels[item.kind]??'Waiting for current work and saved changes to settle.'}));
     if(gateway.status().state!=='ready')blockers.push({code:'native_unknown',message:'Waiting for Assistant to reconnect.'});
@@ -251,7 +265,7 @@ export async function startServer(options: { directory: string; port: number; pr
     if (closing) throw new Fault(503, 'service_closing', 'The workspace is restarting. Reconcile the original change when it is ready.');
     reauthorize.get(request)?.();
     const path=(request.url??'').split('?')[0];
-    if(store.updateMaintenanceHeld&&!updateSettlingRoutes.has(path))throw new Fault(409,'update_maintenance','Nova Dream is updating. Your writing is kept; retry after the update finishes.');
+    if(store.updateMaintenanceHeld&&!updateSettlingRoutes.has(path)&&!isFeedSemanticPassivePost(request.method??'',path))throw new Fault(409,'update_maintenance','Nova Dream is updating. Your writing is kept; retry after the update finishes.');
     return input;
   };
   const handle = async (request: IncomingMessage, response: ServerResponse, surface: 'desktop' | 'phone' | 'web' = 'desktop') => {
@@ -296,8 +310,8 @@ export async function startServer(options: { directory: string; port: number; pr
       // writes, subresources and embedded frames retain their existing guards.
       const ownerLanding = web && options.privateWeb?.auth === 'vercel' && request.method === 'GET' && url.pathname === '/' && request.headers['sec-fetch-mode'] === 'navigate' && request.headers['sec-fetch-dest'] === 'document';
       if (request.headers['sec-fetch-site'] === 'cross-site' && !ownerLanding) throw new Fault(403, 'origin_rejected', 'Cross-site access is not allowed.');
-      if (store.recoveryHeld && request.method === 'POST' && url.pathname !== '/api/session') throw new Fault(409, 'recovery_held', 'This is a recovered copy for review. Changes and connected services are paused; your current workspace is separate.');
-      if (!store.recoveryHeld && store.recoveryEffectsPaused && request.method === 'POST' && !recoveredLocalRoutes.has(url.pathname)) throw new Fault(409, 'recovery_connections_paused', 'Connected services and automated work remain paused in this recovered workspace. Local records can be edited.');
+      if (store.recoveryHeld && request.method === 'POST' && url.pathname !== '/api/session'&&!isFeedSemanticPassivePost(request.method,url.pathname)) throw new Fault(409, 'recovery_held', 'This is a recovered copy for review. Changes and connected services are paused; your current workspace is separate.');
+      if (!store.recoveryHeld && store.recoveryEffectsPaused && request.method === 'POST' && !recoveredLocalRoutes.has(url.pathname)&&!isFeedSemanticPassivePost(request.method,url.pathname)) throw new Fault(409, 'recovery_connections_paused', 'Connected services and automated work remain paused in this recovered workspace. Local records can be edited.');
       if (['/workspace', '/workspace/observation', '/workspace/plan', '/workspace/policy', '/workspace/research-progress', '/workspace/direct/policy', '/workspace/direct/read'].includes(url.pathname) && request.method === 'POST' && !remote && !web) {
         const supplied=Buffer.from(request.headers.authorization??''),expected=Buffer.from('Bearer '+moduleToken);
         if(supplied.length!==expected.length||!timingSafeEqual(supplied,expected))throw new Fault(403,'workspace_tool_auth','Use the connected Assistant for workspace tools.');
@@ -334,7 +348,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/access/context' && request.method === 'GET') {
           let requiresPairing = false;
           if (remote) try { phoneAccess.authenticate(tokenFrom(request, phoneCookie) ?? ''); } catch { requiresPairing = true; }
-          return json(200, { surface, requiresPairing, workspaceEpoch: remote ? undefined : store.epoch, recovery: store.recoveryHeld, recoveryLocal: store.recoveryEffectsPaused && !store.recoveryHeld });
+          return json(200, { surface, requiresPairing, ...(remote && requiresPairing ? { pairingReason: phoneAccess.pairingReason(tokenFrom(request, phoneCookie) ?? '') } : {}), workspaceEpoch: remote ? undefined : store.epoch, recovery: store.recoveryHeld, recoveryLocal: store.recoveryEffectsPaused && !store.recoveryHeld });
         }
         if (remote && url.pathname === '/api/pair' && request.method === 'POST') {
           const paired = phoneAccess.pair(await commandBody(request, 2048), tokenFrom(request, phoneCookie));
@@ -354,7 +368,7 @@ export async function startServer(options: { directory: string; port: number; pr
         const authenticate = () => { if (web) authorizePrivateWeb(request, options.privateWeb!); return remote ? phoneAccess.authenticate(tokenFrom(request, phoneCookie) ?? '') : store.authenticate(localSessionToken()); };
         const device = authenticate();
         reauthorize.set(request, () => { if (authenticate() !== device) throw new Fault(401, 'session_changed', 'Reconnect to your workspace.'); });
-        if (remote && !phoneRouteAllowed(url.pathname, request.method ?? '')) throw new Fault(403, 'desktop_required', 'Manage host setup and connected devices in Settings on your computer.');
+        if (remote && !phoneRouteAllowed(url.pathname, request.method ?? '')&&!feedSemanticPhoneRouteAllowed(request.method??'',url.pathname)) throw new Fault(403, 'desktop_required', 'Manage host setup and connected devices in Settings on your computer.');
         if(url.pathname==='/api/software-update/acceptance'&&request.method==='GET'){
           if(surface!=='desktop'||store.recoveryEffectsPaused)throw new Fault(403,'local_only','Update acceptance is available only to the local host.');
           return json(200,{candidateId:options.candidateId,epoch:store.epoch,heldFor:updateHold,maintenanceHeld:store.updateMaintenanceHeld,blockers:localUpdateBlockers(),agent:agentServiceInfo(gateway.serviceInfo?.()),nativeSuspended:nativeUpdateLease?.snapshot(updateHold).nativeSuspended??false,resumeReadinessRequired:!!nativeUpdateLease});
@@ -370,8 +384,15 @@ export async function startServer(options: { directory: string; port: number; pr
           if(url.pathname==='/api/software-update/cancel')return json(200,await softwareUpdates.cancel(input));
           throw new Fault(404,'not_found','This update action is unavailable.');
         }
-        if (options.candidateId && (url.pathname === '/api/snapshot' || request.method === 'POST' && !staleClientCleanup.has(url.pathname)) && (request.headers['x-edition3-candidate'] !== options.candidateId || request.headers['x-edition3-desktop'] !== undefined && request.headers['x-edition3-desktop'] !== options.candidateId)) {
+        if (options.candidateId && (url.pathname === '/api/snapshot' || request.method === 'POST' && !staleClientCleanup.has(url.pathname)&&!isFeedSemanticPassivePost(request.method,url.pathname)) && (request.headers['x-edition3-candidate'] !== options.candidateId || request.headers['x-edition3-desktop'] !== undefined && request.headers['x-edition3-desktop'] !== options.candidateId)) {
           throw new Fault(409, 'client_update', 'This window needs the latest app. Keep your writing and reopen the app to continue saving.');
+        }
+        if(url.pathname==='/api/home/news/semantic'||url.pathname.startsWith('/api/home/news/semantic/')){
+          if(!feedSemantic)throw new Fault(503,'feed_service_unavailable','Saved Feed requests are temporarily unavailable.');
+          const result=await feedSemantic.http.handle(request,surface);
+          if(!result)throw new Fault(404,'not_found','This Feed route is unavailable.');
+          // Use the seam's original captured token, not a newly read cookie.
+          result.authorize();return json(result.status,result.body);
         }
         if (url.pathname === '/api/home/weather' && request.method === 'GET') {
           if ([...url.searchParams.keys()].some(key => key !== 'widgetId') || url.searchParams.getAll('widgetId').length !== 1) throw new Fault(400, 'weather_query', 'Choose one saved Weather widget.');
@@ -451,12 +472,13 @@ export async function startServer(options: { directory: string; port: number; pr
         if (!remote && url.pathname === '/api/storage/backups/open' && request.method === 'POST') {
           if (web) throw new Fault(409, 'recovery_local_preview', 'Separate review windows are available through the host connection. Use the verified recovery switch to open a restored copy in this web workspace.');
           const input = assistantRequestSchema.extend({ recoveryId: z.string().uuid() }).strict().parse(await commandBody(request, 2048));
+          if (recoveryPendingOwners.has(input.recoveryId)) throw new Fault(409, 'recovery_preview_closing', 'This recovery copy is still closing. Its saved data and original work remain owned.');
           const directory = backups.recoveredDirectory(device, input.recoveryId);
           store.admit(device, input, { ...input, type: 'recovery.open' }, () => ({ accepted: true }));
           if (!recoveryServices.has(input.recoveryId)) {
             if (!recoveryOpening.has(input.recoveryId)) {
-              if (recoveryServices.size + recoveryOpening.size >= 2) throw new Fault(409, 'recovery_preview_limit', 'Two recovery copies are already open. Restart this workspace to close their previews before opening another.');
-              const opening = startServer({ directory, port: 0, keyProtector: options.keyProtector, recoveryPreview: true, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, clientDirectory: options.clientDirectory }).then(async recovery => { if (closing) { await recovery.close(); throw new Fault(503, 'service_closing', 'The workspace is restarting.'); } recoveryServices.set(input.recoveryId, recovery); return recovery; }).finally(() => recoveryOpening.delete(input.recoveryId));
+              if (recoveryServices.size + recoveryOpening.size + recoveryPendingOwners.size >= 2) throw new Fault(409, 'recovery_preview_limit', 'Two recovery copies are already open. Restart this workspace to close their previews before opening another.');
+              const opening = startServer({ directory, port: 0, keyProtector: options.keyProtector, recoveryPreview: true, version: options.version, buildVersion: options.buildVersion, schemaVersion: options.schemaVersion, candidateId: options.candidateId, clientDirectory: options.clientDirectory }).then(recovery => { recoveryServices.set(input.recoveryId, recovery); if (closing) throw new Fault(503, 'service_closing', 'The workspace is restarting.'); return recovery; }).catch(failure => { if (failure instanceof ServiceDrainPendingError) recoveryPendingOwners.set(input.recoveryId, failure.owner); throw failure; }).finally(() => recoveryOpening.delete(input.recoveryId));
               recoveryOpening.set(input.recoveryId, opening);
             }
             await recoveryOpening.get(input.recoveryId);
@@ -595,6 +617,15 @@ export async function startServer(options: { directory: string; port: number; pr
           const cmd = z.object({ id: z.string().uuid() }).strict().parse(await commandBody(request)); return json(200, await skillManagement.check(cmd.id));
         }
         if (url.pathname === '/api/agent-skills/operation/resolve' && request.method === 'POST') return json(200, skillManagement.resolve(device, await commandBody(request)));
+        if(url.pathname==='/api/home/ideas'&&request.method==='GET'){
+          const id=url.searchParams.get('id'),kind=url.searchParams.get('kind'),after=url.searchParams.get('after')??'';
+          if(kind==='entry')return json(200,ideaPursuits.entry(id??''));
+          if(kind==='run')return json(200,ideaPursuits.run(id??'',url.searchParams.get('operation')??''));
+          if(id)return json(200,kind==='entries'?ideaPursuits.entries(id,after):kind==='runs'?ideaPursuits.runs(id,after):ideaPursuits.detail(id));
+          return json(200,ideaPursuits.list(after));
+        }
+        if(url.pathname==='/api/home/ideas'&&request.method==='POST')return json(200,ideaPursuits.command(device,await commandBody(request,500000)));
+        if(url.pathname==='/api/home/ideas/receipt'&&request.method==='POST')return json(200,ideaPursuits.receipt(device,await commandBody(request,500000)));
         if (url.pathname === '/api/home/library' && request.method === 'GET') return json(200, homeLibrary.state(device));
         if (url.pathname === '/api/home/library/export' && request.method === 'GET') {
           const exported = homeLibrary.export(url.searchParams);
@@ -605,6 +636,11 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/home/context' && request.method === 'POST') return json(200, homeLibrary.capture(device, await commandBody(request, 20000)));
         if (url.pathname === '/api/home/feed' && request.method === 'GET') return json(200, homeFeed.state(device));
         if (url.pathname === '/api/home/feed/open' && request.method === 'POST') return json(200, homeFeed.destination(device, await commandBody(request, 4096)));
+        if (url.pathname === '/api/home/news' && request.method === 'GET') return json(200, newsFeed.state({ following: url.searchParams.get('following') === '1' }));
+        if (url.pathname === '/api/home/news' && request.method === 'POST') return json(200, newsFeed.command(device, await commandBody(request, 65536)));
+        if (url.pathname === '/api/home/news/receipt' && request.method === 'POST') return json(200, newsFeed.receipt(device, await commandBody(request, 65536)));
+        if (url.pathname === '/api/home/news/refresh' && request.method === 'POST') return json(200, await newsFeed.refresh(device, await commandBody(request, 4096)));
+        if (url.pathname === '/api/home/news/refresh/receipt' && request.method === 'POST') return json(200, newsFeed.refreshReceipt(device, await commandBody(request, 4096)));
         if (url.pathname === '/api/agents/activity' && request.method === 'GET') return json(200, agentActivity.state());
         if (url.pathname === '/api/agents/activity' && request.method === 'POST') return json(200, agentActivity.command(device, await commandBody(request, 12000)));
         if (url.pathname === '/api/agents/meetings' && request.method === 'GET') {
@@ -652,11 +688,20 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/groups' && request.method === 'POST') return json(200, assistantGroups.save(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/group-preparations' && request.method === 'GET') return json(200, assistantGroupPreparations.read(device, groupPreparationQuery(url.searchParams)));
         if (url.pathname === '/api/assistant/group-preparations' && request.method === 'POST') return json(200, assistantGroupPreparations.save(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/group-preparations/preview' && request.method === 'POST') return json(200, assistantGroupPreparations.preview(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/group-execution' && request.method === 'GET')
+          return json(200, assistantGroupExecutions.readQuery(device, groupExecutionQuery(url.searchParams)));
+        if (url.pathname === '/api/assistant/group-execution' && request.method === 'POST')
+          return json(200, await assistantGroupExecutions.command(device, await commandBody(request), reauthorize.get(request)!));
+        if (url.pathname === '/api/assistant/group-execution/observe' && request.method === 'POST')
+          return json(200, await assistantGroupExecutions.observe(device, await commandBody(request), reauthorize.get(request)!));
         if (url.pathname === '/api/profile/studio' && request.method === 'GET') return json(200, profileStudio.state());
         if (url.pathname === '/api/profile/studio' && request.method === 'POST') return json(200, profileStudio.save(device, await commandBody(request)));
         if (url.pathname === '/api/profile/history' && request.method === 'GET') return json(200, store.profileHistory(z.string().min(1).max(200).optional().parse(url.searchParams.get('before') ?? undefined)));
         if (url.pathname === '/api/profile/quests' && request.method === 'POST') return json(200, store.saveQuest(device, await commandBody(request)));
         if (url.pathname === '/api/content/library' && request.method === 'GET') return json(200, contentWorkspace.library());
+        if (url.pathname === '/api/content/library/receipt' && request.method === 'POST') return json(200, contentWorkspace.libraryReceipt(device, await commandBody(request)));
+        if (url.pathname === '/api/content/workspace/receipt' && request.method === 'POST') return json(200, contentWorkspace.receipt(device, await commandBody(request)));
         if (url.pathname === '/api/content/workspace' && request.method === 'POST') return json(200, await contentWorkspace.command(device, await commandBody(request)));
         if (url.pathname === '/api/content/state' && request.method === 'GET') return json(200, contentWorkspace.state(z.string().min(1).max(100).parse(url.searchParams.get('id'))));
         if (url.pathname === '/api/content/result' && request.method === 'GET') return json(200, contentWorkspace.result(z.uuid().parse(url.searchParams.get('id'))));
@@ -726,6 +771,8 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/voice/finals' && request.method === 'POST') return json(200, await calls.finals(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/voice/consult' && request.method === 'POST') return json(200, await calls.consult(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/voice/end' && request.method === 'POST') return json(200, await calls.end(device, await commandBody(request)));
+        if (url.pathname === '/api/assistant/setup-request' && request.method === 'GET') return json(200, setupRequests.read(device, Object.fromEntries(url.searchParams)));
+        if (url.pathname === '/api/assistant/setup-request/close' && request.method === 'POST') return json(200, setupRequests.closeRequest(device, await commandBody(request, 8192)));
         if (url.pathname === '/api/assistant/sign-in' && request.method === 'GET') return json(200, signIn?.status() ?? { state: 'idle', message: 'Connect this host’s managed runtime to sign in here.' });
         if (url.pathname === '/api/assistant/usage' && request.method === 'GET') return json(200, await assistantUsage.read());
         if (url.pathname === '/api/assistant/account' && request.method === 'GET') return json(200, await chatGptAccount?.read(url.searchParams.get('refresh') === '1') ?? { state: 'unavailable', emails: [], profileCount: 0, message: 'Check the saved account on the host running your Assistant.' });
@@ -743,8 +790,8 @@ export async function startServer(options: { directory: string; port: number; pr
           const input = assistantRequestSchema.strict().parse(await commandBody(request));
           if (input.epoch !== store.epoch) throw new Fault(409, 'epoch_changed', 'Review setup after workspace recovery.');
           if (!runtime) throw new Fault(503, 'runtime_unavailable', 'No managed runtime is available.');
-          void runtime.start();
-          return json(202, runtime.status());
+          const setupRequest = setupRequests.start(device, 'runtime-start', input, async () => { const result = await runtime.start(); return { applied: result.state === 'running' }; });
+          return json(202, { ...runtime.status(), setupRequest });
         }
         if (url.pathname === '/api/assistant/search' && request.method === 'POST') return json(200, await assistant.search(await commandBody(request)));
         if (url.pathname === '/api/assistant/browse' && request.method === 'POST') return json(200, await assistant.browse(await commandBody(request)));
@@ -799,7 +846,8 @@ export async function startServer(options: { directory: string; port: number; pr
           const input = connectionSchema.parse(await commandBody(request));
           if (input.epoch !== store.epoch) throw new Fault(409, 'epoch_changed', 'Review this connection after recovery.');
           if (!(gateway instanceof Gateway)) throw new Fault(400, 'injected_gateway', 'This test transport cannot be configured.');
-          return json(200, await gateway.configure(input.url, input.token));
+          const setupRequest = setupRequests.start(device, 'gateway-connect', input, async () => { await gateway.configure(input.url, input.token); return { applied: true }; });
+          return json(202, { ...gateway.status(), setupRequest });
         }
         if (url.pathname === '/api/assistant/conversation/recover-settings' && request.method === 'POST') return json(200, await assistant.recoverSettings(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/conversation/fork' && request.method === 'POST') return json(200, await assistant.fork(device, await commandBody(request)));
@@ -885,7 +933,7 @@ export async function startServer(options: { directory: string; port: number; pr
     } finally { await transferred?.discard(); }
   };
   const dispatch = (surface: 'desktop' | 'phone' | 'web') => (request: IncomingMessage, response: ServerResponse) => {
-    const mutation=request.method==='POST'&&!((request.url??'').startsWith('/api/software-update'));
+    const mutation=request.method==='POST'&&!((request.url??'').startsWith('/api/software-update'))&&!isFeedSemanticPassivePost(request.method,(request.url??'').split('?')[0]);
     if(mutation)++mutationRequests;
     const job = handle(request, response, surface); requests.add(job);
     void job.finally(() => {requests.delete(job);if(mutation)--mutationRequests;}).catch(() => { if (!response.destroyed) response.destroy(); });
@@ -896,7 +944,52 @@ export async function startServer(options: { directory: string; port: number; pr
   if (webServer) { webServer.requestTimeout = 15000; webServer.headersTimeout = 10000; }
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); }).catch(async error => { if (server.listening) await new Promise<void>(ok => server.close(() => ok())); if (webServer?.listening) await new Promise<void>(ok => webServer.close(() => ok())); await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await conversationCleanup.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close(); if (gateway instanceof Gateway) await gateway.stop(); await transfers.close(); store.close(); throw error; });
+  let taskTimer: ReturnType<typeof setInterval> | undefined, crmTimer: ReturnType<typeof setInterval> | undefined;
+  // This owner exists before either listener binds. The same-Store Feed
+  // controller attaches before seal; startServer accepts no authority option.
+  const drain = new ServiceDrain({
+    stopAdmission() {
+      closing = true;
+      softwareUpdates.close(); homeWeather.close(); newsFeed.close(); companions.close();
+      if (taskTimer) clearInterval(taskTimer); if (crmTimer) clearInterval(crmTimer);
+      agentRoutines.close(); agentActivity.close();
+    },
+    async closeListeners() {
+      const httpClosed = server.listening ? new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept())) : Promise.resolve();
+      const webClosed = webServer?.listening ? new Promise<void>((accept, reject) => webServer.close(error => error ? reject(error) : accept())) : Promise.resolve();
+      const timer = setTimeout(() => { server.closeAllConnections(); webServer?.closeAllConnections(); }, 1000);
+      try { await Promise.all([httpClosed, webClosed]); } finally { clearTimeout(timer); }
+    },
+    async settleDependents(waitMs) {
+      // Opening requests keep their original promise and deposit any completed
+      // or pending child owner before removing the opening-map entry.
+      await Promise.allSettled([...requests]);
+      await Promise.allSettled([...recoveryOpening.values()]);
+      const children = [...recoveryServices.values(), ...recoveryPendingOwners.values()];
+      const settled = await Promise.all(children.map(async child => {
+        try { await child.close(waitMs); return true; }
+        catch (failure) { if (failure instanceof ServiceDrainPendingError) return false; throw failure; }
+      }));
+      return { localSettled: settled.every(Boolean) };
+    },
+    async dispose() {
+      // Failure or a pending child leaves this original owner reachable. Store
+      // closure is a successful final step, never an unconditional finally.
+      await backups.close();
+      await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); await hubMeetings.close(); await conversationCleanup.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); await assistantGroupExecutions.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
+      await nativeUpdateLease?.close(); await signIn?.close(); await setupRequests.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
+      await transfers.close(); store.close();
+    },
+  });
+  try {
+  feedSemantic=createFeedSemanticService(store,newsFeed,gateway,chatGptAccount,phoneAccess,()=>({
+    enabled:true,closing,ownOrigin,cookieName,candidateId:options.candidateId,
+    ...(options.development?{developmentOrigin:options.developmentOrigin??'http://127.0.0.1:4384'}:{}),
+    phoneOrigin:phoneHost.origin,privateWeb:options.privateWeb,
+  }),runtime);
+  drain.attachFeed(feedSemantic.controller);
+  drain.seal();
+  await new Promise<void>((accept, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', () => { server.off('error', reject); accept(); }); }).then(async () => { if (webServer) await new Promise<void>((accept, reject) => { webServer.once('error', reject); webServer.listen(options.privateWeb!.port, '127.0.0.1', () => { webServer.off('error', reject); accept(); }); }); });
   if (!store.recoveryEffectsPaused) { mailIndex.start(); addressBooks.start(); if(!store.updateMaintenanceHeld)contactCrm.tick();
     assignments.startPolling(); teamWork.start(); subtaskSuggestions.startPolling();
     agentRoutines.start(); hubMeetings.startPolling(); agentActivity.start(); }
@@ -906,28 +999,11 @@ export async function startServer(options: { directory: string; port: number; pr
   // Resume only after the service owns its listening address. A competing
   // launch that failed to bind must not create another managed process.
   if (!store.recoveryEffectsPaused) { void runtime?.resume(); if (phoneAccess.enabled) void phoneHost.reconcile(); }
-  const taskTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { store.tickTasks(); calendar.reminders.tick(); } catch { /* Persisted schedules remain retryable on the next tick or snapshot. */ } }, 1000); taskTimer.unref();
-  const crmTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { contactCrm.tick(); } catch { /* Contact settings and existing Tasks remain available for retry. */ } }, 60000); crmTimer.unref();
-  let closePromise: Promise<void> | undefined;
-  const close = () => {
-    if (closePromise) return closePromise;
-    closing = true; softwareUpdates.close(); homeWeather.close(); companions.close(); clearInterval(taskTimer); clearInterval(crmTimer); agentRoutines.close(); agentActivity.close();
-    // Stop admission before closing any authority. Browsers may retain sockets
-    // without a complete HTTP request, so idle-connection cleanup is insufficient.
-    const httpClosed = new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));
-    const webClosed = webServer?.listening ? new Promise<void>((accept, reject) => webServer.close(error => error ? reject(error) : accept())) : Promise.resolve();
-    const drainTimer = setTimeout(() => { server.closeAllConnections(); webServer?.closeAllConnections(); }, 1000);
-    closePromise = (async () => {
-      try {
-        await backups.close(); await Promise.all([...recoveryServices.values()].map(service => service.close()));
-        await teamWork.close(); await hostBrowser.close(); await workRepositories.close(); await github.close(); companions.close(); await hubMeetings.close(); await conversationCleanup.close(); await moduleActions.close(); await addressBooks.close(); await phoneHost.close(); await questions.close(); await approvals.close(); await accessControl.close(); await responseControl?.close(); await speechGateway?.close(); await skillManagement.close(); await calendarGroups.close(); await Promise.all([calendarWrites.close(), mailTriage.close(), mailDelivery.close(), mailIndex.close(), calendar.close(), accounts.close()]); await dictation.close(); await calls.close(); assistant.close(); await assignments.close(); await subtaskSuggestions.close();
-        await nativeUpdateLease?.close(); await signIn?.close(); await chatGptAccount?.close(); await accountControl.close(); await runtime?.stop(); if (gateway instanceof Gateway) await gateway.stop();
-      } finally {
-        try { await Promise.all([httpClosed, webClosed]); await Promise.allSettled([...requests]); }
-        finally { clearTimeout(drainTimer); await transfers.close(); store.close(); }
-      }
-    })();
-    return closePromise;
-  };
-  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, conversationCleanup, moduleActions, phoneHost, phoneAccess, store, assistant, observations, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, prepareWorkspaceSwitch: () => softwareUpdates.prepareWorkspaceSwitch(), refreshWorkspaceUpdates: () => softwareUpdates.refresh(), finishWorkspaceSwitch: () => softwareUpdates.finishWorkspaceSwitch(), close };
+  taskTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { store.tickTasks(); calendar.reminders.tick(); } catch { /* Persisted schedules remain retryable on the next tick or snapshot. */ } }, 1000); taskTimer.unref();
+  crmTimer = setInterval(() => { if (store.recoveryEffectsPaused||store.updateMaintenanceHeld) return; try { contactCrm.tick(); } catch { /* Contact settings and existing Tasks remain available for retry. */ } }, 60000); crmTimer.unref();
+  newsFeed.start();
+  const close = (waitMs?: number) => drain.close(waitMs);
+
+  return { origin: ownOrigin, privateWebOrigin: webServer?.address() && typeof webServer.address() === 'object' ? `http://127.0.0.1:${(webServer.address() as import('node:net').AddressInfo).port}` : undefined, conversationCleanup, moduleActions, phoneHost, phoneAccess, store, assistant, observations, approvals, questions, assignments, subtaskSuggestions, agentRoutines, hubMeetings, skillWorkshop, skillManagement, gateway, runtime, calls, accounts, calendar, calendarWrites, calendarGroups, mailIndex, mailDelivery, mailTriage, prepareWorkspaceSwitch: () => softwareUpdates.prepareWorkspaceSwitch(), refreshWorkspaceUpdates: () => softwareUpdates.refresh(), finishWorkspaceSwitch: () => softwareUpdates.finishWorkspaceSwitch(), drainStatus: () => drain.status(), close };
+  } catch (failure) { return drain.failedStart(failure); }
 }

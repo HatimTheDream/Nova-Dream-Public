@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import type { Entity, Snapshot, Task } from '../../../packages/domain/contracts';
 import { readLocal, saveLocal } from './api';
 import { retainedWindowId } from './useWorkspace';
 import { TaskNavigationController, type TaskOrigin, type TaskSection } from './task-editor-navigation';
-import { TaskEditor } from './TaskEditor';
+import { lazy } from './preload-lazy';
 import { Dialog } from './ui';
-import { RoutineEditor } from './RoutineEditor';
+const TaskEditor = lazy(() => import('./TaskEditor').then(module => ({ default: module.TaskEditor })));
+const RoutineEditor = lazy(() => import('./RoutineEditor').then(module => ({ default: module.RoutineEditor })));
 
 export function useTaskWorkspace(snapshot: Snapshot) {
   const current = useRef(snapshot); current.current = snapshot;
@@ -50,12 +51,12 @@ export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin
     const routine = occurrence && snapshot.routines?.find(item => item.id === pointer.routineId && item.revision > 0);
     const backToOccurrence = () => { workspace.occurrence(state.token); };
     if (!routine) return <Dialog title="Future Schedule Unavailable" close={backToOccurrence}><p>The original series is unavailable. This occurrence, its schedule draft and its return path are kept.</p>{workspace.error && <p role="alert">{workspace.error}</p>}<button type="button" onClick={backToOccurrence}>Back To This Occurrence</button></Dialog>;
-    return <RoutineEditor key={`${routine.id}:${state.token}`} routine={routine} snapshot={snapshot} occurrenceTitle={task.value.title}
+    return <Suspense fallback={<Dialog title="Opening Future Schedule" close={backToOccurrence}><p role="status">Reading your kept schedule…</p></Dialog>}><RoutineEditor key={`${routine.id}:${state.token}`} routine={routine} snapshot={snapshot} occurrenceTitle={task.value.title}
       close={backToOccurrence} navigationError={workspace.error} registerDeparture={workspace.registerDeparture}
-      saved={(confirmed, clean) => { if (clean && confirmed.id === pointer.routineId) workspace.occurrence(state.token); void refresh(); }}/>;
+      saved={(confirmed, clean) => { if (clean && confirmed.id === pointer.routineId) workspace.occurrence(state.token); void refresh(); }}/></Suspense>;
   }
   const previous = state.frames.at(-2), parent = previous && workspace.controller.resolve(previous.taskId);
-  return <TaskEditor key={task.id} task={task} snapshot={snapshot} section={frame.section} scroll={frame.scroll} sectionScroll={frame.sectionScroll} keepView={workspace.view}
+  return <Suspense fallback={<Dialog title="Opening Task" close={finish}><p role="status">Reading your kept task…</p></Dialog>}><TaskEditor key={task.id} task={task} snapshot={snapshot} section={frame.section} scroll={frame.scroll} sectionScroll={frame.sectionScroll} keepView={workspace.view}
     registerDeparture={workspace.registerDeparture}
     back={previous ? workspace.back : finish} backLabel={previous ? `Back To ${parent?.value.title || 'Previous Task'}` : `Back To ${state.origin.label}`}
     navigationError={workspace.error} close={finish} openTask={workspace.go} newTask={workspace.child}
@@ -66,5 +67,5 @@ export function TaskWorkspace({ workspace, snapshot, refresh, closed, openOrigin
       const changed = workspace.acknowledge(confirmed, state.token, clean && (!returning || canClose(state.origin, finish)));
       if (changed && !workspace.controller.state?.active) closed(state.origin);
       void refresh();
-    }}/>
+    }}/></Suspense>
 }

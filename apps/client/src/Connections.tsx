@@ -1,3 +1,4 @@
+import { SetupRequestControls, useSetupRequest } from './SetupRequestControls';
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantState } from '../../../packages/domain/assistant';
 import type { Snapshot } from '../../../packages/domain/contracts';
@@ -72,6 +73,8 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
     catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : 'Setup has not been confirmed. Check connection status.'); }
     finally { if (current()) setBusy(false); }
   };
+  const setup = useSetupRequest(snapshot.epoch, snapshot.deviceId, refresh);
+  const setupBlocked = busy || setup.busy || !!setup.journal.pending || !!setup.journal.error;
   const connection = assistant?.connection;
   const ready = connection?.state === 'ready';
   const accountReady = ready && connection.modelAuthReady;
@@ -109,9 +112,10 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
     <h2>{section === 'accounts' ? 'ChatGPT accounts' : 'Assistant connection'}</h2>
     {recoveryPaused && <p className="notice">Connections are paused in this copy. Open Backups & Recovery to review recovery.</p>}
     {error && <p className="field-error" role="alert">{error}</p>}
+    <SetupRequestControls control={setup} enabled={canConnect}/>
     <div hidden={section === 'accounts'} inert={section === 'accounts'}>
     <div className="assistant-setup"><div className="section-heading settings-connection-status"><strong>{recoveryPaused ? 'Paused for recovery' : !online ? 'Offline' : accountReady ? 'Ready to work' : !connection ? 'Checking connection…' : connecting ? 'Connecting…' : 'Connection needs attention'}</strong>
-      {accountReady ? <button onClick={openAssistant}>Open Assistant</button> : <button className="primary" disabled={!canConnect || busy || !runtime || !connection || runtime.state === 'starting'} onClick={() => void perform(() => request('assistant/runtime/start', { requestId: crypto.randomUUID(), epoch: snapshot.epoch }))}>{!runtime || !connection ? 'Checking this host…' : runtime.state === 'starting' ? 'Starting OpenClaw…' : runtime.state === 'running' ? 'Reconnect this host' : 'Start on this host'}</button>}</div>
+      {accountReady ? <button onClick={openAssistant}>Open Assistant</button> : <button className="primary" disabled={!canConnect || setupBlocked || !runtime || !connection || runtime.state === 'starting'} onClick={() => void setup.start('runtime-start')}>{!runtime || !connection ? 'Checking this host…' : runtime.state === 'starting' ? 'Starting OpenClaw…' : runtime.state === 'running' ? 'Reconnect this host' : 'Start on this host'}</button>}</div>
       {!ready && <p className="metadata" role="status">{connection?.message ?? 'Reading connection status…'}</p>}
       {connection?.pairingRequestId && <p className="notice">OpenClaw needs approval for this device. Request: <code>{connection.pairingRequestId}</code></p>}
       {runtime && ['starting', 'error', 'unavailable'].includes(runtime.state) && <p className={runtime.state === 'starting' ? 'metadata' : 'field-error'} role="status">{runtime.message}{runtime.state === 'starting' && runtime.elapsedSeconds !== undefined && ` · ${runtime.elapsedSeconds < 60 ? `${runtime.elapsedSeconds}s` : `${Math.floor(runtime.elapsedSeconds / 60)}m ${runtime.elapsedSeconds % 60}s`} elapsed`}</p>}
@@ -123,7 +127,7 @@ export function Connections({ snapshot, online, openAssistant, remoteHost = fals
       <div className="connection-facts"><div><span>AI runtime</span><strong>{!connection ? 'Checking…' : ready ? 'Connected' : connecting ? 'Connecting…' : 'Not connected'}</strong></div><div><span>Model access</span><strong>{accountReady ? 'Available' : 'Not confirmed'}</strong></div></div>
       <button aria-label="Refresh Assistant connection and accounts" disabled={busy || !canConnect} onClick={() => void perform(async () => { await request<ChatGptAccountStatus>('assistant/account?refresh=1'); if (ready) await request('assistant/models'); })}>Refresh connection</button>
       {!!signIn?.id && (!showSignIn || signIn.state === 'completed') && <p className="metadata">Last sign-in: {signIn.message}</p>}
-      <details className="gateway-options settings-details"><summary>Advanced connection setup</summary><form onSubmit={event => { event.preventDefault(); void perform(async () => { await request('assistant/connection', { requestId: crypto.randomUUID(), epoch: snapshot.epoch, url: address, ...(token ? { token } : {}) }); setToken(''); }); }}><p className="metadata">Use the secure address and connection token from your chosen OpenClaw host.</p><label>Gateway address<input required type="url" placeholder="wss://your-private-host" value={address} onChange={event => setAddress(event.target.value)} autoComplete="off" spellCheck={false}/></label><label>Connection token<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Kept only by the private service"/></label><button disabled={busy || !canConnect || !address}>Connect Gateway</button></form></details>
+      <details className="gateway-options settings-details"><summary>Advanced connection setup</summary><form onSubmit={event => { event.preventDefault(); if (!setupBlocked && canConnect) void setup.start('gateway-connect', { url: address, ...(token ? { token } : {}) }, () => setToken('')); }}><p className="metadata">Use the secure address and connection token from your chosen OpenClaw host.</p><label>Gateway address<input required type="url" placeholder="wss://your-private-host" disabled={setupBlocked} value={address} onChange={event => setAddress(event.target.value)} autoComplete="off" spellCheck={false}/></label><label>Connection token<input type="password" disabled={setupBlocked} value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Kept only by the private service"/></label><button disabled={setupBlocked || !canConnect || !address}>Connect Gateway</button></form></details>
 
     </details>
     </div>

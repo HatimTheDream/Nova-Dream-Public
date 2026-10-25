@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { canonical } from '../packages/domain/contracts';
+import { phonePairSchema } from '../packages/domain/phone';
 import { Store } from '../apps/service/store.js';
 import { PhoneAccess } from '../apps/service/phone-access.js';
 
@@ -90,4 +92,66 @@ test('a fresh owner code re-pairs the same browser identity while rotating and f
   assert.throws(() => f.access.pair(input, second.token), /Pair this phone/);
   assert.equal(f.access.authenticate(second.token), first.deviceId); assert.equal(f.access.devices().length, 1);
   f.restart(); assert.deepEqual(f.access.pair(fresh, second.token), second);
+});
+
+
+function rejectedPair(run: () => unknown) {
+  try { run(); assert.fail('Expected a terminal rejection'); } catch (error: any) {
+    assert.equal(error.code, 'phone_pair_rejected'); return error.current;
+  }
+}
+test('a rejected pairing has an exact durable fence, including if a later challenge has the same digits', t => {
+  const f = fixture(t); f.access.setEnabled('owner', cmd(f.store), true);
+  const input = { requestId: randomUUID(), code: '1234-5678', name: 'Original', expiresAt: 1300000 };
+  const proof = rejectedPair(() => f.access.pair(input));
+  assert.equal(proof.sha256, createHash('sha256').update(canonical(phonePairSchema.parse(input))).digest('hex'));
+  assert.equal(proof.reason, 'code_unavailable');
+  f.store.internalWrite('phone:challenge', { epoch: f.store.epoch, codeDigest: createHash('sha256').update('12345678').digest('hex'), expiresAt: 1300000 });
+  f.restart(); assert.deepEqual(rejectedPair(() => f.access.pair(input)), proof); assert.equal(f.access.devices().length, 0);
+  assert.throws(() => f.access.pair({ ...input, name: 'Changed' }), /different details/);
+});
+test('expired finite fences may be pruned because the original deadline independently prevents late admission', t => {
+  const f = fixture(t); f.access.setEnabled('owner', cmd(f.store), true);
+  const input = { requestId: randomUUID(), code: '12345678', name: 'Original', expiresAt: 1300000 };
+  rejectedPair(() => f.access.pair(input)); f.advance(300001);
+  rejectedPair(() => f.access.pair({ ...input, requestId: randomUUID(), expiresAt: 1600000 }));
+  assert.equal(f.store.internalRead('phone:pair-rejection:' + input.requestId), undefined);
+  f.store.internalWrite('phone:challenge', { epoch: f.store.epoch, codeDigest: createHash('sha256').update(input.code).digest('hex'), expiresAt: 1600000 });
+  assert.equal(rejectedPair(() => f.access.pair(input)).reason, 'request_expired'); assert.equal(f.access.devices().length, 0);
+});
+test('a confirmed original receipt remains recoverable after its new-admission deadline', t => {
+  const f = fixture(t); f.access.setEnabled('owner', cmd(f.store), true);
+  const input = { requestId: randomUUID(), code: f.access.startPairing('owner', cmd(f.store)).code, name: 'Phone', expiresAt: 1300000 };
+  const original = f.access.pair(input); f.advance(300001); f.restart();
+  assert.deepEqual(f.access.pair(input), original); assert.equal(f.access.devices().length, 1);
+  f.access.revoke('owner', { ...cmd(f.store), deviceId: original.deviceId });
+  assert.equal(rejectedPair(() => f.access.pair(input)).reason, 'session_revoked');
+});
+test('pairing access reason distinguishes a known expired or revoked cookie without granting access', t => {
+  const f = fixture(t); assert.equal(f.access.pairingReason(''), 'disabled'); f.access.setEnabled('owner', cmd(f.store), true);
+  assert.equal(f.access.pairingReason('unknown'), 'required');
+  const original = f.access.pair({ requestId: randomUUID(), code: f.access.startPairing('owner', cmd(f.store)).code, name: 'Phone' });
+  assert.equal(f.access.pairingReason(original.token), undefined); f.advance(30 * 86400000);
+  assert.equal(f.access.pairingReason(original.token), 'expired'); assert.throws(() => f.access.authenticate(original.token));
+  f.access.revoke('owner', { ...cmd(f.store), deviceId: original.deviceId });
+  assert.equal(f.access.pairingReason(original.token), 'revoked'); assert.throws(() => f.access.authenticate(original.token));
+});
+test('legacy pairing rejection stays fenced permanently and excessive future deadlines never become later admission', t => {
+  const f = fixture(t); f.access.setEnabled('owner', cmd(f.store), true);
+  const legacy = { requestId: randomUUID(), code: '12345678', name: 'Legacy' };
+  const proof = rejectedPair(() => f.access.pair(legacy)); f.advance(600001); f.restart();
+  assert.deepEqual(rejectedPair(() => f.access.pair(legacy)), proof);
+  const future = { ...legacy, requestId: randomUUID(), expiresAt: 9999999999999 };
+  assert.equal(rejectedPair(() => f.access.pair(future)).reason, 'clock_mismatch');
+  assert.equal(f.access.devices().length, 0);
+});
+
+test('permanent pairing fences have a finite cap without removing originals or blocking finite new requests', t => {
+  const f = fixture(t); f.access.setEnabled('owner', cmd(f.store), true);
+  for (let i = 0; i < 512; i++) f.store.internalWrite('phone:pair-rejection:fixture-' + i, { requestId: 'fixture-' + i });
+  assert.throws(() => f.access.pair({ requestId: randomUUID(), code: '12345678', name: 'Legacy' }), /earlier pairing requests are kept/);
+  assert.equal(f.store.internalList('phone:pair-rejection:').length, 512);
+  const finite = { requestId: randomUUID(), code: '12345678', name: 'Finite', expiresAt: 1300000 };
+  assert.equal(rejectedPair(() => f.access.pair(finite)).reason, 'code_unavailable');
+  assert.equal(f.store.internalList('phone:pair-rejection:').length, 513);
 });

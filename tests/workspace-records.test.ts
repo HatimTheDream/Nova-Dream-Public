@@ -52,8 +52,10 @@ test('all missing module records share encrypted revisions, snapshots and retain
     f.restart();
     for (const [kind, id, value] of values) { assert.deepEqual(f.store.readEntity(kind, id)?.value, value); assert.equal(f.store.snapshot('owner').records?.[kind].length, 1); assert.deepEqual(f.store.recordHistory({ kind, id }).versions[0].value, value); }
     const db = new DatabaseSync(join(f.path, 'workspace.sqlite'), { readOnly: true });
+    try {
     for (const table of ['entities', 'history', 'receipts']) for (const row of db.prepare(`SELECT payload FROM ${table}`).all()) { const bytes = Buffer.from(row.payload as Uint8Array).toString('utf8'); assert.ok(!bytes.includes('Private fixture')); assert.ok(!bytes.includes('Exact bytes')); }
-    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 56); db.close();
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 60);
+    } finally { db.close(); }
   } finally { f.close(); }
 });
 test('revisions and request receipts reject competing, cross-device and changed-payload writes', () => {
@@ -132,7 +134,7 @@ test('future portrait data survives unrelated edits without replacement, and fut
     assert.deepEqual(f.store.readEntity('profile', 'profile:owner')?.value.appearance, appearance);
     const resolved = resolveSquareLynxAppearance(appearance); assert.notEqual(resolved.status, 'ready'); assert.deepEqual(resolved.source, appearance);
     const db = new DatabaseSync(join(f.path, 'workspace.sqlite')); db.exec('PRAGMA user_version=999'); db.close();
-    const before = readFileSync(join(f.path, 'workspace.sqlite')); assert.throws(() => new Store(f.path), /newer Nova Dream/); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
+    const before = readFileSync(join(f.path, 'workspace.sqlite')); assert.throws(() => new Store(f.path), /compatible Nova Dream build/); assert.deepEqual(readFileSync(join(f.path, 'workspace.sqlite')), before);
   } finally { f.close(); }
 });
 

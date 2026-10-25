@@ -49,6 +49,8 @@ const loader = registerHooks({
   },
 });
 const { Workspace } = await import('../apps/client/src/App');
+const { ConversationHeaderTools } = await import('../apps/client/src/ConversationHeaderTools');
+const { registerAssistantDraftNavigation } = await import('../apps/client/src/assistant-draft-navigation');
 const { SearchWorkspace, useGlobalSearch } = await import('../apps/client/src/SearchWorkspace');
 const { GeneralSettings } = await import('../apps/client/src/GeneralSettings');
 const { Dialog } = await import('../apps/client/src/ui');
@@ -68,6 +70,12 @@ const { useAssistant: actualUseAssistant } = await import('../apps/client/src/us
 loader.deregister();
 const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : node?.props ? [node, ...nodes(node.props.children)] : [];
 const text = (node: any): string => Array.isArray(node) ? node.map(text).join(' ') : node?.props ? text(node.props.children) : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
+// App may pass these exact callbacks through the maintained lazy wrapper.
+// Match the bound surface contract; mount the real editor separately below.
+const isDirectChooser = (node: any) => !!node.props?.target?.token && typeof node.props.current === 'function'
+  && typeof node.props.open === 'function' && typeof node.props.close === 'function';
+const isGeneralSettings = (node: any) => typeof node.props?.saveShared === 'function'
+  && typeof node.props.resetNavigation === 'function';
 const scope = { epoch: '00000000-0000-4000-8000-000000000001', deviceId: 'device', windowId: 'search-window' };
 function snapshot(): Snapshot {
   const row = <T>(id: string, value: T) => ({ id, value, revision: 2, deviceId: 'device', updatedAt: '2026-10-19T00:00:00.000Z' });
@@ -268,12 +276,12 @@ test('actual App guarded entry and return preserve exact token and refuse destin
     const page = () => app.find(node => node.props.page === 'agents' && node.props.openAgentChat);
     const viewKey = `e3:direct-chat-view:${scope.epoch}:${scope.deviceId}:${scope.windowId}`;
     f.refuse(key => key === viewKey); assert.equal(page().props.openAgentChat(recipient.agentId, recipient.agentRevision), false); await app.flush();
-    assert.equal(currentRoute(app), 'agents'); assert.equal(nodes(app.tree).some(n => n.type === DirectAgentChooser), false);
+    assert.equal(currentRoute(app), 'agents'); assert.equal(nodes(app.tree).some(isDirectChooser), false);
     f.refuse(() => false); assert.equal(page().props.openAgentChat(recipient.agentId, recipient.agentRevision), true); await app.flush();
-    const chooser = app.find(n => n.type === DirectAgentChooser), staleClose = chooser.props.close;
+    const chooser = app.find(isDirectChooser), staleClose = chooser.props.close;
     f.refuse(key => key === viewKey); assert.equal(chooser.props.open(row), false); await app.flush();
-    assert.equal(controller.selectedId, null); assert.equal(app.find(n => n.type === DirectAgentChooser).props.target.conversationId, undefined);
-    f.refuse(() => false); assert.equal(app.find(n => n.type === DirectAgentChooser).props.open(row), true); await app.flush();
+    assert.equal(controller.selectedId, null); assert.equal(app.find(isDirectChooser).props.target.conversationId, undefined);
+    f.refuse(() => false); assert.equal(app.find(isDirectChooser).props.open(row), true); await app.flush();
     const assistant = app.find(n => n.props.directBack); f.refuse(key => key === viewKey);
     assert.equal(assistant.props.directBack(), false); await app.flush(); assert.equal(currentRoute(app), 'assistant');
     f.refuse(() => false); assert.equal(assistant.props.directBack(), true); await app.flush(); assert.equal(currentRoute(app), 'agents');
@@ -281,6 +289,46 @@ test('actual App guarded entry and return preserve exact token and refuse destin
     const latest = f.storage.get(viewKey); staleClose(); await app.flush();
     assert.equal(f.storage.get(viewKey), latest); assert.equal(currentRoute(app), 'assistant'); assert.deepEqual(postCalls(f), []);
   } finally { f.close(); restore(); }
+});
+
+test('Content source refusal leaves no deferred Assistant target and admitted opening keeps the exact source', async () => {
+  const f = fixture(), controller = directController(), restore = installController(controller);
+  let allowed = false, release = () => {};
+  const source = { conversationId: randomUUID(), nativeId: randomUUID(), messageId: 'original-message', messageHash: 'a'.repeat(64) };
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Content').props.onClick(); await app.flush();
+    release = registerRecordDraftNavigation(() => allowed);
+    app.find(n => n.props.page === 'content').props.openSource(source); await app.flush();
+    assert.equal(currentRoute(app), 'content');
+    allowed = true; app.button('Assistant').props.onClick(); await app.flush();
+    assert.equal(app.find(n => n.props.controller === controller && n.props.contentActions).props.sourceRequest, null,
+      'a refused source must not appear when Assistant is opened later for unrelated work');
+    app.button('Content').props.onClick(); await app.flush();
+    app.find(n => n.props.page === 'content').props.openSource(source); await app.flush();
+    assert.equal(currentRoute(app), 'assistant');
+    assert.deepEqual(app.find(n => n.props.controller === controller && n.props.contentActions).props.sourceRequest.target,
+      { ...source, epoch: scope.epoch, role: 'assistant' });
+    assert.deepEqual(postCalls(f), []);
+  } finally { release(); f.close(); restore(); }
+});
+
+test('Content opening refusal leaves no deferred record selection after the writing guard clears', async () => {
+  const f = fixture(), controller = directController(), restore = installController(controller);
+  let allowed = false, release = () => {};
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Assistant').props.onClick(); await app.flush();
+    release = registerRecordDraftNavigation(() => allowed);
+    app.find(n => n.props.controller === controller && n.props.contentActions).props.contentActions.openContent('content:refused'); await app.flush();
+    assert.equal(currentRoute(app), 'assistant');
+    allowed = true; app.button('Content').props.onClick(); await app.flush();
+    assert.equal(app.find(n => n.props.page === 'content').props.target, null,
+      'an unrelated later Content visit must keep its existing selection');
+    app.button('Assistant').props.onClick(); await app.flush();
+    app.find(n => n.props.controller === controller && n.props.contentActions).props.contentActions.openContent('content:admitted'); await app.flush();
+    assert.equal(currentRoute(app), 'content');
+    assert.equal(app.find(n => n.props.page === 'content').props.target.id, 'content:admitted');
+    assert.deepEqual(postCalls(f), []);
+  } finally { release(); f.close(); restore(); }
 });
 
 test('actual Team callback respects retained writer and exact saved revision without sending', async () => {
@@ -302,12 +350,12 @@ test('an old Team callback cannot bypass the current Settings writing owner', as
     app.button('Agents').props.onClick(); await app.flush();
     const oldOpen = app.find(node => node.props.page === 'agents' && node.props.openAgentChat).props.openAgentChat;
     app.button('Settings').props.onClick(); await app.flush();
-    const settings = app.find(node => nodes(node.props.general).some(child => child.type === GeneralSettings));
-    const general = f.mount(GeneralSettings, nodes(settings.props.general).find(node => node.type === GeneralSettings).props); await general.flush();
+    const settings = app.find(node => nodes(node.props.general).some(isGeneralSettings));
+    const general = f.mount(GeneralSettings, nodes(settings.props.general).find(isGeneralSettings).props); await general.flush();
     general.find(node => node.props['aria-label'] === 'Color Theme').props.onChange({ target: { value: 'dark' } }); await general.flush(); await app.flush();
     const before = new Map(f.storage); assert.equal(oldOpen(recipient.agentId, recipient.agentRevision), false); await app.flush();
     assert.equal(currentRoute(app), 'settings'); assert.deepEqual(f.storage, before);
-    assert.equal(nodes(app.tree).some(node => node.type === DirectAgentChooser), false); assert.deepEqual(postCalls(f), []);
+    assert.equal(nodes(app.tree).some(isDirectChooser), false); assert.deepEqual(postCalls(f), []);
   } finally { f.close(); restore(); }
 });
 
@@ -348,7 +396,7 @@ test('Assistant-origin Back restores the exact previous conversation and refuses
     const app = f.mount(Workspace, appProps(data)); await app.flush(); app.button('Assistant').props.onClick(); await app.flush();
     const assistant = () => app.find(node => node.props.controller === controller && node.props.openAgentChat);
     assistant().props.openAgentChat(recipient.agentId, recipient.agentRevision); await app.flush();
-    app.find(node => node.type === DirectAgentChooser).props.open(direct); await app.flush();
+    app.find(isDirectChooser).props.open(direct); await app.flush();
     assert.equal(controller.selectedId, direct.id);
     const viewKey = `e3:direct-chat-view:${scope.epoch}:${scope.deviceId}:${scope.windowId}`;
     f.refuse(key => key === viewKey); assert.equal(assistant().props.directBack(), false); await app.flush();
@@ -378,5 +426,74 @@ test('actual controller reload selects the original chat after a refused rollbac
     const hook = f.mount(() => actualUseAssistant(data, false), {}); await hook.flush();
     assert.equal(hook.tree.selectedId, original.id); assert.match(hook.tree.error, /previous chat selection is kept/);
     assert.equal(hook.tree.select(next.id), false); assert.equal(hook.tree.selectedId, original.id); assert.deepEqual(postCalls(f), []);
+  } finally { f.close(); }
+});
+
+
+test('Setup round trip keeps the exact Assistant mounted, retains sections and never sends the draft', async () => {
+  const f = fixture(), controller = { ...directController(), selectedId: 'original', space: 'work' }, restore = installController(controller);
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Assistant').props.onClick(); await app.flush();
+    const assistant = () => app.find(n => n.props.controller === controller && n.props.contentActions);
+    const before = assistant(); before.props.openSettings('accounts'); await app.flush();
+    assert.equal(currentRoute(app), 'settings'); assert.equal(assistant().type, before.type); assert.equal(assistant().key, before.key);
+    assert.ok(nodes(app.tree).some(n => n.props.hidden && n.props.inert && nodes(n).includes(assistant())));
+    const settings = () => app.find(n => n.props.selected && n.props.select && n.props.general);
+    assert.equal(settings().props.selected, 'accounts'); assert.equal(settings().props.returnTo.label, 'Assistant');
+    settings().props.select('phone'); await app.flush(); assert.equal(settings().props.selected, 'phone');
+    const raw = [...f.storage.entries()].find(([key]) => key.startsWith('e3:setup-return:'))![1];
+    assert.deepEqual(JSON.parse(raw).selection, { id: 'original', space: 'work' });
+    assert.equal(JSON.parse(raw).section, 'phone');
+    settings().props.returnTo.open(); await app.flush(); assert.equal(currentRoute(app), 'assistant');
+    assert.equal(assistant().key, before.key); assert.equal(controller.selectedId, 'original'); assert.equal(controller.space, 'work');
+    app.button('Home').props.onClick(); await app.flush(); before.props.openSettings('accounts'); await app.flush();
+    assert.equal(currentRoute(app), 'home', 'A retired Assistant callback cannot replace the current route');
+    assert.deepEqual(postCalls(f), []);
+  } finally { f.close(); restore(); }
+});
+
+test('Setup departure refuses failed writing retention or return metadata and keeps current work visible', async () => {
+  const f = fixture(), controller = directController(), restore = installController(controller);
+  let unregister = () => {};
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Assistant').props.onClick(); await app.flush();
+    const assistant = () => app.find(n => n.props.controller === controller && n.props.contentActions);
+    unregister = registerAssistantDraftNavigation(() => false);
+    assistant().props.openSettings('accounts'); await app.flush(); assert.equal(currentRoute(app), 'assistant');
+    assert.equal([...f.storage.keys()].some(key => key.startsWith('e3:setup-return:')), false);
+    unregister(); unregister = () => {}; f.refuse(key => key.startsWith('e3:setup-return:'));
+    assistant().props.openSettings('assistant'); await app.flush(); assert.equal(currentRoute(app), 'assistant');
+    assert.match(text(app.tree), /exact setup return could not be retained/); assert.deepEqual(postCalls(f), []);
+  } finally { unregister(); f.close(); restore(); }
+});
+
+test('Reload reopens the original setup section; a mismatched conversation cannot silently become Back', async () => {
+  const f = fixture(), controller = { ...directController(), selectedId: 'original', space: 'chat' }, restore = installController(controller);
+  try {
+    const app = f.mount(Workspace, appProps()); await app.flush(); app.button('Assistant').props.onClick(); await app.flush();
+    app.find(n => n.props.controller === controller && n.props.contentActions).props.openSettings('accounts'); await app.flush(); app.close();
+    const restored = f.mount(Workspace, appProps()); await restored.flush(); assert.equal(currentRoute(restored), 'settings');
+    const settings = restored.find(n => n.props.selected && n.props.select && n.props.general); assert.equal(settings.props.selected, 'accounts');
+    controller.selectedId = 'other'; await restored.update({});
+    restored.find(n => n.props.returnTo).props.returnTo.open(); await restored.flush();
+    assert.equal(currentRoute(restored), 'settings'); assert.match(text(restored.tree), /original conversation selection has changed/);
+    assert.deepEqual(postCalls(f), []);
+  } finally { f.close(); restore(); }
+});
+
+test('Connection Details is reachable in the existing conversation menu and closes it before navigation', async () => {
+  const f = fixture(), calls: string[] = [];
+  try {
+    for (const conversation of [undefined, directConversation()]) {
+      const header = f.mount(ConversationHeaderTools, { conversation, conversations: conversation ? [conversation] : [], pins: [], projects: [], blocked: false,
+        visibilityBlocked: () => false, edit: async () => {}, openVersion() {}, openPin() {}, removePin: async () => {}, settings() {}, memory() {}, exportDraft() {},
+        summary: {}, panelOpen: false, togglePanel() {}, connectionDetails: () => calls.push('settings') });
+      await header.flush(); const menu = header.find(n => n.props.label === 'Conversation menu');
+      const child = menu.props.children(() => calls.push('close'));
+      const content = f.mount(child.type, child.props); await content.flush();
+      content.button('Connection Details').props.onClick(); assert.deepEqual(calls.splice(0), ['close', 'settings']);
+      content.close(); header.close();
+    }
+    assert.deepEqual(postCalls(f), []);
   } finally { f.close(); }
 });

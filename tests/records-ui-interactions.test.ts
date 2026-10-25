@@ -33,7 +33,7 @@ const nodes = (node: any): any[] => Array.isArray(node) ? node.flatMap(nodes) : 
 const text = (node: any): string => Array.isArray(node) ? node.map(text).join('') : node?.props ? text(node.props.children) : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
 const button = (tree: any, label: string) => nodes(tree).find(node => node.type === 'button' && (text(node) === label || node.props['aria-label'] === label));
 const field = (tree: any, label: string) => nodes(nodes(tree).find(node => node.type === 'label' && text(node).startsWith(label))).find(node => ['input', 'textarea'].includes(node.type));
-const snapshot = { epoch: 'fixture-epoch', deviceId: 'fixture-device', cursor: 1, records: { contact: [] } } as any;
+const snapshot = { epoch: '00000000-0000-4000-8000-000000000901', deviceId: 'fixture-device', cursor: 1, records: { contact: [] } } as any;
 const organization = { id: 'organization:fixture', revision: 1, memberIds: [], value: { name: 'Studio', website: '', phone: '', industry: '', notes: '' } };
 const crm = { organizations: [organization], activities: [], relationships: [] };
 
@@ -48,6 +48,7 @@ function host(initialComponent: (props: any) => any, initialProps: any, respond:
       effect(run: () => void | (() => void), deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((value, n) => !Object.is(value, prior.deps[n]))) { cells[i] = { deps, cleanup: prior?.cleanup }; effects.push(() => { cells[i].cleanup?.(); cells[i].cleanup = run(); }); } },
       memo(read: () => unknown, deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((value, n) => !Object.is(value, prior.deps[n]))) cells[i] = { deps, value: read() }; return cells[i].value; },
     },
+    window: { addEventListener() {}, removeEventListener() {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
     requestAnimationFrame: (run: () => void) => { frames.push(run); return frames.length; },
     setInterval: (run: () => void) => { intervals.add(run); return run; }, clearInterval: (run: () => void) => intervals.delete(run),
@@ -73,12 +74,12 @@ test('library archive cannot discard edited template or brand writing, including
     try {
       await app.flush(); button(app.tree, 'Edit').props.onClick(); await app.flush();
       assert.equal(button(app.tree, 'Archive').props.disabled, false);
-      field(app.tree, type === 'brand' ? 'Voice, audience' : 'Draft structure').props.onChange({ target: { value: 'Writing that must survive' } }); await app.flush();
+      field(app.tree, type === 'brand' ? 'Voice, Audience And Guidelines' : 'Draft Structure').props.onChange({ target: { value: 'Writing that must survive' } }); await app.flush();
       assert.equal(button(app.tree, 'Archive').props.disabled, true);
       await button(app.tree, 'Archive').props.onClick(); await app.flush();
       assert.equal(app.calls.filter(call => call.path === '/api/content/workspace').length, 0);
       await app.mount();
-      assert.equal(field(app.tree, type === 'brand' ? 'Voice, audience' : 'Draft structure').props.value, 'Writing that must survive');
+      assert.equal(field(app.tree, type === 'brand' ? 'Voice, Audience And Guidelines' : 'Draft Structure').props.value, 'Writing that must survive');
       assert.equal(button(app.tree, 'Archive').props.disabled, true);
     } finally { app.close(); }
   }

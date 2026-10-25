@@ -33,6 +33,7 @@ export function useComposerMode(epoch: string, draftId: string, journal: { value
       const next = { ...value, ...(value.workMode === intent.mode ? { workMode: 'chat' as const } : {}) };
       if (!captured || canonical(value) !== canonical(captured)) return next;
       next.text = '';
+      delete next.idea;
       next.attachments = sourceHash ? value.attachments.filter(file => file.sha256 === sourceHash) : [];
       if (!sourceHash) delete next.refineSource;
       return next;

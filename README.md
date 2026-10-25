@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-2.12.0-blue)
+![Version](https://img.shields.io/badge/Version-2.28.8-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 
@@ -121,7 +121,7 @@ npm run quality
 
 The coherent quality gate includes type checking, tests, production dependency audits, release metadata validation and the client/service build. CI runs the same gate. Internal package identifiers retain the Edition 3 name for compatibility; `private: true` prevents accidental npm package publication. Source distribution is separate from signed desktop installers, which are not provided here.
 
-The client budget remains 180 KB gzip for startup and 80 KB per deferred chunk; the current total ceiling is 707,000 bytes. Its measured rationale is recorded in `scripts/client-budget.mjs`.
+The client budget remains 180 KB gzip for startup and 80 KB per deferred chunk; the current total ceiling is 912,000 bytes. Its measured rationale is recorded in `scripts/client-budget.mjs`.
 
 The accepted pixel character and current runtime assets are included. Unused experimental 3D models, downloaded generation outputs, private design records and authoring environments are excluded. See [third-party notices](THIRD_PARTY_NOTICES.md) and [the changelog](CHANGELOG.md).
 

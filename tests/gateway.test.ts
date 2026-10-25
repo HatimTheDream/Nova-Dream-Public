@@ -281,3 +281,29 @@ test('model display names use the real product label, not internal codenames', a
   assert.equal(modelDisplayName('unknown/model-id'), 'unknown/model-id');
   assert.equal(modelDisplayName('other/model', 'Friendly Name'), 'Friendly Name');
 });
+
+test('Group identity observation stays a scoped read with one bounded transport call', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'nova-group-identity-')), store = new Store(directory);
+  let options!: GatewayClientOptions;
+  const calls: { method: string; params: unknown; timeout: number | undefined }[] = [];
+  const gateway = new Gateway(store, 'fixture', value => {
+    options = value;
+    return { start() {}, async stopAndWait() {}, async request<T>(method: string, params: unknown, timing?: { timeoutMs?: number }) {
+      if (method === 'models.list') return { models: [] } as T;
+      calls.push({ method, params, timeout: timing?.timeoutMs }); return { originalIdentity: true } as T;
+    } };
+  });
+  try {
+    await gateway.configure('ws://127.0.0.1:59999', 'fixture');
+    options.onHelloOk?.({ protocol: 4, features: { methods: ['models.list', 'e3.accounts.group-identity'], events: [] },
+      auth: { scopes: ['operator.read', 'operator.write'] }, policy: {} } as unknown as HelloOk);
+    const params = { epoch: store.epoch, agentId: 'edition3-group', profileId: 'openai:fixture' };
+    assert.deepEqual(await gateway.request('e3.accounts.group-identity', params), { originalIdentity: true });
+    assert.deepEqual(calls, [{ method: 'e3.accounts.group-identity', params, timeout: 90000 }]);
+    await assert.rejects(gateway.request('e3.accounts.group-identity', { ...params, agentId: 'main' }));
+    await assert.rejects(gateway.request('e3.accounts.group-identity', { ...params, refresh: true }));
+    assert.equal(calls.length, 1);
+    const { maintenanceGatewayKind } = await import('../apps/service/update-maintenance.js');
+    assert.equal(maintenanceGatewayKind('e3.accounts.group-identity', params), 'read');
+  } finally { await gateway.stop(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});

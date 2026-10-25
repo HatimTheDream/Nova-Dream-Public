@@ -17,6 +17,21 @@ function storageFixture() {
   } };
 }
 
+test('Reply All mode and exact reply writing survive close, compose navigation and reload independently',()=>{
+ const storage=storageFixture();
+ try{
+  const original=createInboxWriting('device','reply-window'),source='reply:account:thread-a';
+  const fields={replyAll:true,replySubject:'Exact Subject',replyBody:'Unsent Reply\nSecond line'};
+  for(const [name,value]of Object.entries(fields))original.getState().change(inboxWritingKey(source,name),value);
+  const compose=original.getState().newMessage('gmail:sender');original.getState().selectMessage(compose);
+  const reloaded=createInboxWriting('device','reply-window');
+  for(const[name,value]of Object.entries(fields))assert.equal(reloaded.getState().fields[inboxWritingKey(source,name)],value);
+  reloaded.getState().change(inboxWritingKey(source,'replyBody'),'Newer writing');
+  assert.equal(reloaded.getState().fields[inboxWritingKey(source,'replyAll')],true);
+  assert.equal(reloaded.getState().fields[inboxWritingKey('reply:account:thread-b','replyAll')],undefined);
+ }finally{storage.restore();}
+});
+
 test('cloned Inbox writing survives reload before any edit, then both windows keep independent branches', () => {
   const storage = storageFixture();
   try {

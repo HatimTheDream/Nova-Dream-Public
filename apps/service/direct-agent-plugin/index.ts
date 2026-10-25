@@ -5,15 +5,19 @@ import {
   type DirectExecutionContext, type TrustedDirectCall,
 } from '../direct-agent-tool-calls.js';
 import { assertDirectConfiguration, assertDirectConfigurationShape, directConfigurationHash, directPluginId, directToolPolicyId } from '../direct-agent-runtime-policy.js';
+import { assertGroupConfiguration, groupRuntimeAgent } from '../group-runtime-policy.js';
 
 // Exact public 2026.9.8 SDK subset. Registration alone is not runtime admission.
 export type DirectPluginApi = {
   registrationMode: string; pluginConfig?: Record<string, unknown>;
   runtime: {
     version: string; config: { current(): unknown };
+    modelConfig: { resolveDefaultModelForAgent(input: { cfg: unknown; agentId: string;
+      allowManifestNormalization: false; allowPluginNormalization: false }): { provider: string; model: string } };
     agent: { session: { getSessionEntry(input: { agentId: string; sessionKey: string; readConsistency: 'latest' }):
       { sessionId?: string; permissionMode?: string; permissionModePending?: boolean; authProfileOverride?: string;
-        lifecycleRevision?: string | null; model?: string; modelProvider?: string } | undefined } };
+        lifecycleRevision?: string | null; model?: string; modelProvider?: string;
+        modelOverride?: string; providerOverride?: string } | undefined } };
   };
   registerGatewayMethod(name: string, handler: (input: {
     params: unknown; respond(ok: boolean, result?: unknown, error?: { code: string; message: string }): void;
@@ -46,30 +50,52 @@ export function registerDirectAgentTools(api: DirectPluginApi) {
   const initial = api.runtime.config.current();
   assertDirectConfigurationShape(initial);
   const policySha256 = directConfigurationHash(initial), registrationId = randomUUID();
+  const groupConfigured = !!(initial as { agents?: { entries?: Record<string, unknown> } }).agents?.entries?.[groupRuntimeAgent];
   let disposed = false;
   const current = () => {
     if (disposed) throw Error('The original direct-agent registration is closed.');
     assertDirectConfiguration(api.runtime.config.current(), policySha256);
+    if (groupConfigured) assertGroupConfiguration(api.runtime.config.current(), policySha256);
   };
   current();
   const calls = new DirectAgentToolCalls({ epoch: config.epoch, policySha256 }, current);
-  api.registerGatewayMethod('e3.direct.policy', ({ params, respond }) => {
+  const selectedModel = (entry: { providerOverride?: string; modelOverride?: string }, agentId: string) => {
+    // Native default selection deliberately removes both overrides. Resolve
+    // that case through the public agent-aware helper and current checked cfg;
+    // last-result model/modelProvider never establishes dispatch authority.
+    const selected = entry.providerOverride === undefined && entry.modelOverride === undefined
+      ? api.runtime.modelConfig.resolveDefaultModelForAgent({ cfg: api.runtime.config.current(), agentId,
+        allowManifestNormalization: false, allowPluginNormalization: false })
+      : { provider: entry.providerOverride, model: entry.modelOverride };
+    const provider = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/i).max(120).parse(selected.provider).toLowerCase();
+    let model = z.string().min(1).max(512).regex(/^[^\s@]+$/).parse(selected.model);
+    if (model.includes('/')) {
+      if (!model.toLowerCase().startsWith(provider + '/')) throw Error('Selected provider/model contradict each other.');
+      model = model.slice(provider.length + 1);
+      if (!model || model.includes('/')) throw Error('The selected model needs an exact supported route.');
+    }
+    return `${provider}/${model}`;
+  };
+  for (const [method, agentId] of [
+    ['e3.direct.policy', directRuntimeAgent],
+    ...(groupConfigured ? [['e3.group.policy', groupRuntimeAgent] as const] : []),
+  ] as const) api.registerGatewayMethod(method, ({ params, respond }) => {
     try {
       current();
-      const input = z.object({ epoch: z.uuid(), nativeKey: z.string().regex(/^agent:edition3-direct:e3:[a-f0-9-]{36}$/),
+      const input = z.object({ epoch: z.uuid(), nativeKey: z.string().regex(new RegExp(`^agent:${agentId}:e3:[a-f0-9-]{36}$`)),
         nativeId: z.uuid().nullable() }).strict().parse(params);
       if (input.epoch !== config.epoch) throw Error('Workspace replaced.');
-      const entry = api.runtime.agent.session.getSessionEntry({ agentId: directRuntimeAgent, sessionKey: input.nativeKey, readConsistency: 'latest' });
+      const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey: input.nativeKey, readConsistency: 'latest' });
       if (input.nativeId && entry?.sessionId !== input.nativeId) throw Error('Original session replaced.');
       const session = entry ? {
         key: input.nativeKey, id: z.uuid().parse(entry.sessionId),
         lifecycleRevision: z.string().min(1).max(512).nullable().parse(entry.lifecycleRevision ?? null),
         permissionMode: entry.permissionMode, permissionModePending: entry.permissionModePending === true,
         accountId: entry.authProfileOverride ?? null,
-        model: typeof entry.model === 'string' ? entry.model.includes('/') ? entry.model : entry.modelProvider ? `${entry.modelProvider}/${entry.model}` : null : null,
+        model: selectedModel(entry, agentId),
       } : null;
       current();
-      respond(true, { format: 1, epoch: config.epoch, agentId: directRuntimeAgent, registrationId,
+      respond(true, { format: 1, epoch: config.epoch, agentId, registrationId,
         sourcePolicySha256: config.policySha256, policySha256, nativeKey: input.nativeKey, session });
     } catch { respond(false, undefined, { code: 'INVALID_REQUEST', message: 'The original direct-agent policy or session is unavailable.' }); }
   }, { scope: 'operator.read' });
@@ -98,6 +124,8 @@ export function registerDirectAgentTools(api: DirectPluginApi) {
   api.registerTrustedToolPolicy({
     id: directToolPolicyId, description: 'Bind direct-agent reads to the original native run and captured current access.',
     evaluate: async (event, context) => {
+      if (context.agentId === groupRuntimeAgent)
+        return { block: true, blockReason: 'This Group recipient has only its explicit common provided context and no tools.' };
       if (context.agentId !== directRuntimeAgent) return;
       if (event.toolName !== directReadTool || context.toolName !== event.toolName
         || event.runId !== context.runId || event.toolCallId !== context.toolCallId)

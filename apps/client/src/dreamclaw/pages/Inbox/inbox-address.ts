@@ -51,3 +51,18 @@ export function buildManualSignatureHtml(value?: string): string {
   if (!trimmed) return '';
   return `<div dir="ltr">${escapeHtml(trimmed).replace(/\n/g, '<br>')}</div>`;
 }
+
+/** Reply to the real participants, excluding every connected sender identity.
+ * A sent message replies to its original To recipients, not back to yourself. */
+export function buildReplyRecipients(source:{from:string;to?:string;cc?:string}|null,ownEmails:Set<string>,replyAll:boolean):{to:string[];cc:string[]}{
+  if(!source)return {to:[],cc:[]};
+  const own=new Set([...ownEmails].map(normalizeEmail));
+  const valid=(value:string)=>isValidEmailAddress(value)&&!own.has(value);
+  const sender=extractEmail(source.from),recipients=parseAddressList(source.to??'').filter(valid),to=new Set<string>(),cc=new Set<string>();
+  if(valid(sender))to.add(sender);
+  else if(own.has(sender))for(const address of recipients)to.add(address);
+  if(replyAll){
+    for(const address of [...recipients,...parseAddressList(source.cc??'').filter(valid)])if(!to.has(address))cc.add(address);
+  }
+  return {to:[...to],cc:[...cc]};
+}

@@ -1,3 +1,4 @@
+import { SetupJourneyJournal, captureSetupPosition, restoreSetupPosition, type SetupPosition } from './setup-journey';
 import { SavedDraftArticle } from './SavedDraftArticle';
 import { captureLayoutReset, undoLayoutReset, type LayoutResetUndo } from './layout-reset';
 import { assistantSpace, spaceDraftId } from '../../../packages/domain/assistant-space';
@@ -31,19 +32,20 @@ import { NavigationLabels } from './NavigationLabels';
 import { mayLeaveAssistantDraft } from './assistant-draft-navigation';
 import { mayLeaveHomeDraft } from './home-draft-navigation';
 import { mayLeaveSettingsDraft } from './settings-draft-navigation';
-import { GeneralSettings, type GeneralSettingsSaveContext } from './GeneralSettings';
+import type { GeneralSettingsSaveContext } from './GeneralSettings';
 import type { SharedGeneralSettings } from './general-settings-state';
 import { applyHomeHandoff, homeHandoffProject, prepareWorkHandoff, type HandoffDraftJournal } from './home-assistant-handoff';
 import type { HomeAssistantHandoff, HomeReference } from '../../../packages/domain/home-library';
 import type { HomeFeedTarget } from '../../../packages/domain/home-feed';
 import { homeFeedOpenSchema, type HomeFeedOpenRequest, type HomeDestinationLink } from '../../../packages/domain/home-feed';
-import { HomeDestination } from './HomeDestination';
+const HomeDestination = lazy(() => import('./HomeDestination').then(module => ({ default: module.HomeDestination })));
 import { dismissFrontendNoticeFromKeyboard, refreshFrontend } from './frontend-update';
 const Home = lazy(() => import('./Home').then(module => ({ default: module.Home })));
 const ProjectEditor = lazy(() => import('./ProjectEditor').then(module => ({ default: module.ProjectEditor })));
 const Assistant = lazy(() => import('./Assistant').then(module => ({ default: module.Assistant })));
 import type { SettingsTab, SettingsDraftSummary } from './SettingsPage';
 const SettingsPage = lazy(() => import('./SettingsPage').then(module => ({ default: module.SettingsPage })));
+const GeneralSettings = lazy(() => import('./GeneralSettings').then(module => ({ default: module.GeneralSettings })));
 const PhonePairingScreen = lazy(() => import('./Phone').then(module => ({ default: module.PhonePairingScreen })));
 import { VoiceController } from './voice-controller';
 import { VoicePanel } from './VoicePanel';
@@ -67,7 +69,7 @@ const MailInbox = lazy(() => import('./OriginalInbox'));
 const Contacts = lazy(() => import('./Contacts'));
 const RecordsPage = lazy(() => import('./RecordsPage'));
 import type { RecordTarget } from './RecordsPage';
-import { DirectAgentChooser } from './DirectAgentChat';
+const DirectAgentChooser = lazy(() => import('./DirectAgentChat').then(module => ({ default: module.DirectAgentChooser })));
 import { DirectChatNavigation, directChatStorage, mayLeaveDirectChat, type DirectChatTarget } from './direct-agent-chat';
 import type { BrowseTarget } from '../../../packages/domain/search';
 import type { RecordOrigin, ContentOutputSource } from '../../../packages/domain/workspace-records';
@@ -133,7 +135,7 @@ export function App() {
     const timer = setTimeout(() => setStartupComplete(true), 420);
     return () => clearTimeout(timer);
   }, [handoff, startupComplete]);
-  if (workspace.access?.requiresPairing) return <Suspense fallback={<ModuleLoading module="Phone pairing"/>}><PhonePairingScreen paired={workspace.reconnect}/></Suspense>;
+  if (workspace.access?.requiresPairing) return <Suspense fallback={<ModuleLoading module="Phone pairing"/>}><PhonePairingScreen paired={workspace.reconnect} access={workspace.access}/></Suspense>;
   if (!workspace.snapshot && workspace.updateRequired) return <main className="startup"><AppUpdate initial/></main>;
   if (!workspace.snapshot || !startupComplete) {
     // Browsers retain failed native imports for this document; a new preparation
@@ -152,8 +154,12 @@ export function App() {
 export function Workspace({ snapshot, online, error, refresh, reconnect, access, updateRequired, frontendUpdate, dismissFrontendUpdate }: ReturnType<typeof useWorkspace> & { snapshot: Snapshot }) {
   const taskWorkspace = useTaskWorkspace(snapshot);
   const search = useGlobalSearch(snapshot);
-  const [route, setRoute] = useState<Route>(() => taskWorkspace.state?.active ? taskWorkspace.state.origin.route : search.view?.open ? search.view.origin.route : 'home');
-  const assistant = useAssistant(snapshot, route === 'assistant');
+  const [setupJournal] = useState(() => new SetupJourneyJournal({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) }, { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId }));
+  const [setupJourney, setSetupJourney] = useState(setupJournal.value), [setupError, setSetupError] = useState(setupJournal.error);
+  const setupPosition = useRef<SetupPosition | undefined>(undefined), setupWritingFocus = useRef<HTMLElement | null>(null);
+  const [route, setRoute] = useState<Route>(() => taskWorkspace.state?.active ? taskWorkspace.state.origin.route : search.view?.open ? search.view.origin.route : setupJournal.value ? 'settings' : 'home');
+  const assistant = useAssistant(snapshot, route === 'assistant', setupJournal.value?.selection);
+  const setupCurrentRoute = useRef(route); setupCurrentRoute.current = route;
   const directScope = { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId };
   const [directNavigation] = useState(() => new DirectChatNavigation(directChatStorage, `e3:direct-chat-view:${snapshot.epoch}:${snapshot.deviceId}:${retainedWindowId}`, directScope));
   const [directTarget, setDirectTarget] = useState<DirectChatTarget | undefined>(() => directNavigation.value);
@@ -162,8 +168,8 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const directFocus = useRef<HTMLElement | null>(null);
   const [voice] = useState(() => new VoiceController(snapshot.deviceId));
   useEffect(() => { const release = () => voice.dispose(); window.addEventListener('pagehide', release); return () => { window.removeEventListener('pagehide', release); release(); }; }, [voice]);
-  const [connectionOrigin, setConnectionOrigin] = useState<ModuleId | null>(null);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>('index');
+  const connectionOrigin = setupJourney?.origin;
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => setupJournal.value?.section ?? 'index');
   const [settingsDraft, setSettingsDraft] = useState<SettingsDraftSummary>();
   const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null);
   const openEmail = async (source: MailContactSource) => { const identity = await calendarWindowIdentity(); keepInboxTarget(snapshot.deviceId, identity.id, { epoch: snapshot.epoch, source: { provider: source.provider, accountId: source.accountId, threadId: source.threadId }, messageId: source.messageId }); open('inbox'); };
@@ -206,9 +212,50 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const dock = useReorder(currentLayout.nav, order => layout.change(value => ({ ...value, nav: order })), 'bottom-navigation', { motion: true, touchHold: true, hold: true, axis: 'horizontal' });
   useEffect(() => { if (nav.dragging) setNavMenu(null); }, [nav.dragging]);
   const canOpen = (next: Route, retry: () => void) => { const allowed = next === route || (mayLeaveAssistantDraft() && mayLeaveDirectChat() && mayLeaveRecordDrafts() && mayLeaveAgentDrafts() && mayLeaveHomeDraft() && (route !== 'settings' || mayLeaveSettingsDraft(retry))); if (!allowed && search.shown) search.setShown(false); return allowed; };
-  const applyRoute = (next: Route) => { searchRouteGeneration.current++; search.setShown(false); reminderNavigation.current++; preparedReminderReturn.current = undefined; reminderRetry.current = undefined; setRoute(next); setNavMenu(null); if (next !== 'settings') setConnectionOrigin(null); };
-  const open = (next: Route): boolean => { if (search.navigation.view?.open && !mayLeaveRecordDrafts()) { search.setNotice('Keep the current writing before navigating.'); search.setShown(false); return false; } if (!canOpen(next, () => open(next))) return false; applyRoute(next); return true; };
-  const openSettings = (tab: SettingsTab = 'index', origin: ModuleId | null = null): boolean => { if (!canOpen('settings', () => openSettings(tab, origin))) return false; applyRoute('settings'); setSettingsTab(tab); setConnectionOrigin(origin); return true; };
+  const applyRoute = (next: Route) => { searchRouteGeneration.current++; search.setShown(false); reminderNavigation.current++; preparedReminderReturn.current = undefined; reminderRetry.current = undefined; setRoute(next); setNavMenu(null); };
+  const open = (next: Route): boolean => {
+    if (search.navigation.view?.open && !mayLeaveRecordDrafts()) { search.setNotice('Keep the current writing before navigating.'); search.setShown(false); return false; }
+    if (!canOpen(next, () => open(next))) return false;
+    if (next !== 'settings' && setupJournal.value) {
+      if (!setupJournal.keep(undefined)) { setSetupError(setupJournal.error); return false; }
+      setSetupJourney(undefined);
+    }
+    setSetupError(''); applyRoute(next); return true;
+  };
+  const openSettings = (tab: SettingsTab = 'index', origin: ModuleId | null = null): boolean => {
+    if (setupCurrentRoute.current !== route) return false;
+    if (!canOpen('settings', () => openSettings(tab, origin))) return false;
+    const from = route === 'settings' ? setupJournal.value?.origin : origin ?? route;
+    if (from) {
+      const target = route === 'settings' && setupJournal.value ? { ...setupJournal.value, section: tab }
+        : { format: 1 as const, scope: setupJournal.scope, origin: from, section: tab, token: crypto.randomUUID(),
+          ...(from === 'assistant' ? { selection: { id: assistant.selectedId, space: assistant.space } } : {}) };
+      if (!setupJournal.keep(target)) { setSetupError(setupJournal.error); return false; }
+      if (route !== 'settings') {
+        const root = document.querySelector<HTMLElement>('.global-search-origin:not([hidden])');
+        setupPosition.current = captureSetupPosition(root, setupWritingFocus.current && root?.contains(setupWritingFocus.current) ? setupWritingFocus.current : document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      }
+      setSetupJourney(target);
+    }
+    setSetupError(''); applyRoute('settings'); setSettingsTab(tab); return true;
+  };
+  const selectSettings = (tab: SettingsTab) => {
+    if (setupCurrentRoute.current !== 'settings') return;
+    if (setupJournal.value && !setupJournal.keep({ ...setupJournal.value, section: tab })) { setSetupError(setupJournal.error); return; }
+    setSetupJourney(setupJournal.value); setSetupError(''); setSettingsTab(tab);
+  };
+  const returnFromSettings = () => {
+    if (setupCurrentRoute.current !== 'settings') return false;
+    const target = setupJournal.value;
+    if (!target || !setupJournal.matchesSelection(assistant.selectedId, assistant.space)) { setSetupError('The original conversation selection has changed. Its writing and setup return are kept.'); return false; }
+    const position = setupPosition.current;
+    if (!open(target.origin)) return false;
+    requestAnimationFrame(() => {
+      if (position) restoreSetupPosition(position);
+      else document.querySelector<HTMLElement>('.global-search-origin:not([hidden]) textarea, .global-search-origin:not([hidden]) h1')?.focus({ preventScroll: true });
+    });
+    return true;
+  };
   const exactDirect = (token: string) => directCurrent.current.route === 'assistant' && directNavigation.exact(token)
     && directCurrent.current.snapshot.epoch === directScope.epoch && directCurrent.current.snapshot.deviceId === directScope.deviceId
     && (!directNavigation.value?.conversationId || directCurrent.current.selectedId === directNavigation.value.conversationId);
@@ -243,8 +290,8 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
     requestAnimationFrame(() => { const original = directFocus.current; if (original?.isConnected) original.focus(); else if (target.origin === 'agents') (document.getElementById(`direct-chat-hub-${target.recipient.agentId}`) ?? document.getElementById(`direct-chat-team-${target.recipient.agentId}`))?.focus(); });
     return true;
   };
-  const openContent = (id: string) => { setRecordTarget({ kind: 'content', id, nonce: crypto.randomUUID() }); open('content'); };
-  const openContentSource = (source: ContentOutputSource) => { setSourceRequest({ target: { epoch: snapshot.epoch, conversationId: source.conversationId, nativeId: source.nativeId, messageId: source.messageId, messageHash: source.messageHash, role: 'assistant' }, nonce: crypto.randomUUID() }); open('assistant'); };
+  const openContent = (id: string) => { if (!open('content')) return; setRecordTarget({ kind: 'content', id, nonce: crypto.randomUUID() }); };
+  const openContentSource = (source: ContentOutputSource) => { if (!open('assistant')) return; setSourceRequest({ target: { epoch: snapshot.epoch, conversationId: source.conversationId, nativeId: source.nativeId, messageId: source.messageId, messageHash: source.messageHash, role: 'assistant' }, nonce: crypto.randomUUID() }); };
   const keepHomeDestination = (input?: HomeFeedOpenRequest) => {
     if (!saveLocal(homeDestinationKey, input ?? null)) { setHomeNavigationError('Browser storage is full. Free storage before replacing this saved source reference.'); return false; }
     setHomeNavigationError(''); setHomeDestination(input); return true;
@@ -342,7 +389,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const complete = (item: Entity<Task>) => changeTaskStatus(item, ['done', 'skipped'].includes(item.value.status) ? 'open' : 'done');
   const searchScope = search.navigation.scope;
   const searchVisible = search.shown && !taskWorkspace.state?.active;
-  const renderRoute = (page: Route) => route === page && !searchVisible || !!search.view?.open && searchMountedRoutes.includes(page);
+  const renderRoute = (page: Route) => route === page && !searchVisible || route === 'settings' && setupJourney?.origin === page || !!search.view?.open && searchMountedRoutes.includes(page);
   const coverWithSearch = () => { if (!searchVisible) setSearchMountedRoutes(current => [...new Set([...current, route])]); search.setShown(true); };
   const exactSearch = (token: string) => !!searchActions.current && search.navigation.view?.open && search.navigation.view.token === token;
   const retainSearchOwners = () => {
@@ -462,20 +509,21 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
       {layout.conflict && <Conflict name="Layout" message={layout.conflict.message} current={layout.conflict.current ? JSON.stringify(layout.conflict.current.value, null, 2) : undefined} reapply={layout.reapply} discard={layout.discard}/>}
       {layout.dirty && !layout.conflict && <div className="layout-status" role="status">{layout.status}<button className="text-button" onClick={() => void layout.flush()}>Retry</button></div>}
       {(taskActions.state.error || taskActions.state.notice || taskActions.state.queue.length > 0) && <div className="connection-banner task-feedback" role={taskActions.state.error ? 'alert' : 'status'}><span>{taskActions.state.error || (taskActions.busy ? 'Saving task changes...' : taskActions.state.queue.length ? 'Task changes are waiting for confirmation.' : taskActions.state.notice)}</span>{taskActions.state.queue.length > 0 && !taskActions.busy && <button onClick={() => void taskActions.retry()}>Retry task changes</button>}{!taskActions.state.queue.length && taskActions.state.undo.length > 0 && <button disabled={taskActions.busy} onClick={() => void taskActions.undo()}>Undo</button>}<button className="icon-button" disabled={taskActions.busy} aria-label="Dismiss task notice" onClick={taskActions.dismiss}><X size={16}/></button></div>}
+      {setupError && <div className="notice warning" role="alert">{setupError}</div>}
       {renderRoute('home') && <div className="global-search-origin" hidden={searchVisible || route !== 'home'}><RenderingFallback fallback={<main className="page-scroll"><Empty title="Home could not load" action={<button onClick={() => location.reload()}>Reload Home</button>}>Your kept writing and original saves remain on this device.</Empty></main>}><Suspense fallback={<ModuleLoading module="Home"/>}><Home taskActions={taskActions} libraryTarget={libraryTarget} clearLibraryTarget={() => setLibraryTarget(undefined)} onAssistantHandoff={acceptHomeHandoff} openResource={openHomeResource} openFeedTarget={openHomeFeedTarget} snapshot={snapshot} layout={currentLayout} saveLayout={layout.change} open={route => { if (!mayLeaveAssistantDraft()) return; if (route === 'assistant') { setPreviewRequest(null); assistant.select(null, 'chat'); } open(route); }} openSettings={tab => openSettings(tab, 'home')} operations={assistant.operations} conversations={assistant.conversations} activityRead={assistant.statusRead} openConversation={conversation => { if (!mayLeaveAssistantDraft()) return; setPreviewRequest(null); assistant.select(conversation.id, assistantSpace(conversation)); open('assistant'); }} openDraft={id => { const item = snapshot.drafts.find(draft => draft.id === id); if (!item || !mayLeaveAssistantDraft()) return; assistant.select(item.deviceId === snapshot.deviceId ? item.value.conversationId ?? null : null, assistantSpace(item.value)); if (open('assistant')) setPreviewRequest({ id: item.id, nonce: crypto.randomUUID() }); }} newTask={newTask} editTask={editTask} complete={complete} draft={draft.value} dirty={draft.dirty} draftStatus={draft.status}/></Suspense></RenderingFallback></div>}
       {directError && <div className="notice" role="alert">{directError}<button onClick={() => setDirectError('')}>Dismiss</button></div>}
-      {route === 'assistant' && directTarget && !directTarget.conversationId && <DirectAgentChooser key={directTarget.token} target={directTarget} snapshot={snapshot} controller={assistant} current={() => exactDirect(directTarget.token)} open={conversation => openDirect(conversation.id, directTarget.token)} close={() => { closeDirect(directTarget.token); }}/>}
-      {renderRoute('assistant') && <div className="global-search-origin" hidden={searchVisible || route !== 'assistant'}><Suspense fallback={<ModuleLoading module="Assistant"/>}>{searchPreview?.standalone ? <main className="page-scroll search-saved-draft" aria-label="Saved Assistant Draft">{savedSearchDraft ? <SavedDraftArticle draft={savedSearchDraft}/> : <Empty title="This saved draft changed or is unavailable.">Its exact Search reference is kept.</Empty>}<p className="metadata">This is the host-saved original. Opening the Assistant workspace keeps its current conversation and draft separately.</p><button onClick={() => { if (retainSearchOwners()) setSearchPreview(undefined); }}>Open Assistant Workspace</button></main> : <Assistant openAgentChat={(id, revision) => openAgentChat(id, revision, 'assistant')} directBack={directTarget?.conversationId === assistant.selectedId ? () => closeDirect(directTarget.token) : undefined} onSearchDraft={search.publishDraft} searchPreview={searchPreview} searchRequest={searchQuery?.destination === 'assistant' ? searchQuery.request : undefined} onOpenApp={destination => destination.module === 'settings' ? openSettings(destination.settingsTab ?? 'index') : open(destination.module)} appIcon={appIcon} contentActions={{ snapshot, refresh, openContent }} sourceRequest={sourceRequest} controller={assistant} voice={voice} key={previewRequest?.nonce ?? "working"} initialPreview={previewRequest && ![spaceDraftId(snapshot.deviceId, 'chat'), spaceDraftId(snapshot.deviceId, 'work')].includes(previewRequest.id) ? snapshot.drafts.find(item => item.id === previewRequest.id) : undefined} snapshot={snapshot} legacyJournal={draft} refreshWorkspace={refresh} openSettings={() => openSettings('assistant', 'assistant')} newProject={() => setShowProject('new')} editProject={id => setShowProject(id)}/>}</Suspense></div>}
+      {route === 'assistant' && directTarget && !directTarget.conversationId && <Suspense fallback={<ModuleLoading module="Assistant"/>}><DirectAgentChooser key={directTarget.token} target={directTarget} snapshot={snapshot} controller={assistant} current={() => exactDirect(directTarget.token)} open={conversation => openDirect(conversation.id, directTarget.token)} close={() => { closeDirect(directTarget.token); }}/></Suspense>}
+      {renderRoute('assistant') && <div className="global-search-origin" hidden={searchVisible || route !== 'assistant'} inert={searchVisible || route !== 'assistant'} onFocusCapture={event => { const node = event.target; if (node instanceof HTMLElement && ['TEXTAREA', 'INPUT'].includes(node.tagName)) setupWritingFocus.current = node; }}><Suspense fallback={<ModuleLoading module="Assistant"/>}>{searchPreview?.standalone ? <main className="page-scroll search-saved-draft" aria-label="Saved Assistant Draft">{savedSearchDraft ? <SavedDraftArticle draft={savedSearchDraft}/> : <Empty title="This saved draft changed or is unavailable.">Its exact Search reference is kept.</Empty>}<p className="metadata">This is the host-saved original. Opening the Assistant workspace keeps its current conversation and draft separately.</p><button onClick={() => { if (retainSearchOwners()) setSearchPreview(undefined); }}>Open Assistant Workspace</button></main> : <Assistant openAgentChat={(id, revision) => openAgentChat(id, revision, 'assistant')} directBack={directTarget?.conversationId === assistant.selectedId ? () => closeDirect(directTarget.token) : undefined} onSearchDraft={search.publishDraft} searchPreview={searchPreview} searchRequest={searchQuery?.destination === 'assistant' ? searchQuery.request : undefined} onOpenApp={destination => destination.module === 'settings' ? openSettings(destination.settingsTab ?? 'index', 'assistant') : open(destination.module)} appIcon={appIcon} contentActions={{ snapshot, refresh, openContent }} sourceRequest={sourceRequest} controller={assistant} voice={voice} key={previewRequest?.nonce ?? "working"} initialPreview={previewRequest && ![spaceDraftId(snapshot.deviceId, 'chat'), spaceDraftId(snapshot.deviceId, 'work')].includes(previewRequest.id) ? snapshot.drafts.find(item => item.id === previewRequest.id) : undefined} snapshot={snapshot} legacyJournal={draft} refreshWorkspace={refresh} openSettings={tab => openSettings(tab ?? 'assistant', 'assistant')} newProject={() => setShowProject('new')} editProject={id => setShowProject(id)}/>}</Suspense></div>}
       {renderRoute('calendar') && <div className="global-search-origin" hidden={searchVisible || route !== 'calendar'}><RenderingFallback fallback={<main className="page-scroll"><Empty title="Calendar could not load" action={<button onClick={() => location.reload()}>Reload Calendar</button>}>Your saved events and kept writing remain available on this device.</Empty></main>}><Suspense fallback={<ModuleLoading module="Calendar"/>}><Calendar reminderReturn={calendarReminderReturn?.kind === 'calendar' ? calendarReminderReturn : undefined} canReturnToReminders={prepareReminderReturn} returnToReminders={returnToReminders} refresh={refresh} editRoutine={id => { setRoutineTarget({ id, nonce: crypto.randomUUID() }); open('tasks'); }} snapshot={snapshot} online={online} editTask={editTask} openSettings={() => openSettings('accounts', 'calendar')} openInbox={() => open('inbox')} openContent={openContent}/></Suspense></RenderingFallback></div>}
       {renderRoute('inbox') && <div className="global-search-origin" hidden={searchVisible || route !== 'inbox'}><RenderingFallback fallback={<main className="page-scroll"><Empty title="Inbox could not load" action={<button onClick={() => location.reload()}>Reload Inbox</button>}>Your kept writing remains on this device.</Empty></main>}><Suspense fallback={<ModuleLoading module="Inbox" percent={0}/>}><MailInbox searchRequest={searchQuery?.destination === 'inbox' ? searchQuery.request as InboxSearchRequest : undefined} prepare={online && !access?.recoveryLocal && !access?.recovery} refresh={refresh} openContact={id => { setRecordTarget({ kind: 'contact', id, nonce: crypto.randomUUID() }); open('contacts'); }} snapshot={snapshot} openSettings={() => openSettings('accounts', 'inbox')} openCalendar={() => open('calendar')}/></Suspense></RenderingFallback></div>}
       {renderRoute('tasks') && <div className="global-search-origin" hidden={searchVisible || route !== 'tasks'}><Suspense fallback={<ModuleLoading module="Tasks"/>}><Tasks openCalendar={() => open('calendar')} routineTarget={routineTarget} clearRoutineTarget={() => setRoutineTarget(null)} snapshot={snapshot} newTask={newTask} editTask={editTask} changeStatus={changeTaskStatus} actions={taskActions} refresh={refresh}/></Suspense></div>}
-      {renderRoute('settings') && <div className="global-search-origin" hidden={searchVisible || route !== 'settings'}><Suspense fallback={<ModuleLoading module="Settings"/>}><SettingsPage key={`${snapshot.epoch}:${snapshot.deviceId}`} appIcon={appIcon} selected={settingsTab} select={setSettingsTab} draft={settingsDraft} snapshot={snapshot} online={online} access={access} openAssistant={() => open('assistant')} returnTo={connectionOrigin ? { label: modules[connectionOrigin].label, open: () => { open(connectionOrigin); } } : undefined} general={<>{layout.pending && <div className="notice warning" role="status"><span>The original layout save is awaiting confirmation.</span><button disabled={layout.saving} onClick={() => void layout.flush()}>Reconcile Save</button></div>}<GeneralSettings reveal={() => setSettingsTab('general')} onDraftState={setSettingsDraft} currentLayout={currentLayout} appIcon={appIcon} snapshot={snapshot} online={online} pending={layout.saving || !!layout.pending} status={layout.status} error={layout.conflict?.message} saveShared={saveGeneralSettings} resetNavigation={() => { setUndoLayout(captureLayoutReset(currentLayout, 'navigation')); layout.change(value => ({ ...value, nav: [...moduleIds] })); }} hasUndoReset={!!undoLayout} undoReset={() => { if (!undoLayout) return; layout.change(value => undoLayoutReset(value, undoLayout)); setUndoLayout(null); }}/></>}/></Suspense></div>}
+      {renderRoute('settings') && <div className="global-search-origin" hidden={searchVisible || route !== 'settings'}><Suspense fallback={<ModuleLoading module="Settings"/>}><SettingsPage key={`${snapshot.epoch}:${snapshot.deviceId}`} appIcon={appIcon} selected={settingsTab} select={selectSettings} draft={settingsDraft} snapshot={snapshot} online={online} access={access} openAssistant={() => { if (connectionOrigin === 'assistant') returnFromSettings(); else open('assistant'); }} returnTo={connectionOrigin ? { label: modules[connectionOrigin].label, open: returnFromSettings } : undefined} general={<>{layout.pending && <div className="notice warning" role="status"><span>The original layout save is awaiting confirmation.</span><button disabled={layout.saving} onClick={() => void layout.flush()}>Reconcile Save</button></div>}<GeneralSettings reveal={() => setSettingsTab('general')} onDraftState={setSettingsDraft} currentLayout={currentLayout} appIcon={appIcon} snapshot={snapshot} online={online} pending={layout.saving || !!layout.pending} status={layout.status} error={layout.conflict?.message} saveShared={saveGeneralSettings} resetNavigation={() => { setUndoLayout(captureLayoutReset(currentLayout, 'navigation')); layout.change(value => ({ ...value, nav: [...moduleIds] })); }} hasUndoReset={!!undoLayout} undoReset={() => { if (!undoLayout) return; layout.change(value => undoLayoutReset(value, undoLayout)); setUndoLayout(null); }}/></>}/></Suspense></div>}
       {(['contacts', 'content', 'agents', 'profile'] as const).map(page => renderRoute(page) && <div key={page} className="global-search-origin" hidden={searchVisible || route !== page}><RenderingFallback fallback={<main className="page-scroll"><Empty title="This module could not load" action={<button onClick={() => location.reload()}>Reload workspace</button>}>Your saved records and kept writing remain available.</Empty></main>}><Suspense fallback={<ModuleLoading module={modules[page].label}/>}>{page === 'contacts' ? <Contacts openSettings={() => openSettings('accounts', 'contacts')} key={`${snapshot.epoch}:${snapshot.deviceId}`} snapshot={snapshot} refresh={refresh} editTask={editTask} target={recordTarget} openEmail={openEmail} openCalendar={() => open('calendar')}/> : <RecordsPage openAgentChat={(id, revision) => openAgentChat(id, revision)} openAssistantSettings={() => openSettings('assistant', page)} openWork={id=>{assistant.select(id,'work');open('assistant');}} openEmail={openEmail} outputs={assistant.outputs} openContent={openContent} openSource={openContentSource} page={page} snapshot={snapshot} refresh={refresh} editTask={editTask} target={recordTarget}/>}</Suspense></RenderingFallback></div>)}
       {!searchVisible && route !== 'assistant' && <VoicePanel appIcon={appIcon} floating controller={voice} openConversation={id => { assistant.select(id); open('assistant'); }}/> }
       {searchVisible && <SearchWorkspace search={search} snapshot={snapshot} open={target => openSearchTarget(target, search.view!.token)} close={() => closeSearch(search.view!.token)} queryIn={destination => queryFromSearch(destination, search.view!.token)}/>}
     </div><BottomNavigation reorder={dock} items={currentLayout.nav.map(id => ({ id, label: modules[id].label, icon: modules[id].icon }))} route={searchVisible ? null : route} open={next => next === 'settings' ? openSettings() : open(next)} updateAvailable={!!snapshot.softwareUpdate} returnToWideNavigation={() => { const selected = document.querySelector<HTMLButtonElement>('#main-navigation:not([hidden]) button[aria-current="page"]'); (selected ?? navigationToggle.current)?.focus(); }}/><span className="sr-only" role="status">{nav.announcement}</span><span className="sr-only" role="status">{dock.announcement}</span>
     {homeNavigationError && !homeDestination && <Dialog title="Open Saved Source" close={() => setHomeNavigationError('')}><p role="alert">{homeNavigationError}</p></Dialog>}
-    {homeDestination && <HomeDestination input={homeDestination} navigationError={homeNavigationError} discuss={acceptHomeHandoff} close={() => { keepHomeDestination(undefined); }} open={openHomeDestinationLink}/>}
+    {homeDestination && <RenderingFallback fallback={<Dialog title="Saved Source" close={() => { keepHomeDestination(undefined); }}><Empty title="Source Could Not Load"><span role="alert">This preview could not load. Your saved source has not been changed.</span></Empty>{homeNavigationError && <p role="alert">{homeNavigationError}</p>}</Dialog>}><Suspense fallback={<Dialog title="Saved Source" close={() => { keepHomeDestination(undefined); }}><p role="status">Opening Saved Source…</p>{homeNavigationError && <p role="alert">{homeNavigationError}</p>}</Dialog>}><HomeDestination input={homeDestination} navigationError={homeNavigationError} discuss={acceptHomeHandoff} close={() => { keepHomeDestination(undefined); }} open={openHomeDestinationLink}/></Suspense></RenderingFallback>}
     {reminderError && <Dialog title="Reminder Original" close={() => { reminderRetry.current = undefined; setReminderError(''); }}><p role="alert">{reminderError}</p>{reminderRetry.current && <button onClick={() => reminderRetry.current?.()}>Back To Reminders</button>}</Dialog>}
     {remindersOpen && <Reminders snapshot={snapshot} notifications={notifications} refresh={refresh} close={() => setRemindersOpen(false)} openReminder={openReminder} originRoute={route} actions={reminderActions}/>}
     <TaskWorkspace workspace={taskWorkspace} snapshot={snapshot} refresh={refresh}

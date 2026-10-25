@@ -1,7 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -14,6 +14,8 @@ import { blankRecord, type AgentDesign } from '../packages/domain/workspace-reco
 import { assertDirectAgentOperation, captureDirectAgentTurn, directAgentMayRead, directAgentMessageAuthor, verifyDirectAgentRecords } from '../packages/domain/direct-agent.js';
 import { canonical, emptyDraft } from '../packages/domain/contracts.js';
 import { ModuleActions, type ModuleServices } from '../apps/service/module-actions.js';
+
+const supportedSchema = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).edition3.schemaVersion as number;
 
 class Transport implements AssistantTransport {
   calls: string[] = []; generation = randomUUID();
@@ -203,7 +205,7 @@ test('captured authors survive rename, restart and held restore with exact origi
   const saved = transcript.all(f.chat)!.messages;
   assert.deepEqual(saved.map(message => message.author?.name), ['Original owner', 'Aster']);
   const backup = f.store.captureBackup('test', { status: 'not-configured', notes: [] });
-  assert.equal(backup.schema, 56);
+  assert.equal(backup.schema, supportedSchema);
   const restored = Store.restoreBackup(join(f.directory, 'restored'), backup);
   try {
     const after = restored.captureBackup('test', { status: 'not-configured', notes: [] });
@@ -220,15 +222,15 @@ test('captured authors survive rename, restart and held restore with exact origi
   assert.equal(canonical(f.store.internalRead(`assistant:operation:${f.operation.id}`)), canonical(f.operation));
 });
 
-test('synthetic header-only schema55 migration keeps ordinary entities; schema57 refuses before schema writes', t => {
+test('synthetic header-only schema55 migration keeps ordinary entities; an unsupported newer schema refuses before writes', t => {
   const directory = mkdtempSync(join(tmpdir(), 'nova-direct-schema-'));
   let store = new Store(directory); const device = store.session().deviceId, snapshot = store.captureBackup('test', { status: 'not-configured', notes: [] }); store.close();
   let db = new DatabaseSync(join(directory, 'workspace.sqlite')); db.exec('PRAGMA user_version=55'); db.close();
   store = new Store(directory);
   assert.deepEqual(store.captureBackup('test', { status: 'not-configured', notes: [] }).entities, snapshot.entities);
   assert.equal(store.snapshot(device).drafts.length, 0); store.close();
-  db = new DatabaseSync(join(directory, 'workspace.sqlite')); db.exec('PRAGMA user_version=57'); db.close();
-  assert.throws(() => new Store(directory), /newer Nova Dream build/);
-  db = new DatabaseSync(join(directory, 'workspace.sqlite')); assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, 57); db.close();
+  db = new DatabaseSync(join(directory, 'workspace.sqlite')); db.exec(`PRAGMA user_version=${supportedSchema + 1}`); db.close();
+  assert.throws(() => new Store(directory), /compatible Nova Dream build/);
+  db = new DatabaseSync(join(directory, 'workspace.sqlite')); assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, supportedSchema + 1); db.close();
   t.after(() => rmSync(directory, { recursive: true, force: true }));
 });

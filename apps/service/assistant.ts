@@ -42,6 +42,7 @@ import { ConversationContinuation } from './conversation-continuation.js';
 import { effortPreference, nativeThinking, resolveAutoEffort, taskEffortDemand, type EffortDemand } from '../../packages/domain/auto-effort.js';
 
 const conversationKey = (id: string) => `assistant:conversation:${id}`;
+import {captureIdeaBinding,ideaOperationIndex} from './idea-pursuits.js';
 const operationKey = (id: string) => `assistant:operation:${id}`;
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const now = () => new Date().toISOString();
@@ -469,7 +470,8 @@ export class AssistantService {
     else if (value.settledAt !== undefined) value = { ...value, settledAt: undefined };
     if (terminal.has(value.state) || value.state === 'unknown') value = { ...value, ...(value.tools ? { tools: value.tools.map(tool => tool.state === 'running' ? { ...tool, state: 'unknown' as const } : tool) } : {}) };
     if (current && terminal.has(current.state) && canonical(value) === canonical(current)) return current;
-    const saved = this.store.internalWrite(operationKey(value.id), { ...value, updatedAt: observedAt });
+    const saved = {...value,updatedAt:observedAt};
+    this.store.internalBatchJoined([{id:operationKey(value.id),value:saved},...ideaOperationIndex(this.store,saved)]);
     if (saved.context.directAgent && (terminal.has(saved.state) || saved.cancelRequested)) this.directOwner?.end(saved.id);
     if (!saved.context.directAgent) this.plans.observe(saved);
     this.researchProgress?.changed();
@@ -996,11 +998,12 @@ export class AssistantService {
       const plain = { space: 'chat' as const, project: project ? { id: project.id, revision: project.revision,
         name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}),
         ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null,
-        attachments: files, draftId: draft.id, draftRevision };
+        ...(draft.value.idea?{idea:captureIdeaBinding(this.store,draft.value.idea)}:{}), attachments: files, draftId: draft.id, draftRevision };
       return { input: draft.value.text, manifest: { ...plain, digest: digest(plain) } as ContextManifest };
     }
+    const idea=captureIdeaBinding(this.store,draft.value.idea);
     const memory = this.memory.capture(conversation.projectId);
-    const manifest = { brandVersion: 1 as const, computerControlGuidance, space: assistantSpace(conversation), ...(draft.value.workMode === 'research' && assistantSpace(conversation) === 'chat' ? { researchWorkflow: 'chat-research-v1' as const, researchProgressGuidance } : {}), planning: true as const, ...(draft.value.workMode === 'goal' ? { goalReporting: true as const } : {}), ...(conversation.autoTitle ? { messageVersion: 2 as const } : {}), ...(memory ? { memory } : {}), ...(draft.value.workMode && draft.value.workMode !== 'chat' ? { workMode: draft.value.workMode } : {}), ...(draft.value.refineSource ? { refineSource: draft.value.refineSource } : {}), project: project ? { id: project.id, revision: project.revision, name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}), ...(project.value.workspace ? { workspace: conversation.workspace ?? project.value.workspace } : {}), ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null, attachments: files, draftId: draft.id, draftRevision };
+    const manifest = { ...(idea?{idea}:{}), brandVersion: 1 as const, computerControlGuidance, space: assistantSpace(conversation), ...(draft.value.workMode === 'research' && assistantSpace(conversation) === 'chat' ? { researchWorkflow: 'chat-research-v1' as const, researchProgressGuidance } : {}), planning: true as const, ...(draft.value.workMode === 'goal' ? { goalReporting: true as const } : {}), ...(conversation.autoTitle ? { messageVersion: 2 as const } : {}), ...(memory ? { memory } : {}), ...(draft.value.workMode && draft.value.workMode !== 'chat' ? { workMode: draft.value.workMode } : {}), ...(draft.value.refineSource ? { refineSource: draft.value.refineSource } : {}), project: project ? { id: project.id, revision: project.revision, name: project.value.name, purpose: project.value.purpose, ...(project.value.instructions ? { instructions: project.value.instructions } : {}), ...(project.value.workspace ? { workspace: conversation.workspace ?? project.value.workspace } : {}), ...(project.value.attachments?.length ? { attachments: project.value.attachments } : {}) } : null, attachments: files, draftId: draft.id, draftRevision };
     for (const attachment of manifest.attachments) if (canonical(this.store.blobMetadata(attachment.id)) !== canonical(attachment)) throw new Fault(409, 'attachment_changed', 'A required attachment changed or is missing.');
     const captured = { ...manifest, ...(resume ? { resumeDigest: resume.digest } : {}) };
     return { input: draft.value.text, manifest: { ...captured, digest: digest(captured) } as ContextManifest };

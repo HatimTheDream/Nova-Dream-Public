@@ -24,17 +24,26 @@ export class ConversationRemovals {
     if (this.closed) throw new Fault(503, 'service_closed', 'Check the removal after reconnecting.');
     return this.store.internalWrite(key(item.requestId), { ...item, updatedAt: new Date().toISOString() });
   }
+  private nativeRequest<T>(method:Parameters<AssistantTransport['request']>[0],params:unknown){this.store.assertFeedExternalEffectAllowed();return this.gateway.request<T>(method,params);}
   private connection(item: ConversationRemoval) {
+    if(item.nativeId)this.store.assertFeedExternalEffectAllowed();
     const state = this.gateway.status();
     if (this.closed || item.epoch !== this.store.epoch || state.state !== 'ready' || state.generation !== item.connectionGeneration || !state.grantedScopes.includes('operator.write') || !state.methods.includes('sessions.delete') || !state.methods.includes('sessions.describe')) throw new Fault(409, 'removal_connection', 'Reconnect this chat’s original host to finish its removal.');
   }
   async remove(device: string, raw: unknown): Promise<ConversationRemoval> {
     const input = removeConversationSchema.parse(raw);
-    if (this.store.internalRead<Conversation>(`assistant:conversation:${input.conversationId}`)?.directAgent)
+    const entry=this.store.internalHistoryRemovalEntry(input.conversationId,input.requestId);
+    const requested=entry?entry.requested:this.store.internalRead<ConversationRemoval>(key(input.requestId));
+    if(requested&&(requested.requestId!==input.requestId||requested.conversationId!==input.conversationId))throw new Fault(409,'removal_identity','The original removal belongs to a different conversation or request.');
+    if(entry?.requested?.nativeId&&['prepared','unknown'].includes(entry.requested.state))this.store.assertFeedExternalEffectAllowed();
+    const originalChat=entry?entry.chat:this.store.internalRead<Conversation>(`assistant:conversation:${input.conversationId}`);
+    if(originalChat&&originalChat.id!==input.conversationId)throw new Fault(409,'removal_identity','The stored conversation identity changed.');
+    if (originalChat?.directAgent)
       throw new Fault(409, 'direct_agent_runtime_unqualified', 'Keep the original agent chat until its dedicated removal route is qualified.');
-    const receipt = this.store.admit(device, input, { type: 'conversation.remove', ...input }, () => {
+    const receipt = this.store.internalPrepareHistoryConversationRemoval(device,input,id=>this.busy(id)) ?? this.store.admit(device, input, { type: 'conversation.remove', ...input }, () => {
       const currentId = this.store.internalRead<string>(`assistant:removal-current:${input.conversationId}`);
       const current = currentId ? this.store.internalRead<ConversationRemoval>(key(currentId)) : undefined;
+      if(current&&(current.requestId!==currentId||current.conversationId!==input.conversationId))throw new Fault(409,'removal_identity','The current removal belongs to a different conversation or request.');
       if (current && ['prepared', 'unknown'].includes(current.state) && current.epoch === input.epoch && current.expectedRevision === input.expectedRevision) return { requestId: current.requestId };
       this.assertAvailable(input.conversationId);
       const chat = this.store.internalRead<Conversation>(`assistant:conversation:${input.conversationId}`);
@@ -49,21 +58,25 @@ export class ConversationRemovals {
       this.store.internalWrite(`assistant:removal-current:${item.conversationId}`, item.requestId);
       this.save(item); return { requestId: input.requestId };
     });
-    const item = this.store.internalRead<ConversationRemoval>(key(receipt.value.requestId))!;
+    const saved=this.store.internalHistoryRemovalEntry(input.conversationId,receipt.value.requestId);
+    const item = (saved?saved.requested:this.store.internalRead<ConversationRemoval>(key(receipt.value.requestId)))!;
+    if(!item||item.requestId!==receipt.value.requestId||item.conversationId!==input.conversationId)throw new Fault(409,'removal_identity','The saved removal result belongs to a different conversation or request.');
     if (['completed', 'rejected'].includes(item.state)) return item;
     const running = this.running.get(item.requestId); if (running) return running;
-    const work = this.apply(item).finally(() => this.running.delete(item.requestId)); this.running.set(item.requestId, work); return work;
+    const work = this.apply(item,!!entry).finally(() => this.running.delete(item.requestId)); this.running.set(item.requestId, work); return work;
   }
-  private async apply(item: ConversationRemoval): Promise<ConversationRemoval> {
-    if (this.store.internalRead<Conversation>(`assistant:conversation:${item.conversationId}`)?.directAgent)
+  private async apply(item: ConversationRemoval,historical=false): Promise<ConversationRemoval> {
+    if(item.nativeId)this.store.assertFeedExternalEffectAllowed();
+    if (!historical&&this.store.internalRead<Conversation>(`assistant:conversation:${item.conversationId}`)?.directAgent)
       throw new Fault(409, 'direct_agent_runtime_unqualified', 'The original direct-agent removal cannot use the generic native route.');
     try {
+      if(historical){if(this.closed)throw Error('Service closed');return this.store.internalCompleteHistoryConversationRemoval(item)!;}
       if (item.nativeId) {
         this.connection(item);
         // Describe never creates a missing chat. An absent original after a
         // lost acknowledgement settles without another destructive command.
         type NativeSession = { key: string; sessionId: string; archived?: boolean; hasActiveRun?: boolean; activeRunIds?: string[] };
-        const describe = () => this.gateway.request<{ session: NativeSession | null }>('sessions.describe', { key: item.nativeKey });
+        const describe = () => this.nativeRequest<{ session: NativeSession | null }>('sessions.describe', { key: item.nativeKey });
         let resolved = await describe();
         this.connection(item);
         if (resolved.session) {
@@ -73,7 +86,7 @@ export class ConversationRemovals {
             if (session.hasActiveRun === false || Array.isArray(session.activeRunIds)) return;
             // sessions.describe on supported hosts reports archive/identity but
             // omits activity. Read bounded history, verifying its incarnation.
-            const history = await this.gateway.request<{ sessionId?: string; sessionInfo?: { sessionId?: string; hasActiveRun?: boolean; activeRunIds?: string[] }; inFlightRun?: { runId?: string } }>('chat.history', { sessionKey: item.nativeKey, limit: 1, maxChars: 1024 });
+            const history = await this.nativeRequest<{ sessionId?: string; sessionInfo?: { sessionId?: string; hasActiveRun?: boolean; activeRunIds?: string[] }; inFlightRun?: { runId?: string } }>('chat.history', { sessionKey: item.nativeKey, limit: 1, maxChars: 1024 });
             this.connection(item);
             if ((history.sessionId ?? history.sessionInfo?.sessionId) !== item.nativeId) throw new Fault(409, 'removal_identity', 'The host returned a different chat. Reopen its current status.');
             if (history.inFlightRun?.runId || history.sessionInfo?.hasActiveRun || history.sessionInfo?.activeRunIds?.length) throw new Fault(409, 'removal_busy', 'Finish the native reply before removing this chat.');
@@ -83,12 +96,12 @@ export class ConversationRemovals {
           // Deleted is now local and reversible. Only this separately confirmed
           // permanent removal may archive the exact idle native session.
           if (resolved.session.archived !== true) {
-            await this.gateway.request('sessions.patch', { key: item.nativeKey, expectedSessionId: item.nativeId, archived: true });
+            await this.nativeRequest('sessions.patch', { key: item.nativeKey, expectedSessionId: item.nativeId, archived: true });
             this.connection(item);
             resolved = await describe(); this.connection(item); await verifyIdle(resolved.session);
             if (resolved.session?.archived !== true) throw new Error('Native archive is unconfirmed');
           }
-          const result = await this.gateway.request<{ ok: boolean; key: string; deleted: boolean }>('sessions.delete', { key: item.nativeKey, expectedSessionId: item.nativeId, archivedOnly: true, deleteTranscript: true });
+          const result = await this.nativeRequest<{ ok: boolean; key: string; deleted: boolean }>('sessions.delete', { key: item.nativeKey, expectedSessionId: item.nativeId, archivedOnly: true, deleteTranscript: true });
           this.connection(item);
           if (result.ok !== true || result.key !== item.nativeKey || result.deleted !== true) throw new Error('Unconfirmed native removal');
         } else if (resolved.session !== null) throw new Error('Unconfirmed native identity');
@@ -102,7 +115,8 @@ export class ConversationRemovals {
     } catch (error) {
       if (this.closed) throw error;
       const rejected = error instanceof GatewayClientRequestError && ['INVALID_REQUEST', 'FORBIDDEN'].includes(error.gatewayCode) || error instanceof Fault && ['removal_identity', 'removal_busy'].includes(error.code);
-      return this.save({ ...item, state: rejected ? 'rejected' : 'unknown', message: rejected ? 'The host rejected removal. The local chat is kept; review its current status.' : 'Removal is not confirmed. Check again to finish the same request.' });
+      const failed={ ...item, state: (rejected ? 'rejected' : 'unknown') as ConversationRemoval['state'], message: rejected ? 'The host rejected removal. The local chat is kept; review its current status.' : 'Removal is not confirmed. Check again to finish the same request.' };
+      return historical?this.store.internalSaveHistoryConversationRemovalFailure(failed)!:this.save(failed);
     }
   }
 }

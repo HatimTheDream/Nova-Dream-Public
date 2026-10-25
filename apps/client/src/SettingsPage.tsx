@@ -72,7 +72,7 @@ export function SettingsPage({ appIcon, selected, select, snapshot, online, acce
   }, [currentId]);
   const choose = (next: SettingsTab) => select(next);
   return <main ref={page} onScroll={event => positions.current.set(currentId, event.currentTarget.scrollTop)} className="page-scroll settings-page" aria-label="Settings">
-    {returnTo && <div className="settings-return"><button className="compact-action compact-utility" onClick={returnTo.open}><ArrowLeft size={16}/>Back to {returnTo.label}</button></div>}
+    {returnTo && <div className="settings-return"><button className="compact-action compact-utility" onClick={returnTo.open}><ArrowLeft size={16}/>Back To {returnTo.label}</button></div>}
     <header className="settings-titlebar">
       {current && <nav className="settings-section-navigation" aria-label="Settings sections"><button className="compact-action compact-utility" onClick={() => choose('index')}><ArrowLeft size={15}/>All Settings</button><ComposerMenu label="Change Settings Section" text="Change Section" icon={<ChevronDown size={15}/>} placement="below" align="right" kind="menu" className="settings-section-menu">{close => <div className="compact-choice-menu">{sections.map(section => <button className="compact-action" role="menuitemradio" aria-checked={currentId === section.id} key={section.id} onClick={() => { close(); choose(section.id); }}>{section.label}</button>)}</div>}</ComposerMenu></nav>}
       <h1 ref={heading} tabIndex={-1} className="settings-heading">{current?.label ?? 'Settings'}</h1>

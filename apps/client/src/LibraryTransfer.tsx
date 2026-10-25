@@ -107,6 +107,8 @@ export function LibraryTransfer({ scope, controller, request, acceptText, showPa
   try { downloadLibraryFile(exported, urls ? libraryPortableUrls(exported).text : undefined);setMessage('File handed to this browser for download. Your saved Library is unchanged.'); }
   catch (reason) { setMessage(reason instanceof Error ? reason.message : 'The browser could not download this file.'); }
  };
+ const selectedCount = draft?.rows.filter(row => row.selected && !row.confirmation).length ?? 0;
+ const exportedLinks = exported?.entries.filter(row => row.status === 'portable' && row.item.kind === 'link').length ?? 0;
  const retainedRow = (row: TransferRow) => <section key={row.position} className="library-transfer-row">
   <label className="check-label"><input type="checkbox" checked={row.selected} disabled={blocked || !!row.confirmation} onChange={event => select(row.position, event.target.checked)}/><span>Include source {row.position + 1}</span></label>
   <label>Title<input maxLength={150} value={row.value.title} disabled={blocked} onChange={event => edit(row.position, { title: event.target.value })}/></label>
@@ -123,7 +125,7 @@ export function LibraryTransfer({ scope, controller, request, acceptText, showPa
     <button className="primary" disabled={reading} onClick={() => void fetchExport()}>{reading ? 'Preparing exact file…' : 'Prepare Export'}</button>
     {exported && <><p role="status">{exported.entries.length} references · {exported.entries.filter(row => row.status === 'portable').length} portable notes or links · {exported.entries.filter(row => row.status !== 'portable').length} reference descriptions or unavailable versions.</p>
      <div className="compact-actions"><button onClick={() => download(false)}>Download Nova JSON</button><button onClick={() => download(true)}>Download URL Text</button></div>
-     <p className="metadata">URL text includes {exported.entries.filter(row => row.status === 'portable' && row.item.kind === 'link').length} link addresses. Other entries are excluded from that text file.</p></>}
+     <p className="metadata">URL text includes {exportedLinks} {exportedLinks === 1 ? 'link address' : 'link addresses'}. Other entries are excluded from that text file.</p></>}
     {message && <p role="status">{message}</p>}
    </div>
   </Dialog>}
@@ -148,7 +150,7 @@ export function LibraryTransfer({ scope, controller, request, acceptText, showPa
        }}><option value="">Choose an existing collection</option>{controller.state?.collections.filter(row => !row.archived).map(row => <option key={row.id} value={row.id}>{row.title}</option>)}</select></label>
        {outdated && <div className="notice"><span>The destination changed. Your complete review is kept.</span><button disabled={blocked || !destination} onClick={() => { if (destination) owner.change(value => ({ ...value, destination: { id: destination.id, expectedRevision: destination.revision } }));redraw(); }}>Use Current Collection</button></div>}
        <p className="metadata">Imports create new sources and preserve their order. Existing matching links are skipped without replacing their notes. Undo removes the new memberships; created sources remain in Library.</p>
-       <button className="primary" disabled={blocked || outdated || !destination || !draft.rows.some(row => row.selected && !row.confirmation)} onClick={() => void save()}>Save {draft.rows.filter(row => row.selected && !row.confirmation).length} Selected Sources</button>
+       <button className="primary" disabled={blocked || outdated || !destination || !draft.rows.some(row => row.selected && !row.confirmation)} onClick={() => void save()}>Save {selectedCount} Selected {selectedCount === 1 ? 'Source' : 'Sources'}</button>
       </>}
      <div className="compact-actions"><button onClick={close}>Keep For Later</button><button disabled={blocked} onClick={() => { if (confirm('Discard this import review and its unsaved writing? The original file and saved Library sources remain.')) { if (owner.discard()) { setDocument(undefined);setMessage('Import review discarded.'); }redraw(); } }}>Discard Import Review</button><button onClick={() => { owner.keep();redraw(); }}>Retry Keeping Review</button></div>
     </>}

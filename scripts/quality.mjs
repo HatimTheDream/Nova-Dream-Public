@@ -9,9 +9,15 @@ const TAIL_LIMIT = 64 * 1024;
 
 // Keep the existing scripts and their coverage. Tests use source and isolated
 // fixtures; only the build lane writes the application's dist directory.
-export function qualityPlan(npmCli) {
+export function qualityOptions(args) {
+  if (args.length === 0) return { serial: false };
+  if (args.length === 1 && args[0] === '--serial') return { serial: true };
+  throw new Error('Usage: npm run quality [-- --serial]');
+}
+
+export function qualityPlan(npmCli, { serial = false } = {}) {
   if (!isAbsolute(npmCli) || !existsSync(npmCli)) throw new Error('Run quality through npm with its existing npm CLI.');
-  const command = id => ({ id, file: process.execPath, args: [npmCli, 'run', id === 'test' ? 'test:quality' : id] });
+  const command = id => ({ id, file: process.execPath, args: [npmCli, 'run', id === 'test' && !serial ? 'test:quality' : id] });
   return [[command('test')], [command('typecheck'), command('validate:release'), command('build')], [command('security:audit')]];
 }
 
@@ -79,12 +85,12 @@ function runCommand(command, { cwd, env, signal, emit, outputLimit, clock }) {
 }
 
 export async function runQualityPlan(plan, { cwd = process.cwd(), env = process.env, signal,
-  emit = () => {}, outputLimit = OUTPUT_LIMIT, clock = () => performance.now() } = {}) {
+  emit = () => {}, outputLimit = OUTPUT_LIMIT, clock = () => performance.now(), serial = false } = {}) {
   if (!Number.isSafeInteger(outputLimit) || outputLimit < 0 || outputLimit > OUTPUT_LIMIT) throw new Error('Invalid quality output limit.');
   const names = plan.flat().map(command => command.id);
   if (!plan.length || plan.some(lane => !lane.length) || new Set(names).size !== names.length) throw new Error('Quality checks must be unique and nonempty.');
   const started = clock();
-  const lanes = await Promise.all(plan.map(async lane => {
+  const runLane = async lane => {
     const results = [];
     for (const command of lane) {
       if (signal?.aborted || results.some(result => result.state !== 'passed')) {
@@ -92,19 +98,26 @@ export async function runQualityPlan(plan, { cwd = process.cwd(), env = process.
       } else results.push(await runCommand(command, { cwd, env, signal, emit, outputLimit, clock }));
     }
     return results;
-  }));
+  };
+  // Serial mode changes concurrency only. A failed lane still blocks its own
+  // dependants, while independent test/build/security lanes all get a result.
+  const lanes = [];
+  if (serial) {
+    for (const lane of plan) lanes.push(await runLane(lane));
+  } else lanes.push(...await Promise.all(plan.map(runLane)));
   const checks = lanes.flat();
   return { kind: 'nova-quality-result', passed: checks.every(check => check.state === 'passed'),
     cancelled: signal?.aborted ?? false, elapsedMs: Math.round(clock() - started), checks };
 }
 
-export async function qualityMain() {
+export async function qualityMain(args = process.argv.slice(2)) {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
   try {
-    const plan = qualityPlan(process.env.npm_execpath ?? '');
-    const result = await runQualityPlan(plan, { signal: controller.signal, emit: event => {
+    const options = qualityOptions(args);
+    const plan = qualityPlan(process.env.npm_execpath ?? '', options);
+    const result = await runQualityPlan(plan, { ...options, signal: controller.signal, emit: event => {
       if (event.type === 'output') (event.stream === 'stderr' ? process.stderr : process.stdout).write(event.content);
       else if (event.type === 'tail') process.stdout.write(`\n[quality:${event.id}] Output limit reached; final output follows:\n${event.content.toString('utf8')}\n`);
       else process.stdout.write(`\n[quality:${event.id}] ${event.type === 'start' ? 'started' : `${event.state} in ${(event.elapsedMs / 1000).toFixed(2)}s`}\n`);

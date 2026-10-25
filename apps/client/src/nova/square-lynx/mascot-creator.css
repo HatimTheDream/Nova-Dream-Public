@@ -22,3 +22,30 @@
 @container mascot-host (max-width:531px){.mascot-creator{width:320px}}
 @container mascot-creator (max-width:360px){.mascot-creator .mc-tools button span{display:none}}
 @media (pointer:coarse),(max-width:600px){.mascot-creator{--mc-height:44px;--mc-arrow:44px;--mc-lock:44px;padding:8px}.mascot-creator .mc-choice-current{height:46px;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;font-size:11px}:root .mascot-creator .mc-arrows button,:root .mascot-creator .mc-choice-block>.mc-lock{height:46px}.mascot-creator .mc-chip{width:24px;height:24px}.mascot-creator .mc-color-panel{width:304px}:root .mascot-creator .mc-preset-grid button{height:44px;min-height:44px}.mascot-creator .mc-custom-color input{width:44px;height:44px}.mascot-creator .mc-footer{gap:4px}.mascot-creator .mc-tools{gap:2px}:root .mascot-creator .mc-save-actions button{padding-inline:5px;font-size:11px;gap:4px}}
+
+/* Named choices retain the compact four-row creator and independent locks. */
+.mascot-creator{--mc-choice-width:164px}
+.mascot-creator .mc-choice-block{width:calc(var(--mc-choice-width) + var(--mc-arrow)*2 + var(--mc-lock) + 14px);max-width:100%}
+.mascot-creator .mc-cycle{column-gap:8px}
+.mascot-creator .mc-choice-current{display:block;height:var(--mc-height);padding:0;margin:0;background:transparent}
+.mascot-creator .mc-choice-current select{display:block;width:100%;min-width:0;height:var(--mc-height);min-height:var(--mc-height);padding:3px 6px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text);font-size:11px;line-height:1.3}
+.mascot-creator .mc-color-panel{overflow:auto;overscroll-behavior:contain}
+@container mascot-host (max-width:531px){.mascot-creator{width:100%}}
+@media(pointer:coarse),(max-width:600px){
+ .mascot-creator{--mc-choice-width:180px}
+ .mascot-creator .mc-choice-current select,.mascot-creator .mc-preview-controls select,.mascot-creator .mc-custom-color input{font-size:16px}
+ .mascot-creator .mc-preview-controls select{width:120px}
+ :root .mascot-creator .mc-arrows button,:root .mascot-creator .mc-choice-block>.mc-lock{height:44px}
+ .mascot-creator .mc-footer{flex-wrap:wrap;gap:12px}
+ .mascot-creator .mc-save-actions{margin-left:auto}
+}
+@media(max-width:360px){
+ .mascot-creator .mc-choice-block{width:100%}
+ .mascot-creator .mc-cycle{grid-template-columns:minmax(0,1fr)}
+ .mascot-creator .mc-arrows{display:none}
+}
+@container mascot-host (max-width:300px){
+ .mascot-creator .mc-choice-block{width:100%}
+ .mascot-creator .mc-cycle{grid-template-columns:minmax(0,1fr)}
+ .mascot-creator .mc-arrows{display:none}
+}

@@ -5,15 +5,15 @@ import { profileSchema } from './workspace-records.js';
 export const groupPrefix = 'assistant:groups:';
 export const groupLimit = 32;
 export const groupEventLimit = 10000;
-const uuid = z.string().uuid(), revision = z.number().int().min(0).max(groupEventLimit);
-const agentId = z.string().regex(/^agent:[a-zA-Z0-9:_-]+$/).max(100);
-const actor = z.object({ profileId: z.literal('profile:owner'), revision: z.number().int().nonnegative(),
-  name: profileSchema.shape.name, appearance: profileSchema.shape.appearance.optional() }).strict();
-const provenance = z.object({ requestId: uuid, epoch: uuid, deviceId: uuid }).strict();
-const selectedAgent = z.object({ agentId, agentRevision: z.number().int().positive() }).strict();
-const selectedAgents = z.array(selectedAgent).max(groupLimit).refine(rows => new Set(rows.map(row => row.agentId)).size === rows.length, 'Choose each agent once.');
+const uuid = /* @__PURE__ */ (() => (z.string().uuid()))(), revision = /* @__PURE__ */ (() => (z.number().int().min(0).max(groupEventLimit)))();
+const agentId = /* @__PURE__ */ (() => (z.string().regex(/^agent:[a-zA-Z0-9:_-]+$/).max(100)))();
+const actor = /* @__PURE__ */ (() => (z.object({ profileId: z.literal('profile:owner'), revision: z.number().int().nonnegative(),
+  name: profileSchema.shape.name, appearance: profileSchema.shape.appearance.optional() }).strict()))();
+const provenance = /* @__PURE__ */ (() => (z.object({ requestId: uuid, epoch: uuid, deviceId: uuid }).strict()))();
+const selectedAgent = /* @__PURE__ */ (() => (z.object({ agentId, agentRevision: z.number().int().positive() }).strict()))();
+const selectedAgents = /* @__PURE__ */ (() => (z.array(selectedAgent).max(groupLimit).refine(rows => new Set(rows.map(row => row.agentId)).size === rows.length, 'Choose each agent once.')))();
 const envelope = { requestId: uuid, epoch: uuid, groupId: uuid, expectedRevision: revision };
-export const groupCommandSchema = z.discriminatedUnion('action', [
+export const groupCommandSchema = /* @__PURE__ */ (() => (z.discriminatedUnion('action', [
   z.object({ ...envelope, action: z.literal('create'), expectedRevision: z.literal(0),
     title: z.string().trim().min(1).max(150), projectId: z.string().min(1).max(100).nullable(),
     members: selectedAgents, defaultAgentId: agentId.nullable(), shareEarlierHistory: z.literal(false).default(false) }).strict(),
@@ -26,9 +26,9 @@ export const groupCommandSchema = z.discriminatedUnion('action', [
     defaultAgentId: agentId.nullable(), shareEarlierHistory: z.literal(false).default(false) }).strict(),
   z.object({ ...envelope, action: z.literal('set-archived'), archived: z.boolean() }).strict(),
   z.object({ ...envelope, action: z.literal('set-trashed'), trashed: z.boolean() }).strict(),
-]);
+])))();
 export type GroupCommand = z.infer<typeof groupCommandSchema>;
-export const assistantGroupSchema = z.object({
+export const assistantGroupSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), id: uuid, revision: revision.refine(value => value > 0), membershipRevision: revision.refine(value => value > 0),
   title: z.string().trim().min(1).max(150), projectId: z.string().min(1).max(100).nullable(),
   owner: z.literal('profile:owner'), createdBy: provenance, createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
@@ -40,23 +40,23 @@ export const assistantGroupSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Choose an active default responder, or keep an empty Group without one.' });
   if (value.membershipRevision > value.revision || value.defaultRevision > value.revision)
     context.addIssue({ code: 'custom', message: 'The Group revisions do not match its history.' });
-});
+})))();
 export type AssistantGroup = z.infer<typeof assistantGroupSchema>;
-export const groupMemberSchema = z.object({
+export const groupMemberSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), id: uuid, groupId: uuid, agentId, agentRevision: z.number().int().positive(),
   name: profileSchema.shape.name, appearance: profileSchema.shape.appearance,
   joinedBy: provenance, joinedAt: z.string().datetime(), joinEventId: uuid, joinedRevision: revision.refine(value => value > 0),
   history: z.object({ kind: z.literal('none-before-membership'), joinEventId: uuid }).strict(),
   restoresMembershipId: uuid.nullable(),
-}).strict();
+}).strict()))();
 export type GroupMember = z.infer<typeof groupMemberSchema>;
-export const groupEventSchema = z.object({
+export const groupEventSchema = /* @__PURE__ */ (() => (z.object({
   format: z.literal(1), id: uuid, groupId: uuid, sequence: revision.refine(value => value > 0),
   command: groupCommandSchema, deviceId: uuid, at: z.string().datetime(), actor,
   before: assistantGroupSchema.nullable(), after: assistantGroupSchema,
   addedMembers: z.array(groupMemberSchema).max(groupLimit), removedMembershipIds: z.array(uuid).max(1),
   restoredDefault: z.boolean(),
-}).strict();
+}).strict()))();
 export type GroupEvent = z.infer<typeof groupEventSchema>;
 export type GroupBundle = { group: AssistantGroup | null; members: GroupMember[]; events: GroupEvent[] };
 export type GroupCapture = { eventId: string; at: string; deviceId: string; actor: z.infer<typeof actor>; addedMembers: GroupMember[] };

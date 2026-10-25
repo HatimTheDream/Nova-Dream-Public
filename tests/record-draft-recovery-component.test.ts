@@ -113,6 +113,6 @@ test('opening the real retained Contact editor sends no POST and keeps the origi
  const snapshot:Snapshot={epoch:f.scope.epoch,deviceId:f.scope.deviceId,cursor:0,tasks:[],drafts:[],projects:[],layout:{id:'layout',revision:1,updatedAt:'',deviceId:f.scope.deviceId,value:{...structuredClone(defaultLayout),timezone:'UTC'}},capabilities:{assistant:false,voice:false,reason:'Isolated'},records:{contact:[],content:[],agent:[],assignment:[],profile:[]}};
  try {await app.flush();selectFirst(app.tree);await app.flush();button(app.tree,'Copy Into This Window').props.onClick();await app.flush();
   await app.mount(RecordEditor,{kind:'contact',id:f.id,snapshot,refresh:async()=>{},editTask:()=>{}});await app.poll();
-  assert.deepEqual(app.calls,[]);assert.deepEqual(JSON.parse(app.storage.get(f.targetKey)!).pending,pending);assert.equal(app.storage.get(f.sourceKey),raw);assert.match(text(app.tree),/kept on this device/i);
+  assert.deepEqual(app.calls,[]);assert.deepEqual(JSON.parse(app.storage.get(f.targetKey)!).pending,pending);assert.equal(app.storage.get(f.sourceKey),raw);assert.match(text(app.tree),/On this device · save unconfirmed; retry save/);
  } finally {app.close();}
 });

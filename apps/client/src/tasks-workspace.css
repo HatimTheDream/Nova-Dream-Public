@@ -69,3 +69,34 @@
  .tasks-workspace .task-calendar-row .task-subtask-progress { grid-column: 3; grid-row: 1; }
  .tasks-workspace .task-calendar-row .task-inline-note { grid-column: 2 / -1; grid-row: 2; }
 }
+
+/* Approved compact task controls; the existing list/actions remain unchanged. */
+.tasks-workspace .task-page-heading { flex-wrap:wrap; gap:12px; }
+.task-compact-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.tasks-workspace .task-content-layout { display:block; }
+.tasks-workspace .task-input-disclosure { display:flex; align-items:flex-start; gap:6px; flex-basis:100%; min-width:0; }
+.tasks-workspace .task-input-disclosure[hidden] { display:none; }
+.tasks-workspace .task-input-disclosure > .task-search { flex:0 1 360px; width:360px; min-width:0; max-width:calc(100% - 50px); margin:0; flex-direction:row; }
+.tasks-workspace .task-input-disclosure .task-search input { min-width:0; width:100%; }
+.tasks-workspace .task-input-disclosure > .task-quick-add { display:flex; align-items:center; flex:0 1 360px; width:360px; max-width:calc(100% - 50px); min-width:0; gap:6px; padding:0; margin:0; border:0; }
+.tasks-workspace .task-input-disclosure .task-quick-add > .e3-icon { display:none !important; }
+.tasks-workspace .task-input-disclosure .task-quick-add > button[type="submit"] { flex:0 0 auto; white-space:nowrap; }
+.tasks-workspace .task-input-disclosure .task-quick-add input { width:100%; min-width:0; flex:1 1 100px; }
+.task-filter-fields { display:grid; gap:10px; width:min(300px,calc(100vw - 40px)); max-height:calc(100dvh - 60px); overflow:auto; padding:4px; }
+.task-filter-fields label { display:flex; flex-direction:column; gap:5px; min-width:0; font-size:13px; }
+.task-filter-fields select { min-width:0; width:100%; }
+.task-filter-fields .task-filter-selecting { flex-direction:row; align-items:center; }
+.task-filter-fields .task-filter-selecting input { width:auto; }
+.task-filter-footer { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+:root .task-filter-footer > button { flex:0 0 auto; width:auto; }
+:root .task-compact-actions .composer-control-button { min-height:32px; padding:6px 9px; font-size:13px; background:var(--surface); }
+:root .task-compact-actions .task-add-trigger { width:32px; padding-inline:0; }
+@media (max-width:800px), (pointer:coarse) {
+ :root .task-compact-actions button, :root .task-compact-actions button.composer-control-button, :root .task-input-disclosure button, :root .task-filter-fields button { min-height:44px; min-width:44px; }
+ :root .task-compact-actions .task-add-trigger { width:44px; }
+ .task-input-disclosure input, .task-filter-fields select { min-height:44px; font-size:16px; }
+ .task-input-disclosure .task-inline-create-options { flex:0 0 44px; }
+}
+@container tasks-workspace (max-width:360px) {
+ .task-plan-today > span:not(.e3-icon), .task-compact-actions button[aria-controls="task-search-disclosure"] > span:not(.e3-icon) { display:none; }
+}

@@ -2,7 +2,7 @@ import { Resolver } from 'node:dns/promises';
 import { createServer,request as requestHttp,type Server,type IncomingMessage,type IncomingHttpHeaders } from 'node:http';
 import { createConnection,isIP,type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
-import { publicImageAddress } from './email-image-fetch.js';
+import { publicNetworkAddress as publicImageAddress } from './public-network-address.js';
 
 /** The browser sends every HTTP(S) connection through this loopback proxy.
  * Resolve once, reject private/reserved addresses, and dial the approved numeric

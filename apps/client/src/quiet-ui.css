@@ -94,3 +94,8 @@
   :root .notice { flex-wrap:wrap; }
   :root .notice > div { flex-basis:calc(100% - 36px); }
 }
+
+/* Welcome actions follow their content at every workspace entry. */
+:root .assistant-welcome .suggestions { align-items:center; }
+:root .assistant-welcome .suggestions > button { flex:0 0 auto; width:fit-content; max-width:100%; }
+@media (max-width:800px), (pointer:coarse) { :root .assistant-welcome .suggestions > button { min-height:44px; } }

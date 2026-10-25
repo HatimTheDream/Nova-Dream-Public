@@ -37,7 +37,7 @@ const loader = registerHooks({
    export const request=(path,data)=>fixture().request(path,data);` };
   if (url === 'nova-home-test:workspace') return { format: 'module', shortCircuit: true, source: `export const retainedWindowId='lifecycle-window';` };
   if (url.startsWith('nova-home-test:child:')) return { format: 'module', shortCircuit: true, source: `import {createElement} from ${JSON.stringify(react)};export const ${url.split(':').at(-1)}=()=>createElement('p',null,'Other Home view');` };
-  if (url === 'nova-home-test:css') return { format: 'module', shortCircuit: true, source: '' };
+  if (url === 'nova-home-test:css' || url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: '' };
   return next(url, context);
  },
 });
@@ -288,7 +288,9 @@ test('focused collections have one heading and no overview chrome while keeping 
   const html=f.render(()=>renderToStaticMarkup(HomeLibrary({snapshot:s,controller,openWidgets(){}})));
   assert.equal((html.match(/<h1 /g)??[]).length,1);assert.ok(html.includes('home-library-count'));assert.ok(html.includes(focused?'2 Sources':'1 Collection'));
   assert.equal(html.includes('Move collection Research shelf.'),!focused);assert.equal(html.includes('<h2>'),!focused);
-  assert.ok(html.includes(focused?'<h1 class="page-title" aria-label="Research shelf">':'<h1 class="page-title" aria-label="All Collections">'));
+  const heading = html.match(/<h1\b[^>]*>/)![0];
+  assert.ok(heading.includes('class="page-title"'));assert.ok(heading.includes(focused?'aria-label="Research shelf"':'aria-label="All Collections"'));
+  assert.ok(heading.includes('tabindex="-1"'), 'The stable heading accepts scoped focus return');
   assert.equal((html.match(/Useful retained work/g)??[]).length,1);
   for(const label of ['Manage Research shelf','Pin Research shelf','Add links','Rename or edit','Archive collection','Add an existing source','Undo','Keep this visible','Source unavailable · reference kept'])assert.ok(html.includes(label),label);
   assert.ok(html.includes('href="https://example.test/kept?q=1#anchor"'));assert.ok(html.includes('Inspect Saved source'));

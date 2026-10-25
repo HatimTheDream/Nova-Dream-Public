@@ -28,6 +28,8 @@ const rejectionSchema = z.object({
 }).strict();
 const journalSchema = z.object({
   format: z.literal(1), scope: scopeSchema, draft: groupEditorDraftSchema,
+  origin: z.enum(['create', 'group']).optional(),
+  recoveredFrom: z.array(scopeSchema).max(8).optional(),
   pending: z.object({ command: groupCommandSchema, dispatched: z.boolean(), receipt: receiptSchema.optional(),
     rejection: rejectionSchema.optional() }).strict().refine(pending => {
     const rejected = pending.rejection;
@@ -36,9 +38,36 @@ const journalSchema = z.object({
       && rejected.groupId === pending.command.groupId;
   }, 'The kept rejection does not match the original Group request.').optional(),
 }).strict();
-type Journal = z.infer<typeof journalSchema>;
+export type GroupEditorRecord = z.infer<typeof journalSchema>;
+type Journal = GroupEditorRecord;
 type StoragePort = Pick<Storage, 'getItem' | 'setItem'>;
 export const emptyGroupEditor = (): GroupEditorDraft => ({ title: '', projectId: null, members: [], defaultAgentId: null });
+export function groupEditorKey(scope: GroupEditorScope) {
+  scopeSchema.parse(scope);
+  return `e3:group-editor:${scope.deviceId}:${scope.epoch}:${scope.windowId}:${scope.groupId}`;
+}
+/** One reader for ordinary reload and explicit closed-window recovery. */
+export function readGroupEditorJournal(raw: string, scope: GroupEditorScope): GroupEditorRecord {
+  scopeSchema.parse(scope);
+  if (raw.length > 128 * 1024 || new TextEncoder().encode(raw).length > 128 * 1024)
+    throw Error('The kept Group editor exceeds its supported size.');
+  const kept = journalSchema.parse(JSON.parse(raw));
+  if (canonical(kept.scope) !== canonical(scope)) throw Error('This kept editor belongs to another Group or workspace.');
+  const origins = kept.recoveredFrom ?? [];
+  if (new Set(origins.map(origin => origin.windowId)).size !== origins.length
+    || origins.some(origin => origin.epoch !== scope.epoch || origin.deviceId !== scope.deviceId
+      || origin.groupId !== scope.groupId || origin.windowId === scope.windowId))
+    throw Error('The original Group writing locations could not be verified.');
+  if (kept.pending) {
+    if (kept.pending.command.epoch !== scope.epoch || kept.pending.command.groupId !== scope.groupId)
+      throw Error('The kept request belongs to another Group.');
+    if (kept.pending.receipt) {
+      if (!kept.pending.dispatched) throw Error('The kept Group receipt has no original dispatch marker.');
+      originalGroupReceipt(scope, kept.pending.command, kept.pending.receipt);
+    }
+  }
+  return kept;
+}
 
 /** A response is evidence for one original command, never a refreshed command. */
 export function originalGroupReceipt(scope: GroupEditorScope, command: GroupCommand, raw: unknown): GroupReceipt {
@@ -79,25 +108,15 @@ export class GroupEditorJournal {
   private knownUnsent?: string;
   private clearAttempt?: { archiveKey: string; archived: string; cleared: string };
   constructor(private storage: StoragePort, readonly scope: GroupEditorScope,
-    private current: () => boolean, initial: GroupEditorDraft = emptyGroupEditor()) {
+    private current: () => boolean, initial: GroupEditorDraft = emptyGroupEditor(), origin?: 'create' | 'group') {
     scopeSchema.parse(scope);
-    this.key = `e3:group-editor:${scope.deviceId}:${scope.epoch}:${scope.windowId}:${scope.groupId}`;
-    this.value = { format: 1, scope, draft: groupEditorDraftSchema.parse(initial) };
+    this.key = groupEditorKey(scope);
+    this.value = { format: 1, scope, draft: groupEditorDraftSchema.parse(initial), ...(origin ? { origin } : {}) };
     try {
       this.raw = storage.getItem(this.key);
       if (this.raw === null) return;
-      if (new TextEncoder().encode(this.raw).length > 128 * 1024) throw Error('The kept Group editor exceeds its supported size.');
-      const kept = journalSchema.parse(JSON.parse(this.raw));
-      if (canonical(kept.scope) !== canonical(scope)) throw Error('This kept editor belongs to another Group or workspace.');
-      if (kept.pending) {
-        if (kept.pending.command.epoch !== scope.epoch || kept.pending.command.groupId !== scope.groupId)
-          throw Error('The kept request belongs to another Group.');
-        if (kept.pending.receipt) {
-          if (!kept.pending.dispatched) throw Error('The kept Group receipt has no original dispatch marker.');
-          originalGroupReceipt(scope, kept.pending.command, kept.pending.receipt);
-        }
-      }
-      this.value = kept;
+      const kept = readGroupEditorJournal(this.raw, scope);
+      this.value = origin === 'group' ? { ...kept, origin } : kept;
     } catch (error) {
       this.invalid = true; this.error = error instanceof Error ? error.message : 'The original Group editor could not be read.';
     }
@@ -168,7 +187,7 @@ export class GroupEditorJournal {
     if (!pending) throw Error('The original Group request is unavailable.');
     const receipt = originalGroupReceipt(this.scope, pending.command, raw);
     // Preserve genuine late evidence and newer writing before fallible storage.
-    this.value = { ...this.value, pending: { ...pending, receipt } };
+    this.value = { ...this.value, origin: 'group', pending: { ...pending, receipt } };
     if (this.current()) this.retain();
     return receipt;
   }

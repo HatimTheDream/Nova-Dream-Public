@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { registerWorker, type WorkerPluginApi } from '../apps/service/worker-plugin/index.js';
 import { workerInputHash, workerNativeIdentity } from '../apps/service/worker-plugin/identity.js';
 import { withWorkerPlugin } from '../apps/service/worker-runtime-config.js';
+import { withSourcePlugin } from '../apps/service/source-runtime-config.js';
+import { withAccountPlugin } from '../apps/service/account-runtime-config.js';
 import type { WorkerReceipt, WorkerStatus } from '../packages/domain/worker.js';
 
 const cleanups: (() => void)[] = [];
@@ -184,4 +186,21 @@ test('owned native policy is separate, revocable and cannot widen an admitted to
  await assert.rejects(f.invoke('run',{...input,nativeTools:['calculator__click','calculator__type_text']}),/different work|original native tool/);assert.equal(f.calls.length,1);
  const revoked=withWorkerPlugin({...cfg,mcp:{servers:{}}},f.epoch,'/fixture/worker',f.receiptDirectory);assert.deepEqual((revoked.agents as any).entries[assignmentNativeRuntimeAgent],assignmentRuntimePolicy);
  f.api.config=revoked as any;const later={...await f.input(),toolMode:'workspace',nativeTools:names};await assert.rejects(f.invoke('run',later),/native tool set changed/);assert.equal(f.calls.length,1);
+});
+
+
+test('composed worker policy remains exactly idempotent and moved bundles retain replacement semantics', () => {
+ const epoch=randomUUID(),worker='/fixture/worker',receipts='/fixture/receipts';
+ const composed=withAccountPlugin(withSourcePlugin(withWorkerPlugin({plugins:{load:{paths:['/owner/plugin']}}},epoch,worker,receipts),
+  epoch,'/fixture/source','/fixture/cache'),epoch,'/fixture/account','/fixture/openclaw.mjs');
+ const preserved=structuredClone(composed),paths=composed.plugins?.load?.paths;assert(paths);
+ assert.deepEqual(paths,['/owner/plugin',worker,'/fixture/source','/fixture/account']);
+ assert.deepEqual(withWorkerPlugin(composed,epoch,worker,receipts),composed,'qualification must not reorder the original composed policy');
+ const repeated={...composed,plugins:{...composed.plugins,load:{...composed.plugins?.load,paths:[...paths,worker]}}};
+ assert.deepEqual(withWorkerPlugin(repeated,epoch,worker,receipts),composed,'duplicate paths still normalize to the single original position');
+ const changed=withWorkerPlugin(composed,epoch,'/replacement/worker',receipts);
+ assert.deepEqual(changed.plugins.load.paths,['/owner/plugin','/fixture/source','/fixture/account','/replacement/worker']);
+ assert.equal(changed.plugins.entries['edition3-worker'].config.bundlePath,'/replacement/worker');
+ assert.deepEqual(withWorkerPlugin(changed,epoch,'/replacement/worker',receipts),changed);
+ assert.deepEqual(composed,preserved,'policy preparation must not mutate its input');
 });

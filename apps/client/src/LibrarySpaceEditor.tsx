@@ -7,7 +7,7 @@ import { registerHomeDraftNavigation } from './home-draft-navigation';
 import { Dialog } from './ui';
 import { draftBrowserStorage } from './draft-browser-storage';
 
-export type SpaceEditorRequest = LibrarySpaceScope & { nonce: string; draft: LibrarySpaceDraft };
+export type SpaceEditorRequest = LibrarySpaceScope & { nonce: string; draft: LibrarySpaceDraft; restoreFocus?: () => void };
 export function LibrarySpaceEditor({ scope, shelves, request, controller, prepareFocus }: {
  scope: LibrarySpaceScope; shelves?: HomeShelves; request?: SpaceEditorRequest; controller: HomeLibraryController; prepareFocus?: () => () => void;
 }) {
@@ -27,7 +27,7 @@ export function LibrarySpaceEditor({ scope, shelves, request, controller, prepar
  }, [owner]);
  useEffect(() => {
   if (!request || seen.current === request.nonce || request.epoch !== scope.epoch || request.deviceId !== scope.deviceId || request.windowId !== scope.windowId) return;
-  seen.current = request.nonce;owner.open(request.draft);setVisible(true);refresh();
+  seen.current = request.nonce;owner.open(request.draft);finishFocus.current = request.restoreFocus ?? prepareFocus?.();setVisible(true);refresh();
  }, [request?.nonce, owner]);
  const adopt = (command: HomeShelvesCommand, result: HomeShelvesReceipt) => {
   if (!life.current.active || !owner.value || command.type !== 'space-save' || owner.value.id !== command.id) return;
@@ -39,13 +39,13 @@ export function LibrarySpaceEditor({ scope, shelves, request, controller, prepar
   const saved = controller.lastSave;
   if (saved && isHomeShelvesCommand(saved.command) && isHomeShelvesReceipt(saved.result)) adopt(saved.command, saved.result);
  }, [controller.lastSave, owner]);
- const close = () => { if (!owner.value || owner.keep()) setVisible(false);refresh(); };
+ const close = () => { if (!owner.value || owner.keep()) { setVisible(false);finishFocus.current = undefined; }refresh(); };
  const blocked = controller.busy || !!controller.pending || !!controller.journalError;
  const value = owner.value, outdated = !!value && !!shelves && value.expectedRevision !== shelves.revision;
  const nameConflict = !!value && !!shelves && shelves.spaces.some(space => space.id !== value.id && homeSpaceNameKey(space.name) === homeSpaceNameKey(value.name));
  const save = async () => {
   if (!life.current.active) return;
-  finishFocus.current = prepareFocus?.();
+  finishFocus.current ??= prepareFocus?.();
   if (known.current) { adopt(known.current.command, known.current.result);return; }
   const current = owner.value;
   if (blocked || !shelves || !current || current.expectedRevision !== shelves.revision || !current.name.trim() || nameConflict || !owner.keep()) { refresh();return; }
@@ -55,7 +55,7 @@ export function LibrarySpaceEditor({ scope, shelves, request, controller, prepar
  };
  return <>
   {owner.invalid && <p className="notice warning" role="alert">{owner.error}</p>}
-  {owner.value && !visible && <button className="compact-action compact-utility" onClick={() => setVisible(true)}>Resume Space Name</button>}
+  {owner.value && !visible && <button className="compact-action compact-utility" onClick={() => { finishFocus.current = prepareFocus?.();setVisible(true); }}>Resume Space Name</button>}
   {visible && value && <Dialog title={shelves?.spaces.some(space => space.id === value.id) ? 'Rename Space' : 'New Space'} close={close} size="choice">
    <form onSubmit={event => { event.preventDefault();void save(); }}>
     <label>Space Name<input value={value.name} maxLength={100} onChange={event => { owner.edit(event.target.value);refresh(); }}/></label>

@@ -4,16 +4,16 @@ import { z } from 'zod';
 import type { Attachment } from './contracts.js';
 import { directAgentRecipientSchema } from './direct-agent.js';
 
-export const permissionModeSchema = z.enum(['read-only', 'guarded', 'workspace', 'full']);
+export const permissionModeSchema = /* @__PURE__ */ (() => z.enum(['read-only', 'guarded', 'workspace', 'full']))();
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
-export const assistantRequestSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid() });
-const refineSourceSchema = z.object({ outputId: z.string().uuid(), version: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export const connectionSchema = assistantRequestSchema.extend({
+export const assistantRequestSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string().uuid(), epoch: z.string().uuid() }))();
+const refineSourceSchema = /* @__PURE__ */ (() => z.object({ outputId: z.string().uuid(), version: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict())();
+export const connectionSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({
   url: z.string().url().max(2048),
   token: z.string().max(8192).optional(),
-}).strict();
-export const createConversationSchema = assistantRequestSchema.extend({
+}).strict())();
+export const createConversationSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({
   space: assistantSpaceSchema.optional(),
   autoTitle: z.boolean().optional(),
   title: z.string().trim().min(1).max(150), projectId: z.string().max(100).nullable(),
@@ -22,36 +22,36 @@ export const createConversationSchema = assistantRequestSchema.extend({
   permissionMode: permissionModeSchema.optional(),
   refineSource: refineSourceSchema.optional(),
   recipient: directAgentRecipientSchema.optional(),
-}).strict();
-export const submitSchema = assistantRequestSchema.extend({
+}).strict())();
+export const submitSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({
   conversationId: z.string().uuid(), conversationRevision: z.number().int().positive(),
   draftId: z.string().max(200), draftRevision: z.number().int().positive(), projectRevision: z.number().int().nonnegative(),
-}).strict();
-export const enqueueSchema = submitSchema.extend({ automatic: z.boolean().optional() }).strict();
-export const steerSchema = submitSchema.extend({ targetOperationId: z.string().uuid() }).strict();
-export const conversationEditSchema = assistantRequestSchema.extend({
+}).strict())();
+export const enqueueSchema = /* @__PURE__ */ (() => submitSchema.extend({ automatic: z.boolean().optional() }).strict())();
+export const steerSchema = /* @__PURE__ */ (() => submitSchema.extend({ targetOperationId: z.string().uuid() }).strict())();
+export const conversationEditSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({
   conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(),
   title: z.string().trim().min(1).max(150).optional(), archived: z.boolean().optional(),
   deleted: z.boolean().optional(), pinned: z.boolean().optional(), unread: z.boolean().optional(), projectId: z.string().max(100).nullable().optional(),
   model: z.string().max(150).nullable().optional(), thinking: z.string().max(30).nullable().optional(),
   fastMode: z.union([z.boolean(), z.literal('auto')]).nullable().optional(),
   permissionMode: permissionModeSchema.optional(),
-}).strict();
-export const recoverSettingsSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), pendingRequestId: z.string().uuid(), action: z.enum(['retry', 'use-current']) }).strict();
-export const conversationAccountSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), profileId: z.string().min(1).max(200).nullable() }).strict();
-export const resumeConversationSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/), allowPartial: z.boolean().optional() }).strict();
-export const recoverContinuationSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), pendingRequestId: z.string().uuid() }).strict();
-export const saveOutputSchema = assistantRequestSchema.extend({
+}).strict())();
+export const recoverSettingsSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), pendingRequestId: z.string().uuid(), action: z.enum(['retry', 'use-current']) }).strict())();
+export const conversationAccountSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), profileId: z.string().min(1).max(200).nullable() }).strict())();
+export const resumeConversationSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ conversationId: z.string().uuid(), expectedRevision: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/), allowPartial: z.boolean().optional() }).strict())();
+export const recoverContinuationSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ conversationId: z.string().uuid(), pendingRequestId: z.string().uuid() }).strict())();
+export const saveOutputSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({
   conversationId: z.string().uuid(), nativeId: z.string().uuid(), messageId: z.string().max(1000),
   messageHash: z.string().regex(/^[a-f0-9]{64}$/), name: z.string().trim().min(1).max(150),
-}).strict();
-export const forkConversationSchema = saveOutputSchema.omit({ name: true }).extend({ expectedRevision: z.number().int().positive(), purpose: z.enum(['branch', 'edit', 'retry']), text: z.string().max(100000).optional() }).strict();
-export const artifactSourceSchema = saveOutputSchema.omit({ requestId: true, name: true }).extend({ artifactId: z.string().min(1).max(2000) }).strict();
-export const saveArtifactSchema = saveOutputSchema.extend({ artifactId: z.string().min(1).max(2000) }).strict();
-export const queueActionSchema = assistantRequestSchema.extend({ queueId: z.string().uuid(), expectedRevision: z.number().int().positive() }).strict();
-export const queueStateSchema = queueActionSchema.extend({ state: z.enum(['paused', 'removed']) }).strict();
-export const queueEditSchema = queueActionSchema.extend({ input: z.string().max(100000) }).strict();
-export const queueOrderSchema = assistantRequestSchema.extend({ conversationId: z.string().uuid(), items: z.array(z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict()).max(50) }).strict();
+}).strict())();
+export const forkConversationSchema = /* @__PURE__ */ (() => saveOutputSchema.omit({ name: true }).extend({ expectedRevision: z.number().int().positive(), purpose: z.enum(['branch', 'edit', 'retry']), text: z.string().max(100000).optional() }).strict())();
+export const artifactSourceSchema = /* @__PURE__ */ (() => saveOutputSchema.omit({ requestId: true, name: true }).extend({ artifactId: z.string().min(1).max(2000) }).strict())();
+export const saveArtifactSchema = /* @__PURE__ */ (() => saveOutputSchema.extend({ artifactId: z.string().min(1).max(2000) }).strict())();
+export const queueActionSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ queueId: z.string().uuid(), expectedRevision: z.number().int().positive() }).strict())();
+export const queueStateSchema = /* @__PURE__ */ (() => queueActionSchema.extend({ state: z.enum(['paused', 'removed']) }).strict())();
+export const queueEditSchema = /* @__PURE__ */ (() => queueActionSchema.extend({ input: z.string().max(100000) }).strict())();
+export const queueOrderSchema = /* @__PURE__ */ (() => assistantRequestSchema.extend({ conversationId: z.string().uuid(), items: z.array(z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict()).max(50) }).strict())();
 export type AssistantConnection = {
   state: 'unconfigured' | 'connecting' | 'ready' | 'disconnected' | 'pairing' | 'error';
   url?: string; generation?: string; message: string; protocol?: number; methods: string[];
@@ -103,6 +103,7 @@ export type ContextManifest = {
   teamHandoffs?: { teamId: string; ids: string[] };
   teamReview?: import('./team-review.js').TeamReviewScope;
   project: { id: string; revision: number; name: string; purpose: string; instructions?: string; workspace?: { folder: string; environment: 'local' | 'worktree'; path?: string; branch?: string }; attachments?: Attachment[] } | null;
+  idea?: import('./idea-pursuits.js').IdeaBinding;
   attachments: Attachment[]; refineSource?: { outputId: string; version: number; sha256: string }; draftId: string; draftRevision: number; digest: string;
 };
 export type AssistantOperation = {

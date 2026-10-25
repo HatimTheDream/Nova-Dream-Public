@@ -308,6 +308,7 @@ function matchesThread(thread: IndexedMailThread, criteria: MailAssistantCriteri
 function actionLabel(action: MailAssistantAction, organization?: string): string {
   switch (action) {
     case 'delete': return 'Move to trash';
+    case 'restore': return 'Restore To Original Folder';
     case 'archive': return 'Archive';
     case 'mark-read': return 'Mark as read';
     case 'mark-unread': return 'Mark as unread';
@@ -337,6 +338,8 @@ function threadActionPreview(
   );
   switch (action) {
     case 'delete': return { before: 'In mailbox', after: 'Trash', changes: true };
+    // Restore requires E3's captured Delete provenance, never an indexed guess.
+    case 'restore': return { before: 'Trash', after: 'Original Folder', changes: false };
     case 'archive': return { before: 'Inbox', after: 'Archive', changes: true };
     case 'mark-read': return { before: unread ? 'Unread' : 'Read', after: 'Read', changes: unread };
     case 'mark-unread': return { before: unread ? 'Unread' : 'Read', after: 'Unread', changes: !unread };

@@ -29,6 +29,61 @@
 .group-history button { justify-self: start; }
 .group-profile { padding: 16px 0; }
 .group-rail-status { padding: 8px 12px; font-size: 12px; }
+.group-messaging { display: flex; flex-direction: column; min-height: 100%; max-width: 900px; margin: auto; padding: 16px 20px; gap: 16px; }
+.group-messages-heading, .group-recipient-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.group-messages-heading h2 { flex: 1; margin: 0; font-size: 16px; }
+.group-transcript { flex: 1; min-width: 0; }
+.group-round { margin-bottom: 12px; }
+.group-round-heading { display: flex; flex-direction: column; text-align: left; gap: 5px; max-width: 100%; }
+.group-round-heading span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.group-round-heading small { color: var(--muted); font-weight: normal; }
+.group-round-detail { display: flex; flex-direction: column; gap: 18px; padding: 16px 0; }
+.group-message { display: flex; flex-direction: column; gap: 7px; max-width: 88%; }
+.group-owner-message { align-self: flex-end; align-items: flex-end; }
+.group-agent-message { align-self: flex-start; align-items: flex-start; }
+.group-message-author { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.group-message-author > span, .group-message-author > small { color: var(--muted); }
+.group-message-bubble { padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.group-owner-message .group-message-bubble { background: color-mix(in srgb, var(--gold, #c79642) 12%, transparent); }
+.group-context-choice { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.group-context-choice input { width: auto; flex-shrink: 0; }
+.group-message-composer { border-top: 1px solid var(--line); padding-top: 14px; }
+.group-recipient-row label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 13px; }
+.group-recipient-row select { max-width: 260px; min-width: 0; }
+.group-message-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin: 12px 0; }
+.group-message-field textarea { width: 100%; min-height: 100px; resize: vertical; }
+.group-message-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; margin: 8px 0; overflow-wrap: anywhere; }
+.group-message-status > span:first-child { font-weight: 600; }
+.group-kept-drafts { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.group-message-comparison pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 280px; overflow: auto; padding: 12px; border: 1px solid var(--line); }
+.group-reply-controls { display: flex; flex-direction: column; gap: 8px; max-width: 100%; min-width: 0; }
+.group-reply-status { font-size: 12px; font-weight: 600; }
+.group-reply-setup { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.group-reply-setup label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 0; max-width: 100%; }
+.group-reply-setup select { max-width: 260px; width: 100%; }
+.group-reply-controls > button { align-self: flex-start; }
+.group-reply-controls .metadata { overflow-wrap: anywhere; }
+.group-recovery-writing { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; font: inherit; }
+@media (max-width: 800px), (pointer: coarse) {
+  .group-reply-controls button, .group-reply-controls select { min-height: 44px; }
+  .group-reply-controls select { font-size: 16px; }
+}
+.group-context-details { font-size: 12px; margin: 10px 0; }
+.group-context-details ul { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.group-context-details li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.group-context-details li span { overflow-wrap: anywhere; }
+.group-messaging .button-row { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .group-messaging { padding: 12px; }
+  .group-message { max-width: 96%; }
+  .group-recipient-row label { max-width: 100%; }
+  .group-recipient-row select { max-width: 100%; }
+  .group-message-field textarea, .group-recipient-row select { font-size: 16px; }
+}
+@media (pointer: coarse) {
+  .group-messaging button, .group-recipient-row select, .group-context-choice { min-height: 44px; }
+  .group-message-field textarea, .group-recipient-row select { font-size: 16px; }
+}
 @media (max-width: 1100px) {
   .group-panel-open .group-conversation { display: none; }
   .group-members-panel { width: 100%; min-width: 0; border-left: 0; }

@@ -13,6 +13,8 @@ export function withWorkerPlugin(raw: unknown, epoch: string, bundlePath: string
   if (previousAgent && !matchesAssignmentRuntimePolicy(previousAgent)) throw new Error('The assignment runtime policy was changed. Review the dedicated agent before enabling module tools.');
   const previousNative = agents.entries?.[assignmentNativeRuntimeAgent];
   if (previousNative && !matchesAssignmentRuntimePolicy(previousNative, previous.config?.nativeTools ?? [])) throw new Error('The native assignment policy changed. Review its exact tool access.');
-  const paths = [...new Set([...(plugins.load?.paths ?? []).filter(path => path !== previous.config?.bundlePath), bundlePath])];
+  // Re-observing the same bundle must preserve composed plugin order. A moved
+  // bundle still removes its previous path and uses the existing append rule.
+  const paths = [...new Set([...(plugins.load?.paths ?? []).filter(path => path !== previous.config?.bundlePath || path === bundlePath), bundlePath])];
   return Object.assign({}, config, { agents: { ...agents, ownership: agents.ownership ?? 'explicit', defaults: { ...agents.defaults, systemAgent: { agentId: 'main', ...agents.defaults?.systemAgent } }, entries: { main: {}, ...agents.entries, [assignmentRuntimeAgent]: assignmentRuntimePolicy, ...(nativeTools.length || previousNative ? { [assignmentNativeRuntimeAgent]: assignmentPolicyWithNativeTools(nativeTools) } : {}) } }, plugins: { ...plugins, enabled: true, allow: [...new Set([...(plugins.allow ?? []), workerPluginId])], load: { ...plugins.load, paths }, entries: { ...plugins.entries, [workerPluginId]: { enabled: true, config: { epoch, bundlePath, receiptDirectory, ...(nativeTools.length ? { nativeTools } : {}) } } } } });
 }

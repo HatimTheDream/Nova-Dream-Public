@@ -24,6 +24,7 @@ const loader = registerHooks({
   },
 });
 const { GroupEditor } = await import('../apps/client/src/AssistantGroup');
+const { GroupWritingRecovery } = await import('../apps/client/src/GroupWritingRecovery');
 const { useAssistantGroups } = await import('../apps/client/src/useAssistantGroups');
 const { mayLeaveRecordDrafts } = await import('../apps/client/src/record-draft-navigation');
 loader.deregister();
@@ -74,13 +75,13 @@ function host(f: ReturnType<typeof fixture>, respond: (command: GroupCommand) =>
       ref(value: any) { return cells[cursor++] ??= { current: value }; },
       effect(run: () => void | (() => void), deps: unknown[]) { const i = cursor++, prior = cells[i]; if (!prior || deps.some((value, index) => !Object.is(value, prior.deps[index]))) { cells[i] = { deps, cleanup: prior?.cleanup }; effects.push(() => { cells[i].cleanup?.(); cells[i].cleanup = run(); }); } },
     },
-    localStorage: { getItem: (k: string) => { if (failNextRead) { failNextRead = false; throw Error('Synthetic cleared-pointer readback failure'); } if (faults.read) throw Error('Synthetic denied read'); return f.storage.get(k) ?? null; }, setItem: (k: string, v: string) => { if (faults.write) throw Error('Synthetic denied write'); f.storage.set(k, v);
+    localStorage: { get length() { return f.storage.size; }, key: (i: number) => [...f.storage.keys()][i] ?? null, getItem: (k: string) => { if (failNextRead) { failNextRead = false; throw Error('Synthetic cleared-pointer readback failure'); } if (faults.read) throw Error('Synthetic denied read'); return f.storage.get(k) ?? null; }, setItem: (k: string, v: string) => { if (faults.write) throw Error('Synthetic denied write'); f.storage.set(k, v);
       if (faults.clearedReadback && k === `e3:group-editor:${f.scope.deviceId}:${f.scope.epoch}:${f.scope.windowId}:${f.scope.groupId}` && !JSON.parse(v).pending) { faults.clearedReadback = false; failNextRead = true; } } },
     requestAnimationFrame: (fn: Function) => { fn(); return 1; },
     fetch: async (url: string, init: RequestInit) => {
       const command = init.body ? JSON.parse(String(init.body)) : undefined; calls.push({ url, method: init.method!, command });
       if (command) { const result = await respond(command); return result instanceof Response ? result : new Response(JSON.stringify(result)); }
-      if (read) return new Response(JSON.stringify(await read(url)));
+      if (read) { const result = await read(url); return result instanceof Response ? result : new Response(JSON.stringify(result)); }
       const query = new URL(url, 'http://fixture').searchParams;
       if (query.get('view') === 'history') return new Response(JSON.stringify({ epoch: f.scope.epoch, view: 'history',
         groupId: f.scope.groupId, revision: f.bundle.group!.revision, total: f.bundle.group!.revision,
@@ -105,6 +106,78 @@ function host(f: ReturnType<typeof fixture>, respond: (command: GroupCommand) =>
 }
 const write = async (app: ReturnType<typeof host>, value: string) => { field(app.tree, 'Group Name').props.onChange({ target: { value } }); await app.flush(); };
 
+test('recovery dialog copies only after its exact read and preserves an uncertain original without POST', async () => {
+  const f = fixture(), originalScope = { ...f.scope, windowId: randomUUID() };
+  const originalKey = `e3:group-editor:${f.scope.deviceId}:${f.scope.epoch}:${originalScope.windowId}:${f.scope.groupId}`;
+  const destination = `e3:group-editor:${f.scope.deviceId}:${f.scope.epoch}:${f.scope.windowId}:${f.scope.groupId}`;
+  const command = { action: 'create', requestId: randomUUID(), epoch: f.scope.epoch, groupId: f.scope.groupId,
+    expectedRevision: 0, title: 'Original Title', projectId: null, members: [], defaultAgentId: null, shareEarlierHistory: false };
+  const raw = JSON.stringify({ format: 1, scope: originalScope, origin: 'create',
+    draft: { title: 'Unfinished Name', projectId: null, members: [], defaultAgentId: null }, pending: { command, dispatched: true } });
+  f.storage.set(originalKey, raw);
+  let opened = 0, closed = 0;
+  const app = host(f, () => { throw Error('Recovery must not post'); }, () => GroupWritingRecovery({
+    scope: f.scope, groups: [], canOpen: true, open: target => {
+      opened++; assert.equal(target.kind, 'create');
+      assert.deepEqual(JSON.parse(f.storage.get(destination)!).pending, { command, dispatched: true }); return opened > 1;
+    }, close: () => closed++,
+  }), () => new Response(JSON.stringify({ code: 'group_missing', message: 'Group unavailable' }), { status: 404 }));
+  try {
+    await app.flush();
+    button(app.tree, 'Unfinished NameAnother Or Closed Tab').props.onClick(); await app.flush();
+    assert.equal(app.calls.length, 0); assert.equal(f.storage.has(destination), false);
+    button(app.tree, 'Copy Into This Window').props.onClick(); await app.flush();
+    assert.equal(opened, 1); assert.equal(closed, 0); assert.match(text(app.tree), /copy is kept/);
+    const kept = f.storage.get(destination);
+    f.storage.set(originalKey, raw.replace('Unfinished Name', 'New Original Writing'));
+    button(app.tree, 'Open Kept Copy').props.onClick(); await app.flush();
+    assert.equal(opened, 2); assert.equal(closed, 1); assert.equal(f.storage.get(destination), kept);
+    assert.deepEqual(app.calls.map(call => call.method), ['GET', 'GET']);
+    assert.equal(f.storage.get(originalKey), raw.replace('Unfinished Name', 'New Original Writing'));
+  } finally { app.close(); }
+});
+
+test('recovery read finishing after navigation permission changes cannot copy or open writing', async () => {
+  const f = fixture(), sourceScope = { ...f.scope, windowId: randomUUID() };
+  const key = `e3:group-editor:${f.scope.deviceId}:${f.scope.epoch}:${sourceScope.windowId}:${f.scope.groupId}`;
+  f.storage.set(key, JSON.stringify({ format: 1, scope: sourceScope, origin: 'create',
+    draft: { title: 'Kept Name', projectId: null, members: [], defaultAgentId: null } }));
+  let canOpen = true, opened = 0, complete!: (value: Response) => void;
+  const app = host(f, f.admit, () => GroupWritingRecovery({ scope: f.scope, groups: [], canOpen,
+    open: () => { opened++; return true; }, close: () => {} }), () => new Promise(resolve => { complete = resolve; }));
+  try {
+    await app.flush(); button(app.tree, 'Kept NameAnother Or Closed Tab').props.onClick(); await app.flush();
+    button(app.tree, 'Copy Into This Window').props.onClick(); await app.flush();
+    canOpen = false; app.force(); await app.flush();
+    complete(new Response(JSON.stringify({ code: 'group_missing', message: 'Group unavailable' }), { status: 404 })); await app.flush();
+    assert.equal(opened, 0); assert.equal(f.storage.size, 1); assert.deepEqual(app.calls.map(call => call.method), ['GET']);
+    canOpen = true; app.force(); await app.flush(); assert.equal(button(app.tree, 'Copy Into This Window').props.disabled, false);
+  } finally { app.close(); }
+});
+
+test('replacement is independent of new member selection and expires when the saved Group revision changes', async () => {
+  const f = fixture();
+  f.admit({ epoch: f.scope.epoch, groupId: f.scope.groupId, requestId: randomUUID(), expectedRevision: 0,
+    action: 'create', title: 'Planning Circle', projectId: null, members: [
+      { agentId: 'agent:planner', agentRevision: 1 }, { agentId: 'agent:reviewer', agentRevision: 1 }],
+    defaultAgentId: 'agent:planner', shareEarlierHistory: false });
+  const app = host(f), planner = f.bundle.members[0].id, reviewer = f.bundle.members[1].id;
+  const row = () => nodes(app.tree).find(node => node.type === 'li' && text(node).startsWith('Planner'));
+  try {
+    await app.flush(); button(app.tree, 'Members · 2').props.onClick(); await app.flush();
+    const replacement = () => nodes(app.tree).find(node => node.type === 'select' && node.props['aria-label'] === 'Replacement For Planner');
+    replacement().props.onChange({ target: { value: reviewer } }); await app.flush();
+    assert.equal(button(row(), 'Remove').props.disabled, false);
+    const key = `e3:group-editor:${f.scope.deviceId}:${f.scope.epoch}:${f.scope.windowId}:${f.scope.groupId}`;
+    assert.equal(JSON.parse(f.storage.get(key)!).draft.defaultAgentId, null);
+    f.admit({ action: 'choose-default', requestId: randomUUID(), epoch: f.scope.epoch, groupId: f.scope.groupId,
+      expectedRevision: f.bundle.group!.revision, membershipId: planner });
+    app.reader.detail = f.detail(); app.force(); await app.flush();
+    assert.equal(replacement().props.value, ''); assert.equal(button(row(), 'Remove').props.disabled, true);
+    assert.equal(app.calls.length, 0);
+  } finally { app.close(); }
+});
+
 test('rendered Group create requires explicit responder and sends one exact metadata command', async () => {
   const f = fixture(), app = host(f);
   try {
@@ -116,7 +189,10 @@ test('rendered Group create requires explicit responder and sends one exact meta
     button(app.tree, 'Create Group').props.onClick(); await app.flush();
     assert.equal(app.calls.length, 1); assert.equal(app.calls[0].method, 'POST');
     assert.equal(app.calls[0].command?.action, 'create'); assert.equal((app.calls[0].command as any).shareEarlierHistory, false);
-    assert.equal(f.bundle.group?.title, 'Planning Circle'); assert.match(text(app.tree), /Messaging is unavailable/);
+    assert.equal(f.bundle.group?.title, 'Planning Circle');
+    assert.ok(nodes(app.tree).some(node => node.props.group?.id === f.scope.groupId && node.props.windowId === f.scope.windowId));
+    assert.equal(text(app.tree).includes('Group Change Saved.'), false);
+    assert.equal(text(app.tree).split('The Original Change Is Confirmed.').length - 1, 1);
     assert.equal(button(app.tree, 'Add Selected Members').props.disabled, true);
   } finally { app.close(); }
 });
@@ -184,7 +260,7 @@ test('removing the default needs an explicit replacement and Undo preserves a ne
     await app.flush(); button(app.tree, 'Members · 2').props.onClick(); await app.flush();
     assert.equal(button(memberRow('Planner'), 'Remove').props.disabled, true);
     nodes(app.tree).find(node => node.type === 'select' && node.props['aria-label'] === 'Replacement For Planner')
-      .props.onChange({ target: { value: 'agent:reviewer' } }); await app.flush();
+      .props.onChange({ target: { value: reviewer } }); await app.flush();
     button(memberRow('Planner'), 'Remove').props.onClick(); await app.flush();
     assert.equal(f.bundle.group?.defaultMemberId, reviewer);
     const removal = f.bundle.events.at(-1)!; assert.deepEqual(removal.removedMembershipIds, [originalPlanner]);

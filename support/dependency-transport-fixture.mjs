@@ -29,6 +29,13 @@ export function dependencyFixture(t,{format=1,change,runHook,includeHost=false}=
   const plugin='dist/service/apps/service/worker-plugin/';for(const n of ['index.js','identity.js','journal.js'])files[plugin+n]=Buffer.from('export {};');
   files[plugin+'openclaw.plugin.json']=raw({id:'edition3-worker'});files[plugin+'package.json']=raw({openclaw:{extensions:['./index.js']}});
   for(const n of ['dist/service/apps/service/assignments.js','dist/service/apps/service/runtime-child.js','dist/service/packages/domain/worker.js'])files[n]=Buffer.from('export {};');
+  if(pkg.edition3.schemaVersion>=56){
+   const direct='dist/service/apps/service/direct-agent-plugin/';
+   files[direct+'index.js']=Buffer.from('export {};');
+   files[direct+'openclaw.plugin.json']=raw({id:'edition3-direct-agent'});
+   files[direct+'package.json']=raw({openclaw:{extensions:['./index.js']}});
+   for(const name of ['direct-agent-tool-calls.js','direct-agent-runtime-policy.js','direct-agent-owner.js'])files['dist/service/apps/service/'+name]=Buffer.from('export {};');
+  }
   const manifest=put(join(directory,'dist/candidate.json'),{version:pkg.version,...pkg.edition3,artifacts:Object.entries(files).map(([path,b])=>({path,sha256:put(join(directory,path),b).sha256})),frontendCompatibility:{format:2,eligibility:'client-behavior',sourceRevision:commit,serviceInputsSha256:(base?'c':'d').repeat(64)}});
   const verified=verifyCandidate(directory),archive=put(join(root,side+(base?'-base':'')+'.tgz'),Buffer.from('synthetic application archive '+side+(base?' base':''))),repository='fixture/'+side;
   const metadata={candidateId:verified.id,archiveSha256:archive.sha256},frozenSourceDirectory=join(directory,'frozen-source'),sourceHashes={};

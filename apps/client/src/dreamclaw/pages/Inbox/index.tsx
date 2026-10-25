@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { useInboxHost, useInboxWriting } from '../../inbox-host';
 import { InboxDeliveryCard } from '../../InboxDeliveryCard';
-import { InboxRowActions, InboxThreadMenu } from '../../InboxThreadActions';
+import { InboxRowActions, InboxThreadMenu, InboxReaderFlag } from '../../InboxThreadActions';
 import { inboxSyncStatus } from '../../services/inbox/inboxSyncStatus';
 import {useInboxOutgoingFiles,type InboxOutgoingFiles} from '../../inbox-outgoing-files';
 import { inboxActiveCompose, inboxComposeSources, inboxWritingKey } from '../../inbox-writing';
@@ -60,6 +60,7 @@ import {
   ShieldAlert,
   Tag,
   Trash2,
+  Undo,
   Unplug,
   X,
 } from '@dreamclaw/components/icons';
@@ -168,7 +169,7 @@ import {
   summarizeInboxAttachments,
   type InboxAttachmentKind,
 } from '@dreamclaw/services/inbox/attachmentPresentation';
-import { normalizeEmail, extractEmail, parseAddressList, isValidEmailAddress, sanitizeEmailHref, escapeHtml, buildManualSignatureHtml } from './inbox-address';
+import { normalizeEmail, extractEmail, parseAddressList, isValidEmailAddress, sanitizeEmailHref, escapeHtml, buildManualSignatureHtml, buildReplyRecipients } from './inbox-address';
 import { formatMessageDate, formatThreadListDate, formatFollowUpDeadline, toCalendarDateValue, toCalendarTimeValue, ensureReplySubject } from './inbox-format';
 import { normalizeInboxBucket, normalizeInboxDensity, normalizeInboxCategoryFilter, bucketLabel, bucketDescription, bucketTone, providerTone, categoryLabel, triageCategoryLabel, categoryTone } from './inbox-classify';
 
@@ -219,11 +220,6 @@ type NativeTagOption = {
   id: string;
   label: string;
   color?: string;
-};
-
-type ReplyRecipients = {
-  to: string[];
-  cc: string[];
 };
 
 const THREADS_PER_PAGE = INBOX_DEFAULT_PAGE_SIZE;
@@ -1087,33 +1083,6 @@ function getOwnEmailSet(aliases: NativeGmailSendAsAlias[], accountLabel: string)
   return values;
 }
 
-
-function buildReplyRecipients(
-  sourceMessage: ThreadMessageView | null,
-  ownEmails: Set<string>,
-  replyAll: boolean,
-): ReplyRecipients {
-  if (!sourceMessage) return { to: [], cc: [] };
-
-  const to = new Set<string>();
-  const cc = new Set<string>();
-  const sender = extractEmail(sourceMessage.from);
-  if (sender && !ownEmails.has(sender)) to.add(sender);
-
-  if (replyAll) {
-    for (const address of parseAddressList(sourceMessage.to)) {
-      if (!ownEmails.has(address) && !to.has(address)) cc.add(address);
-    }
-    for (const address of parseAddressList(sourceMessage.cc)) {
-      if (!ownEmails.has(address) && !to.has(address)) cc.add(address);
-    }
-  }
-
-  return {
-    to: [...to],
-    cc: [...cc],
-  };
-}
 
 export function InboxPage() {
   const host = useInboxHost();
@@ -2804,7 +2773,7 @@ export function InboxPage() {
     }
   }, [addNotification, mutatingThread]);
 
-  const handleThreadMutation = useCallback(async (mutation: 'mark-read' | 'mark-unread' | 'archive' | 'delete') => {
+  const handleThreadMutation = useCallback(async (mutation: 'mark-read' | 'mark-unread' | 'archive' | 'delete' | 'restore') => {
     if (!selectedThreadItem || !selectedAccount) return;
     if(mutation==='mark-unread')displayedOpening.current.suppress();
     await prepareInboxMailAction([selectedThreadItem], mutation);
@@ -2839,7 +2808,7 @@ export function InboxPage() {
     await prepareInboxMailAction([thread], thread.isFlagged ? 'unflag' : 'flag');
   }, [prepareInboxMailAction]);
 
-  const handleBulkThreadMutation = useCallback(async (mutation: 'mark-read' | 'mark-unread' | 'archive' | 'delete') => {
+  const handleBulkThreadMutation = useCallback(async (mutation: 'mark-read' | 'mark-unread' | 'archive' | 'delete' | 'restore') => {
     if (selectedThreadItems.length === 0) return;
     await prepareInboxMailAction(selectedThreadItems, mutation);
   }, [prepareInboxMailAction, selectedThreadItems]);
@@ -3454,8 +3423,8 @@ export function InboxPage() {
                         : loading && snapshots.length === 0
                         ? <LoadingRing label={`Loading ${activeFolderDefinition.label}`}/>
                         : activeFolder === 'inbox'
-                          ? `${inboxCoverage.loadedConversations.toLocaleString('en-US')} conversations`
-                          : `${inboxCoverage.loadedConversations.toLocaleString('en-US')} conversations loaded`}
+                          ? `${inboxCoverage.loadedConversations.toLocaleString('en-US')} Conversation${inboxCoverage.loadedConversations === 1 ? '' : 's'}`
+                          : `${inboxCoverage.loadedConversations.toLocaleString('en-US')} Conversation${inboxCoverage.loadedConversations === 1 ? '' : 's'} Loaded`}
                     </span>
                   </div>
               </div>
@@ -3511,12 +3480,12 @@ export function InboxPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => void handleBulkThreadMutation('delete')}
-                      disabled={mutatingThread || !selectedThreadsCanModify || activeFolder === 'trash'}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/20 px-2 py-1 text-red-300 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      onClick={() => void handleBulkThreadMutation(activeFolder === 'trash' ? 'restore' : 'delete')}
+                      disabled={mutatingThread || triageState.busy || !selectedThreadsCanModify}
+                      className={clsx("inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40", activeFolder === 'trash' ? "border-aegis-border text-aegis-text-muted hover:bg-[rgb(var(--aegis-overlay)/0.05)]" : "border-red-500/20 text-red-300 hover:bg-red-500/10")}
                     >
-                      <Trash2 size={12} />
-                      Delete
+                      {activeFolder === 'trash' ? <Undo size={12} /> : <Trash2 size={12} />}
+                      {activeFolder === 'trash' ? 'Restore' : 'Delete'}
                     </button>
                     <div ref={nativeTagMenuRef} className="relative">
                       <button
@@ -3962,7 +3931,7 @@ export function InboxPage() {
                             )}
                           </button>
                           <InboxRowActions pinned={thread.isPinned} flagged={thread.isFlagged} canModify={canModifyThread} busy={mutatingThread || triageState.busy} inTrash={activeFolder === 'trash'}
-                            onPin={() => handleToggleRowPin(thread)} onFlag={() => void handleToggleRowFlag(thread)} onDelete={() => void prepareInboxMailAction([thread], 'delete')} />
+                            onPin={() => handleToggleRowPin(thread)} onFlag={() => void handleToggleRowFlag(thread)} onDelete={() => void prepareInboxMailAction([thread], 'delete')} onRestore={() => void prepareInboxMailAction([thread], 'restore')} />
                         </div>
                       </div>
                       </Fragment>
@@ -4044,7 +4013,7 @@ export function InboxPage() {
                 {selectedThreadItem && selectedAccount ? (
                   <div className="dc-inbox-reader-header-content flex flex-col gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-aegis-border/20 pb-1.5">
-                      <div className="flex flex-wrap items-center gap-0.5">
+                      <div className="dc-inbox-reader-navigation flex flex-wrap items-center gap-0.5">
                         <button
                           type="button"
                           onClick={() => {
@@ -4091,6 +4060,7 @@ export function InboxPage() {
                       </div>
 
                       <div className="dc-inbox-reader-actions flex flex-wrap items-center gap-0.5">
+                        <InboxReaderFlag flagged={selectedThreadItem.isFlagged} canModify={selectedAccount.canModify} busy={mutatingThread||triageState.busy} onFlag={()=>void handleToggleFlag()} className={threadToolbarButtonClass}/>
                         <button
                           type="button"
                           onClick={() => void handleThreadMutation(showsUnread(selectedThreadItem) ? 'mark-read' : 'mark-unread')}
@@ -4113,19 +4083,16 @@ export function InboxPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void handleThreadMutation('delete')}
-                          disabled={mutatingThread || !selectedAccount.canModify || activeFolder === 'trash'}
-                          aria-label="Delete thread"
-                          title="Delete"
-                          className={threadToolbarDangerButtonClass}
+                          onClick={() => void handleThreadMutation(activeFolder === 'trash' ? 'restore' : 'delete')}
+                          disabled={mutatingThread || triageState.busy || !selectedAccount.canModify}
+                          aria-label={activeFolder === 'trash' ? 'Restore Thread' : 'Delete thread'}
+                          title={activeFolder === 'trash' ? 'Review Restore To Original Folder' : 'Move To Trash'}
+                          className={activeFolder === 'trash' ? threadToolbarButtonClass : threadToolbarDangerButtonClass}
                         >
-                          <Trash2 size={12} />
+                          {activeFolder === 'trash' ? <Undo size={12} /> : <Trash2 size={12} />}
                         </button>
                         <button
-                          onClick={() => {
-                            setReplyAll(false);
-                            setShowReplyComposer(true);
-                          }}
+                          onClick={() => setShowReplyComposer(true)}
                           disabled={!selectedAccount.canRead || !replySourceMessage}
                           aria-label="Reply"
                           title={replySourceMessage ? 'Reply' : 'Open this draft to edit it'}
@@ -4134,7 +4101,7 @@ export function InboxPage() {
                           <Reply size={12} />
                         </button>
                         <InboxThreadMenu key={getInboxThreadKey(selectedThreadItem)} pinned={selectedThreadItem.isPinned} flagged={selectedThreadItem.isFlagged} canModify={selectedAccount.canModify} busy={mutatingThread || triageState.busy} inTrash={activeFolder === 'trash'}
-                          onPin={handleTogglePin} onFlag={() => void handleToggleFlag()} onDelete={() => void handleThreadMutation('delete')}
+                          onPin={handleTogglePin} onFlag={() => void handleToggleFlag()} onDelete={() => void handleThreadMutation('delete')} onRestore={() => void handleThreadMutation('restore')}
                           canReply={selectedAccount.canRead && !!replySourceMessage} onReplyAll={() => { setReplyAll(true); setShowReplyComposer(true); }}
                           sender={senderActionState} onSender={action => void handleSenderAction(action)} />
                       </div>
@@ -4205,7 +4172,7 @@ export function InboxPage() {
                 aria-busy={threadLoading || threadMessages.length > 0 && !conversationPrepared}
               >
                 {!threadLoading && threadMessages.length > 0 && !conversationPrepared && <div className="dc-email-preparation">
-                  {preparationFailed ? <div className="dc-inbox-reader-error" role="alert"><Mail size={24} aria-hidden="true"/><h3>This email couldn’t finish preparing</h3><p>Some content is unavailable. Try again to open the complete email.</p><button onClick={retryPreparation}><RefreshCw size={15}/>Try again</button></div> : <LoadingRing label="Preparing email"/>}
+                  {preparationFailed ? <div className="dc-inbox-reader-error" role="alert"><Mail size={24} aria-hidden="true"/><h3>This Email Couldn’t Finish Preparing</h3><p>Some content is unavailable. Try again to open the complete email.</p><button onClick={retryPreparation}><RefreshCw size={15}/>Try again</button></div> : <LoadingRing label="Preparing email"/>}
                 </div>}
                 {threadLoading ? (
                   <div className="flex h-full items-center justify-center text-aegis-text-dim">
@@ -4213,14 +4180,14 @@ export function InboxPage() {
                   </div>
                 ) : threadError && threadMessages.length === 0 ? (
                   <div className="dc-inbox-reader-error" role="alert">
-                    <Mail size={24} aria-hidden="true"/><h3>This message couldn’t load</h3>
+                    <Mail size={24} aria-hidden="true"/><h3>This Message Couldn’t Load</h3>
                     <p>{threadError}</p>
                     <div><button onClick={retrySelectedMessage}><RefreshCw size={15}/>Try again</button><button onClick={host.openSettings}>Account settings</button></div>
                   </div>
                 ) : threadMessages.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center px-6 text-center text-aegis-text-dim">
                     <IconParkMail size={30} aria-hidden="true" />
-                    <h3 className="mt-3 text-[16px] font-extrabold text-aegis-text">Choose a conversation</h3>
+                    <h3 className="mt-3 text-[16px] font-extrabold text-aegis-text">Choose A Conversation</h3>
                     <p className="mt-1 max-w-[320px] text-[12px] leading-5 text-aegis-text-muted">Select a thread to review the full conversation, safety context, and available actions.</p>
                   </div>
                 ) : (

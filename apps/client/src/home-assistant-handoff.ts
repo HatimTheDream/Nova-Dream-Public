@@ -19,12 +19,14 @@ export function applyHomeHandoff(draft: Draft, handoff: KeptHomeHandoff): Draft 
   const marker = `[Nova Source Context ${handoff.id}]`;
   const close = `[/Nova Source Context ${handoff.id}]`;
   const block = `${marker}\n${handoff.value.text}\n${close}`;
-  if (draft.text.includes(block)) return draft;
+  if(handoff.value.idea&&draft.idea&&(draft.idea.pursuitId!==handoff.value.idea.pursuitId||draft.idea.entryId!==handoff.value.idea.entryId))throw Error('This draft belongs to another Idea brief. Keep or send it before opening another pursuit.');
+  if (draft.text.includes(block)) return handoff.value.idea&&!draft.idea?draftSchema.parse({...draft,idea:handoff.value.idea}):draft;
   const text = `${draft.text}${draft.text ? '\n\n' : ''}${block}`;
   if (text.length > 100000) throw new Error('This source will not fit beside the current Assistant writing. Keep or send that draft first, then retry. No source text or existing writing was truncated.');
   const occupied = !!draft.text.trim() || !!draft.attachments.length || !!draft.projectId || !!draft.conversationId;
   return draftSchema.parse({
     ...draft,
+    ...(handoff.value.idea?{idea:handoff.value.idea}:{}),
     text,
     ...(!occupied ? {
       title: handoff.value.title.slice(0, 150),

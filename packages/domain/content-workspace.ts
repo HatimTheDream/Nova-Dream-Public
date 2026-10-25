@@ -24,6 +24,11 @@ export const contentWorkspaceCommandSchema=/* @__PURE__ */ (() => z.discriminate
  z.object({...base,...source,type:z.literal('apply-work'),jobId:z.uuid(),placement:z.enum(['replace','append'])}).strict(),
 ]))();
 export type ContentWorkspaceCommand=z.infer<typeof contentWorkspaceCommandSchema>;
+export type ContentLibraryCommand=Extract<ContentWorkspaceCommand,{type:'library-save'}>;
+export type ContentLibraryReceipt={command:ContentLibraryCommand}&(
+ {state:'unknown'}|{state:'saved';item:ContentLibraryItem}|{state:'rejected';code:string;message:string});
+export type ContentWorkspaceReceipt={command:ContentWorkspaceCommand}&(
+ {state:'unknown';message:string}|{state:'recorded';result:unknown;message:string}|{state:'rejected';code:string;message:string});
 export const builtinContentTemplates:ContentLibraryItem[]=[
  {id:'template:article',name:'Article',type:'template',revision:1,archived:false,guidance:'',brief:'Audience:\nPurpose:\nKey message:\nSources:',body:'# Title\n\n## Introduction\n\n## Main points\n\n## Next steps\n',platform:'Article',collection:'',tags:[],brandId:null},
  {id:'template:post',name:'Social post',type:'template',revision:1,archived:false,guidance:'',brief:'Audience:\nPlatform:\nGoal:',body:'Hook\n\nMain message\n\nCall to action\n',platform:'Social post',collection:'',tags:[],brandId:null},

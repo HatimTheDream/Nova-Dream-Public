@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ChatGptAccount as Account, ChatGptAccountStatus } from '../../packages/domain/sign-in.js';
 import { chatGptAccountOrderSchema, chatGptProfileIdSchema, chatGptRuntimeSnapshotSchema, chatGptUsageFreshMs, emptyChatGptUsage } from '../../packages/domain/chatgpt-accounts.js';
@@ -37,9 +38,27 @@ export class ChatGptAccount {
   private pending?: Promise<ChatGptAccountStatus>;
   private abort = new AbortController();
   private ordering?: Promise<ChatGptAccountStatus>;
+  private routingInvalidation = 0;
   constructor(private runtime: Pick<ManagedRuntime, 'accountCommand'> & Partial<Pick<ManagedRuntime, 'accountOrderCommand'>>, private run: ReadCommand = readCommand, private now = Date.now, private options?: Options) {}
   private fingerprint(command: Command) { return JSON.stringify([command, this.options?.gateway.status().generation, this.options?.gateway.status().url]); }
   private readsPaused() { return this.abort.signal.aborted || !!this.options?.store.updateMaintenanceHeld; }
+  /** Synchronous routing observation only; no native probe or permission is issued.
+   * Global dialogue activity blocks account mutations, not its own Feed worker. */
+  internalRoutingPolicy(): { revision: string; busy: boolean } {
+    const options = this.options, state = options?.gateway.status();
+    if (!options || this.readsPaused() || state?.state !== 'ready' || !state.generation || !state.url)
+      throw new Fault(409, 'account_host_changed', 'The managed account routing policy is unavailable.');
+    const configurationRevision = options.store.internalGatewayConfigurationRevision();
+    if (configurationRevision === undefined)
+      throw new Fault(409, 'account_host_changed', 'The managed account routing policy is unavailable.');
+    const orders = options.store.internalList<OrderReceipt>('accounts:order:')
+      .filter(order => order.generation === state.generation)
+      .map(({ requestId, generation, profileIds, nativeIds, state }) => ({ requestId, generation, profileIds, nativeIds, state }))
+      .sort((a, b) => a.requestId < b.requestId ? -1 : a.requestId > b.requestId ? 1 : 0);
+    const revision = createHash('sha256').update(JSON.stringify({ configurationRevision, generation: state.generation, url: state.url, epoch: options.store.epoch,
+      invalidation: this.routingInvalidation, orders })).digest('hex');
+    return { revision, busy: !!this.ordering || orders.some(order => ['prepared', 'sending', 'unknown'].includes(order.state)) };
+  }
   async read(refresh = false): Promise<ChatGptAccountStatus> {
     if (this.readsPaused()) return unavailable();
     let command: Command;
@@ -146,7 +165,7 @@ export class ChatGptAccount {
         if (!safe) throw new Fault(409, 'account_order_not_sent', 'The workspace became busy or changed before account selection. The previous order is kept.');
       }));
       if (this.fingerprint(this.runtime.accountCommand()) !== fingerprint || !same(result.profileIds, receipt.nativeIds)) throw Error('Account order changed.');
-      save('confirmed'); this.cache = undefined;
+      save('confirmed'); this.invalidate();
     } catch (error) {
       if (error instanceof Fault && ['account_order_not_sent', 'account_order_unavailable'].includes(error.code)) { save('not-sent'); throw error; }
       save('unknown'); throw new Fault(409, 'account_order_unknown', 'Account order was sent but is not confirmed. Retry this same change to check it.');
@@ -192,6 +211,6 @@ export class ChatGptAccount {
     }
     return { profileId: selected.profileId, label: selected.label, ...(selected.identityKey ? { identityKey: selected.identityKey } : {}), reason: selected.profileId === order[0] ? 'preferred' : 'backup', checkedAt: snapshot.checkedAt };
   }
-  invalidate() { this.cache = undefined; }
+  invalidate() { this.cache = undefined; this.routingInvalidation++; }
   async close() { this.abort.abort(); await Promise.allSettled([this.pending, this.ordering]); this.cache = undefined; }
 }

@@ -825,8 +825,11 @@
   .tasks-workspace .daily-task .task-inline-note { grid-column:2 / -1; grid-row:3; max-width:none; padding:0 0 var(--space-2); white-space:normal; overflow-wrap:anywhere; }
 }
 @media(max-width:650px) { .tasks-workspace .task-list { padding-inline:12px; }.task-editor .dialog-footer { bottom:-18px; } }
-/* Task feedback must not shift the row the owner just checked. */
-.task-feedback { position:absolute; right:18px; bottom:18px; z-index:40; width:max-content; max-width:calc(100% - 36px); padding:9px 12px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:var(--shadow); }
+/* Reserve a footer below the scrolling page: keep its top rows steady without
+   covering the last task, editor controls or the phone navigation. */
+.task-feedback { position:relative; order:2; flex:none; align-self:stretch; width:auto; min-width:0; max-width:100%; max-height:min(30vh,12rem); overflow:auto; margin:0 12px 12px; padding:9px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:none; }
+.task-feedback>span { overflow-wrap:anywhere; }
+@media(max-width:800px),(pointer:coarse) { .task-feedback button { min-height:44px; min-width:44px; } }
 .tasks-workspace .check-button { box-shadow:none; background:transparent; }
 
 /* Three destinations, with quiet sections inside each list. */

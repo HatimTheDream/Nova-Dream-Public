@@ -17,3 +17,15 @@ test('app window acknowledgements do not open neighboring setup or model-tool au
   }
   for (const path of ['/api/assistant/module-action', '/api/assistant/module-actions']) assert.equal(phoneRouteAllowed(path, 'POST'), true, 'existing owner review route remains allowed');
 });
+test('paired phones can read only the exact Content receipt route and method',()=>{
+ assert(phoneRouteAllowed('/api/content/workspace/receipt','POST'));
+ for(const method of ['GET','PUT','PATCH','DELETE'])assert(!phoneRouteAllowed('/api/content/workspace/receipt',method));
+ for(const suffix of ['/','/apply','s','?command=apply'])assert(!phoneRouteAllowed('/api/content/workspace/receipt'+suffix,'POST'));
+});
+
+test('Ideas history and original receipts expose only exact authenticated route methods',()=>{
+ for(const method of ['GET','POST'])assert(phoneRouteAllowed('/api/home/ideas',method));
+ assert(phoneRouteAllowed('/api/home/ideas/receipt','POST'));assert(!phoneRouteAllowed('/api/home/ideas/receipt','GET'));
+ for(const path of ['/api/home/ideas/start','/api/home/ideas/send','/api/home/ideas/','/api/home/ideas/receipt/'])
+  for(const method of ['GET','POST'])assert(!phoneRouteAllowed(path,method));
+});
