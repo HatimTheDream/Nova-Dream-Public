@@ -1,3 +1,8 @@
+## [2.28.9] - 2026-10-25
+
+- Fix Assistant startup on Windows when app storage redirects the native lock directory; preserve existing ownership checks.
+- Local candidate preparation only; focused checks and actual native acceptance remain pending. Deployment is deferred.
+
 ## [2.28.8] - 2026-10-25
 
 - Mark side-effect-free schema construction so unused validation code can be omitted without changing validation behavior. Defer the saved-source preview with accessible loading and failure dialogs that retain its original reference and close behavior.

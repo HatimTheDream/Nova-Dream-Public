@@ -16,6 +16,8 @@ for(const version of ['2026.9.2','2026.9.8'])test(`${version}: reconnecting the 
   const directory = mkdtempSync(join(tmpdir(), 'edition3-runtime-'));
   const entry = join(directory, 'openclaw.mjs');
   const previous = process.env.E3_OPENCLAW_ENTRY;
+  const scopedWindowsHome = process.platform === 'win32' && version === '2026.9.8';
+  const previousHome = process.env.HOME, previousProfile = process.env.USERPROFILE;
   writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'openclaw', version }));
   // A local readiness fixture, not evidence of the actual OpenClaw provider.
   writeFileSync(entry, `import { appendFileSync } from 'node:fs';
@@ -35,9 +37,11 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   };
   const runtime: ManagedRuntime = new ManagedRuntime(store, gateway);
   try {
+    if (scopedWindowsHome) { process.env.HOME = directory; process.env.USERPROFILE = directory; }
     const starting = runtime.start();
     assert.equal(runtime.status().phase, 'preparing');
     assert.equal((await starting).state, 'running');
+    if (scopedWindowsHome) assert(existsSync(join(directory, 'AppData/Local/OpenClaw/locks/openclaw-state-owners')), 'The native child prepares only this fixture’s ownership directory.');
     assert.equal(runtime.status().phase, 'ready'); assert.ok(runtime.status().readyAt! >= runtime.status().startedAt!);
     assert.equal(connection.modelAuthReady, false); // Process readiness never grants model access.
     assert.equal(connections.length, 1);
@@ -78,6 +82,10 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     await runtime.stop();
     if(needsShortRuntimeTemporaryDirectory(join(store.directory,'openclaw-runtime')))assert.equal(existsSync(signIn.env.TMPDIR!),false,'Only the owned short temporary directory is removed after shutdown');
   } finally {
+    if (scopedWindowsHome) {
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousProfile;
+    }
     await runtime.stop(); store.close();
     if (previous === undefined) delete process.env.E3_OPENCLAW_ENTRY; else process.env.E3_OPENCLAW_ENTRY = previous;
     rmSync(directory, { recursive: true, force: true });

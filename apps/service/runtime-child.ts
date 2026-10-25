@@ -17,6 +17,8 @@ const stopWithOwner = () => {
 process.once('disconnect', stopWithOwner);
 for (const stream of [process.stdout, process.stderr]) stream.on('error', (error: NodeJS.ErrnoException) => { if (error.code === 'EPIPE') stopWithOwner(); });
 process.argv.splice(1, 1);
+const { prepareWindowsStateOwnerDirectory } = await import(new URL(import.meta.url.endsWith('.ts') ? './openclaw-owner-directory.ts' : './openclaw-owner-directory.js', import.meta.url).href);
+prepareWindowsStateOwnerDirectory(entry);
 const { installNativeApprovalCompatibility } = await import(new URL(import.meta.url.endsWith('.ts') ? './openclaw-approval-compat.ts' : './openclaw-approval-compat.js', import.meta.url).href);
 installNativeApprovalCompatibility(entry);
 await import(pathToFileURL(entry).href);
