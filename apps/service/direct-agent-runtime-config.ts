@@ -77,8 +77,9 @@ export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string,
     agents.entries[groupRuntimeAgent] = expectedGroup;
   }
   plugins.allow = [...new Set([...(plugins.allow ?? []), directPluginId])];
+  plugins.slots = { ...object(plugins.slots ?? {}), memory: 'none' };
   plugins.load = { ...plugins.load, paths: [...new Set([...(plugins.load?.paths ?? []).filter((path: string) => path !== prior?.config?.bundlePath), bundlePath])] };
-  plugins.entries = { ...plugins.entries, [directPluginId]: { enabled: true, config: {
+  plugins.entries = { ...plugins.entries, 'memory-core': { ...object(plugins.entries?.['memory-core'] ?? {}), enabled: false }, [directPluginId]: { enabled: true, config: {
     epoch, bundlePath, url: bridge.url + '/direct', token: bridge.token, policySha256: '',
   } } };
   assertDirectConfigurationShape(config);

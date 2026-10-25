@@ -1,3 +1,9 @@
+## [2.28.10] - 2026-10-25
+
+- Preserve explicitly configured system-CA trust for native ChatGPT sign-in without disabling TLS verification.
+- Make the Direct runtime plugin policy explicit, keeping unrequested default plugins outside its controlled tool set.
+- Local candidate preparation only; focused checks and actual provider acceptance remain pending. Deployment is deferred.
+
 ## [2.28.9] - 2026-10-25
 
 - Fix Assistant startup on Windows when app storage redirects the native lock directory; preserve existing ownership checks.

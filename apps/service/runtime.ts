@@ -186,6 +186,8 @@ export class ManagedRuntime {
     // Existing ChatGPT access is consumed only by OpenClaw's supported native login bridge.
     // No ambient provider key, channel token, runtime flag, or old OpenClaw profile is inherited.
     const env: NodeJS.ProcessEnv = Object.fromEntries(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SystemRoot', 'COMSPEC', 'PATHEXT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
+    // Honor the host's explicit system trust-store opt-in without inheriting arbitrary Node or TLS overrides.
+    if (process.env.NODE_USE_SYSTEM_CA === '1') env.NODE_USE_SYSTEM_CA = '1';
     env.PATH = `${dirname(this.nodePath())}${delimiter}${env.PATH ?? ''}`;
     const temporary=needsShortRuntimeTemporaryDirectory(root)?(this.shortTemporaryDirectory??=mkdtempSync('/tmp/nova-')):join(root,'tmp');
     return { ...env, OPENCLAW_HOME: join(root, 'home'), OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_WORKSPACE_DIR: join(root, 'workspace'), OPENCLAW_PROFILE: 'edition3', OPENCLAW_GATEWAY_PORT: String(config.port), OPENCLAW_GATEWAY_TOKEN: config.token, OPENCLAW_LOAD_SHELL_ENV: '0', OPENCLAW_EXEC_SHELL_SNAPSHOT: '0', OPENCLAW_NO_AUTO_UPDATE: '1', OPENCLAW_DISABLE_BONJOUR: '1', OPENCLAW_SKIP_CHANNELS: '1', TMPDIR: temporary, TEMP: temporary, TMP: temporary };
