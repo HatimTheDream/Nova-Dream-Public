@@ -30,6 +30,58 @@ RESERVE = 1610612736
 ALLOWANCE = 128 * 1024 ** 2
 SESSION_BINDINGS_VERIFIER_SHA256 = '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0'
 _VERIFICATION_SCRATCH = ContextVar('nova_verification_scratch', default=None)
+_LOCAL_WINDOWS = ContextVar('nova_local_windows_retained', default=None)
+
+
+def retained_image_path(path):
+    """Local capture bytes are distinct from their recorded original identities."""
+    local = _LOCAL_WINDOWS.get()
+    return local.image_path(path) if local is not None else pathlib.Path(path)
+
+
+def retained_node_identity(path):
+    local = _LOCAL_WINDOWS.get()
+    return local.node_identity(path) if local is not None else None
+
+
+def retained_glob(root, pattern):
+    root = pathlib.Path(root)
+    image = retained_image_path(root)
+    return (root / path.relative_to(image) for path in image.rglob(pattern))
+
+
+def local_windows_native_saved_state(before_capture, after_capture, *, node, app_releases,
+                                     startup_window, catalog_runtime_root, configuration_derivation, deadline=None):
+    """Compare complete closed Windows images with explicit original identities.
+
+    This does not qualify process lifecycle, restoration, or a startup by itself.
+    The local entrypoint must separately bind the actual closed host operation.
+    Hosted schema/identity defaults remain outside this scoped context.
+    """
+    require(_LOCAL_WINDOWS.get() is None, 'Nested local retained authority is not supported.')
+    from local_retained_context import LocalRetainedContext
+    local = LocalRetainedContext(before_capture, after_capture, node=node, startup_window=startup_window,
+                                catalog_runtime_root=catalog_runtime_root,
+                                configuration_derivation=configuration_derivation, app_releases=app_releases,
+                                deadline=deadline)
+    token = _LOCAL_WINDOWS.set(local)
+    try:
+        portable = configuration_derivation != {'kind': 'no-managed-native-config'}
+        if portable:
+            saved_state(*local.images)
+        # Existing native time derivations use epoch seconds, while capture and
+        # host records use integer epoch milliseconds. Convert at this boundary.
+        native_saved_state(*local.images, from_version='2026.9.8', node=node,
+                           app_releases=app_releases,
+                           log_retention_window=tuple(v / 1000 for v in startup_window),
+                           catalog_runtime_root=catalog_runtime_root)
+        local.finish()
+        return {'kind': 'local-windows-native-comparison', 'schema': 60,
+                'nativeVersion': '2026.9.8', 'sourceRoot': str(local.source_root),
+                'completeNativeFamiliesCompared': True, 'portableRowsCompared': portable, 'startupQualified': False,
+                'restorationQualified': False, 'saclNotRequested': True}
+    finally:
+        _LOCAL_WINDOWS.reset(token)
 
 
 @contextlib.contextmanager
@@ -223,6 +275,7 @@ def require(value, message):
 
 
 def digest(path):
+    path = retained_image_path(path)
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
@@ -728,6 +781,8 @@ class CopiedDatabase:
 
 
 def database(path, closed):
+    path = retained_image_path(path)
+    require(_LOCAL_WINDOWS.get() is None or closed, 'Local retained SQLite must use a complete private family copy.')
     require(path.is_file() and not path.is_symlink(), 'Expected an ordinary workspace database.')
     if closed:
         return CopiedDatabase(path)
@@ -739,7 +794,7 @@ def database(path, closed):
 
 def saved_state(snapshot, live, restored=False):
     """Compare stable, stopped trees without opening either retained SQLite family."""
-    paths = lambda root: {path.relative_to(root) for path in root.rglob('workspace.sqlite')}
+    paths = lambda root: {path.relative_to(root) for path in retained_glob(root, 'workspace.sqlite')}
     before_paths = paths(snapshot)
     require(before_paths and before_paths == paths(live), 'The saved database set changed.')
     reports = []
@@ -748,7 +803,8 @@ def saved_state(snapshot, live, restored=False):
         with contextlib.closing(database(old, True)) as before, contextlib.closing(database(current, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Saved database integrity failed.')
             old_schema, new_schema = before.execute('pragma user_version').fetchone()[0], after.execute('pragma user_version').fetchone()[0]
-            require(old_schema in {53, 55} and new_schema == old_schema, 'An app-only update changed a saved database schema.')
+            allowed = {60} if _LOCAL_WINDOWS.get() is not None else {53, 55}
+            require(old_schema in allowed and new_schema == old_schema, 'An app-only update changed a saved database schema.')
             for table in ('entities', 'history', 'blobs', 'blob_refs', 'receipts', 'meta'):
                 retained = rows(before, table)
                 require(retained == rows(after, table), 'Saved content, history, attachment, request receipt or workspace metadata changed.')
@@ -760,10 +816,11 @@ def saved_state(snapshot, live, restored=False):
             require(meaningful(old_services) == meaningful(new_services), 'Saved domain or account configuration records changed.')
             require({row[0] for row in old_services} <= {row[0] for row in new_services}, 'A retained service record was removed.')
             for name in ('workspace.identity', 'workspace-key.json', 'workspace-selection.json'):
-                if (old.parent / name).exists():
-                    require((old.parent / name).read_bytes() == (current.parent / name).read_bytes(), 'Workspace identity, key or selection changed.')
+                if retained_image_path(old.parent / name).exists():
+                    require(retained_image_path(old.parent / name).read_bytes() == retained_image_path(current.parent / name).read_bytes(), 'Workspace identity, key or selection changed.')
             reports.append({'beforeSchema': old_schema, 'afterSchema': new_schema})
-    require(any(item['beforeSchema'] == 55 for item in reports), 'The prior selected schema55 store is missing.')
+    expected = 60 if _LOCAL_WINDOWS.get() is not None else 55
+    require(any(item['beforeSchema'] == expected for item in reports), 'The prior selected schema' + str(expected) + ' store is missing.')
     return reports
 
 
@@ -777,6 +834,7 @@ def rows(connection, table, maximum=1_000_000):
 
 
 def bounded_json(path, maximum):
+    path = retained_image_path(path)
     require(path.is_file() and not path.is_symlink() and path.stat().st_size <= maximum, 'Unexpected workspace authority record.')
     return json.loads(path.read_bytes())
 
@@ -785,6 +843,8 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     """Follow the reviewed workspace-host selection contract, then bind its epoch
     to the authenticated live acceptance. Never guess the active runtime by name.
     """
+    original_root = root
+    root = retained_image_path(root)
     require(root.resolve(strict=True) == root and root.is_dir(), 'The durable workspace root changed.')
     selected = root
     selection = root / 'workspace-selection.json'
@@ -799,15 +859,17 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     marker = selected / 'edition3.identity'
     require(marker.is_file() and not marker.is_symlink() and marker.read_bytes() == b'private.novadream.edition3.preview\n', 'Selected workspace identity changed.')
     with contextlib.closing(database(selected / 'workspace.sqlite', closed)) as connection:
-        require(connection.execute('pragma user_version').fetchone()[0] == 55, 'The selected workspace schema changed.')
+        require(connection.execute('pragma user_version').fetchone()[0] == (60 if _LOCAL_WINDOWS.get() is not None else 55), 'The selected workspace schema changed.')
         row = connection.execute("select value from meta where key='epoch'").fetchone()
         require(row is not None and isinstance(row[0], str) and str(uuid.UUID(row[0])) == row[0]
                 and (expected_epoch is None or row[0] == expected_epoch), 'The selected workspace does not match authenticated acceptance.')
-    return selected, row[0]
+    return original_root / selected.relative_to(root), row[0]
 
 
 def native_scope(root, expected_epoch=None, closed=False):
     selected, epoch = selected_workspace(root, expected_epoch, closed)
+    original_selected = selected
+    selected = retained_image_path(selected)
     native = selected / 'openclaw-runtime'
     require(native.resolve(strict=True) == native and native.is_dir(), 'Selected native runtime was redirected.')
     marker = native / 'edition3-runtime.identity'
@@ -816,7 +878,7 @@ def native_scope(root, expected_epoch=None, closed=False):
     shared = native / 'state' / 'state' / 'openclaw.sqlite'
     if shared.exists() or shared.is_symlink():
         require(shared.resolve(strict=True) == shared, 'Canonical native database was redirected.')
-        paths.add(shared.relative_to(root))
+        paths.add(shared.relative_to(retained_image_path(root)))
     agents = native / 'state' / 'agents'
     if agents.exists() or agents.is_symlink():
         require(agents.resolve(strict=True) == agents and agents.is_dir(), 'Canonical native agent root was redirected.')
@@ -828,8 +890,8 @@ def native_scope(root, expected_epoch=None, closed=False):
                 path = agent / 'agent' / name
                 if path.exists() or path.is_symlink():
                     require(path.resolve(strict=True) == path, 'Canonical native agent database was redirected.')
-                    paths.add(path.relative_to(root))
-    return selected.relative_to(root), epoch, paths
+                    paths.add(path.relative_to(retained_image_path(root)))
+    return original_selected.relative_to(root), epoch, paths
 
 
 CAPTURE_OWNER_RETIRED_SHA256 = 'f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
@@ -1175,7 +1237,8 @@ def retained_quarantine_cache(snapshot, live, selected, active, from_version, to
         'agent_integrity_verifications': 'CREATE TABLE agent_integrity_verifications ( path TEXT NOT NULL PRIMARY KEY, dev TEXT NOT NULL, ino TEXT NOT NULL, app_version TEXT NOT NULL, verified_at INTEGER NOT NULL, clean_close INTEGER NOT NULL CHECK (clean_close IN (0, 1)) ) STRICT',
     }
     decisions = []
-    authority = live if logical_workspace_root is None else logical_workspace_root
+    authority = (_LOCAL_WINDOWS.get().source_root if _LOCAL_WINDOWS.get() is not None
+                 else live if logical_workspace_root is None else logical_workspace_root)
     allowed_paths = {str(authority / path) for path in active if path.name != 'openclaw.sqlite'}
     for path, closed in ((old_path, True), (new_path, False)):
         if not path.exists():
@@ -1337,6 +1400,9 @@ def verified_session_bindings(snapshot, selected, configuration, node, key):
 
 def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None,
                                  *, session_binding_key=None, session_binding_node=None, logical_workspace_root=None):
+    local = _LOCAL_WINDOWS.get()
+    if local is not None:
+        return local.configuration(selected)
     relative = selected / 'openclaw-runtime' / 'openclaw.json'
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
@@ -1613,9 +1679,13 @@ def native_restart_rows(before, after, table, relative, after_path, replacements
                     and value[1] == relative.parts[-3] and isinstance(value[2], str) and re.fullmatch(r'[0-9]+:[0-9]+', value[2])
                     and isinstance(value[3], str) and re.fullmatch(r'[0-9]{1,20}', value[3]), 'Unreviewed native canonical receipt format.')
             receipts.append(value)
+        local = _LOCAL_WINDOWS.get()
         identity = after_path.stat()
+        source = local.node_identity(after_path) if local is not None else None
         require(after_path.is_file() and not after_path.is_symlink()
-                and receipts[1][2] == str(identity.st_dev) + ':' + str(identity.st_ino), 'Native canonical receipt belongs to another database.')
+                and receipts[1][2] == (source['dev'] + ':' + source['ino'] if source is not None
+                                      else str(identity.st_dev) + ':' + str(identity.st_ino)),
+                'Native canonical receipt belongs to another database.')
         # Birth time is a generation hint; complete logical rows and quick_check
         # still establish retention/integrity. Bind its companion inode exactly.
         return old.copy()
@@ -1644,9 +1714,12 @@ def native_restart_rows(before, after, table, relative, after_path, replacements
                         and isinstance(process['startedAt'], str) and 0 < len(process['startedAt']) <= 64
                         and ('commandFingerprint' not in process or isinstance(process['commandFingerprint'], str)
                              and re.fullmatch(r'[a-f0-9]{64}', process['commandFingerprint'])), 'Unreviewed Codex process identity.')
-                process_path = pathlib.Path('/proc') / str(process['pid'])
-                require(not process_path.exists() or (process_path / 'stat').read_text().rsplit(')', 1)[1].split()[0] in {'Z', 'X'},
-                        'A removed Codex process registration still has a live owner.')
+                if _LOCAL_WINDOWS.get() is not None:
+                    _LOCAL_WINDOWS.get().processes_retired([process['pid']])
+                else:
+                    process_path = pathlib.Path('/proc') / str(process['pid'])
+                    require(not process_path.exists() or (process_path / 'stat').read_text().rsplit(')', 1)[1].split()[0] in {'Z', 'X'},
+                            'A removed Codex process registration still has a live owner.')
             result[row] = count
     return result
 
@@ -1750,7 +1823,7 @@ def catalog_file(path, expected_hash, signature=None, *, current=False):
     Current cache timestamps must describe its actual file; both sides retain
     exact content hashes, sizes and mtimes.
     """
-    path = pathlib.Path(path)
+    path = retained_image_path(path)
     require(path.is_absolute() and path.resolve(strict=True) == path,
             'Catalog file was redirected.')
     info = path.lstat()
@@ -1766,8 +1839,11 @@ def catalog_file(path, expected_hash, signature=None, *, current=False):
                 and all(type(signature[name]) in (int, float) and math.isfinite(signature[name])
                         and 0 <= signature[name] <= 9007199254740991 for name in ('mtimeMs', 'ctimeMs')),
                 'Catalog file signature changed shape or size.')
-        require(abs(signature['mtimeMs'] - info.st_mtime_ns / 10 ** 6) <= 0.001
-                and (not current or abs(signature['ctimeMs'] - info.st_ctime_ns / 10 ** 6) <= 0.001),
+        source = retained_node_identity(path)
+        mtime = int(source['mtimeNs']) if source is not None else info.st_mtime_ns
+        ctime = int(source['ctimeNs']) if source is not None else info.st_ctime_ns
+        require(abs(signature['mtimeMs'] - mtime / 10 ** 6) <= 0.001
+                and (not current or abs(signature['ctimeMs'] - ctime / 10 ** 6) <= 0.001),
                 'Catalog file signature does not describe its physical file.')
     later = path.lstat()
     identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
@@ -1839,8 +1915,10 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
     def attest(root, named, recorded, content_hash=None, size=None, *, current, ownership_key):
         path = root / named.relative_to(logical)
         require(path.resolve(strict=True) == path, 'Copied Codex admission file was redirected.')
-        info = path.lstat(); actual = stat_identity(info); expected = identity(recorded)
-        owner = (info.st_uid, info.st_gid)
+        info = path.lstat(); physical = stat_identity(info); expected = identity(recorded)
+        local = _LOCAL_WINDOWS.get()
+        actual = local.source_identity_tuple(path) if local is not None else physical
+        owner = local.source_security(path) if local is not None else (info.st_uid, info.st_gid)
         require(owners.setdefault(ownership_key, owner) == owner, 'Copied Codex admission ownership changed across roles.')
         is_file = stat.S_ISREG(expected[2])
         require(is_file or stat.S_ISDIR(expected[2]), 'Copied Codex admission contains a special file.')
@@ -1859,9 +1937,9 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
             require(hashes[actual] == content_hash, 'Copied Codex admission bytes changed.')
         else:
             require(content_hash is None and size is None, 'Copied Codex admission directory gained file content.')
-        require(observed_identity(path.lstat()) == actual + owner and path.resolve(strict=True) == path,
+        require(observed_identity(path.lstat()) == physical + (info.st_uid, info.st_gid) and path.resolve(strict=True) == path,
                 'Copied Codex admission changed during attestation.')
-        observed[path] = actual + owner
+        observed[path] = physical + (info.st_uid, info.st_gid)
 
     by_source = []
     for position, receipt in enumerate(receipts):
@@ -1884,8 +1962,8 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
             members = value['members']
             require(isinstance(members, dict) and '' in members and 0 < len(members) <= 2048,
                     'Copied Codex native member closure exceeded its bound.')
-            roles = [(snapshot if position == 0 else live, position == 1 and logical == live)]
-            if logical != live:
+            roles = [(snapshot if position == 0 else live, position == 1 and (logical == live or _LOCAL_WINDOWS.get() is not None))]
+            if logical != live and _LOCAL_WINDOWS.get() is None:
                 roles.append((logical, True))  # The maintained pre-start original.
             for root, current in roles:
                 physical_source = root / source.relative_to(logical)
@@ -1941,7 +2019,7 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
                                      if stat.S_ISDIR(identity(current['members'][relative]['capturedIdentity'])[2])
                                      or current['members'][relative]['boundaryChecked'])
         if changed or refreshed_capture_time:
-            require(logical == live and isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
+            require((logical == live or _LOCAL_WINDOWS.get() is not None) and isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
                     and all(type(value) in (int, float) and math.isfinite(value) for value in startup_window)
                     and 0 <= startup_window[0] <= startup_window[1], 'Copied Codex capture lacks a closed startup window.')
         target = projected['nativeNamespaces'][new_name]
@@ -1986,7 +2064,8 @@ def retained_package_build(old, new, catalog_runtime_root, workspace_roots):
     runtime = pathlib.Path(catalog_runtime_root)
     require(runtime.is_absolute() and runtime.resolve(strict=True) == runtime
             and runtime.name == 'openclaw' and runtime.parent.name == 'node_modules'
-            and re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name),
+            and (re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name)
+                 or _LOCAL_WINDOWS.get() is not None and runtime == _LOCAL_WINDOWS.get().catalog_runtime_root),
             'Catalog build runtime is outside the reviewed managed engine.')
 
     def physical_identity(path):
@@ -2107,6 +2186,8 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, 
     require(len(before['plugins']) == len(after['plugins']), 'Native plugin catalog membership changed.')
     app_plugins = {'edition3-worker': 'worker-plugin', 'edition3-sources': 'source-plugin',
                    'edition3-accounts': 'account-plugin', 'edition3-workspace': 'module-plugin'}
+    if _LOCAL_WINDOWS.get() is not None:
+        app_plugins['edition3-direct-agent'] = 'direct-agent-plugin'
     seen = set()
     for old, new in zip(before['plugins'], after['plugins']):
         build_changed = json.dumps(old.get('packageBuild'), sort_keys=True) != json.dumps(new.get('packageBuild'), sort_keys=True)
@@ -2218,9 +2299,10 @@ def retained_neutral_channel_policy(row, after_path, workspace_roots, configurat
             'Neutral channel policy lacks retained startup authority.')
     snapshot, live, logical, selected = map(pathlib.Path, workspace_roots)
     relative = selected / 'openclaw-runtime/openclaw.json'
-    require(not selected.is_absolute() and '..' not in selected.parts and logical == live
+    require(not selected.is_absolute() and '..' not in selected.parts
+            and (logical == live or _LOCAL_WINDOWS.get() is not None and logical == _LOCAL_WINDOWS.get().source_root)
             and pathlib.Path(after_path) == live / selected / 'openclaw-runtime/state/state/openclaw.sqlite'
-            and configuration.get('path') == str(live / relative)
+            and configuration.get('path') == str(logical / relative)
             and isinstance(configuration.get('hashes'), list) and len(configuration['hashes']) == 2,
             'Neutral channel policy is outside the selected shared database.')
     require(isinstance(startup_window, (tuple, list)) and len(startup_window) == 2
@@ -2838,7 +2920,8 @@ def attest_native_event_retention(runtime_root):
     runtime = pathlib.Path(runtime_root)
     require(runtime.is_absolute() and runtime.resolve(strict=True) == runtime
             and runtime.name == 'openclaw' and runtime.parent.name == 'node_modules'
-            and re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name),
+            and (re.fullmatch(r'openclaw-2026\.9\.8-[a-f0-9]{12}', runtime.parent.parent.name)
+                 or _LOCAL_WINDOWS.get() is not None and runtime == _LOCAL_WINDOWS.get().catalog_runtime_root),
             'Native event retention runtime is outside the reviewed managed engine.')
     paths = [runtime.parent.parent, runtime.parent, runtime, runtime / 'dist', runtime / 'package.json']
     paths += [runtime / 'dist' / name for name in NATIVE_EVENT_RETENTION_SOURCES]
@@ -2948,6 +3031,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                        log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
                        logical_workspace_root=None, catalog_runtime_root=None):
     to_version = to_version or from_version
+    local_authority = _LOCAL_WINDOWS.get().source_root if _LOCAL_WINDOWS.get() is not None else live
     migrating = from_version != to_version
     require(not migrating or (from_version, to_version) in NATIVE_MIGRATION_PAIRS, 'Native migration is outside the reviewed pair.')
     before_selected, before_epoch, before_paths = native_scope(snapshot, expected_epoch, closed=True)
@@ -2986,7 +3070,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
             boot_replacements = native_boot_replacements(before, after, old_tables & new_tables, configuration, from_version, to_version, node)
             if (from_version, to_version) == ('2026.9.6', '2026.9.8'):
                 migrated_native98_rows(before, after, old_tables, new_tables, relative, live / relative, node, boot_replacements,
-                                       app_releases, (snapshot, live, logical_workspace_root or live, selected),
+                                       app_releases, (snapshot, live, logical_workspace_root or local_authority, selected),
                                        configuration, log_retention_window)
                 continue
             if migrating:
@@ -3012,7 +3096,7 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                     if to_version in {'2026.9.6', '2026.9.8'}:
                         retained_plugin_index(before, after, node, live / relative, from_version, to_version,
                                               app_releases=app_releases,
-                                              workspace_roots=(snapshot, live, logical_workspace_root or live, selected),
+                                              workspace_roots=(snapshot, live, logical_workspace_root or local_authority, selected),
                                               configuration=configuration, startup_window=log_retention_window,
                                               catalog_runtime_root=catalog_runtime_root)
                     else:
