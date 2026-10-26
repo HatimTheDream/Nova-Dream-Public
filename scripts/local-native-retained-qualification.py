@@ -38,7 +38,7 @@ def json_read(path, maximum=16*1024*1024):
 
 
 def save(path, value):
-    data = (json.dumps(value, ensure_ascii=True, allow_nan=False, indent=2)+'\n').encode('ascii')
+    data = (json.dumps(value, ensure_ascii=True, allow_nan=False)+'\n').encode('ascii')
     need(len(data) <= 256*1024*1024, 'Evidence record exceeded bound')
     with Path(path).open('xb') as stream:
         need(stream.write(data) == len(data), 'Short evidence write')
@@ -70,8 +70,69 @@ INPUT_FIELDS = {'format','kind','operationId',*PATH_FIELDS,'retiredPids','limits
                 'totalTimeoutMs','candidate','sourceRefs','sourceReview','runtimeEvidence','appManifest'}
 
 
+def app_release_bindings(value):
+    """Select the two releases from the caller's already hash-checked source refs.
+
+    A retained launcher release is optional, explicit, and the same authenticated
+    candidate. Its complete existing verifier receipt and artifact closure are
+    reused; this never invents a release from a catalog path or starts a candidate.
+    """
+    current, current_hash = json_read(value['appManifest'])
+    after = (value['releaseRoot'], current)
+    if 'beforeAppRelease' not in value:
+        return [after, after]
+    spec = value['beforeAppRelease']
+    need(type(spec) is dict and set(spec) == {'root','manifest','authentication'},
+         'Closed explicit before application release required')
+    for path in spec.values():
+        need(type(path) is str and Path(path).is_absolute() and str(Path(path)) == path,
+             'Exact absolute before release paths required')
+    root = Path(spec['root']); release = Path(value['releaseRoot'])
+    need(Path(spec['manifest']) == root/'dist/candidate.json'
+         and root.parent == release/'.launcher/candidates', 'Before release must be the retained launcher candidate')
+    refs = {row['path']:row for row in value['sourceRefs']}
+    need(len(refs) == len(value['sourceRefs'])
+         and all(path in refs for path in (spec['manifest'],spec['authentication'],value['appManifest'],str(release/'package.json'))),
+         'Before release is missing authenticated evidence')
+    auth, auth_hash = json_read(spec['authentication'])
+    before, before_hash = json_read(spec['manifest'])
+    need(refs[spec['authentication']]['sha256'] == auth_hash
+         and auth.get('format') == 1 and auth.get('kind') == 'retained-launcher-candidate-authentication'
+         and auth.get('qualified') is True and auth.get('noUndeclaredFiles') is True
+         and auth.get('allDeclaredArtifactHashesPassed') is True and auth.get('packageAndManifestExactlyCurrent') is True,
+         'Complete retained candidate authentication is required')
+    need(auth['root'] == spec['root'] and auth['manifest'] == refs[spec['manifest']]
+         and auth['currentManifest'] == refs[value['appManifest']]
+         and before_hash == current_hash == refs[value['appManifest']]['sha256']
+         and before == current and auth['priorCandidateId'] == auth['currentCandidateId'] == root.name
+         and all(auth[key] == current[key] for key in ('version','buildVersion','schemaVersion','apiVersion','appId')),
+         'Retained before candidate identity differs from the current candidate')
+    verifier = auth['verifier']
+    need(verifier['path'] == str(release/'scripts/candidate.mjs') and refs.get(verifier['path']) == verifier,
+         'Maintained candidate verifier source is unbound')
+    expected = {item['path']:item['sha256'] for item in before['artifacts']}
+    need(len(expected) == len(before['artifacts']) > 0
+         and all(not Path(name).is_absolute() and name.startswith(('dist/client/','dist/service/','dist/desktop/'))
+                 and all(part not in ('','..','.') for part in name.split('/')) for name in expected),
+         'Retained candidate artifact paths are invalid')
+    expected.update({'package.json':auth['packageSha256'],'dist/candidate.json':before_hash})
+    files = auth['artifacts']; seen = set(); total = 0
+    need(type(files) is list and len(files) == auth['completeFilesCount'] == len(expected)
+         and auth['declaredArtifactCount'] == len(before['artifacts'])
+         and refs[str(release/'package.json')]['sha256'] == auth['packageSha256'], 'Retained candidate closure is incomplete')
+    for item in files:
+        need(type(item) is dict and set(item) == {'path','relativePath','sha256','bytes'}, 'Closed retained artifact reference required')
+        name = item['relativePath']; reference = {key:item[key] for key in ('path','sha256','bytes')}
+        need(name in expected and name not in seen and item['path'] == str(root/Path(name))
+             and item['sha256'] == expected[name] and refs.get(item['path']) == reference,
+             'Retained candidate artifact is missing or differs from the authenticated closure')
+        seen.add(name); total += item['bytes']
+    need(seen == set(expected) and total == auth['totalBytes'], 'Retained candidate complete allocation binding changed')
+    return [(spec['root'],before), after]
+
+
 def validate_plan(value, *, fresh):
-    need(type(value) is dict and set(value) == INPUT_FIELDS and value['format'] == 1
+    need(type(value) is dict and set(value) in (INPUT_FIELDS,INPUT_FIELDS|{'beforeAppRelease'}) and value['format'] == 1
          and value['kind'] == 'local-native-retained-qualification', 'Closed local qualification plan required')
     need(str(uuid.UUID(value['operationId'],version=4)) == value['operationId'], 'Operation UUID required')
     for key in PATH_FIELDS:
@@ -108,7 +169,7 @@ def validate_plan(value, *, fresh):
     paths = refs_check(value['sourceRefs'])
     required = {Path(__file__).resolve(), *(RUNNER/name for name in ('recovery.py','local_windows_capture.py',
         'windows_same_handle.py','local_windows_clone.py','local_retained_context.py','local_retained_configuration.py',
-        'local-retained-configuration.mjs','verify-session-bindings.mjs')),
+        'local-retained-configuration.mjs','verify-session-bindings.mjs','local_windows_neutral_io.py')),
         Path(value['node']),Path(value['releaseRoot'])/'scripts/local-native-retained-host.mjs',
         Path(value['vendorRoot'])/'openclaw.mjs',Path(value['vendorRoot'])/'package.json'}
     need(required <= paths, 'Plan omits a maintained execution source')
@@ -119,6 +180,7 @@ def validate_plan(value, *, fresh):
              and {p for p in members if p.is_file()} <= paths, 'Plan omits current compiled/builder closure')
     for name in ('sourceReview','runtimeEvidence','appManifest'):
         need(Path(value[name]) in paths, 'Plan omits required source/engine/candidate evidence')
+    app_release_bindings(value)
     # Allocation includes four expanded immutable images plus one physical clone,
     # with distinct fixed recovery reserve. No cleanup is performed for capacity.
     required_bytes = value['limits']['maxBytes'] * 5 + 2*1024**3
@@ -177,6 +239,8 @@ def rename_role(source, target, expected_information, deadline, *, operation_id,
 
 def assert_restored(before, after):
     """Exact physical return; comparison-image IDs are never source authority."""
+    if before.get('format')==2 or after.get('format')==2:
+        return compare_graph_captures(before,after,independent=False)
     for value in (before,after):
         need(value.get('kind') == 'local-windows-closed-tree' and value.get('format') == 1
              and value.get('complete') is True and value.get('allHandlesClosed') is True
@@ -215,8 +279,10 @@ def assert_restored(before, after):
     return {'completePhysicalReturn':True,'sourceIdsRetained':True,'saclNotRequested':True}
 
 
-def assert_working_baseline(before, after):
-    """Compare every captured member before START; only copied physical IDs differ."""
+def assert_working_baseline(before, after, clone_authority=None):
+    """Bind every pre-start member; copied directory storage needs exact authority."""
+    if before.get('format')==2 or after.get('format')==2:
+        return compare_graph_captures(before,after,independent=True,clone_authority=clone_authority)
     for value in (before,after):
         need(value.get('kind') == 'local-windows-closed-tree' and value.get('format') == 1
              and value.get('complete') is True and value.get('allHandlesClosed') is True
@@ -266,6 +332,160 @@ def assert_working_baseline(before, after):
         compare(old,new,independent=Path(old['physicalPath']).is_relative_to(Path(before['sourceRoot'])),node=False)
     return {'completePreStartEquality':True,'onlyCopiedPhysicalIdsDiffer':True,
             'completeFileAndDatabaseFamilyRoster':True,'saclNotRequested':True}
+
+
+def working_directory_authority(before, authority):
+    """Bind construction-derived directory storage to its completed actual copy."""
+    import local_windows_clone as clone
+    need(type(authority) is dict and authority.get('kind')=='local-windows-working-copy'
+        and authority.get('complete') is True and authority.get('allHandlesClosed') is True
+        and authority.get('sourceChildrenWritten') is False and authority.get('renamesPerformed') is False
+        and authority['sourceRoot']==before['sourceRoot'],'Completed exact working-copy authority required')
+    source=Path(before['sourceRoot']);target=Path(authority['destinationRoot'])
+    need(target!=source and target.parent==source.parent,'Independent sibling copy authority required')
+    old_rows=before['physicalEntries']['root'];entries=authority['entries']
+    need(set(entries)=={key for key,row in old_rows.items() if row['kind']!='junction'},'Complete copied ordinary roster required')
+    handles={row['path']:row for row in authority['handles']}
+    need(len(handles)==len(authority['handles']),'Duplicate copied handle authority')
+    result={};changed=False
+    for key,old in old_rows.items():
+        if old['kind']!='directory':continue
+        row=entries[key];derivation=row.get('directoryStorageDerivation')
+        need(row['kind']=='directory' and type(derivation) is dict and derivation=={
+            'kind':'independent-directory-index-storage','sourcePath':old['physicalPath'],
+            'sourceInformation':old['information'],'sourceMembers':old['members'],
+            'targetInformationRef':'information','membersExactlyCreated':True},'Directory construction source binding changed')
+        info=row['information'];clone._same_metadata(old['information'],info,True,derive_directory_storage=True)
+        need(row['security']==old['security'] and row['streams']==old['streams'],'Directory construction saved state changed')
+        observed=handles.get(str(target/capture._relative(key)))
+        need(type(observed) is dict and observed['kind']=='directory' and observed.get('handleClosed') is True
+            and observed['before']==info==observed['after'] and observed['streams']==row['streams']
+            and observed['ownerGroupDaclBeforeBase64']==row['security']['ownerGroupDaclBase64']
+            ==observed['ownerGroupDaclAfterBase64'],'Directory construction native observation changed')
+        changed=changed or any(old['information'][field]!=info[field] for field in ('size','allocationBytes'))
+        result[key]=row
+    need(authority.get('directoryStorageDerived') is changed and authority.get('independentIdsOnly') is (not changed),
+        'Directory construction declaration changed')
+    need(authority['rootInformation']==entries['.']['information']
+        and authority['rootSecurity']==entries['.']['security'] and authority['rootStreams']==entries['.']['streams'],
+        'Copied root authority changed')
+    return result,changed
+
+
+def compare_graph_captures(before,after,*,independent,clone_authority=None):
+    """Pure complete graph equality. Transport IDs never replace source IDs."""
+    for value in (before,after):capture.validate_physical_graph(value)
+    need(independent or clone_authority is None,'Original return must not use copy-derived authority')
+    directory_authority,storage_changed=working_directory_authority(before,clone_authority) if clone_authority is not None else ({},False)
+    require_fields=('sourceRoot','canonicalSourceRoot','vendorRoot','canonicalVendorRoot')
+    need(all(before[k]==after[k] for k in require_fields),'Original physical namespace changed')
+    for role in ('root','vendor'):
+        old_rows,new_rows=before['physicalEntries'][role],after['physicalEntries'][role]
+        need(set(old_rows)==set(new_rows),'Complete physical closure roster changed')
+        copied=independent and role=='root'
+        for key,old in old_rows.items():
+            new=new_rows[key]
+            need(old['kind']==new['kind'] and old['physicalPath']==new['physicalPath'],'Physical source mapping changed')
+            excluded={'fileIndex64','fileId128Hex'} if copied else set()
+            expected=old['information']
+            if copied and old['kind']=='directory' and clone_authority is not None:
+                expected=directory_authority[key]['information'];excluded=set()
+                need(directory_authority[key]['security']==new['security'] and directory_authority[key]['streams']==new['streams'],
+                    'Actual copied directory state changed before start')
+            need(set(expected)==set(new['information'])
+                and all(expected[k]==new['information'][k] for k in expected if k not in excluded),
+                'Full physical source metadata changed')
+            need(all(old['information'][k]!=new['information'][k] for k in excluded),'Working physical identity is not independent')
+            need(old['security']==new['security'] and old['streams']==new['streams'],'Physical security or streams changed')
+            if old['kind']=='directory':need(old['members']==new['members'],'Physical directory membership changed')
+            elif old['kind']=='file':need(old['bytes']==new['bytes'] and old['sha256']==new['sha256'],'Physical file/database bytes changed')
+            if old['kind']!='junction':
+                need(all(old['nodeIdentity'][k]==new['nodeIdentity'][k] for k in capture.NODE_FIELDS if not (copied and k=='ino')),
+                    'Original Node metadata changed')
+    old_edges,new_edges=capture.graph_index(before),capture.graph_index(after)
+    need(set(old_edges)==set(new_edges),'Complete physical junction roster changed')
+    for key,old in old_edges.items():
+        new=new_edges[key]
+        need(all(old[k]==new[k] for k in ('sourceRole','path','rawTarget','canonicalTarget','targetRole','targetPath')),
+             'Original junction target graph changed')
+    if not independent:return {'completePhysicalReturn':True,'sourceIdsRetained':True,'saclNotRequested':True}
+    result={'completePreStartEquality':True,'onlyCopiedPhysicalIdsDiffer':not storage_changed,
+            'copiedDirectoryStorageBound':clone_authority is not None,
+            'completeFileAndDatabaseFamilyRoster':True,'saclNotRequested':True}
+    if clone_authority is not None:
+        changed_count=sum(any(row['information'][field]!=row['directoryStorageDerivation']['sourceInformation'][field]
+                              for field in ('size','allocationBytes')) for row in directory_authority.values())
+        result['directoryStorageDerivation']={'boundCount':len(directory_authority),'changedCount':changed_count,
+            'fields':['size','allocationBytes'],'exactTargetTupleMatched':True}
+    return result
+
+
+def assert_native_return_chain(baseline, before_startup, after_startup, restored, host, *, operation_id):
+    """Exact workspace return plus a bounded, observed vendor-read transition.
+
+    This does not identify the reader. Every vendor field except a forward access
+    timestamp inside the actual host window stays exact, including post-host return.
+    """
+    values=(baseline,before_startup,after_startup,restored)
+    for value in values:capture.validate_physical_graph(value)
+    namespace=('sourceRoot','canonicalSourceRoot','vendorRoot','canonicalVendorRoot')
+    need(all(all(value[key]==baseline[key] for key in namespace) for value in values),
+         'Native return physical namespace changed')
+    need(type(host) is dict and host.get('format')==1 and host.get('kind')=='local-native-retained-host-result'
+        and host.get('operationId')==operation_id and type(operation_id) is str and bool(operation_id)
+        and host.get('workspaceRoot')==baseline['sourceRoot'] and host.get('ready') is True
+        and host.get('passed') is True and host.get('closed') is True
+        and host.get('providerRequestSubmitted') is False,'Successful exact native host required for return chain')
+    start,end=host.get('startedEpochMs'),host.get('endedEpochMs');identity=host.get('nativeIdentity');observer=host.get('observer')
+    need(type(start) is int and type(end) is int and 0<=start<=end<=2**53-1
+        and type(observer) is dict and type(observer.get('pid')) is int and observer['pid']>0
+        and type(identity) is dict and type(identity.get('pid')) is int and identity['pid']>0
+        and type(host.get('observedNativePids')) is list
+        and all(type(pid) is int and pid>0 for pid in host['observedNativePids'])
+        and identity['pid'] in host['observedNativePids']
+        and all(type(identity.get(key)) is str and identity[key] for key in ('epoch','generation','version'))
+        and type(identity.get('startedAt')) is int and start<=identity['startedAt']<=end,
+        'Bounded observed native identity and startup window required')
+    need(baseline['endedEpochMs']<=before_startup['startedEpochMs']
+        and before_startup['endedEpochMs']<=start<=end<=after_startup['startedEpochMs']
+        and after_startup['endedEpochMs']<=restored['startedEpochMs'],'Native return capture chronology changed')
+    minimum,maximum=(116444736000000000+value*10000 for value in (start,end))
+    semantic_fields=('kind','physicalPath','imageRelativePath','security','streams','bytes','sha256','members',
+                     'nodeIdentity','nodeIdentityBefore')
+    def role_equal(first,second,role,*,vendor_window=False):
+        old_rows,new_rows=first['physicalEntries'][role],second['physicalEntries'][role]
+        need(set(old_rows)==set(new_rows),'Return-chain complete '+role+' roster changed')
+        changes=[]
+        for key,old in old_rows.items():
+            new=new_rows[key]
+            need(all(old.get(field)==new.get(field) for field in semantic_fields),
+                'Return-chain saved state changed: '+role+'/'+key)
+            a,b=old['information'],new['information']
+            if not vendor_window:
+                need(a==b,'Return-chain full native metadata changed: '+role+'/'+key)
+                continue
+            need(role=='vendor' and set(a)==set(b) and all(a[field]==b[field] for field in a if field!='access100ns'),
+                'Vendor non-access native metadata changed: '+key)
+            if a['access100ns']!=b['access100ns']:
+                need(old['kind'] in ('file','directory') and a['reparseTag']==b['reparseTag']==0
+                    and a['access100ns']<b['access100ns'] and minimum<=b['access100ns']<=maximum,
+                    'Vendor access timestamp changed outside native window: '+key)
+                changes.append({'relativePath':key,'kind':old['kind'],
+                    'beforeAccess100ns':a['access100ns'],'afterAccess100ns':b['access100ns']})
+        fields=('sourceRole','path','rawTarget','canonicalTarget','targetRole','targetPath')
+        edges=lambda value:{(edge['sourceRole'],edge['path']):{field:edge[field] for field in fields}
+            for edge in value['junctions'] if edge['sourceRole']==role}
+        need(edges(first)==edges(second),'Return-chain complete '+role+' alias graph changed')
+        return changes
+    role_equal(baseline,restored,'root')
+    role_equal(baseline,before_startup,'vendor')
+    changes=role_equal(before_startup,after_startup,'vendor',vendor_window=True)
+    role_equal(after_startup,restored,'vendor')
+    return {'completeWorkspaceReturn':True,'sourceIdsRetained':True,'saclNotRequested':True,
+        'vendorBeforeStartupExact':True,'vendorAfterStartupToReturnExact':True,
+        'vendorAccessTransition':{'kind':'observed-vendor-access-during-native-startup',
+            'operationId':operation_id,'nativeIdentity':identity,'startedEpochMs':start,'endedEpochMs':end,
+            'readerIdentityAttributed':False,'changedCount':len(changes),'changes':changes}}
 
 
 def reconcile_host_close(result_path, operation_id, original_pid, node):
@@ -348,12 +568,13 @@ def execute(plan_path, intent_path):
     import local_windows_clone as clone
     evidence,images=Path(plan['evidenceRoot']),Path(plan['captureRoot'])
     report={'operationId':plan['operationId'],'stages':[],'qualified':False,'restored':False}
-    baseline=None; clone_authority=None
+    baseline=None; clone_authority=None; before=None; after=None; host=None
     ownership={'dispatchAttempted':False,'closed':False}
     renames={}
     primary=None
     def tree(name,*,restoring=False):
-        value=capture.capture_closed_tree(plan['sourceRoot'],images/name,vendor_root=plan['vendorRoot'],limits=plan['limits'],deadline=deadline if restoring else work_deadline)
+        value=capture.capture_closed_tree(plan['sourceRoot'],images/name,vendor_root=plan['vendorRoot'],limits=plan['limits'],deadline=deadline if restoring else work_deadline,
+            representation='physical-graph-v2')
         save(evidence/(name+'.json'),value);return value
     try:
         report['priorRetirement']=capture.assert_processes_retired(plan['node'],plan['retiredPids'],work_deadline)
@@ -362,24 +583,24 @@ def execute(plan_path, intent_path):
         clone_limits={key:plan['limits'][key] for key in ('maxEntries','maxBytes','maxFileBytes','maxAliases','maxReportBytes')}
         clone_authority=clone.prepare_working_copy(baseline,plan['workingRoot'],node=plan['node'],limits=clone_limits,deadline=work_deadline)
         save(evidence/'clone-authority.json',clone_authority)
-        report['stages'].append(rename_role(plan['sourceRoot'],plan['parkedRoot'],baseline['entries']['.']['information'],
+        report['stages'].append(rename_role(plan['sourceRoot'],plan['parkedRoot'],capture.source_root_entry(baseline)['information'],
             work_deadline,operation_id=plan['operationId'],phase='park-pristine',evidence=evidence,state=renames))
         report['stages'].append(rename_role(plan['workingRoot'],plan['sourceRoot'],clone_authority['rootInformation'],
             work_deadline,operation_id=plan['operationId'],phase='activate-working',evidence=evidence,state=renames))
         clone.finalize_renamed_root(clone_authority,plan['sourceRoot'],deadline=work_deadline)
         before=tree('before-startup')
-        report['preStartComparison']=assert_working_baseline(baseline,before)
+        report['preStartComparison']=assert_working_baseline(baseline,before,clone_authority=clone_authority)
         host,report['hostRetirement']=run_host(plan,evidence,work_deadline,deadline,ownership)
         report['hostResult']={'path':str(evidence/'host-result.json'),'sha256':recovery.digest(evidence/'host-result.json')}
         after=tree('after-startup')
         need(host.get('passed') is True and len(host['observedNativePids']) > 0,'Original maintained startup did not qualify')
-        manifest,_=json_read(plan['appManifest'])
+        app_releases=app_release_bindings(plan)
         derivation={'kind':'maintained-local-configuration','releaseRoot':plan['releaseRoot'],
                     'sourceRefs':plan['sourceRefs'],'hostResult':host}
         # Builder references are the exact subset inside the admitted release.
         derivation['sourceRefs']=[r for r in plan['sourceRefs'] if Path(r['path']).is_relative_to(Path(plan['releaseRoot']))]
         report['comparison']=recovery.local_windows_native_saved_state(before,after,node=plan['node'],
-            app_releases=[(plan['releaseRoot'],manifest),(plan['releaseRoot'],manifest)],
+            app_releases=app_releases,
             startup_window=(host['startedEpochMs'],host['endedEpochMs']),catalog_runtime_root=plan['vendorRoot'],
             configuration_derivation=derivation,deadline=work_deadline)
     except BaseException as error:
@@ -393,11 +614,15 @@ def execute(plan_path, intent_path):
                 if renames.get('activate-working') == 'confirmed':
                     report['stages'].append(rename_role(plan['sourceRoot'],plan['preservedRoot'],clone_authority['rootInformation'],
                         deadline,operation_id=plan['operationId'],phase='preserve-working',evidence=evidence,state=renames))
-                report['stages'].append(rename_role(plan['parkedRoot'],plan['sourceRoot'],baseline['entries']['.']['information'],
+                report['stages'].append(rename_role(plan['parkedRoot'],plan['sourceRoot'],capture.source_root_entry(baseline)['information'],
                     deadline,operation_id=plan['operationId'],phase='return-pristine',evidence=evidence,state=renames))
                 clone.finalize_renamed_root(baseline,plan['sourceRoot'],deadline=deadline)
                 restored=tree('restored-original',restoring=True)
-                report['restorationComparison']=assert_restored(baseline,restored)
+                if before is not None and after is not None and host is not None and host.get('passed') is True:
+                    report['restorationComparison']=assert_native_return_chain(
+                        baseline,before,after,restored,host,operation_id=plan['operationId'])
+                else:
+                    report['restorationComparison']=assert_restored(baseline,restored)
                 report['restored']=True
             except BaseException as error:
                 report['restorationError']=error_record(error)

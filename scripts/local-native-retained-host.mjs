@@ -42,7 +42,7 @@ function parseInput(path) {
   assert(!existsSync(value.resultPath) && !existsSync(value.resultPath + '.started.json'));
   assert.equal(process.env.E3_SERVER_KEY_FILE, undefined, 'External server-key scope is not admitted');
   assert.notEqual(process.env.NODE_TLS_REJECT_UNAUTHORIZED, '0', 'TLS verification must remain enabled');
-  const candidate = readJson(join(value.releaseRoot, 'dist/candidate.json'));
+  const candidate = readJson(join(value.releaseRoot, 'dist/candidate.json'), 262144);
   assert.equal(candidate.version, value.expectedVersion); assert.equal(candidate.buildVersion, value.expectedBuildVersion);
   assert.equal(candidate.schemaVersion, value.expectedSchema);
   return value;

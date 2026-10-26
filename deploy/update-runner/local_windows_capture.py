@@ -19,12 +19,14 @@ import stat
 import struct
 import subprocess
 import time
+import zlib
 
 PRIMITIVE_SHA256 = 'c7022c40ebdb88f3ee55b768e87a15b22fb724a16bfb07bfcc095e393d0c876e'
 MOUNT_POINT = 0xA0000003
 REPARSE = 0x400
 STREAM_BUFFER = 65536
 NODE_FIELDS = frozenset(('dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs', 'birthtimeNs'))
+PRESERVED_BASIC_FIELDS = ('creation100ns', 'access100ns', 'write100ns', 'change100ns', 'attributes')
 LIMIT_FIELDS = frozenset(('node', 'maxEntries', 'maxBytes', 'maxFileBytes', 'maxDepth', 'maxAliases', 'maxReportBytes'))
 _module = None
 
@@ -328,9 +330,11 @@ def assert_processes_retired(node, pids, deadline):
 
 
 def _node_join(identity, info):
+    # libuv projects Windows directory st_size to zero. The native directory
+    # size/allocation remain captured and compared independently in full.
     require(int(identity['dev']) == info['volumeSerial32'] and int(identity['ino']) == info['fileIndex64']
             and stat.S_ISDIR(int(identity['mode'])) == info['directory']
-            and int(identity['size']) == info['size']
+            and int(identity['size']) == (0 if info['directory'] else info['size'])
             and int(identity['birthtimeNs']) == (info['creation100ns'] - 116444736000000000) * 100
             and int(identity['mtimeNs']) == (info['write100ns'] - 116444736000000000) * 100,
             'node-native-identity-mismatch', {'node': identity, 'native': info})
@@ -379,6 +383,8 @@ def _relative(key):
 
 def verify_capture_content(capture, deadline):
     """Revalidate ordinary snapshot roster and bytes; never interpret its IDs as source IDs."""
+    if capture.get('format') == 2:
+        return verify_graph_content(capture, deadline)
     _check(deadline)
     require(type(capture) is dict and capture.get('complete') is True
             and capture.get('kind') == 'local-windows-closed-tree', 'complete-capture-required')
@@ -421,7 +427,10 @@ def verify_capture_content(capture, deadline):
     return True
 
 
-def capture_closed_tree(root, destination, *, vendor_root, limits, deadline):
+def capture_closed_tree(root, destination, *, vendor_root, limits, deadline, representation='expanded-v1'):
+    if representation == 'physical-graph-v2':
+        return capture_physical_graph(root, destination, vendor_root=vendor_root, limits=limits, deadline=deadline)
+    require(representation == 'expanded-v1', 'unknown-capture-representation')
     _check(deadline)
     _windows_required()
     require(type(limits) is dict and set(limits) == LIMIT_FIELDS, 'closed-capture-limits-required')
@@ -619,4 +628,487 @@ def capture_closed_tree(root, destination, *, vendor_root, limits, deadline):
         report['complete'] = False
         report['originalError'] = _error(error)
         raise CaptureRefused('closed-tree-final-verification-refused', report) from error
+    return report
+
+
+# Format2 retains one source record/image for each physical object. The logical
+# namespace is an observed graph; no original path is an image-link target.
+GRAPH_FIELDS = frozenset(('format','kind','sourceRoot','canonicalSourceRoot','vendorRoot','canonicalVendorRoot',
+    'storageRoot','destinationRoot','vendorDestinationRoot','startedEpochMs','endedEpochMs','physicalEntries',
+    'junctions','counts','limits','primitiveSha256','saclNotRequested','complete','allHandlesClosed','canonicalRootObservations'))
+EDGE_FIELDS = frozenset(('sourceRole','path','rawTarget','canonicalTarget','targetRole','targetPath',
+    'targetNodeIdentityBefore','targetNodeIdentityAfter','imagePath','imageRawTarget','imageCanonicalTarget',
+    'imageInformation','imageHandleClosed'))
+COUNT_FIELDS = frozenset(('physicalEntries','physicalFiles','physicalBytes','physicalAliases','imageEntries',
+    'logicalEntries','logicalFiles','logicalBytes','reportBytes'))
+
+
+def graph_image_root(value, role):
+    require(role in ('root','vendor'), 'unknown-physical-role')
+    return Path(value['destinationRoot' if role == 'root' else 'vendorDestinationRoot'])
+
+
+def graph_source_root(value, role):
+    require(role in ('root','vendor'), 'unknown-physical-role')
+    return Path(value['sourceRoot' if role == 'root' else 'vendorRoot'])
+
+
+def source_root_entry(value):
+    return value['physicalEntries']['root']['.'] if value.get('format')==2 else value['entries']['.']
+
+
+def graph_index(value):
+    result={}
+    for edge in value['junctions']:
+        require(type(edge) is dict and set(edge)==EDGE_FIELDS,'closed-alias-edge-required')
+        key=(edge['sourceRole'],edge['path'])
+        require(key not in result,'duplicate-physical-alias')
+        result[key]=edge
+    return result
+
+
+def graph_resolve(value, role, relative, *, edges=None):
+    """Resolve recorded aliases to a captured physical row, without filesystem IO."""
+    edges=graph_index(value) if edges is None else edges
+    parts=list(_relative(relative).parts); current='.'; seen=set()
+    for _ in range(value['limits']['maxDepth']+value['limits']['maxAliases']+2):
+        row=value['physicalEntries'][role].get(current)
+        require(row is not None,'logical-member-not-captured',{'role':role,'path':current})
+        if row['kind'] == 'junction':
+            key=(role,current)
+            require(key not in seen and key in edges,'alias-cycle-or-missing-edge')
+            seen.add(key);edge=edges[key];role,current=edge['targetRole'],edge['targetPath']
+            continue
+        if not parts:
+            return role,current,row
+        require(row['kind'] == 'directory','logical-parent-not-directory')
+        name=parts.pop(0)
+        require(name in row['members'],'logical-member-not-in-observed-directory')
+        current=name if current == '.' else current+'/'+name
+    raise CaptureRefused('alias-resolution-bound-exceeded')
+
+
+def graph_logical_rows(value, role='root', relative='.', *, deadline=None):
+    """Stream complete logical names with source identity explicitly derived."""
+    edges=graph_index(value); stack=[(relative,0)]
+    # Count is computed over the finite graph before any consumer enumerates it.
+    maximum=value['counts']['logicalEntries'] if role == 'root' and relative == '.' else 100000000
+    emitted=0
+    while stack:
+        if deadline is not None:_check(deadline)
+        name,depth=stack.pop();require(depth <= value['limits']['maxDepth'],'logical-depth-exceeded')
+        physical_role,key,row=graph_resolve(value,role,name,edges=edges)
+        emitted+=1;require(emitted <= maximum,'logical-count-exceeded')
+        yield name,physical_role,key,row
+        if row['kind'] == 'directory':
+            stack.extend((child if name == '.' else name+'/'+child,depth+1) for child in reversed(row['members']))
+
+
+def graph_counts(value):
+    edges=graph_index(value);memo={};active=set()
+    def count(role,key,depth):
+        require(depth <= value['limits']['maxDepth'],'logical-depth-exceeded')
+        identity=(role,key)
+        require(identity not in active,'physical-alias-graph-cycle')
+        if identity in memo:
+            require(depth+memo[identity][3]<=value['limits']['maxDepth'],'logical-depth-exceeded')
+            return memo[identity]
+        active.add(identity);row=value['physicalEntries'][role][key]
+        if row['kind'] == 'junction':
+            edge=edges[identity];result=count(edge['targetRole'],edge['targetPath'],depth)
+        elif row['kind'] == 'file':result=(1,1,row['bytes'],0)
+        else:
+            children=[count(role,n if key == '.' else key+'/'+n,depth+1) for n in row['members']]
+            result=(1+sum(r[0] for r in children),sum(r[1] for r in children),sum(r[2] for r in children),
+                    1+max((r[3] for r in children),default=-1))
+        require(result[0] <= 100000000 and result[2] <= 2**63-1 and depth+result[3] <= value['limits']['maxDepth'],
+                'derived-logical-closure-exceeds-finite-bound')
+        active.remove(identity);memo[identity]=result;return result
+    logical=count('root','.',0)
+    count('vendor','.',0)  # A hidden cycle in the captured vendor tree also refuses.
+    rows=[r for entries in value['physicalEntries'].values() for r in entries.values()]
+    return {'physicalEntries':len(rows),'physicalFiles':sum(r['kind']=='file' for r in rows),
+            'physicalBytes':sum(r['bytes'] for r in rows if r['kind']=='file'),
+            'physicalAliases':len(edges),'imageEntries':len(rows)+1,
+            'logicalEntries':logical[0],'logicalFiles':logical[1],'logicalBytes':logical[2]}
+
+
+def graph_report_bytes(value):
+    # The canonical count sets its own numeric field to zero; no fixed-point or
+    # circular hash is implied. The actual encoded record is independently capped.
+    projected=dict(value,counts=dict(value['counts'],reportBytes=0))
+    return len(json.dumps(projected,ensure_ascii=True,allow_nan=False,separators=(',',':')).encode('ascii'))
+
+
+def pack_metadata_observation(value):
+    """Lossless bounded private native evidence, without repeated plaintext rows."""
+    raw=json.dumps(value,ensure_ascii=True,allow_nan=False,separators=(',',':')).encode('ascii')
+    require(len(raw)<=131072,'metadata-observation-budget')
+    return {'encoding':'zlib-json-base64','bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
+            'data':base64.b64encode(zlib.compress(raw)).decode('ascii')}
+
+
+def unpack_metadata_observation(value):
+    require(type(value) is dict and set(value)=={'encoding','bytes','sha256','data'}
+        and value['encoding']=='zlib-json-base64' and type(value['bytes']) is int
+        and 0<value['bytes']<=131072 and type(value['data']) is str and len(value['data'])<=175000,
+        'bounded-metadata-observation-required')
+    compressed=base64.b64decode(value['data'],validate=True)
+    decoder=zlib.decompressobj();raw=decoder.decompress(compressed,value['bytes']+1)
+    require(len(raw)==value['bytes'] and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+        and hashlib.sha256(raw).hexdigest()==value['sha256'],'metadata-observation-encoding-changed')
+    def object_pairs(pairs):
+        result={}
+        for key,item in pairs:
+            require(key not in result,'duplicate-metadata-observation-key');result[key]=item
+        return result
+    result=json.loads(raw,object_pairs_hook=object_pairs)
+    require(type(result) is dict,'metadata-observation-object-required')
+    return result
+
+
+def validate_source_preservation(obs, info, security, streams, *, require_closed):
+    """Accept an explicit original-tuple preservation chain, never an omitted time."""
+    record=obs.get('metadataPreservation')
+    if record is None:
+        require(obs.get('openedInformation')==info,'source-observer-changed-full-metadata')
+        return
+    required={'kind','attempted','completed','preWriteObservation','intent','apiEvent'}
+    allowed=required|{'postCloseObservation'}
+    require(type(record) is dict and required<=set(record)<=allowed
+        and (not require_closed or set(record)==allowed) and record.get('kind')=='same-handle-access-preservation'
+        and record.get('attempted') is True and record.get('completed') is True,
+        'complete-source-preservation-required')
+    baseline=obs['acquisitionBaseline'];opened=obs['openedInformation'];transition=obs['acquisitionTransition']
+    original=baseline['before']
+    _info_checked(opened,'directory' if info['directory'] else 'file')
+    require(original==baseline['after']==info and baseline['ownerGroupDaclBeforeBase64']==security
+        ==baseline['ownerGroupDaclAfterBase64'] and baseline['streams']==streams,
+        'preserved-original-tuple-required')
+    require(all(original[k]==opened[k] for k in original if k!='access100ns')
+        and original['access100ns']<opened['access100ns']
+        and transition.get('kind')=='post-acquisition-pre-io-baseline'
+        and transition.get('contentIoStarted') is False
+        and transition.get('accessTimeChanged') is True
+        and transition['started100ns']<=opened['access100ns']<=transition['ended100ns']
+        and transition['before']=={'informationRef':'acquisitionBaseline.before',
+            'ownerGroupDaclRef':'acquisitionBaseline.ownerGroupDaclBeforeBase64','access100ns':original['access100ns']}
+        and transition['after']=={'informationRef':'openedInformation',
+            'ownerGroupDaclRef':'suppressionSecurityBase64','access100ns':opened['access100ns']}
+        and obs['suppressionSecurityBase64']==security,'preservation-acquisition-chain-changed')
+    pre=unpack_metadata_observation(record['preWriteObservation'])
+    require(pre['information']==opened and pre['security']=={'ownerGroupDaclBase64':security,'saclNotRequested':True}
+        and pre['streams']==streams and pre['observations']['before']==opened==pre['observations']['after']
+        and pre['observations']['openedInformation']==opened
+        and pre['observations']['ownerGroupDaclBeforeBase64']==security==pre['observations']['ownerGroupDaclAfterBase64'],
+        'preservation-prewrite-state-changed')
+    intent=record['intent'];event=record['apiEvent']
+    expected_basic={key:original[key] for key in PRESERVED_BASIC_FIELDS}
+    require(type(event['arguments']['handle']) is int and event['arguments']['handle']>0
+        and event['arguments']['handle']==obs['accessTimeSuppressionEvent']['arguments']['handle'],
+        'preservation-original-handle-binding-changed')
+    if info['directory']:
+        require(obs['directorySweeps'] and all(s.get('complete') is True and s.get('eof') is True
+            for s in obs['directorySweeps']),'preservation-incomplete-directory-io')
+    else:
+        require(obs['readResult'].get('complete') is True and obs['readResult'].get('eof') is True
+            and obs['readResult']['bytes']==info['size'],'preservation-incomplete-file-io')
+    require(intent=={'kind':'restore-observed-access-on-original-handle','handle':event['arguments']['handle'],
+        'originalInformationRef':'acquisitionBaseline.before','expectedPreWriteInformationRef':'openedInformation',
+        'originalBasicInfo':expected_basic,'contentIoComplete':True},'preservation-intent-changed')
+    require(event['api']=='SetFileInformationByHandle:source-basic-preservation'
+        and event['arguments']=={'handle':intent['handle'],'class':0,'bytes':ctypes.sizeof(_primitive().BasicInfo),
+                                  'information':expected_basic}
+        and type(event['result']) is int and event['result']!=0,
+        'preservation-native-write-not-confirmed')
+    raw=base64.b64decode(event['raw']['base64'],validate=True)
+    expected_raw=bytes(_primitive().BasicInfo(*(original[key] for key in PRESERVED_BASIC_FIELDS)))
+    require(event['raw']['bytes']==len(raw)==len(expected_raw) and raw==expected_raw,'preservation-native-payload-changed')
+    if require_closed:
+        post=unpack_metadata_observation(record['postCloseObservation'])
+        require(post['information']==info and post['security']=={'ownerGroupDaclBase64':security,'saclNotRequested':True}
+            and post['streams']==streams and post['observations']['before']==info==post['observations']['after']
+            and post['observations']['openedInformation']==info and post['observations']['handleClosed'] is True
+            and post['observations']['ownerGroupDaclBeforeBase64']==security==post['observations']['ownerGroupDaclAfterBase64'],
+            'preservation-postclose-state-changed')
+
+
+def validate_physical_graph(value, *, require_closed=True):
+    require(type(value) is dict and set(value)==GRAPH_FIELDS and value['format']==2
+            and value['kind']=='local-windows-closed-tree' and value['primitiveSha256']==PRIMITIVE_SHA256
+            and value['saclNotRequested'] is True and value['complete'] is True,'closed-physical-graph-required')
+    require(not require_closed or value['allHandlesClosed'] is True,'physical-graph-handles-not-closed')
+    require(all(type(value[k]) is int and 0<=value[k]<=2**53-1 for k in ('startedEpochMs','endedEpochMs'))
+        and value['startedEpochMs']<=value['endedEpochMs'],'physical-capture-clock-shape')
+    limits=value['limits'];require(set(limits)==LIMIT_FIELDS,'closed-physical-graph-limits')
+    caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,'maxDepth':128,'maxAliases':1024,'maxReportBytes':256*1024**2}
+    require(all(type(limits[k]) is int and 0<limits[k]<=cap for k,cap in caps.items()),'physical-graph-limit-range')
+    storage=_absolute(value['storageRoot']); require(graph_image_root(value,'root')==storage/'root'
+        and graph_image_root(value,'vendor')==storage/'vendor','fixed-physical-image-layout-required')
+    require(type(value['physicalEntries']) is dict and set(value['physicalEntries'])=={'root','vendor'},'two-physical-roles-required')
+    require(type(value['junctions']) is list and len(value['junctions'])<=limits['maxAliases'],'physical-alias-budget')
+    edges=graph_index(value); native=_primitive()
+    canonical=value['canonicalRootObservations']
+    require(type(canonical) is dict and set(canonical)=={'root','vendor'},'canonical-root-observations-required')
+    for role,entries in value['physicalEntries'].items():
+        require(type(entries) is dict and '.' in entries and entries['.']['kind']=='directory','physical-root-missing')
+        source=graph_source_root(value,role);require(source.is_absolute(),'absolute-physical-source-required')
+        observed=canonical[role];expected=value['canonicalSourceRoot' if role=='root' else 'canonicalVendorRoot']
+        require(type(observed) is dict and set(observed)=={'before','after'} and observed['before']==expected==observed['after']
+            and type(expected) is str and Path(expected).is_absolute() and '\x00' not in expected,'canonical-physical-root-changed')
+        require(not _below(storage,source) and not _below(source,storage),'image-source-overlap')
+        for key,row in entries.items():
+            rel=_relative(key);kind=row['kind'];require(kind in ('file','directory','junction'),'physical-kind-refused')
+            common={'kind','physicalPath','imageRelativePath','information','security','streams','sameHandleStable','nativeObservations'}
+            extra=({'bytes','sha256','nodeIdentity','nodeIdentityBefore'} if kind=='file' else
+                   {'members','nodeIdentity','nodeIdentityBefore'} if kind=='directory' else set())
+            require(type(row) is dict and set(row)==common|extra,'closed-physical-row-required')
+            require(Path(row['physicalPath'])==source/rel and row['imageRelativePath']==(Path(role)/rel).as_posix(),
+                    'physical-path-binding-changed')
+            info=_info_checked(row['information'],kind);sec=row['security'];obs=row['nativeObservations']
+            require(type(sec) is dict and set(sec)=={'ownerGroupDaclBase64','saclNotRequested'} and sec['saclNotRequested'] is True,'physical-security-scope')
+            native.checked_security(base64.b64decode(sec['ownerGroupDaclBase64'],validate=True))
+            require(row.get('sameHandleStable') is True and obs['before']==info==obs['after']
+                    and obs['ownerGroupDaclBeforeBase64']==sec['ownerGroupDaclBase64']==obs['ownerGroupDaclAfterBase64']
+                    and (not require_closed or obs.get('handleClosed') is True),'physical-observation-not-stable')
+            if kind=='junction':
+                require(obs.get('sourceObservationMode')=='metadata-only-junction'
+                    and 'accessTimeSuppression' not in obs and 'metadataPreservation' not in obs,
+                    'metadata-only-junction-observation-required')
+            else:
+                suppression=obs.get('accessTimeSuppression')
+                suppression_fields={'kind','access','creation','write','accessLow','accessHigh','immediateAfterOpen','result','lastError','sameHandle'}
+                require(type(suppression) is dict and set(suppression)==suppression_fields
+                    and suppression['kind']=='per-handle-last-access-suppression' and suppression['access']==0x20181
+                    and suppression['creation'] is None and suppression['write'] is None
+                    and type(suppression['accessLow']) is int and suppression['accessLow']==0xffffffff
+                    and type(suppression['accessHigh']) is int and suppression['accessHigh']==0xffffffff
+                    and suppression['immediateAfterOpen'] is True and suppression['result'] is True and suppression['sameHandle'] is True
+                    and type(suppression['lastError']) is int and 0<=suppression['lastError']<=0xffffffff,
+                    'same-source-handle-suppression-evidence-required')
+            streams=row['streams']
+            require(type(streams) is list and all(type(s) is dict and set(s)=={'name','bytes','allocationBytes','rawBase64'}
+                and s['name']=='::$DATA' and type(s['bytes']) is int and type(s['allocationBytes']) is int for s in streams),
+                'physical-stream-record-invalid')
+            for stream in streams:
+                raw=base64.b64decode(stream['rawBase64'],validate=True)
+                require(24<len(raw)<=4120 and parse_streams(raw+bytes(STREAM_BUFFER-len(raw)))==[stream],
+                    'physical-stream-raw-observation-changed')
+            require((kind=='file' and len(streams)==1 and streams[0]['bytes']==info['size']
+                and streams[0]['allocationBytes']==info['allocationBytes']) or (kind!='file'
+                and len(streams)<=1 and all(s['bytes']==s['allocationBytes']==0 for s in streams)),
+                'physical-default-stream-completeness')
+            validate_source_preservation(obs,info,sec['ownerGroupDaclBase64'],streams,require_closed=require_closed)
+            if kind!='junction':
+                identity=row['nodeIdentity'];require(set(identity)==NODE_FIELDS and identity==row['nodeIdentityBefore']
+                    and all(type(v) is str and re.fullmatch('[0-9]{1,40}',v) for v in identity.values()),'physical-node-types')
+                _node_join(identity,info)
+                require(stat.S_ISREG(int(identity['mode']))==(kind=='file'),'physical-node-regular-type')
+            if key!='.':
+                parent=rel.parent.as_posix();require(parent in entries and entries[parent]['kind']=='directory'
+                    and rel.name in entries[parent]['members'],'physical-parent-roster-mismatch')
+            if kind=='directory':
+                names=row['members'];require(type(names) is list and names==sorted(names)
+                    and len(names)==len(set(n.casefold() for n in names)),'physical-member-roster-invalid')
+                require(all(type(n) is str and n not in ('','.','..') and not any(c in n for c in '/\\:\x00')
+                    and (n if key=='.' else key+'/'+n) in entries for n in names),'physical-member-missing')
+            elif kind=='file':
+                require(type(row['bytes']) is int and 0<=row['bytes']<=limits['maxFileBytes'] and row['bytes']==info['size']
+                    and re.fullmatch('[a-f0-9]{64}',row['sha256']),'physical-file-content-shape')
+            else:require((role,key) in edges,'physical-junction-edge-missing')
+    for edge in value['junctions']:
+        require(type(edge) is dict and set(edge)==EDGE_FIELDS,'closed-alias-edge-required')
+        role,key=edge['sourceRole'],edge['path'];target_role,target_key=edge['targetRole'],edge['targetPath']
+        require(role in ('root','vendor') and target_role in ('root','vendor'),'alias-role-invalid')
+        row=value['physicalEntries'][role].get(key);target=value['physicalEntries'][target_role].get(target_key)
+        require(row is not None and row['kind']=='junction' and target is not None and target['kind']=='directory','alias-target-not-physical-directory')
+        expected_source=str(graph_source_root(value,target_role)/_relative(target_key))
+        actual,actual_role=_junction_target(edge['rawTarget'],value['sourceRoot'],value['vendorRoot'])
+        require(actual==expected_source==edge['canonicalTarget'] and actual_role==target_role,'alias-source-target-binding')
+        image_target=graph_image_root(value,target_role)/_relative(target_key)
+        require(Path(edge['imagePath'])==graph_image_root(value,role)/_relative(key)
+            and edge['imageRawTarget']=='\\\\?\\'+str(image_target)
+            and edge['imageCanonicalTarget']==str(image_target),'image-alias-escaped-capture')
+        require(edge['targetNodeIdentityBefore']==edge['targetNodeIdentityAfter']==target['nodeIdentity'],
+                'alias-root-target-identity-changed')
+        _info_checked(edge['imageInformation'],'junction')
+        require(not require_closed or edge['imageHandleClosed'] is True,'image-alias-handle-not-closed')
+    counts=graph_counts(value)
+    require(set(value['counts'])==COUNT_FIELDS and all(value['counts'][k]==v for k,v in counts.items()),'physical-logical-count-mismatch')
+    require(counts['physicalEntries']<=limits['maxEntries'] and counts['physicalBytes']<=limits['maxBytes'],'physical-closure-budget')
+    require(value['counts']['reportBytes']==graph_report_bytes(value)
+        and len(json.dumps(value,ensure_ascii=True,allow_nan=False).encode('ascii'))<=limits['maxReportBytes'],'physical-evidence-budget')
+    return True
+
+
+def verify_graph_content(value, deadline, *, require_closed=True):
+    _check(deadline);validate_physical_graph(value,require_closed=require_closed)
+    storage=Path(value['storageRoot']);require(not _reparse(storage.lstat()) and sorted(os.listdir(storage))==['root','vendor'],'physical-storage-roster-changed')
+    edges=graph_index(value)
+    for role,entries in value['physicalEntries'].items():
+        image=graph_image_root(value,role)
+        for key,expected in entries.items():
+            _check(deadline);path=image/_relative(key);row=path.lstat()
+            if expected['kind']=='junction':
+                edge=edges[(role,key)]
+                require(_reparse(row) and getattr(row,'st_reparse_tag',0)==MOUNT_POINT
+                    and os.readlink(path)==edge['imageRawTarget'] and os.path.realpath(path)==edge['imageCanonicalTarget'],
+                    'image-alias-target-changed')
+                _identity_join(row,edge['imageInformation'],'junction')
+                continue
+            require(not _reparse(row),'undeclared-image-reparse')
+            if expected['kind']=='directory':
+                require(stat.S_ISDIR(row.st_mode) and sorted(os.listdir(path))==expected['members'],'physical-image-directory-roster-changed')
+            else:
+                require(stat.S_ISREG(row.st_mode) and row.st_nlink==1 and row.st_size==expected['bytes'],'physical-image-file-changed')
+                with path.open('rb') as stream:
+                    opened=os.fstat(stream.fileno());require(_common(row)==_common(opened),'physical-image-open-changed')
+                    digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                    require(_stat_row(opened)==_stat_row(os.fstat(stream.fileno()))
+                        and _common(row)==_common(path.lstat()),'physical-image-read-changed')
+                require(digest==expected['sha256'],'physical-image-content-changed')
+    return True
+
+
+def capture_physical_graph(root, destination, *, vendor_root, limits, deadline):
+    """One complete physical capture plus image-only alias views; never links live state."""
+    _check(deadline);_windows_required()
+    require(type(limits) is dict and set(limits)==LIMIT_FIELDS,'closed-capture-limits-required')
+    caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,
+          'maxDepth':128,'maxAliases':1024,'maxReportBytes':256*1024**2}
+    require(all(type(limits[k]) is int and 0<limits[k]<=v for k,v in caps.items()),'capture-limit-range')
+    root,storage,vendor=map(_absolute,(root,destination,vendor_root))
+    require(not _below(root,vendor) and not _below(vendor,root),'disjoint-physical-source-roles-required')
+    for source in (root,vendor):
+        require(not _below(storage,source) and not _below(source,storage),'disjoint-snapshot-required')
+    from local_windows_neutral_io import open_source
+    from local_windows_clone import Win32Target, _junction_payload
+    report={'format':2,'kind':'local-windows-closed-tree','sourceRoot':str(root),
+        'canonicalSourceRoot':os.path.realpath(root),'vendorRoot':str(vendor),'canonicalVendorRoot':os.path.realpath(vendor),
+        'storageRoot':str(storage),'destinationRoot':str(storage/'root'),'vendorDestinationRoot':str(storage/'vendor'),
+        'startedEpochMs':time.time_ns()//1000000,'endedEpochMs':0,'physicalEntries':{'root':{},'vendor':{}},
+        'junctions':[],'counts':{},'limits':dict(limits),'primitiveSha256':PRIMITIVE_SHA256,
+        'saclNotRequested':True,'complete':False,'allHandlesClosed':False}
+    report['canonicalRootObservations']={'root':{'before':report['canonicalSourceRoot'],'after':None},
+        'vendor':{'before':report['canonicalVendorRoot'],'after':None}}
+    source_ports={}; image_ports=[]; image_links={}; ancestors=[]; inventory={'root':{},'vendor':{}}
+    failure=None;close_errors=[];physical_count=physical_bytes=0;charged=4096
+    def budget(value):
+        nonlocal charged
+        charged+=len(json.dumps(value,ensure_ascii=True,allow_nan=False).encode('ascii'))+512
+        require(charged+2*1024**2<=limits['maxReportBytes'],'physical-report-reserve-exceeded')
+    def ancestry(path):
+        for ancestor in reversed(path.parents):
+            if ancestor==Path(ancestor.anchor):continue
+            row=ancestor.lstat();require(stat.S_ISDIR(row.st_mode) and not _reparse(row),'ordinary-ancestor-required')
+            if any(p.path==ancestor for p in ancestors):continue
+            port=_Held(ancestor,'directory',deadline);ancestors.append(port)
+            _identity_join(row,port.evidence['openedInformation'],'directory')
+    def visit(role,path,key,depth):
+        nonlocal physical_count,physical_bytes
+        _check(deadline);require(depth<=limits['maxDepth'],'physical-depth-budget')
+        physical_count+=1;require(physical_count<=limits['maxEntries'],'physical-entry-budget')
+        before=path.lstat();kind='junction' if _reparse(before) else ('directory' if stat.S_ISDIR(before.st_mode) else 'file')
+        if kind=='junction':require(getattr(before,'st_reparse_tag',0)==MOUNT_POINT,'unknown-reparse-kind')
+        elif kind=='file':require(stat.S_ISREG(before.st_mode) and before.st_nlink==1,'ordinary-single-link-source-required')
+        port=open_source(path,kind,deadline);source_ports[(role,key)]=port
+        _identity_join(before,port.evidence['openedInformation'],kind)
+        item={'kind':kind,'path':path};inventory[role][key]=item
+        if kind=='junction':
+            raw=os.readlink(path);target,target_role=_junction_target(raw,str(root),str(vendor))
+            target_key=Path(target).relative_to(root if target_role=='root' else vendor).as_posix()
+            require(len(report['junctions'])<limits['maxAliases'],'physical-alias-budget')
+            image_path=storage/role/_relative(key);image_target=storage/target_role/_relative(target_key)
+            report['junctions'].append({'sourceRole':role,'path':key,'rawTarget':raw,'canonicalTarget':target,
+                'targetRole':target_role,'targetPath':target_key,'targetNodeIdentityBefore':None,'targetNodeIdentityAfter':None,
+                'imagePath':str(image_path),'imageRawTarget':'\\\\?\\'+str(image_target),'imageCanonicalTarget':str(image_target),
+                'imageInformation':None,'imageHandleClosed':False})
+        elif kind=='directory':
+            names=sorted(port.list_names(max_entries=limits['maxEntries'],max_pages=4096))
+            require(len(names)==len(set(n.casefold() for n in names)) and all(type(n) is str and n not in ('','.','..')
+                and not any(c in n for c in '/\\:\x00') for n in names),'ordinary-directory-members-required')
+            item['members']=names
+            for name in names:visit(role,path/name,name if key=='.' else key+'/'+name,depth+1)
+        else:
+            size=port.evidence['openedInformation']['size'];require(size<=limits['maxFileBytes'],'physical-file-budget')
+            physical_bytes+=size;require(physical_bytes<=limits['maxBytes'],'physical-byte-budget');item['bytes']=size
+    try:
+        ancestry(root);ancestry(vendor);ancestry(storage)
+        require(not os.path.lexists(storage),'fresh-storage-required')
+        visit('root',root,'.',0);visit('vendor',vendor,'.',0)
+        # Validate edge destinations and cycles from the actual inventory before
+        # copying or creating any transport junction.
+        temporary={'physicalEntries':inventory,'junctions':report['junctions'],'limits':limits}
+        for edge in report['junctions']:
+            target=inventory[edge['targetRole']].get(edge['targetPath'])
+            require(target is not None and target['kind']=='directory','source-alias-target-missing-or-reparse')
+        counts=graph_counts(temporary)
+        ordinary=[str(item['path']) for items in inventory.values() for item in items.values() if item['kind']!='junction']
+        alias_paths=[str(inventory[e['sourceRole']][e['path']]['path']) for e in report['junctions']]
+        before_node=node_identities(limits['node'],ordinary+alias_paths,deadline)
+        storage.mkdir();image_ports.append(_Held(storage,'directory',deadline))
+        for role,items in inventory.items():
+            for key,item in items.items():
+                _check(deadline);target=storage/role/_relative(key)
+                if item['kind'] in ('directory','junction'):
+                    target.mkdir()
+                    if item['kind']=='directory':image_ports.append(_Held(target,'directory',deadline))
+                    continue
+                digest=hashlib.sha256();total=0;port=source_ports[(role,key)]
+                with target.open('xb') as outgoing:
+                    for chunk in port.read_chunks(limits['maxFileBytes']):
+                        _check(deadline);total+=len(chunk);require(total<=item['bytes'],'physical-source-size-changed')
+                        digest.update(chunk);require(outgoing.write(chunk)==len(chunk),'physical-image-short-write')
+                    outgoing.flush();os.fsync(outgoing.fileno())
+                require(total==item['bytes'],'physical-source-short-read')
+                item['sha256']=digest.hexdigest();image_ports.append(_Held(target,'file',deadline))
+        for edge in report['junctions']:
+            port=Win32Target(Path(edge['imagePath']),'directory',deadline);image_links[(edge['sourceRole'],edge['path'])]=port
+            port.set_junction(_junction_payload(edge['imageRawTarget']),edge['imageRawTarget'])
+            observation=port.observe();edge['imageInformation']=observation['information']
+        for role,items in inventory.items():
+            for key,item in items.items():
+                port=source_ports[(role,key)]
+                if item['kind']=='directory':require(sorted(port.list_names(max_entries=limits['maxEntries'],max_pages=4096))==item['members'],'source-membership-changed')
+        for edge in report['junctions']:
+            require(os.readlink(inventory[edge['sourceRole']][edge['path']]['path'])==edge['rawTarget'],'source-alias-target-changed')
+        after_node=node_identities(limits['node'],ordinary+alias_paths,deadline)
+        require(before_node==after_node,'physical-node-source-identity-changed',{'before':before_node,'after':after_node})
+        for role,source in (('root',root),('vendor',vendor)):
+            report['canonicalRootObservations'][role]['after']=os.path.realpath(source)
+        for role,items in inventory.items():
+            for key,item in items.items():
+                port=source_ports[(role,key)];port.streams();captured=port.capture()
+                row={'kind':item['kind'],'physicalPath':str(item['path']),
+                     'imageRelativePath':(Path(role)/_relative(key)).as_posix(),**captured}
+                if item['kind']!='junction':
+                    row.update(nodeIdentity=after_node[str(item['path'])],nodeIdentityBefore=before_node[str(item['path'])])
+                    _node_join(row['nodeIdentity'],row['information'])
+                if item['kind']=='directory':row['members']=item['members']
+                elif item['kind']=='file':row.update(bytes=item['bytes'],sha256=item['sha256'])
+                report['physicalEntries'][role][key]=row;budget(row)
+        for edge in report['junctions']:
+            alias=str(inventory[edge['sourceRole']][edge['path']]['path'])
+            edge['targetNodeIdentityBefore']=before_node[alias];edge['targetNodeIdentityAfter']=after_node[alias];budget(edge)
+        report['counts']={**counts,'reportBytes':0};report['complete']=True
+        report['endedEpochMs']=time.time_ns()//1000000
+        report['counts']['reportBytes']=graph_report_bytes(report)
+        verify_graph_content(report,deadline,require_closed=False)
+    except BaseException as error:failure=error
+    finally:
+        for port in reversed([*ancestors,*source_ports.values(),*image_ports,*image_links.values()]):
+            try:port.close()
+            except BaseException as error:close_errors.append({'path':str(port.path),'error':_error(error)})
+        for key,port in image_links.items():
+            for edge in report['junctions']:
+                if (edge['sourceRole'],edge['path'])==key:edge['imageHandleClosed']=port.evidence.get('handleClosed') is True
+        report['allHandlesClosed']=(not close_errors and not getattr(failure,'unresolved_handle',False)
+            and all(p.evidence.get('handleClosed') for p in [*ancestors,*source_ports.values(),*image_ports,*image_links.values()]))
+        report['endedEpochMs']=time.time_ns()//1000000
+    if failure is not None or close_errors:
+        report.update(complete=False,originalError=_error(failure) if failure else None,
+            failureObservations=getattr(failure,'observations',None),closeErrors=close_errors)
+        raise CaptureRefused('physical-graph-capture-refused',report) from failure
+    report['counts']['reportBytes']=graph_report_bytes(report)
+    validate_physical_graph(report)
     return report

@@ -46,6 +46,9 @@ def retained_node_identity(path):
 
 def retained_glob(root, pattern):
     root = pathlib.Path(root)
+    local = _LOCAL_WINDOWS.get()
+    if local is not None:
+        return local.glob(root, pattern)
     image = retained_image_path(root)
     return (root / path.relative_to(image) for path in image.rglob(pattern))
 
@@ -928,6 +931,9 @@ def native_capture_owner_paths(root, selected, engine_version):
     empty owner.sqlite files leave the exact durable SQLite comparison; nested
     fixtures, other workspaces and every sibling database retain their bytes.
     """
+    local = _LOCAL_WINDOWS.get()
+    if local is not None:
+        return local.native_capture_owner_paths(root, selected, engine_version)
     if engine_version not in {'2026.9.6', '2026.9.8'} or os.name != 'posix':
         return set()
     native = root / selected / 'openclaw-runtime'
@@ -989,12 +995,13 @@ def static_sqlite_files(root, selected, active):
     """
     ignored = active | {selected / 'workspace.sqlite'}
     result = {}
-    for path in root.rglob('*.sqlite*'):
+    for logical in retained_glob(root, '*.sqlite*'):
+        path = retained_image_path(logical)
         name = path.name
         suffix = next((suffix for suffix in ('-wal', '-shm', '-journal') if name.endswith('.sqlite' + suffix)), '')
         if not suffix and not name.endswith('.sqlite'):
             continue
-        relative = path.relative_to(root)
+        relative = logical.relative_to(root)
         base = relative.with_name(name[:-len(suffix)] if suffix else name)
         if base in ignored:
             continue
@@ -1913,7 +1920,7 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
         return path
 
     def attest(root, named, recorded, content_hash=None, size=None, *, current, ownership_key):
-        path = root / named.relative_to(logical)
+        path = retained_image_path(root / named.relative_to(logical))
         require(path.resolve(strict=True) == path, 'Copied Codex admission file was redirected.')
         info = path.lstat(); physical = stat_identity(info); expected = identity(recorded)
         local = _LOCAL_WINDOWS.get()
@@ -1966,11 +1973,11 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
             if logical != live and _LOCAL_WINDOWS.get() is None:
                 roles.append((logical, True))  # The maintained pre-start original.
             for root, current in roles:
-                physical_source = root / source.relative_to(logical)
-                physical_capture = root / captured.relative_to(logical) / 'content'
+                physical_source = retained_image_path(root / source.relative_to(logical))
+                physical_capture = retained_image_path(root / captured.relative_to(logical) / 'content')
                 for folder in (physical_source, physical_capture):
                     require(folder.resolve(strict=True) == folder and folder.is_dir(), 'Copied Codex namespace was redirected.')
-                    entries = list(folder.rglob('*'))
+                    entries = list(retained_glob(folder,'*'))
                     require(len(entries) < 2048 and {file.relative_to(folder).as_posix() for file in entries} | {''} == set(members),
                             'Copied Codex physical member closure changed.')
                 owner = (root / selected / 'openclaw-runtime').lstat()
@@ -2121,7 +2128,8 @@ def retained_package_build(old, new, catalog_runtime_root, workspace_roots):
         physical = [value / root.relative_to(logical) for value in (snapshot, live)]
         current = False
     observations, directory_identity, documents = {}, {}, []
-    for directory in physical:
+    for logical_directory in physical:
+        directory = retained_image_path(logical_directory)
         path = directory / 'package.json'
         require(directory.resolve(strict=True) == directory, 'Catalog build package root was redirected.')
         directory_identity[directory] = physical_identity(directory)
@@ -2132,9 +2140,10 @@ def retained_package_build(old, new, catalog_runtime_root, workspace_roots):
                 and isinstance(document.get('openclaw'), dict) and isinstance(document['openclaw'].get('build'), dict),
                 'Catalog build package differs from its recorded identity.')
         documents.append(document)
-    require(documents[0] == documents[1] and observations[physical[0] / 'package.json'][3:5]
-            == observations[physical[1] / 'package.json'][3:5]
-            and directory_identity[physical[0]][3:5] == directory_identity[physical[1]][3:5],
+    actual_directories = [retained_image_path(p) for p in physical]
+    require(documents[0] == documents[1] and observations[actual_directories[0] / 'package.json'][3:5]
+            == observations[actual_directories[1] / 'package.json'][3:5]
+            and directory_identity[actual_directories[0]][3:5] == directory_identity[actual_directories[1]][3:5],
             'Catalog build package content or ownership changed across roles.')
     full = documents[0]['openclaw']['build']
     require(set(full) <= {'bundledDist', 'openclawVersion', 'staticAssets', 'workerEntries'}

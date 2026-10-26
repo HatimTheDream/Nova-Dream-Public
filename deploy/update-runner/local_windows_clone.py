@@ -72,11 +72,17 @@ def _supported(row, kind):
     return info
 
 
-def _same_metadata(expected, current, independent):
+def _same_metadata(expected, current, independent, *, derive_directory_storage=False):
     ignored = IDENTITY_FIELDS if independent else frozenset()
+    if derive_directory_storage:
+        require(independent and expected['directory'] is True and current['directory'] is True
+            and expected['reparseTag']==current['reparseTag']==0,'only-independent-ordinary-directory-storage')
+        capture._info_checked(expected,'directory');capture._info_checked(current,'directory')
+        ignored=ignored|{'size','allocationBytes'}
     require(set(expected) == set(current) and all(current[k] == expected[k] for k in expected if k not in ignored),
             'copy-native-metadata-mismatch', {'expected': expected, 'observed': current,
-                                             'independentIdentityOnly': independent})
+                'independentIdentityOnly':independent and not derive_directory_storage,
+                'directoryStorageDerived':derive_directory_storage})
     if independent:
         require(all(current[k] != expected[k] for k in IDENTITY_FIELDS), 'copy-must-have-independent-file-identity')
 
@@ -97,6 +103,8 @@ def _junction_payload(raw):
 
 def physical_plan(before_capture, destination, *, limits):
     """Select physical source members; expanded aliases are never working files."""
+    if before_capture.get('format') == 2:
+        return physical_graph_plan(before_capture,destination,limits=limits)
     require(type(before_capture) is dict and before_capture.get('format') == 1
             and before_capture.get('kind') == 'local-windows-closed-tree'
             and before_capture.get('complete') is True and before_capture.get('allHandlesClosed') is True
@@ -165,6 +173,37 @@ def physical_plan(before_capture, destination, *, limits):
     return {'format': 1, 'kind': 'local-windows-physical-copy-plan', 'sourceRoot': str(source),
             'imageRoot': str(image), 'destinationRoot': str(target), 'rows': rows, 'junctions': junctions,
             'limits': dict(limits), 'bytes': sum(r['expected']['bytes'] for r in files)}
+
+
+def physical_graph_plan(before_capture,destination,*,limits):
+    capture.validate_physical_graph(before_capture)
+    source=Path(before_capture['sourceRoot']);target=Path(destination);image=Path(before_capture['destinationRoot'])
+    require(target.is_absolute() and target.parent==source.parent and target!=source
+        and not target.is_relative_to(Path(before_capture['storageRoot']))
+        and not Path(before_capture['storageRoot']).is_relative_to(target),'fresh-sibling-working-generation-required')
+    caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,'maxAliases':1024,'maxReportBytes':256*1024**2}
+    require(type(limits) is dict and set(limits)==set(caps)
+        and all(type(limits[k]) is int and 0<limits[k]<=v for k,v in caps.items()),'bounded-clone-limits-required')
+    rows=[];junctions=[];edges=capture.graph_index(before_capture)
+    for key,row in before_capture['physicalEntries']['root'].items():
+        _supported(row,row['kind'])
+        if row['kind']=='junction':
+            edge=edges[('root',key)]
+            expected={**copy.deepcopy(row),'path':key,'rawTarget':edge['rawTarget'],
+                      'canonicalTarget':edge['canonicalTarget'],'targetRole':edge['targetRole']}
+            junctions.append({'key':key,'kind':'junction','expected':expected,
+                'payloadBase64':base64.b64encode(_junction_payload(edge['rawTarget'])).decode('ascii')})
+        else:
+            rows.append({'key':key,'kind':row['kind'],'imagePath':str(image/capture._relative(key)),
+                         'expected':copy.deepcopy(row)})
+    files=[r for r in rows if r['kind']=='file']
+    require(len(rows)+len(junctions)<=limits['maxEntries'] and len(junctions)<=limits['maxAliases']
+        and all(r['expected']['bytes']<=limits['maxFileBytes'] for r in files)
+        and sum(r['expected']['bytes'] for r in files)<=limits['maxBytes'],'physical-copy-budget-exceeded')
+    require(limits['maxReportBytes']>=4*1024**2,'clone-evidence-reserve-unavailable')
+    return {'format':1,'kind':'local-windows-physical-copy-plan','sourceRoot':str(source),'imageRoot':str(image),
+        'destinationRoot':str(target),'rows':rows,'junctions':junctions,'limits':dict(limits),
+        'bytes':sum(r['expected']['bytes'] for r in files)}
 
 
 class Win32Target:
@@ -294,14 +333,32 @@ class Win32Target:
             self.evidence['handleClosed'] = True
 
 
-def _verify_target(port, expected, independent):
+def _verify_target(port, expected, independent, *, directory_members=None):
     actual = port.observe()
-    _same_metadata(expected['information'], actual['information'], independent)
+    derive=directory_members is not None
+    _same_metadata(expected['information'], actual['information'], independent,derive_directory_storage=derive)
     require(actual['security'] == expected['security'], 'copy-owner-group-dacl-mismatch',
             {'expected': expected['security'], 'observed': actual['security']})
     projection = lambda rows: [(r['name'], r['bytes'], r['allocationBytes']) for r in rows]
     require(projection(actual['streams']) == projection(expected['streams']), 'copy-stream-roster-mismatch')
+    if derive:
+        require(port.kind=='directory' and directory_members==expected['members'], 'complete-copied-directory-members-required')
+        actual['directoryStorageDerivation']={'kind':'independent-directory-index-storage',
+            'sourcePath':expected['physicalPath'],'sourceInformation':copy.deepcopy(expected['information']),
+            'sourceMembers':directory_members,'targetInformationRef':'information','membersExactlyCreated':True}
     return actual
+
+
+def copied_directory_members(path, expected, deadline):
+    """Observe the complete newly created directory before restoring its times."""
+    require(type(expected) is list and expected==sorted(expected),'sorted-source-members-required')
+    names=[]
+    with os.scandir(path) as entries:
+        for entry in entries:
+            _check(deadline);names.append(entry.name)
+            require(len(names)<=len(expected),'unexpected-copied-directory-member')
+    names.sort();require(names==expected,'copied-directory-members-changed')
+    return names
 
 
 def prepare_working_copy(before_capture, destination, *, node, limits, deadline):
@@ -315,7 +372,8 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
     report = {'format': 1, 'kind': 'local-windows-working-copy', 'sourceRoot': plan['sourceRoot'],
               'destinationRoot': str(target), 'startedEpochMs': time.time_ns() // 1000000,
               'entries': {}, 'junctions': [], 'complete': False, 'saclNotRequested': True,
-              'independentIdsOnly': True, 'sourceChildrenWritten': False, 'renamesPerformed': False}
+              'independentIdsOnly': True, 'directoryStorageDerived':False,
+              'sourceChildrenWritten': False, 'renamesPerformed': False}
     held, ancestors, failure, close_errors = {}, [], None, []
     charged, charge_total, closure_total = {}, 0, 0
     fixed = len(json.dumps(report, ensure_ascii=True, allow_nan=False).encode('utf-8')) + 4096
@@ -399,8 +457,14 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
         for row in reversed(dirs):
             port = held[row['key']]
             reserve()
+            members=(copied_directory_members(port.path,row['expected']['members'],deadline)
+                     if before_capture.get('format')==2 else None)
             port.set_metadata(row['expected']['information'])
-            report['entries'][row['key']] = {'kind': 'directory', **_verify_target(port, row['expected'], True)}
+            actual=_verify_target(port,row['expected'],True,directory_members=members)
+            if members is not None and any(actual['information'][key]!=row['expected']['information'][key]
+                                           for key in ('size','allocationBytes')):
+                report['directoryStorageDerived']=True;report['independentIdsOnly']=False
+            report['entries'][row['key']] = {'kind': 'directory', **actual}
             charge(port, report['entries'][row['key']])
         capture.verify_capture_content(before_capture, deadline)
         report['rootInformation'] = copy.deepcopy(report['entries']['.']['information'])
@@ -441,10 +505,11 @@ def finalize_renamed_root(expected_capture_or_clone, root, *, deadline):
     require(value.get('complete') is True and value.get('allHandlesClosed') is True
             and str(root) == value['sourceRoot'], 'exact-restored-canonical-root-required')
     if value['kind'] == 'local-windows-closed-tree':
-        expected = value['entries']['.']
+        expected = capture.source_root_entry(value)
         _supported(expected, 'directory')
     else:
-        require(value['kind'] == 'local-windows-working-copy' and value['independentIdsOnly'] is True,
+        require(value['kind'] == 'local-windows-working-copy'
+                and (value.get('independentIdsOnly') is True or value.get('directoryStorageDerived') is True),
                 'qualified-working-copy-root-required')
         expected = {'information': value['rootInformation'], 'security': value['rootSecurity'],
                     'streams': value['rootStreams']}

@@ -5,6 +5,8 @@ does not capture, start, stop, restore or grant execution authority.
 """
 import base64
 import json
+import hashlib
+import uuid
 import math
 from pathlib import Path
 import re
@@ -33,6 +35,8 @@ class LocalRetainedContext:
         self.derivation = configuration_derivation
         self.app_releases = app_releases
         self.external_observations = {}
+        require(before.get('format')==after.get('format') and before.get('format') in (1,2),
+                'Local endpoint capture representations must match.')
         require(type(startup_window) in (tuple, list) and len(startup_window) == 2
                 and all(type(v) in (int, float) and math.isfinite(v) for v in startup_window)
                 and 0 <= startup_window[0] <= startup_window[1]
@@ -42,6 +46,9 @@ class LocalRetainedContext:
         require(before['sourceRoot'] == after['sourceRoot']
                 and before['canonicalSourceRoot'] == after['canonicalSourceRoot']
                 and self.source_root.is_absolute(), 'Local captures must bind the same original source root.')
+        if before['format']==2:
+            require(before['vendorRoot']==after['vendorRoot'] and before['canonicalVendorRoot']==after['canonicalVendorRoot'],
+                    'Local captures must bind the same authenticated vendor root.')
         require(self.images[0] != self.images[1]
                 and all(p.is_absolute() and p != self.source_root
                         and not p.is_relative_to(self.source_root)
@@ -51,13 +58,16 @@ class LocalRetainedContext:
                 'Local captures do not bracket the original startup window.')
         for value in self.captures:
             self.validate_capture(value)
-        junction_identity = lambda value: {row['path']: {k: row[k] for k in
-            ('rawTarget','canonicalTarget','targetRole','information','security')}
-            for row in value['junctions']}
-        require(junction_identity(before) == junction_identity(after),
-                'Physical junction mapping, full native information or owner/group/DACL changed.')
+        # The maintained native comparator qualifies the complete endpoint
+        # namespace and referenced state. Global transient cache-junction equality
+        # was an extra local gate, not part of that startup contract. Pre-start
+        # clone equality and pristine return remain separate exact comparisons.
 
     def validate_capture(self, value):
+        if value.get('format') == 2:
+            capture.validate_physical_graph(value)
+            capture.verify_capture_content(value,self.deadline)
+            return
         require(type(value) is dict and value.get('format') == 1
                 and value.get('kind') == 'local-windows-closed-tree'
                 and value.get('complete') is True and value.get('allHandlesClosed') is True
@@ -107,6 +117,19 @@ class LocalRetainedContext:
 
     def locate(self, path):
         path = Path(path)
+        for value in self.captures:
+            if value.get('format') != 2:continue
+            for role in ('root','vendor'):
+                image=capture.graph_image_root(value,role)
+                if path.is_relative_to(image):
+                    return self._graph_location(value,role,path.relative_to(image).as_posix())
+        value=self.captures[1]
+        if value.get('format') == 2:
+            for role in ('root','vendor'):
+                source=capture.graph_source_root(value,role)
+                if path.is_relative_to(source):
+                    return self._graph_location(value,role,path.relative_to(source).as_posix())
+            return None
         for value, image in zip(self.captures, self.images):
             if path.is_relative_to(image):
                 name = path.relative_to(image).as_posix()
@@ -123,16 +146,47 @@ class LocalRetainedContext:
             return value, image, found[0][0]
         return None
 
+    def _graph_location(self,value,role,name):
+        try:
+            physical_role,key,_=capture.graph_resolve(value,role,name)
+        except capture.CaptureRefused as error:
+            if str(error) in ('logical-member-not-captured','logical-member-not-in-observed-directory'):
+                return None
+            raise
+        return value,capture.graph_image_root(value,physical_role),key,physical_role
+
     def image_path(self, path):
         path = Path(path)
         found = self.locate(path)
-        return found[1] / capture._relative(found[2]) if found is not None else path
+        if found is not None:return found[1]/capture._relative(found[2])
+        # Missing members under an admitted source still map into its immutable
+        # view; optional-file checks must never fall back to the original tree.
+        for value in reversed(self.captures):
+            if value.get('format') != 2:continue
+            for role in ('root','vendor'):
+                source=capture.graph_source_root(value,role)
+                if path.is_relative_to(source):return capture.graph_image_root(value,role)/path.relative_to(source)
+        return path
 
     def entry(self, path):
         found = self.locate(path)
+        if found is not None and len(found)==4:
+            return found[0]['physicalEntries'][found[3]][found[2]]
         require(found is not None and found[2] in found[0]['entries'],
                 'Local source identity is absent from the complete capture.')
         return found[0]['entries'][found[2]]
+
+    def glob(self,root,pattern):
+        root=Path(root);found=self.locate(root)
+        if found is None or len(found)!=4:
+            image=self.image_path(root)
+            yield from (root/p.relative_to(image) for p in image.rglob(pattern))
+            return
+        value,_,key,role=found;base=capture._relative(key)
+        for name,_,_,row in capture.graph_logical_rows(value,role,key,deadline=self.deadline):
+            if name==key:continue
+            relative=capture._relative(name).relative_to(base)
+            if relative.match(pattern):yield root/relative
 
     def node_identity(self, path):
         if self.locate(path) is not None:
@@ -158,6 +212,154 @@ class LocalRetainedContext:
     def processes_retired(self, pids):
         require(self.node is not None and pids, 'Removed Windows process registrations need actual ESRCH observations.')
         return capture.assert_processes_retired(self.node, pids, self.deadline)
+
+    def native_capture_owner_paths(self, root, selected, engine_version):
+        """Recognize only the captured official Windows empty staging lease.
+
+        These are process ownership tokens, not application databases. The full
+        capture, content, security, alias and return checks still retain them.
+        No SQLite connection or original-source read occurs here.
+        """
+        if engine_version != '2026.9.8' or any(v.get('format') != 2 for v in self.captures):
+            return set()
+        root, selected = Path(root), Path(selected)
+        require(root in self.images and not selected.is_absolute() and '..' not in selected.parts,
+                'Windows capture lease image/selection is unbound.')
+        cached = getattr(self, '_capture_lease_paths', {})
+        key = selected.as_posix()
+        if key in cached:
+            return set(cached[key][self.images.index(root)])
+        prefix = selected / 'openclaw-runtime/state/tmp/plugin-captures'
+        generations = []
+        for value in self.captures:
+            rows = value['physicalEntries']['root']
+            parent = rows.get(prefix.as_posix())
+            found = {}
+            if parent is not None:
+                require(parent['kind'] == 'directory' and len(parent['members']) <= 1000,
+                        'Windows capture lease parent is not an ordinary bounded directory.')
+                for name in parent['members']:
+                    try:
+                        canonical = str(uuid.UUID(name)) == name
+                    except ValueError:
+                        canonical = False
+                    if not canonical:
+                        continue  # Remains in the exact static SQLite map.
+                    owner = (prefix / name / 'owner.sqlite').as_posix()
+                    if owner in rows:
+                        found[name] = owner
+            generations.append(found)
+        if not any(generations):
+            return set()
+        # This newly qualified Windows shape is one old closed token replaced
+        # by one new token. Other generation patterns need separate evidence.
+        require(all(len(v) == 1 for v in generations) and set(generations[0]).isdisjoint(generations[1]),
+                'Windows capture lease rotation is outside the qualified shape.')
+        host = self.derivation.get('hostResult', {}) if isinstance(self.derivation, dict) else {}
+        identity = host.get('nativeIdentity', {})
+        require(host.get('kind') == 'local-native-retained-host-result'
+                and all(host.get(k) is True for k in ('ready', 'passed', 'closed'))
+                and host.get('originalOwnerRetained') is False
+                and Path(host.get('workspaceRoot', '')) == self.source_root
+                and all(type(host.get(k)) is int for k in ('startedEpochMs', 'endedEpochMs'))
+                and tuple(host.get(k) for k in ('startedEpochMs', 'endedEpochMs')) == self.startup_window
+                and type(identity.get('pid')) is int and identity['pid'] > 0
+                and identity['pid'] in host.get('observedNativePids', [])
+                and identity.get('version') == engine_version
+                and type(identity.get('startedAt')) is int
+                and self.startup_window[0] <= identity['startedAt'] <= self.startup_window[1]
+                and type(host.get('observer', {}).get('pid')) is int and host['observer']['pid'] > 0,
+                'Windows capture lease needs the original closed native host.')
+        for name, value in (('operationId', host.get('operationId')),
+                            ('epoch', identity.get('epoch')), ('generation', identity.get('generation'))):
+            require(type(value) is str and str(uuid.UUID(value)) == value,
+                    'Windows capture lease host identity is malformed: ' + name)
+        require(self.catalog_runtime_root is not None
+                and all(Path(v['vendorRoot']) == self.catalog_runtime_root for v in self.captures),
+                'Windows capture lease producer root is unbound.')
+        producers = {
+            'dist/sqlite-staging-token-CcxeaYVw.mjs': (4495, '640abcf7ec6e84134f752e94c9c49b8d4d1eea55d0416b4f0102e722ff89702f'),
+            'dist/plugin-source-capture-directory-CsjPVlzr.mjs': (20448, 'bb59fd7c7b721a67fce0201e8f6bd250a66c84bc055d06d0ce645ecf18b25f79'),
+            'dist/plugin-source-capture-path-L0n-8p-6.mjs': (1011, '2b5c87c781d8299882aa5ca90d66f8f20eda194a84cd3b73224f2fdd8163d7cf'),
+        }
+
+        def ordinary(value, role, name, kind):
+            row = value['physicalEntries'][role].get(name)
+            require(row is not None and row['kind'] == kind and row.get('sameHandleStable') is True,
+                    'Windows capture lease requires an ordinary captured member.')
+            info, obs = row['information'], row['nativeObservations']
+            require(info['reparseTag'] == 0 and not info['attributes'] & 0x400
+                    and info['links'] == 1 and info['deletePending'] is False
+                    and info['directory'] == (kind == 'directory')
+                    and info['fileIndex64'] > 0 and int(info['fileId128Hex'], 16) > 0
+                    and obs.get('handleClosed') is True and obs['before'] == info == obs['after']
+                    and obs['ownerGroupDaclBeforeBase64'] == row['security']['ownerGroupDaclBase64']
+                    == obs['ownerGroupDaclAfterBase64'] and row['security']['saclNotRequested'] is True,
+                    'Windows capture lease native identity/security/handle closure changed.')
+            require(row['streams'] == [] if kind == 'directory' else
+                    len(row['streams']) == 1 and row['streams'][0]['name'] == '::$DATA'
+                    and row['streams'][0]['bytes'] == info['size'] == row['bytes'],
+                    'Windows capture lease has an unsupported stream.')
+            return row
+
+        def native_id(row):
+            i = row['information']
+            return tuple(i[k] for k in ('volumeSerial32', 'volumeSerial64', 'fileIndex64', 'fileId128Hex'))
+
+        endpoint_paths, ancestry, families = [], [], []
+        native = selected / 'openclaw-runtime'
+        ancestor_names = [selected, native, native / 'state', native / 'state/tmp', prefix]
+        for index, (value, generation) in enumerate(zip(self.captures, generations)):
+            require(value.get('complete') is True and value.get('allHandlesClosed') is True,
+                    'Windows capture lease needs complete closed captures.')
+            for name, expected in producers.items():
+                row = ordinary(value, 'vendor', name, 'file')
+                require((row['bytes'], row['sha256']) == expected,
+                        'Windows capture lease captured producer is not the qualified source.')
+            parents = [ordinary(value, 'root', name.as_posix(), 'directory') for name in ancestor_names]
+            require(all(row['security'] == parents[0]['security'] for row in parents),
+                    'Windows capture lease ancestor protection changed.')
+            ancestry.append(parents)
+            owner_name = next(iter(generation.values()))
+            directory_name = str(Path(owner_name).parent.as_posix())
+            directory = ordinary(value, 'root', directory_name, 'directory')
+            owner = ordinary(value, 'root', owner_name, 'file')
+            journal_name = owner_name + '-journal'
+            journal = ordinary(value, 'root', journal_name, 'file')
+            require(directory['security'] == parents[0]['security']
+                    and owner['security'] == journal['security']
+                    and set(n for n in directory['members'] if n.startswith('owner.sqlite'))
+                    == {'owner.sqlite', 'owner.sqlite-journal'},
+                    'Windows capture lease protection or exact SQLite family changed.')
+            require(owner['bytes'] == 0 and owner['information']['allocationBytes'] == 0
+                    and owner['sha256'] == hashlib.sha256(b'').hexdigest()
+                    and journal['bytes'] == 512 and journal['information']['allocationBytes'] == 512,
+                    'Windows capture lease is not the qualified empty marker.')
+            journal_path = capture.graph_image_root(value, 'root') / journal_name
+            with journal_path.open('rb') as stream:
+                payload = stream.read(513)
+            expected = bytearray(512)
+            expected[20:24] = (512).to_bytes(4, 'big')
+            expected[24:28] = (4096).to_bytes(4, 'big')
+            require(len(payload) == 512 and hashlib.sha256(payload).hexdigest() == journal['sha256'],
+                    'Windows capture journal image disagrees with the closed capture.')
+            expected[12:16] = payload[12:16]  # SQLite header checksum nonce only.
+            require(payload == expected, 'Windows capture lease journal contains unqualified data.')
+            for row in (directory, owner, journal):
+                created = row['information']['creation100ns']
+                lower, upper = (116444736000000000 + value * 10000 for value in self.startup_window)
+                require(type(created) is int and (116444736000000000 <= created <= lower if index == 0 else
+                        lower <= created <= upper),
+                        'Windows capture lease generation is outside its owner window.')
+            families.append((directory, owner, journal))
+            endpoint_paths.append({Path(owner_name)})
+        require(all(native_id(a) == native_id(b) and a['security'] == b['security']
+                    for a, b in zip(*ancestry)), 'Windows capture lease ancestry identity changed.')
+        require(all(native_id(a) != native_id(b) and a['security'] == b['security']
+                    for a, b in zip(*families)), 'Windows capture lease generation identity/protection did not rotate.')
+        cached[key] = endpoint_paths
+        self._capture_lease_paths = cached
+        return set(endpoint_paths[self.images.index(root)])
 
     def configuration(self, selected):
         relative = selected / 'openclaw-runtime/openclaw.json'
