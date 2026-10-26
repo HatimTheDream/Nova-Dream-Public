@@ -133,18 +133,26 @@ def parse_directory_page(raw, seen, maximum):
 
 class NeutralHeld(capture._Held):
     """Reuse qualified metadata/stream/close behavior; separate bounded I/O log."""
-    def __init__(self, path, kind, deadline):
+    def __init__(self, path, kind, deadline, *, expected_links=1, failure_evidence=None):
         capture.require(kind in ('file', 'directory'), 'neutral-source-kind')
         self.path, self.kind, self.deadline = Path(path), kind, deadline
+        self.expected_links = expected_links
         self.port, self.handle, self.closed = capture._primitive().Win32(), None, False
         self._owner_port, self._owner_handle, self._owner_kind = self.port, None, kind
         self.evidence = {'path': str(self.path), 'kind': kind,
                          'ioEvents': [], 'directorySweeps': []}
+        if expected_links != 1:
+            self.evidence['expectedLinks'] = expected_links
         self._io_bytes = 0
         self._read_attempted = False
         self._baseline = None
         self._original_baseline = None
         self._preservation_attempted = False
+        self._capture_completed = False
+        self._source_io_stopped = False
+        self._active_io = None
+        self._io_native_returned = True
+        self._failure_reservation = None
         baseline = None
         primary = None
         close_errors = []
@@ -152,11 +160,15 @@ class NeutralHeld(capture._Held):
             capture._check(deadline)
             # The already-qualified metadata-only handle also proves coexistence
             # with the original share-READ file custody. It never reads content.
-            baseline = capture._Held(self.path, kind, deadline)
+            baseline = capture._Held(self.path, kind, deadline, expected_links=expected_links)
             baseline.streams()
             self._baseline = baseline.capture()
             self._original_baseline = copy.deepcopy({key:self._baseline[key] for key in ('information','security','streams')})
             self.evidence['acquisitionBaseline'] = baseline.evidence
+            if failure_evidence is not None:
+                # The metadata-only baseline is complete; reserve the complete
+                # negative/closure proof BEFORE the first data-owner open.
+                self._failure_reservation = failure_evidence.admit_owner(self,self._original_baseline)
             native, p = capture._primitive(), self.port
             native.canonical_path(str(self.path))
             p.k.SetFileTime.argtypes = [native.HANDLE, ctypes.POINTER(native.FileTime),
@@ -188,7 +200,7 @@ class NeutralHeld(capture._Held):
                 'immediateAfterOpen': True, 'sameHandle': True, 'result': bool(ok), 'lastError': p.last_error}
             self.evidence['accessTimeSuppressionEvent'] = copy.deepcopy(p.events[-1])
             p.require(ok, 'SetFileTime')
-            info = self.evidence['openedInformation'] = capture._info_checked(p.info(self.handle), kind)
+            info = self.evidence['openedInformation'] = capture._info_checked(p.info(self.handle), kind, expected_links=expected_links)
             clock['afterInformation'] = acquisition_clock(p)
             acquired_end = clock['afterInformation']['value100ns']
             self.evidence['acquisitionWindow100ns'] = {'started': acquired_start, 'ended': acquired_end}
@@ -225,6 +237,7 @@ class NeutralHeld(capture._Held):
 
     def _ready(self, kind):
         capture._check(self.deadline)
+        capture.require(not self._source_io_stopped, 'source-io-after-abort-settlement-refused', self.evidence)
         capture.require(not self._preservation_attempted, 'source-io-after-preservation-refused', self.evidence)
         capture.require(not self.closed and self.handle not in (None, ctypes.c_void_p(-1).value)
                         and self.handle == self._owner_handle and self.port is self._owner_port
@@ -235,13 +248,76 @@ class NeutralHeld(capture._Held):
     def close(self):
         # Close only the originally returned handle, once, including on refusal.
         if self._owner_handle not in (None, ctypes.c_void_p(-1).value) and not self.closed:
-            self.closed = True
-            self._owner_port.close(self._owner_handle)
-            self.evidence['handleClosed'] = True
-            capture.require(self.handle == self._owner_handle and self.port is self._owner_port,
-                            'source-handle-authority-replaced', self.evidence)
-            if self._preservation_attempted:
-                self._post_close_observation()
+            primary = None; close_error = None; post_error = None
+            try:
+                if not self._capture_completed and not self._preservation_attempted:
+                    self._settle_aborted_observation()
+            except BaseException as error:
+                primary = error
+            finally:
+                self.closed = True
+                try:
+                    self._owner_port.close(self._owner_handle)
+                    self.evidence['handleClosed'] = True
+                    capture.require(self.handle == self._owner_handle and self.port is self._owner_port,
+                                    'source-handle-authority-replaced', self.evidence)
+                except BaseException as error:
+                    close_error = error
+            if close_error is None:
+                try:
+                    if self._preservation_attempted:
+                        self._post_close_observation()
+                    elif self.evidence.get('abortedObservation',{}).get('verifiedBeforeClose') is True:
+                        self._post_close_observation(self.evidence['abortedObservation'])
+                except BaseException as error:
+                    post_error = error
+            if primary is not None or close_error is not None or post_error is not None:
+                raise capture.CaptureRefused('source-close-preservation-refused', {
+                    **self.evidence, 'settlementError':capture._error(primary) if primary else None,
+                    'closeError':capture._error(close_error) if close_error else None,
+                    'postCloseError':capture._error(post_error) if post_error else None,
+                    'unresolvedHandle':close_error is not None or any(getattr(error,'unresolved_handle',False)
+                        for error in (primary,close_error,post_error))}) from (primary or close_error or post_error)
+
+    def _settle_aborted_observation(self):
+        """Preserve a validated acquisition without claiming a complete capture."""
+        settled=self._active_io is None or self._io_native_returned is True
+        record=self.evidence['abortedObservation']={
+            'kind':'aborted-source-observation','captureComplete':False,'contentIoComplete':False,
+            'synchronousIoSettled':settled,'ioStopped':False,'verifiedBeforeClose':False,
+            'readAttempted':self._read_attempted,'readProgress':copy.deepcopy(self.evidence.get('readResult')),
+            'directoryProgress':[{'sequence':row['sequence'],'complete':row.get('complete') is True,
+                'eof':row.get('eof') is True,'namesObserved':len(row.get('names',[]))}
+                for row in self.evidence['directorySweeps']],
+            'ioEventsObserved':len(self.evidence['ioEvents']),
+            'lastNativeIoReturned':self._io_native_returned,
+            'metadataRestorationProven':False}
+        try:
+            capture.require(settled,'abort-source-io-not-settled',record)
+            self._ready(self._owner_kind)
+            capture.require(self._original_baseline is not None and self._baseline is not None
+                and self.evidence.get('acquisitionTransition',{}).get('kind')=='post-acquisition-pre-io-baseline'
+                and type(self.evidence['acquisitionTransition'].get('accessTimeChanged')) is bool,
+                'abort-acquisition-authority-incomplete',self.evidence)
+            start=len(self.port.events)
+            streams=super().streams()
+            capture.require(streams==self._baseline['streams'],'abort-source-streams-mismatch',self.evidence)
+            current=super().capture()
+            capture.require(all(current[key]==self._baseline[key] for key in ('information','security','streams')),
+                            'abort-source-acquired-state-mismatch',self.evidence)
+            record['settledObservation']=capture.pack_metadata_observation(
+                self._observation(current,self.evidence,self.port.events[start:]))
+            if self.evidence['acquisitionTransition']['accessTimeChanged']:
+                restored=self._preserve_original_access(current,self.port.events[start:],aborted=True)
+            else:
+                self._source_io_stopped=True;record['ioStopped']=True;restored=current
+            capture.require(all(restored[key]==self._original_baseline[key] for key in ('information','security','streams')),
+                            'abort-source-original-tuple-not-restored',self.evidence)
+            record['verifiedBeforeClose']=True
+        except BaseException as error:
+            self._source_io_stopped=True;record['ioStopped']=True
+            record['error']=capture._error(error)
+            raise
 
     @staticmethod
     def _observation(result, evidence, events):
@@ -251,11 +327,12 @@ class NeutralHeld(capture._Held):
                     ('openedInformation','before','after','ownerGroupDaclBeforeBase64','ownerGroupDaclAfterBase64')},
                 'apiEvents':copy.deepcopy(events)}
 
-    def _post_close_observation(self):
+    def _post_close_observation(self, record=None):
         """One metadata-only reopen after the original data handle has closed."""
-        record=self.evidence['metadataPreservation'];held=None;primary=None;close_error=None;value=None
+        record=self.evidence['metadataPreservation'] if record is None else record
+        held=None;primary=None;close_error=None;value=None
         try:
-            held=capture._Held(self.path,self._owner_kind,self.deadline)
+            held=capture._Held(self.path,self._owner_kind,self.deadline,expected_links=self.expected_links)
             held.streams();value=held.capture()
             capture.require(all(value[key]==self._original_baseline[key] for key in ('information','security','streams')),
                             'source-preservation-postclose-mismatch',held.evidence)
@@ -276,9 +353,13 @@ class NeutralHeld(capture._Held):
                 record['postCloseError']={'primary':capture._error(primary) if primary else None,
                                          'close':capture._error(close_error) if close_error else None}
         if primary is not None or close_error is not None:
+            record['unresolvedHandle']=close_error is not None or any(getattr(error,'unresolved_handle',False)
+                for error in (primary,close_error))
             raise capture.CaptureRefused('source-preservation-postclose-refused',record) from (primary or close_error)
+        if 'abortedObservation' in self.evidence:
+            self.evidence['abortedObservation']['metadataRestorationProven']=True
 
-    def _preserve_original_access(self, result, prewrite_events):
+    def _preserve_original_access(self, result, prewrite_events, *, aborted=False):
         """Mutate only the original BasicInfo after all observations are complete."""
         self._ready(self._owner_kind)
         original=self._original_baseline
@@ -287,12 +368,17 @@ class NeutralHeld(capture._Held):
             'source-preservation-prewrite-mismatch',self.evidence)
         expected=original['information'];p=self._owner_port;native=capture._primitive()
         basic={key:expected[key] for key in capture.PRESERVED_BASIC_FIELDS}
-        record=self.evidence['metadataPreservation']={'kind':'same-handle-access-preservation',
+        record=self.evidence['metadataPreservation']={'kind':('same-handle-aborted-access-preservation' if aborted else 'same-handle-access-preservation'),
             'attempted':False,'completed':False,
             'preWriteObservation':capture.pack_metadata_observation(self._observation(result,self.evidence,prewrite_events)),
             'intent':{'kind':'restore-observed-access-on-original-handle','handle':self._owner_handle,
                 'originalInformationRef':'acquisitionBaseline.before','expectedPreWriteInformationRef':'openedInformation',
-                'originalBasicInfo':basic,'contentIoComplete':True}}
+                'originalBasicInfo':basic,'contentIoComplete':not aborted}}
+        if aborted:
+            capture.require(self.evidence['abortedObservation']['synchronousIoSettled'] is True,
+                            'abort-native-io-not-settled',self.evidence)
+            record['intent'].update(abortedObservationRef='abortedObservation',synchronousIoSettled=True)
+            self._source_io_stopped=True;self.evidence['abortedObservation']['ioStopped']=True
         p.k.SetFileInformationByHandle.argtypes=[native.HANDLE,ctypes.c_int32,ctypes.c_void_p,native.DWORD]
         p.k.SetFileInformationByHandle.restype=native.BOOL
         value=native.BasicInfo(*(expected[key] for key in capture.PRESERVED_BASIC_FIELDS))
@@ -321,14 +407,20 @@ class NeutralHeld(capture._Held):
         # Charge before native dispatch; raw directory pages/failed results are
         # never dropped to fit a budget. Final capture owns the aggregate limit.
         capture.require(self._io_bytes + reserve <= MAX_IO_EVIDENCE, 'neutral-io-evidence-budget-exceeded', self.evidence)
+        if self._failure_reservation is not None:
+            self._failure_reservation.grow_io(reserve)
         self._io_bytes += reserve
         self.evidence['ioEvents'].append(event)
+        self._active_io=event;self._io_native_returned=False
         return event
 
     def _finish_io(self, event, reserve):
         used = len(json.dumps(event, ensure_ascii=True, allow_nan=False).encode('ascii')) + 64
         capture.require(used <= reserve, 'neutral-io-event-reserve-exceeded', self.evidence)
+        if self._failure_reservation is not None:
+            self._failure_reservation.settle_io(reserve,used)
         self._io_bytes -= reserve - used
+        self._active_io=None
 
     def _refused(self, reason, error):
         return capture.CaptureRefused(reason, {**self.evidence,
@@ -364,7 +456,8 @@ class NeutralHeld(capture._Held):
                             and result['streams'] == self._baseline['streams'],
                             'source-observation-changed-stored-metadata', self.evidence)
             if self.evidence['acquisitionTransition']['accessTimeChanged']:
-                return self._preserve_original_access(result,self.port.events[prewrite_start:])
+                result=self._preserve_original_access(result,self.port.events[prewrite_start:])
+            self._capture_completed=True
             return result
         except BaseException as error:
             raise self._refused('neutral-source-capture-refused', error) from error
@@ -386,6 +479,7 @@ class NeutralHeld(capture._Held):
                 event = self._begin_io({'api': 'ReadFile', 'requestedBytes': CHUNK_BYTES}, 1024)
                 ctypes.set_last_error(0)
                 ok = self.port.k.ReadFile(self.handle, buffer, CHUNK_BYTES, ctypes.byref(returned), None)
+                self._io_native_returned=True
                 event.update(result=bool(ok), lastError=ctypes.get_last_error(), returnedBytes=returned.value)
                 capture.require(returned.value <= CHUNK_BYTES and (ok or (event['lastError'] == 38 and returned.value == 0)),
                                 'same-handle-read-refused', self.evidence)
@@ -425,6 +519,7 @@ class NeutralHeld(capture._Held):
                     'sweep': sweep['sequence'], 'class': info_class, 'bufferBytes': PAGE_BYTES}, 131072)
                 ctypes.set_last_error(0)
                 ok = self.port.k.GetFileInformationByHandleEx(self.handle, info_class, buffer, PAGE_BYTES)
+                self._io_native_returned=True
                 last_error, raw = ctypes.get_last_error(), bytes(buffer)
                 event.update(result=bool(ok), lastError=last_error, **directory_page_evidence(raw))
                 if not ok:
@@ -443,9 +538,9 @@ class NeutralHeld(capture._Held):
             raise self._refused('neutral-source-enumeration-refused', error) from error
 
 
-def open_source(path, kind, deadline):
+def open_source(path, kind, deadline, *, expected_links=1, failure_evidence=None):
     if kind == 'junction':
         held = capture._Held(Path(path), kind, deadline)
         held.evidence['sourceObservationMode'] = 'metadata-only-junction'
         return held
-    return NeutralHeld(path, kind, deadline)
+    return NeutralHeld(path, kind, deadline,expected_links=expected_links,failure_evidence=failure_evidence)

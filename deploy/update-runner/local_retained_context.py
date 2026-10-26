@@ -35,7 +35,7 @@ class LocalRetainedContext:
         self.derivation = configuration_derivation
         self.app_releases = app_releases
         self.external_observations = {}
-        require(before.get('format')==after.get('format') and before.get('format') in (1,2),
+        require(before.get('format')==after.get('format') and before.get('format') in (1,2,3),
                 'Local endpoint capture representations must match.')
         require(type(startup_window) in (tuple, list) and len(startup_window) == 2
                 and all(type(v) in (int, float) and math.isfinite(v) for v in startup_window)
@@ -46,7 +46,7 @@ class LocalRetainedContext:
         require(before['sourceRoot'] == after['sourceRoot']
                 and before['canonicalSourceRoot'] == after['canonicalSourceRoot']
                 and self.source_root.is_absolute(), 'Local captures must bind the same original source root.')
-        if before['format']==2:
+        if before['format'] in (2,3):
             require(before['vendorRoot']==after['vendorRoot'] and before['canonicalVendorRoot']==after['canonicalVendorRoot'],
                     'Local captures must bind the same authenticated vendor root.')
         require(self.images[0] != self.images[1]
@@ -64,7 +64,7 @@ class LocalRetainedContext:
         # clone equality and pristine return remain separate exact comparisons.
 
     def validate_capture(self, value):
-        if value.get('format') == 2:
+        if value.get('format') in (2,3):
             capture.validate_physical_graph(value)
             capture.verify_capture_content(value,self.deadline)
             return
@@ -118,13 +118,13 @@ class LocalRetainedContext:
     def locate(self, path):
         path = Path(path)
         for value in self.captures:
-            if value.get('format') != 2:continue
+            if value.get('format') not in (2,3):continue
             for role in ('root','vendor'):
                 image=capture.graph_image_root(value,role)
                 if path.is_relative_to(image):
                     return self._graph_location(value,role,path.relative_to(image).as_posix())
         value=self.captures[1]
-        if value.get('format') == 2:
+        if value.get('format') in (2,3):
             for role in ('root','vendor'):
                 source=capture.graph_source_root(value,role)
                 if path.is_relative_to(source):
@@ -162,7 +162,7 @@ class LocalRetainedContext:
         # Missing members under an admitted source still map into its immutable
         # view; optional-file checks must never fall back to the original tree.
         for value in reversed(self.captures):
-            if value.get('format') != 2:continue
+            if value.get('format') not in (2,3):continue
             for role in ('root','vendor'):
                 source=capture.graph_source_root(value,role)
                 if path.is_relative_to(source):return capture.graph_image_root(value,role)/path.relative_to(source)
@@ -220,7 +220,7 @@ class LocalRetainedContext:
         capture, content, security, alias and return checks still retain them.
         No SQLite connection or original-source read occurs here.
         """
-        if engine_version != '2026.9.8' or any(v.get('format') != 2 for v in self.captures):
+        if engine_version != '2026.9.8' or any(v.get('format') not in (2,3) for v in self.captures):
             return set()
         root, selected = Path(root), Path(selected)
         require(root in self.images and not selected.is_absolute() and '..' not in selected.parts,

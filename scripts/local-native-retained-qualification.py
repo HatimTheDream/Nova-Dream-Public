@@ -21,11 +21,24 @@ RUNNER = Path(__file__).resolve().parents[1] / 'deploy/update-runner'
 sys.path.insert(0, str(RUNNER))
 import recovery
 import local_windows_capture as capture
+import local_windows_failure_evidence as failure_evidence
 
 
 def need(value, message):
     if not value:
         raise RuntimeError(message)
+
+
+def qualification_return_reserve(ready_timeout_ms, total_timeout_ms, max_report_bytes):
+    """Select finite admission timing without changing an existing deadline."""
+    enlarged = type(max_report_bytes) is int and max_report_bytes == capture.MAX_REPORT_BYTES
+    upper = 3600000 if enlarged else 1800000
+    minimum = max(1800000, ready_timeout_ms + 60000 + 900000) if enlarged and type(ready_timeout_ms) is int else 0
+    need(type(ready_timeout_ms) is int and 1000 <= ready_timeout_ms <= 300000
+         and type(total_timeout_ms) is int
+         and max(ready_timeout_ms + 60000, minimum) <= total_timeout_ms <= upper,
+         'Finite original readiness and qualification budgets required')
+    return 900 if enlarged else min(300, total_timeout_ms / 3000)
 
 
 def json_read(path, maximum=16*1024*1024):
@@ -39,7 +52,7 @@ def json_read(path, maximum=16*1024*1024):
 
 def save(path, value):
     data = (json.dumps(value, ensure_ascii=True, allow_nan=False)+'\n').encode('ascii')
-    need(len(data) <= 256*1024*1024, 'Evidence record exceeded bound')
+    need(len(data) <= capture.MAX_REPORT_BYTES, 'Evidence record exceeded bound')
     with Path(path).open('xb') as stream:
         need(stream.write(data) == len(data), 'Short evidence write')
         stream.flush(); os.fsync(stream.fileno())
@@ -67,7 +80,80 @@ def refs_check(refs):
 
 PATH_FIELDS = ('sourceRoot','workingRoot','parkedRoot','preservedRoot','captureRoot','evidenceRoot','releaseRoot','vendorRoot','node')
 INPUT_FIELDS = {'format','kind','operationId',*PATH_FIELDS,'retiredPids','limits','readyTimeoutMs',
-                'totalTimeoutMs','candidate','sourceRefs','sourceReview','runtimeEvidence','appManifest'}
+                'totalTimeoutMs','candidate','sourceRefs','sourceReview','runtimeEvidence','appManifest','failureEvidence'}
+
+
+def failure_evidence_configuration(value, ledger=None):
+    """Bind one finite ledger across the complete outer/inner Python operation."""
+    spec=value['failureEvidence']
+    need(type(spec) is dict and set(spec) == {'root','maximumBytes','segmentBytes','primaryRecordBytes','emergencyBytes','portErrorReserveBytes'},
+         'Closed shared failure-evidence configuration required')
+    constants={'maximumBytes':failure_evidence.MAX_FAILURE_EVIDENCE_BYTES,
+               'segmentBytes':failure_evidence.SEGMENT_BYTES,
+               'primaryRecordBytes':failure_evidence.PRIMARY_RECORD_BYTES,
+               'emergencyBytes':failure_evidence.EMERGENCY_BYTES,
+               'portErrorReserveBytes':failure_evidence.PORT_ERROR_RESERVE_BYTES}
+    need(all(type(spec[key]) is int and spec[key] == wanted for key,wanted in constants.items()),
+         'Exact finite failure-evidence allocation and reserves required')
+    failure_evidence_commit_reserve(value['limits']['maxReportBytes'])
+    root=Path(spec['root'])
+    need(type(spec['root']) is str and root.is_absolute() and str(root) == os.path.abspath(root),
+         'Exact absolute failure-evidence root required')
+    for key in ('sourceRoot','workingRoot','parkedRoot','preservedRoot','captureRoot','releaseRoot','vendorRoot'):
+        role=Path(value[key])
+        need(not root.is_relative_to(role) and not role.is_relative_to(root),
+             'Failure evidence must not overlap source, runtime, image or namespace roles')
+    failure_evidence.FailureEvidenceLedger.validate_configuration(root,spec['maximumBytes'],must_be_absent=ledger is None)
+    if ledger is None:
+        return spec['maximumBytes']
+    need(type(ledger) is failure_evidence.FailureEvidenceLedger, 'The original in-process failure ledger is required')
+    ledger.require_idle()
+    receipt=ledger.receipt()
+    need(receipt['root'] == str(root) and receipt['maximumBytes'] == spec['maximumBytes']
+         and type(receipt['committedBytes']) is int and 0 <= receipt['committedBytes'] <= spec['maximumBytes']
+         and receipt['reservedBytes'] == 0 and receipt['activePorts'] == 0 and receipt['activeScopes'] == 0,
+         'Shared failure ledger identity, allocation or idle state changed')
+    return spec['maximumBytes']-receipt['committedBytes']
+
+
+def failure_evidence_commit_reserve(max_report_bytes):
+    need(type(max_report_bytes) is int and max_report_bytes == capture.MAX_REPORT_BYTES,
+         'The shared failure-evidence route requires the reviewed 384MiB report bound')
+    return 2*(failure_evidence.PRIMARY_RECORD_BYTES-max_report_bytes)
+
+
+def admit_failure_evidence_commit_capacity(value):
+    """Extend the same fresh observation; never refresh capacity during recovery."""
+    maximum=value['limits']['maxReportBytes']
+    additional=failure_evidence_commit_reserve(maximum)
+    observed=capture.admit_report_commit_capacity(maximum)
+    base=capture.required_report_commit_bytes(maximum)
+    need(observed.get('admissionRequired') is True and observed.get('maxReportBytes') == maximum
+         and observed.get('requiredCommitBytes') == base
+         and type(observed.get('availableCommitBytes')) is int
+         and observed['availableCommitBytes'] >= base+additional,
+         'Current commit headroom does not cover the fixed primary-evidence serialization reserve')
+    return {**observed,'reportRequiredCommitBytes':base,
+            'primarySerializationReserveBytes':additional,'requiredCommitBytes':base+additional}
+
+
+def prepare_failure_evidence(value, ledger=None):
+    failure_evidence_configuration(value,ledger)
+    if ledger is None:
+        ledger=failure_evidence.FailureEvidenceLedger(value['failureEvidence']['root'],
+                    maximum_bytes=value['failureEvidence']['maximumBytes'])
+    return ledger
+
+
+def record_failure_evidence(report, ledger):
+    # This cannot gate physical restoration; it runs after the recovery finally.
+    try:
+        report['failureEvidence']=ledger.receipt()
+        if report['failureEvidence']['activePorts'] or report['failureEvidence']['activeScopes'] or report['failureEvidence']['failed']:
+            report['qualified']=False
+    except BaseException as error:
+        report['failureEvidenceError']=error_record(error)
+        report['qualified']=False
 
 
 def app_release_bindings(value):
@@ -131,9 +217,17 @@ def app_release_bindings(value):
     return [(spec['root'],before), after]
 
 
-def validate_plan(value, *, fresh):
-    need(type(value) is dict and set(value) in (INPUT_FIELDS,INPUT_FIELDS|{'beforeAppRelease'}) and value['format'] == 1
+def qualification_representation(value):
+    representation=value.get('captureRepresentation','physical-graph-v2')
+    need(representation in ('physical-graph-v2','physical-graph-v3'), 'Explicit supported physical representation required')
+    return representation
+
+
+def validate_plan(value, *, fresh, failure_evidence_ledger=None):
+    need(type(value) is dict and INPUT_FIELDS<=set(value)<=INPUT_FIELDS|{'beforeAppRelease','captureRepresentation'} and value['format'] == 1
          and value['kind'] == 'local-native-retained-qualification', 'Closed local qualification plan required')
+    qualification_representation(value)
+    failure_allocation=failure_evidence_configuration(value,failure_evidence_ledger)
     need(str(uuid.UUID(value['operationId'],version=4)) == value['operationId'], 'Operation UUID required')
     for key in PATH_FIELDS:
         need(type(value[key]) is str and Path(value[key]).is_absolute()
@@ -160,16 +254,14 @@ def validate_plan(value, *, fresh):
                  for i in range(1,129)),'A prior host close observation exists')
     need(type(value['retiredPids']) is list and 0 < len(value['retiredPids']) <= 1024
          and all(type(pid) is int and 0 < pid <= 0xffffffff for pid in value['retiredPids']), 'Exact prior owner PID roster required')
-    need(type(value['readyTimeoutMs']) is int and 1000 <= value['readyTimeoutMs'] <= 300000
-         and type(value['totalTimeoutMs']) is int and value['readyTimeoutMs'] + 60000 <= value['totalTimeoutMs'] <= 1800000,
-         'Finite original readiness and qualification budgets required')
+    qualification_return_reserve(value['readyTimeoutMs'], value['totalTimeoutMs'], value['limits']['maxReportBytes'])
     need(type(value['candidate']) is dict and set(value['candidate']) == {'version','buildVersion','schemaVersion'}
          and value['candidate']['schemaVersion'] == 60, 'Exact local schema60 candidate required')
     need(value['limits']['node'] == value['node'], 'Capture and owner Node must agree')
     paths = refs_check(value['sourceRefs'])
     required = {Path(__file__).resolve(), *(RUNNER/name for name in ('recovery.py','local_windows_capture.py',
         'windows_same_handle.py','local_windows_clone.py','local_retained_context.py','local_retained_configuration.py',
-        'local-retained-configuration.mjs','verify-session-bindings.mjs','local_windows_neutral_io.py')),
+        'local-retained-configuration.mjs','verify-session-bindings.mjs','local_windows_neutral_io.py','local_windows_failure_evidence.py')),
         Path(value['node']),Path(value['releaseRoot'])/'scripts/local-native-retained-host.mjs',
         Path(value['vendorRoot'])/'openclaw.mjs',Path(value['vendorRoot'])/'package.json'}
     need(required <= paths, 'Plan omits a maintained execution source')
@@ -183,8 +275,8 @@ def validate_plan(value, *, fresh):
     app_release_bindings(value)
     # Allocation includes four expanded immutable images plus one physical clone,
     # with distinct fixed recovery reserve. No cleanup is performed for capacity.
-    required_bytes = value['limits']['maxBytes'] * 5 + 2*1024**3
-    for parent in {source.parent,Path(value['captureRoot']).parent,Path(value['evidenceRoot'])}:
+    required_bytes = value['limits']['maxBytes'] * 5 + 2*1024**3 + failure_allocation
+    for parent in {source.parent,Path(value['captureRoot']).parent,Path(value['evidenceRoot']),Path(value['failureEvidence']['root']).parent}:
         need(shutil.disk_usage(parent).free >= required_bytes, 'Retained qualification allocation and reserve do not fit')
 
 
@@ -193,7 +285,7 @@ def parse_z(value):
     return datetime.fromisoformat(value[:-1]+'+00:00').timestamp()
 
 
-def admit(plan_path, intent_path):
+def admit(plan_path, intent_path, *, failure_evidence_ledger=None):
     plan, plan_hash = json_read(plan_path)
     intent, _ = json_read(intent_path,65536)
     need(type(intent) is dict and set(intent) == {'format','kind','operationId','planSha256','issuedAt','launchNotAfter','deadline','independentReview'},
@@ -209,7 +301,7 @@ def admit(plan_path, intent_path):
     need(review_hash == intent['independentReview']['sha256'],'Independent review changed')
     need(review.get('planSha256') == plan_hash and review.get('approved') is True
          and review.get('operationId') == plan['operationId'], 'Exact independent execution review is required')
-    validate_plan(plan,fresh=True)
+    validate_plan(plan,fresh=True,failure_evidence_ledger=failure_evidence_ledger)
     need(time.time() <= launch, 'Immediate launch admission expired during current readback')
     return plan, time.monotonic() + max(0,end-time.time())
 
@@ -239,7 +331,7 @@ def rename_role(source, target, expected_information, deadline, *, operation_id,
 
 def assert_restored(before, after):
     """Exact physical return; comparison-image IDs are never source authority."""
-    if before.get('format')==2 or after.get('format')==2:
+    if before.get('format') in (2,3) or after.get('format') in (2,3):
         return compare_graph_captures(before,after,independent=False)
     for value in (before,after):
         need(value.get('kind') == 'local-windows-closed-tree' and value.get('format') == 1
@@ -281,7 +373,7 @@ def assert_restored(before, after):
 
 def assert_working_baseline(before, after, clone_authority=None):
     """Bind every pre-start member; copied directory storage needs exact authority."""
-    if before.get('format')==2 or after.get('format')==2:
+    if before.get('format') in (2,3) or after.get('format') in (2,3):
         return compare_graph_captures(before,after,independent=True,clone_authority=clone_authority)
     for value in (before,after):
         need(value.get('kind') == 'local-windows-closed-tree' and value.get('format') == 1
@@ -372,17 +464,84 @@ def working_directory_authority(before, authority):
     return result,changed
 
 
+def working_file_authority(before, authority):
+    """Bind every format3 file and its closed family to the completed clone."""
+    if before['format']!=3:return {}
+    import local_windows_clone as clone
+    need(type(authority) is dict and authority.get('complete') is True and authority.get('allHandlesClosed') is True,
+        'Format3 requires completed working-copy file authority')
+    families=capture.graph_family_map(before,'root')
+    proofs=authority.get('hardlinkFamilies')
+    need(type(proofs) is dict and set(proofs)==set(families),'Exact copied hardlink-family roster required')
+    target=Path(authority['destinationRoot']);handles={row['path']:row for row in authority['handles']}
+    source_ids={native_file_identity(row['information']) for rows in before['physicalEntries'].values()
+                for row in rows.values() if row['kind']=='file'}
+    result={};old_to_new={};new_to_old={}
+    for key,old in before['physicalEntries']['root'].items():
+        if old['kind']!='file':continue
+        row=authority['entries'][key];info=row['information'];count=old['information']['links']
+        capture._info_checked(info,'file',expected_links=count)
+        clone._same_metadata(old['information'],info,True)
+        need(row['kind']=='file' and row['bytes']==old['bytes'] and row['sha256']==old['sha256']
+            and row['security']==old['security'] and row['streams']==old['streams'],
+            'Copied file saved state changed')
+        path=str(target/capture._relative(key));observed=handles.get(path)
+        need(type(observed) is dict and observed['kind']=='file' and observed.get('handleClosed') is True
+            and observed['before']==info==observed['after'] and observed['streams']==row['streams']
+            and observed['ownerGroupDaclBeforeBase64']==row['security']['ownerGroupDaclBase64']
+            ==observed['ownerGroupDaclAfterBase64'],'Copied file native observation changed')
+        old_id,new_id=native_file_identity(old['information']),native_file_identity(info)
+        need(new_id not in source_ids,'Copied file shares an original physical identity')
+        need(old_to_new.setdefault(old_id,new_id)==new_id and new_to_old.setdefault(new_id,old_id)==old_id,
+            'Copied hardlink partition split or merged')
+        result[key]=row
+    for representative,members in families.items():
+        proof=proofs[representative];old=before['physicalEntries']['root'][representative]
+        expected={'kind':'independent-closed-hardlink-family','sourceRepresentative':representative,
+            'sourceInformation':old['information'],'members':members,
+            'targetInformationRef':{'entry':representative,'field':'information'},
+            'memberHandlePaths':{name:str(target/capture._relative(name)) for name in members}}
+        need(type(proof) is dict and set(proof)==set(expected)|{'linkEvents'}
+            and all(proof[key]==value for key,value in expected.items()),'Copied hardlink-family source binding changed')
+        events=proof['linkEvents'];need(type(events) is list and len(events)==len(members)-1,
+            'Complete hardlink creation evidence required')
+        for name,event in zip(members[1:],events):
+            need(type(event) is dict and event.get('api')=='CreateHardLinkW:owned-family'
+                and event.get('arguments')=={'path':str(target/capture._relative(name)),
+                    'existingPath':str(target/capture._relative(representative)),'reserved':None}
+                and type(event.get('result')) is int and event['result']!=0,
+                'Hardlink creation was not confirmed for its exact owned member')
+        need(all(result[name]['information']==result[representative]['information'] for name in members),
+            'Copied family full native tuple changed')
+    return result
+
+
+def native_file_identity(info):
+    return tuple(info[key] for key in ('volumeSerial32','volumeSerial64','fileIndex64','fileId128Hex'))
+
+
+def file_partition(value,role):
+    groups={}
+    for name,row in value['physicalEntries'][role].items():
+        if row['kind']=='file':groups.setdefault(native_file_identity(row['information']),[]).append(name)
+    return sorted(tuple(sorted(names)) for names in groups.values())
+
+
 def compare_graph_captures(before,after,*,independent,clone_authority=None):
     """Pure complete graph equality. Transport IDs never replace source IDs."""
     for value in (before,after):capture.validate_physical_graph(value)
+    need(before['format']==after['format'],'Physical capture representations changed')
     need(independent or clone_authority is None,'Original return must not use copy-derived authority')
     directory_authority,storage_changed=working_directory_authority(before,clone_authority) if clone_authority is not None else ({},False)
+    file_authority=working_file_authority(before,clone_authority) if independent and before['format']==3 else {}
     require_fields=('sourceRoot','canonicalSourceRoot','vendorRoot','canonicalVendorRoot')
     need(all(before[k]==after[k] for k in require_fields),'Original physical namespace changed')
     for role in ('root','vendor'):
         old_rows,new_rows=before['physicalEntries'][role],after['physicalEntries'][role]
         need(set(old_rows)==set(new_rows),'Complete physical closure roster changed')
         copied=independent and role=='root'
+        if before['format']==3:
+            need(file_partition(before,role)==file_partition(after,role),'Complete hardlink-family partition changed')
         for key,old in old_rows.items():
             new=new_rows[key]
             need(old['kind']==new['kind'] and old['physicalPath']==new['physicalPath'],'Physical source mapping changed')
@@ -392,6 +551,10 @@ def compare_graph_captures(before,after,*,independent,clone_authority=None):
                 expected=directory_authority[key]['information'];excluded=set()
                 need(directory_authority[key]['security']==new['security'] and directory_authority[key]['streams']==new['streams'],
                     'Actual copied directory state changed before start')
+            elif copied and old['kind']=='file' and before['format']==3:
+                expected=file_authority[key]['information'];excluded=set()
+                need(file_authority[key]['security']==new['security'] and file_authority[key]['streams']==new['streams'],
+                    'Actual copied file state changed before start')
             need(set(expected)==set(new['information'])
                 and all(expected[k]==new['information'][k] for k in expected if k not in excluded),
                 'Full physical source metadata changed')
@@ -412,6 +575,7 @@ def compare_graph_captures(before,after,*,independent,clone_authority=None):
     result={'completePreStartEquality':True,'onlyCopiedPhysicalIdsDiffer':not storage_changed,
             'copiedDirectoryStorageBound':clone_authority is not None,
             'completeFileAndDatabaseFamilyRoster':True,'saclNotRequested':True}
+    if before['format']==3:result['copiedHardlinkFamiliesBound']=len(capture.graph_family_map(before,'root'))
     if clone_authority is not None:
         changed_count=sum(any(row['information'][field]!=row['directoryStorageDerivation']['sourceInformation'][field]
                               for field in ('size','allocationBytes')) for row in directory_authority.values())
@@ -428,6 +592,7 @@ def assert_native_return_chain(baseline, before_startup, after_startup, restored
     """
     values=(baseline,before_startup,after_startup,restored)
     for value in values:capture.validate_physical_graph(value)
+    need(all(value['format']==baseline['format'] for value in values),'Native return capture representations changed')
     namespace=('sourceRoot','canonicalSourceRoot','vendorRoot','canonicalVendorRoot')
     need(all(all(value[key]==baseline[key] for key in namespace) for value in values),
          'Native return physical namespace changed')
@@ -455,6 +620,8 @@ def assert_native_return_chain(baseline, before_startup, after_startup, restored
     def role_equal(first,second,role,*,vendor_window=False):
         old_rows,new_rows=first['physicalEntries'][role],second['physicalEntries'][role]
         need(set(old_rows)==set(new_rows),'Return-chain complete '+role+' roster changed')
+        if first['format']==3:
+            need(file_partition(first,role)==file_partition(second,role),'Return-chain hardlink partition changed')
         changes=[]
         for key,old in old_rows.items():
             new=new_rows[key]
@@ -559,22 +726,29 @@ def run_host(plan, evidence, deadline, closure_deadline, ownership):
         return result,retirement
 
 
-def execute(plan_path, intent_path):
+def execute(plan_path, intent_path, *, failure_evidence_ledger=None):
     need(os.name == 'nt','Windows qualification requires Windows')
-    plan,deadline=admit(plan_path,intent_path)
+    plan,deadline=admit(plan_path,intent_path,failure_evidence_ledger=failure_evidence_ledger)
+    # Check once before any capture or role mutation. A later recovery must
+    # return the pristine generation even if system memory availability falls.
+    resource_admission=admit_failure_evidence_commit_capacity(plan)
+    failure_evidence_ledger=prepare_failure_evidence(plan,failure_evidence_ledger)
     # Preserve a fixed part of the SAME original budget for returning the
     # pristine generation; no failure-time clock reset grants extra authority.
-    work_deadline=deadline-min(300,plan['totalTimeoutMs']/3000)
+    work_deadline=deadline-qualification_return_reserve(plan['readyTimeoutMs'],plan['totalTimeoutMs'],plan['limits']['maxReportBytes'])
     import local_windows_clone as clone
     evidence,images=Path(plan['evidenceRoot']),Path(plan['captureRoot'])
-    report={'operationId':plan['operationId'],'stages':[],'qualified':False,'restored':False}
+    report={'operationId':plan['operationId'],'stages':[],'qualified':False,'restored':False,
+            'resourceAdmission':resource_admission}
     baseline=None; clone_authority=None; before=None; after=None; host=None
     ownership={'dispatchAttempted':False,'closed':False}
     renames={}
     primary=None
     def tree(name,*,restoring=False):
+        scope=failure_evidence_ledger.new_scope(plan['operationId']+'-'+name)
         value=capture.capture_closed_tree(plan['sourceRoot'],images/name,vendor_root=plan['vendorRoot'],limits=plan['limits'],deadline=deadline if restoring else work_deadline,
-            representation='physical-graph-v2')
+            representation=qualification_representation(plan),failure_evidence=scope)
+        failure_evidence_ledger.require_idle()
         save(evidence/(name+'.json'),value);return value
     try:
         report['priorRetirement']=capture.assert_processes_retired(plan['node'],plan['retiredPids'],work_deadline)
@@ -631,6 +805,7 @@ def execute(plan_path, intent_path):
         report['ownerState']=ownership
         report['renameStates']=renames
         report['endedEpochMs']=time.time_ns()//1000000
+        record_failure_evidence(report,failure_evidence_ledger)
         save(evidence/'RESULT.json',report)
     return 0 if report['qualified'] else 1
 

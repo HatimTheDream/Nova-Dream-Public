@@ -46,8 +46,8 @@ def _error(error):
             'observations': getattr(error, 'observations', None)}
 
 
-def _supported(row, kind):
-    info = capture._info_checked(row['information'], kind)
+def _supported(row, kind, *, expected_links=1, owner=None):
+    info = capture._info_checked(row['information'], kind, expected_links=expected_links)
     allowed = ORDINARY_ATTRIBUTES | (0x10 if kind != 'file' else 0) | (0x400 if kind == 'junction' else 0)
     require(info['attributes'] & ~allowed == 0 and all(info[k] > 0 for k in TIMES),
             'unsupported-copy-attributes-or-zero-timestamps', {'kind': kind, 'information': info})
@@ -64,7 +64,7 @@ def _supported(row, kind):
               and streams[0]['allocationBytes'] == info['allocationBytes']) or
              (kind != 'file' and all(s['name'] == '::$DATA' and s['bytes'] == s['allocationBytes'] == 0
                                      for s in streams))), 'unsupported-copy-streams')
-    observed = row['nativeObservations']
+    observed = (owner or row)['nativeObservations']
     require(observed['before'] == info == observed['after']
             and observed['ownerGroupDaclBeforeBase64'] == row['security']['ownerGroupDaclBase64']
             == observed['ownerGroupDaclAfterBase64'] and observed.get('handleClosed') is True,
@@ -103,7 +103,7 @@ def _junction_payload(raw):
 
 def physical_plan(before_capture, destination, *, limits):
     """Select physical source members; expanded aliases are never working files."""
-    if before_capture.get('format') == 2:
+    if before_capture.get('format') in (2,3):
         return physical_graph_plan(before_capture,destination,limits=limits)
     require(type(before_capture) is dict and before_capture.get('format') == 1
             and before_capture.get('kind') == 'local-windows-closed-tree'
@@ -121,7 +121,7 @@ def physical_plan(before_capture, destination, *, limits):
             and all(type(v) is int and v > 0 for v in limits.values())
             and limits['maxEntries'] <= 100000 and limits['maxBytes'] <= 64 * 1024**3
             and limits['maxFileBytes'] <= 2 * 1024**3 and limits['maxAliases'] <= 1024
-            and limits['maxReportBytes'] <= 256 * 1024**2,
+            and limits['maxReportBytes'] <= capture.MAX_REPORT_BYTES,
             'bounded-clone-limits-required')
     entries, aliases = before_capture['entries'], before_capture['junctions']
     require(type(entries) is dict and '.' in entries and len(entries) <= limits['maxEntries']
@@ -181,12 +181,16 @@ def physical_graph_plan(before_capture,destination,*,limits):
     require(target.is_absolute() and target.parent==source.parent and target!=source
         and not target.is_relative_to(Path(before_capture['storageRoot']))
         and not Path(before_capture['storageRoot']).is_relative_to(target),'fresh-sibling-working-generation-required')
-    caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,'maxAliases':1024,'maxReportBytes':256*1024**2}
+    caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,'maxAliases':1024,'maxReportBytes':capture.MAX_REPORT_BYTES}
     require(type(limits) is dict and set(limits)==set(caps)
         and all(type(limits[k]) is int and 0<limits[k]<=v for k,v in caps.items()),'bounded-clone-limits-required')
     rows=[];junctions=[];edges=capture.graph_index(before_capture)
+    families=capture.graph_family_map(before_capture,'root')
+    membership={key:representative for representative,members in families.items() for key in members}
     for key,row in before_capture['physicalEntries']['root'].items():
-        _supported(row,row['kind'])
+        representative=membership.get(key)
+        _supported(row,row['kind'],expected_links=len(families[representative]) if representative is not None else 1,
+                   owner=capture.graph_row_evidence(before_capture,'root',key))
         if row['kind']=='junction':
             edge=edges[('root',key)]
             expected={**copy.deepcopy(row),'path':key,'rawTarget':edge['rawTarget'],
@@ -201,9 +205,11 @@ def physical_graph_plan(before_capture,destination,*,limits):
         and all(r['expected']['bytes']<=limits['maxFileBytes'] for r in files)
         and sum(r['expected']['bytes'] for r in files)<=limits['maxBytes'],'physical-copy-budget-exceeded')
     require(limits['maxReportBytes']>=4*1024**2,'clone-evidence-reserve-unavailable')
-    return {'format':1,'kind':'local-windows-physical-copy-plan','sourceRoot':str(source),'imageRoot':str(image),
+    result={'format':1,'kind':'local-windows-physical-copy-plan','sourceRoot':str(source),'imageRoot':str(image),
         'destinationRoot':str(target),'rows':rows,'junctions':junctions,'limits':dict(limits),
         'bytes':sum(r['expected']['bytes'] for r in files)}
+    if before_capture['format']==3:result['hardlinkFamilies']=families
+    return result
 
 
 class Win32Target:
@@ -214,6 +220,7 @@ class Win32Target:
         self.handle, self.closed = None, False
         self.evidence = {'path': str(path), 'kind': kind, 'rootFinalizationOnly': root_finalization}
         self.root_finalization = root_finalization
+        self.expected_links = 1
         p = self.port
         H, D, B, V = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int32, ctypes.c_void_p
         signatures = [(p.k.SetFileInformationByHandle, [H, ctypes.c_int32, V, D], B),
@@ -312,7 +319,7 @@ class Win32Target:
         p = self.port
         streams = capture._Held.streams(self)
         first = self.evidence['before'] = p.info(self.handle)
-        capture._info_checked(first, self.kind)
+        capture._info_checked(first, self.kind, expected_links=self.expected_links)
         sec1 = capture._primitive().checked_security(p.security(self.handle))
         self.evidence['ownerGroupDaclBeforeBase64'] = base64.b64encode(sec1).decode('ascii')
         sec2 = capture._primitive().checked_security(p.security(self.handle))
@@ -331,6 +338,44 @@ class Win32Target:
             self.closed = True
             self.port.close(self.handle)
             self.evidence['handleClosed'] = True
+
+
+def create_family_links(port, root, representative, members):
+    """Link only fresh sibling names to one independently created, held target."""
+    root=Path(root)
+    require(port.kind=='file' and not port.root_finalization and port.expected_links==1
+        and members==sorted(set(members)) and 2<=len(members)<=100000
+        and representative==members[0] and port.path==root/capture._relative(representative),
+        'closed-owned-hardlink-family-required')
+    events=[]
+    try:
+        for name in members[1:]:
+            _check(port.deadline)
+            path=root/capture._relative(name)
+            require(path!=port.path and not os.path.lexists(path)
+                and path.parent.resolve(strict=True)==path.parent,'fresh-hardlink-member-required')
+            native=capture._primitive().Win32()
+            native.k.CreateHardLinkW.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_void_p]
+            native.k.CreateHardLinkW.restype=ctypes.c_int32
+            try:
+                ok=native.call('CreateHardLinkW:owned-family',native.k.CreateHardLinkW,
+                    (str(path),str(port.path),None),{'path':str(path),'existingPath':str(port.path),'reserved':None})
+            finally:
+                events.append(copy.deepcopy(native.events[-1]))
+            native.require(ok,'CreateHardLinkW:owned-family')
+        actual=capture._info_checked(port.port.info(port.handle),'file',expected_links=len(members))
+        require(all(actual[key]==port.opened[key] for key in ('volumeSerial32','volumeSerial64',*IDENTITY_FIELDS)),
+            'hardlink-owner-identity-changed')
+        for name in members:
+            path=root/capture._relative(name);row=path.lstat()
+            require(stat.S_ISREG(row.st_mode) and not capture._reparse(row) and row.st_nlink==len(members),
+                'hardlink-member-count-changed')
+            capture._identity_join(row,actual,'file')
+    except BaseException as error:
+        raise CloneRefused('owned-hardlink-creation-refused',{'ownerPath':str(port.path),
+            'members':members,'linkEvents':events,'original':_error(error)}) from error
+    port.expected_links=len(members)
+    return events
 
 
 def _verify_target(port, expected, independent, *, directory_members=None):
@@ -374,6 +419,7 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
               'entries': {}, 'junctions': [], 'complete': False, 'saclNotRequested': True,
               'independentIdsOnly': True, 'directoryStorageDerived':False,
               'sourceChildrenWritten': False, 'renamesPerformed': False}
+    if before_capture.get('format')==3:report['hardlinkFamilies']={}
     held, ancestors, failure, close_errors = {}, [], None, []
     charged, charge_total, closure_total = {}, 0, 0
     fixed = len(json.dumps(report, ensure_ascii=True, allow_nan=False).encode('utf-8')) + 4096
@@ -421,7 +467,11 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
             held[row['key']] = port
             port.set_security(row['expected'])  # Empty: never propagates through a junction.
             charge(port)
-        for row in (r for r in plan['rows'] if r['kind'] == 'file'):
+        families=plan.get('hardlinkFamilies',{})
+        member_owner={name:representative for representative,members in families.items() for name in members}
+        files={row['key']:row for row in plan['rows'] if row['kind']=='file'}
+        for row in files.values():
+            if member_owner.get(row['key'],row['key'])!=row['key']:continue
             _check(deadline)
             reserve()
             path = target / capture._relative(row['key'])
@@ -430,6 +480,8 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
             require(copied['bytes'] == expected['bytes'] and copied['sha256'] == expected['sha256'], 'copied-source-bytes-mismatch')
             port = Win32Target(path, 'file', deadline)
             held[row['key']] = port
+            members=families.get(row['key'])
+            link_events=create_family_links(port,target,row['key'],members) if members is not None else []
             port.set_security(expected)
             # Read actual destination bytes while its write/delete-denying handle
             # is retained, before final timestamps. No later data read is hidden.
@@ -440,6 +492,29 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
             report['entries'][row['key']] = {'kind': 'file', 'bytes': expected['bytes'], 'sha256': digest,
                                             **_verify_target(port, expected, True)}
             charge(port, report['entries'][row['key']])
+            if members is not None:
+                family={'kind':'independent-closed-hardlink-family','sourceRepresentative':row['key'],
+                    'sourceInformation':copy.deepcopy(expected['information']),'members':list(members),
+                    'targetInformationRef':{'entry':row['key'],'field':'information'},
+                    'memberHandlePaths':{name:str(target/capture._relative(name)) for name in members},
+                    'linkEvents':link_events}
+                report['hardlinkFamilies'][row['key']]=family
+                for name in members[1:]:
+                    reserve()
+                    member=capture._Held(target/capture._relative(name),'file',deadline,expected_links=len(members))
+                    held[name]=member;member.streams();observed=member.capture()
+                    capture._identity_join(member.path.lstat(),observed['information'],'file')
+                    require(all(observed[field]==report['entries'][row['key']][field]
+                                for field in ('information','security','streams')),'copied-hardlink-family-split')
+                    source=files[name]['expected']
+                    _same_metadata(source['information'],observed['information'],True)
+                    require(source['bytes']==expected['bytes'] and source['sha256']==digest
+                        and source['security']==observed['security'] and source['streams']==observed['streams'],
+                        'copied-hardlink-member-source-changed')
+                    report['entries'][name]={'kind':'file','bytes':source['bytes'],'sha256':digest,
+                        **{field:copy.deepcopy(observed[field]) for field in ('information','security','streams')}}
+                    charge(member,report['entries'][name])
+                charge(port,{'entry':report['entries'][row['key']],'family':family})
         for row in plan['junctions']:
             _check(deadline)
             reserve()
@@ -458,7 +533,7 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
             port = held[row['key']]
             reserve()
             members=(copied_directory_members(port.path,row['expected']['members'],deadline)
-                     if before_capture.get('format')==2 else None)
+                     if before_capture.get('format') in (2,3) else None)
             port.set_metadata(row['expected']['information'])
             actual=_verify_target(port,row['expected'],True,directory_members=members)
             if members is not None and any(actual['information'][key]!=row['expected']['information'][key]
