@@ -29,9 +29,18 @@ def need(value, message):
         raise RuntimeError(message)
 
 
-def qualification_return_reserve(ready_timeout_ms, total_timeout_ms, max_report_bytes):
+def qualification_return_reserve(ready_timeout_ms, total_timeout_ms, max_report_bytes, *, capture_cleanup=None):
     """Select finite admission timing without changing an existing deadline."""
     enlarged = type(max_report_bytes) is int and max_report_bytes == capture.MAX_REPORT_BYTES
+    if capture_cleanup is not None:
+        need(type(capture_cleanup) is dict and capture_cleanup=={
+            'maximumSeconds':900,'maximumCaptures':4,'finalizationSeconds':120,
+            'effectiveWorkerTimeoutSeconds':11220}
+            and all(type(value) is int for value in capture_cleanup.values())
+            and enlarged and type(ready_timeout_ms) is int and 1000<=ready_timeout_ms<=300000
+            and type(total_timeout_ms) is int and total_timeout_ms==6300000,
+            'Exact future105-minute qualification and cleanup admission required')
+        return 1800
     upper = 3600000 if enlarged else 1800000
     minimum = max(1800000, ready_timeout_ms + 60000 + 900000) if enlarged and type(ready_timeout_ms) is int else 0
     need(type(ready_timeout_ms) is int and 1000 <= ready_timeout_ms <= 300000
@@ -81,6 +90,35 @@ def refs_check(refs):
 PATH_FIELDS = ('sourceRoot','workingRoot','parkedRoot','preservedRoot','captureRoot','evidenceRoot','releaseRoot','vendorRoot','node')
 INPUT_FIELDS = {'format','kind','operationId',*PATH_FIELDS,'retiredPids','limits','readyTimeoutMs',
                 'totalTimeoutMs','candidate','sourceRefs','sourceReview','runtimeEvidence','appManifest','failureEvidence'}
+
+
+def capture_cleanup_configuration(value, *, maximum_captures=4, work_seconds=None):
+    spec=value.get('captureCleanup')
+    if spec is None:return None
+    need(type(spec) is dict and set(spec)=={'maximumSeconds','maximumCaptures',
+        'finalizationSeconds','effectiveWorkerTimeoutSeconds'},'Closed capture cleanup admission required')
+    work=value['totalTimeoutMs']/1000 if work_seconds is None else work_seconds
+    need(all(type(number) is int for number in spec.values())
+        and spec['maximumSeconds']==900 and spec['maximumCaptures']==maximum_captures
+        and spec['finalizationSeconds']==120
+        and maximum_captures in (4,6) and work==(6300 if maximum_captures==4 else 10200)
+        and spec['effectiveWorkerTimeoutSeconds']==11220
+        and work+900+120<=spec['effectiveWorkerTimeoutSeconds'],
+        'Finite worker budget must cover original work, shared cleanup and finalization')
+    if maximum_captures==4:
+        need(qualification_representation(value)=='physical-graph-v3'
+            and value['limits']['maxReportBytes']==capture.MAX_REPORT_BYTES,
+            'Cleanup admission is limited to the explicit format3 route')
+    return spec
+
+
+def new_capture_cleanup(value, deadline, *, maximum_captures=4, work_seconds=None):
+    spec=capture_cleanup_configuration(value,maximum_captures=maximum_captures,work_seconds=work_seconds)
+    if spec is None:return None
+    work=value['totalTimeoutMs']/1000 if work_seconds is None else work_seconds
+    return capture.CaptureCleanupBudget(deadline,maximum_seconds=spec['maximumSeconds'],
+        effective_worker_seconds=spec['effectiveWorkerTimeoutSeconds'],
+        admitted_work_seconds=work,finalization_seconds=spec['finalizationSeconds'])
 
 
 def failure_evidence_configuration(value, ledger=None):
@@ -224,9 +262,10 @@ def qualification_representation(value):
 
 
 def validate_plan(value, *, fresh, failure_evidence_ledger=None):
-    need(type(value) is dict and INPUT_FIELDS<=set(value)<=INPUT_FIELDS|{'beforeAppRelease','captureRepresentation'} and value['format'] == 1
+    need(type(value) is dict and INPUT_FIELDS<=set(value)<=INPUT_FIELDS|{'beforeAppRelease','captureRepresentation','captureCleanup'} and value['format'] == 1
          and value['kind'] == 'local-native-retained-qualification', 'Closed local qualification plan required')
     qualification_representation(value)
+    capture_cleanup_configuration(value)
     failure_allocation=failure_evidence_configuration(value,failure_evidence_ledger)
     need(str(uuid.UUID(value['operationId'],version=4)) == value['operationId'], 'Operation UUID required')
     for key in PATH_FIELDS:
@@ -254,7 +293,8 @@ def validate_plan(value, *, fresh, failure_evidence_ledger=None):
                  for i in range(1,129)),'A prior host close observation exists')
     need(type(value['retiredPids']) is list and 0 < len(value['retiredPids']) <= 1024
          and all(type(pid) is int and 0 < pid <= 0xffffffff for pid in value['retiredPids']), 'Exact prior owner PID roster required')
-    qualification_return_reserve(value['readyTimeoutMs'], value['totalTimeoutMs'], value['limits']['maxReportBytes'])
+    qualification_return_reserve(value['readyTimeoutMs'], value['totalTimeoutMs'], value['limits']['maxReportBytes'],
+        capture_cleanup=value.get('captureCleanup'))
     need(type(value['candidate']) is dict and set(value['candidate']) == {'version','buildVersion','schemaVersion'}
          and value['candidate']['schemaVersion'] == 60, 'Exact local schema60 candidate required')
     need(value['limits']['node'] == value['node'], 'Capture and owner Node must agree')
@@ -735,19 +775,29 @@ def execute(plan_path, intent_path, *, failure_evidence_ledger=None):
     failure_evidence_ledger=prepare_failure_evidence(plan,failure_evidence_ledger)
     # Preserve a fixed part of the SAME original budget for returning the
     # pristine generation; no failure-time clock reset grants extra authority.
-    work_deadline=deadline-qualification_return_reserve(plan['readyTimeoutMs'],plan['totalTimeoutMs'],plan['limits']['maxReportBytes'])
+    work_deadline=deadline-qualification_return_reserve(plan['readyTimeoutMs'],plan['totalTimeoutMs'],plan['limits']['maxReportBytes'],
+        capture_cleanup=plan.get('captureCleanup'))
     import local_windows_clone as clone
     evidence,images=Path(plan['evidenceRoot']),Path(plan['captureRoot'])
     report={'operationId':plan['operationId'],'stages':[],'qualified':False,'restored':False,
             'resourceAdmission':resource_admission}
+    if plan.get('captureCleanup') is not None:
+        report['captureCleanupAdmission']=dict(plan['captureCleanup'])
+        report['originalWorkDeadlineMonotonic']=work_deadline
+    cleanup_receipts={}
     baseline=None; clone_authority=None; before=None; after=None; host=None
     ownership={'dispatchAttempted':False,'closed':False}
     renames={}
     primary=None
     def tree(name,*,restoring=False):
+        until=deadline if restoring else work_deadline
+        cleanup=new_capture_cleanup(plan,until)
         scope=failure_evidence_ledger.new_scope(plan['operationId']+'-'+name)
-        value=capture.capture_closed_tree(plan['sourceRoot'],images/name,vendor_root=plan['vendorRoot'],limits=plan['limits'],deadline=deadline if restoring else work_deadline,
-            representation=qualification_representation(plan),failure_evidence=scope)
+        try:
+            value=capture.capture_closed_tree(plan['sourceRoot'],images/name,vendor_root=plan['vendorRoot'],limits=plan['limits'],deadline=until,
+                representation=qualification_representation(plan),failure_evidence=scope,cleanup_budget=cleanup)
+        finally:
+            if cleanup is not None:cleanup_receipts[name]=cleanup.receipt()
         failure_evidence_ledger.require_idle()
         save(evidence/(name+'.json'),value);return value
     try:
@@ -805,6 +855,7 @@ def execute(plan_path, intent_path, *, failure_evidence_ledger=None):
         report['ownerState']=ownership
         report['renameStates']=renames
         report['endedEpochMs']=time.time_ns()//1000000
+        if cleanup_receipts:report['captureCleanupReceipts']=cleanup_receipts
         record_failure_evidence(report,failure_evidence_ledger)
         save(evidence/'RESULT.json',report)
     return 0 if report['qualified'] else 1

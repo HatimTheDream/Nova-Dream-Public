@@ -129,6 +129,48 @@ def _error(error):
             'errno': getattr(error, 'errno', None), 'winerror': getattr(error, 'winerror', None)}
 
 
+class CaptureCleanupBudget:
+    """Explicit caller-admitted, single-capture metadata cleanup allowance."""
+    def __init__(self, work_deadline, *, maximum_seconds, effective_worker_seconds,
+                 admitted_work_seconds, finalization_seconds):
+        values=(work_deadline,maximum_seconds,effective_worker_seconds,
+                admitted_work_seconds,finalization_seconds)
+        require(all(type(value) in (int,float) and math.isfinite(value) for value in values),
+                'cleanup-admission-finite-values-required')
+        require(0<maximum_seconds<=900 and admitted_work_seconds>0 and finalization_seconds>0
+                and effective_worker_seconds>=admitted_work_seconds+maximum_seconds+finalization_seconds,
+                'cleanup-worker-timeout-not-admitted')
+        _check(work_deadline)
+        require(work_deadline-time.monotonic()<=admitted_work_seconds,
+                'cleanup-admitted-work-does-not-bound-deadline')
+        self.work_deadline=work_deadline
+        self.maximum_seconds=maximum_seconds
+        self.effective_worker_seconds=effective_worker_seconds
+        self.admitted_work_seconds=admitted_work_seconds
+        self.finalization_seconds=finalization_seconds
+        self.started=None;self.deadline=None;self.claimed=False
+
+    def claim(self, work_deadline):
+        require(not self.claimed and self.started is None and work_deadline==self.work_deadline,
+                'fresh-per-capture-cleanup-budget-required')
+        self.claimed=True
+
+    def validate_owner(self, work_deadline):
+        require(work_deadline==self.work_deadline and self.started is None,
+                'cleanup-budget-owner-after-cleanup-start-refused')
+
+    def begin(self):
+        if self.started is None:
+            self.started=time.monotonic();self.deadline=self.started+self.maximum_seconds
+        return self.deadline
+
+    def receipt(self):
+        return {'kind':'admitted-shared-capture-cleanup','originalWorkDeadline':self.work_deadline,
+            'maximumSeconds':self.maximum_seconds,'effectiveWorkerSeconds':self.effective_worker_seconds,
+            'admittedWorkSeconds':self.admitted_work_seconds,'finalizationSeconds':self.finalization_seconds,
+            'startedMonotonic':self.started,'deadlineMonotonic':self.deadline}
+
+
 def _primitive():
     global _module
     if _module is None:
@@ -300,8 +342,11 @@ class _Held:
                 'closeError': close_error, 'unresolvedHandle': close_error is not None,
                 'apiEvents': self.port.events}) from error
 
+    def _metadata_deadline(self):
+        return self.deadline
+
     def streams(self):
-        _check(self.deadline)
+        _check(self._metadata_deadline())
         buffer = (ctypes.c_uint64 * (STREAM_BUFFER // 8))()
         p = self.port
         ok = p.call('GetFileInformationByHandleEx:streams', p.k.GetFileInformationByHandleEx,
@@ -329,13 +374,13 @@ class _Held:
         return rows
 
     def capture(self):
-        _check(self.deadline)
+        _check(self._metadata_deadline())
         p, h, native = self.port, self.handle, _primitive()
         first = self.evidence['before'] = copy.deepcopy(p.info(h))
         _info_checked(first, self.kind, expected_links=self.expected_links)
         sec1 = native.checked_security(p.security(h))
         self.evidence['ownerGroupDaclBeforeBase64'] = base64.b64encode(sec1).decode('ascii')
-        _check(self.deadline)
+        _check(self._metadata_deadline())
         sec2 = native.checked_security(p.security(h))
         self.evidence['ownerGroupDaclAfterBase64'] = base64.b64encode(sec2).decode('ascii')
         last = self.evidence['after'] = copy.deepcopy(p.info(h))
@@ -528,11 +573,12 @@ def verify_capture_content(capture, deadline):
     return True
 
 
-def capture_closed_tree(root, destination, *, vendor_root, limits, deadline, representation='expanded-v1', failure_evidence=None):
+def capture_closed_tree(root, destination, *, vendor_root, limits, deadline, representation='expanded-v1', failure_evidence=None, cleanup_budget=None):
     if representation in ('physical-graph-v2','physical-graph-v3'):
         try:
             return capture_physical_graph(root, destination, vendor_root=vendor_root, limits=limits, deadline=deadline,
-                format_version=3 if representation == 'physical-graph-v3' else 2, failure_evidence=failure_evidence)
+                format_version=3 if representation == 'physical-graph-v3' else 2, failure_evidence=failure_evidence,
+                cleanup_budget=cleanup_budget)
         except BaseException as error:
             if failure_evidence is not None and not failure_evidence.closed:
                 failure_evidence.primary_capture(_error(error),getattr(error,'observations',None))
@@ -545,6 +591,7 @@ def capture_closed_tree(root, destination, *, vendor_root, limits, deadline, rep
             if failure_evidence is not None and not failure_evidence.closed:
                 failure_evidence.finish()
     require(failure_evidence is None,'segmented-failure-evidence-requires-physical-graph')
+    require(cleanup_budget is None,'cleanup-budget-requires-physical-graph')
     require(representation == 'expanded-v1', 'unknown-capture-representation')
     _check(deadline)
     _windows_required()
@@ -1187,10 +1234,14 @@ def _unrepresented_source_owners(report,source_ports,family_ports):
         if hasattr(port,'_capture_completed') and id(port) not in represented]
 
 
-def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, format_version=2, failure_evidence=None):
+def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, format_version=2, failure_evidence=None, cleanup_budget=None):
     """One complete physical capture plus image-only alias views; never links live state."""
     _check(deadline);_windows_required()
     require(format_version in (2,3),'explicit-physical-graph-version-required')
+    if cleanup_budget is not None:
+        require(format_version==3 and type(cleanup_budget) is CaptureCleanupBudget,
+                'explicit-format3-cleanup-budget-required')
+        cleanup_budget.claim(deadline)
     require(type(limits) is dict and set(limits)==LIMIT_FIELDS,'closed-capture-limits-required')
     caps={'maxEntries':100000,'maxBytes':64*1024**3,'maxFileBytes':2*1024**3,
           'maxDepth':128,'maxAliases':1024,'maxReportBytes':MAX_REPORT_BYTES}
@@ -1228,6 +1279,7 @@ def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, 
         return port
     def source_port(path,kind,**options):
         token=None
+        if cleanup_budget is not None:options['cleanup_budget']=cleanup_budget
         if failure_evidence is not None:
             if kind=='junction':token=failure_evidence.admit_port(path,kind)
             options['failure_evidence']=failure_evidence
@@ -1387,6 +1439,7 @@ def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, 
         verify_graph_content(report,deadline,require_closed=False)
     except BaseException as error:failure=error
     finally:
+        if cleanup_budget is not None:cleanup_budget.begin()
         for port in reversed([*ancestors,*source_ports.values(),*family_ports.values(),*image_ports,*image_links.values()]):
             try:port.close()
             except BaseException as error:
@@ -1433,6 +1486,7 @@ def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, 
                 'failedConstructorCoveredByOwnerList':False}
         report['endedEpochMs']=time.time_ns()//1000000
     if failure is not None or close_error_count:
+        if cleanup_budget is not None:report['cleanupBudget']=cleanup_budget.receipt()
         if failure_evidence is not None:
             # The complete existing partial report and primary observations are
             # retained in one independently bounded emergency record. Only its
@@ -1446,6 +1500,7 @@ def capture_physical_graph(root, destination, *, vendor_root, limits, deadline, 
             summary.update(originalError=_error(failure) if failure else None,closeErrorCount=close_error_count,
                 failureEvidence=manifest,abortedSourcePreservation=report.get('abortedSourcePreservation'),
                 unresolvedHandle=bool(getattr(failure,'unresolved_handle',False)) or manifest['unresolvedHandle'])
+            if cleanup_budget is not None:summary['cleanupBudget']=cleanup_budget.receipt()
             summary['allHandlesClosed']=summary['allHandlesClosed'] and not manifest['unresolvedHandle']
             require(len(json.dumps(summary,ensure_ascii=True,allow_nan=False).encode('ascii'))<=limits['maxReportBytes'],
                 'failure-envelope-reservation-exceeded',{'complete':False,'allHandlesClosed':summary['allHandlesClosed'],

@@ -133,8 +133,12 @@ def parse_directory_page(raw, seen, maximum):
 
 class NeutralHeld(capture._Held):
     """Reuse qualified metadata/stream/close behavior; separate bounded I/O log."""
-    def __init__(self, path, kind, deadline, *, expected_links=1, failure_evidence=None):
+    def __init__(self, path, kind, deadline, *, expected_links=1, failure_evidence=None, cleanup_budget=None):
         capture.require(kind in ('file', 'directory'), 'neutral-source-kind')
+        if cleanup_budget is not None:
+            capture.require(type(cleanup_budget) is capture.CaptureCleanupBudget,'admitted-cleanup-budget-required')
+            cleanup_budget.validate_owner(deadline)
+        self._cleanup_budget=cleanup_budget;self._cleanup_active=False
         self.path, self.kind, self.deadline = Path(path), kind, deadline
         self.expected_links = expected_links
         self.port, self.handle, self.closed = capture._primitive().Win32(), None, False
@@ -183,6 +187,9 @@ class NeutralHeld(capture._Held):
             clock = self.evidence['acquisitionClock'] = {}
             clock['beforeOpen'] = acquisition_clock(p)
             acquired_start = clock['beforeOpen']['value100ns']
+            # Metadata admission may have consumed the original work budget.
+            # A cleanup allowance never authorizes a new data-owner acquisition.
+            if self._cleanup_budget is not None:capture._check(self.deadline)
             self.handle = p.call('CreateFileW', p.k.CreateFileW,
                 (str(self.path), 0x20181, share, None, 3, 0x02200000, None),
                 {'path': str(self.path), 'access': 0x20181, 'share': share,
@@ -235,8 +242,15 @@ class NeutralHeld(capture._Held):
                 'closeErrors': close_errors,
                 'unresolvedHandle': bool(close_errors) or bool(getattr(primary, 'unresolved_handle', False))}) from primary
 
-    def _ready(self, kind):
-        capture._check(self.deadline)
+    def _metadata_deadline(self):
+        if self._cleanup_active and self._cleanup_budget is not None:
+            return self._cleanup_budget.begin()
+        return self.deadline
+
+    def _ready(self, kind, *, cleanup=False):
+        capture.require(not self._cleanup_active or cleanup,'public-source-io-during-cleanup-refused')
+        capture.require(not cleanup or self._cleanup_active,'internal-cleanup-context-required')
+        capture._check(self._metadata_deadline() if cleanup else self.deadline)
         capture.require(not self._source_io_stopped, 'source-io-after-abort-settlement-refused', self.evidence)
         capture.require(not self._preservation_attempted, 'source-io-after-preservation-refused', self.evidence)
         capture.require(not self.closed and self.handle not in (None, ctypes.c_void_p(-1).value)
@@ -246,10 +260,21 @@ class NeutralHeld(capture._Held):
                         'live-suppressed-source-handle-required', self.evidence)
 
     def close(self):
+        # Only this internal dynamic scope may use the admitted cleanup clock.
+        # Public I/O still refuses even if called from a native callback here.
+        prior=self._cleanup_active
+        self._cleanup_active=True
+        try:
+            return self._close_owner()
+        finally:
+            self._cleanup_active=prior
+
+    def _close_owner(self):
         # Close only the originally returned handle, once, including on refusal.
         if self._owner_handle not in (None, ctypes.c_void_p(-1).value) and not self.closed:
             primary = None; close_error = None; post_error = None
             try:
+                if self._cleanup_budget is not None:self._cleanup_budget.begin()
                 if not self._capture_completed and not self._preservation_attempted:
                     self._settle_aborted_observation()
             except BaseException as error:
@@ -292,9 +317,10 @@ class NeutralHeld(capture._Held):
             'ioEventsObserved':len(self.evidence['ioEvents']),
             'lastNativeIoReturned':self._io_native_returned,
             'metadataRestorationProven':False}
+        if self._cleanup_budget is not None:record['cleanupBudget']=self._cleanup_budget.receipt()
         try:
             capture.require(settled,'abort-source-io-not-settled',record)
-            self._ready(self._owner_kind)
+            self._ready(self._owner_kind,cleanup=True)
             capture.require(self._original_baseline is not None and self._baseline is not None
                 and self.evidence.get('acquisitionTransition',{}).get('kind')=='post-acquisition-pre-io-baseline'
                 and type(self.evidence['acquisitionTransition'].get('accessTimeChanged')) is bool,
@@ -332,8 +358,9 @@ class NeutralHeld(capture._Held):
         record=self.evidence['metadataPreservation'] if record is None else record
         held=None;primary=None;close_error=None;value=None
         try:
-            held=capture._Held(self.path,self._owner_kind,self.deadline,expected_links=self.expected_links)
+            held=capture._Held(self.path,self._owner_kind,self._metadata_deadline(),expected_links=self.expected_links)
             held.streams();value=held.capture()
+            if self._cleanup_budget is not None:capture._check(self._metadata_deadline())
             capture.require(all(value[key]==self._original_baseline[key] for key in ('information','security','streams')),
                             'source-preservation-postclose-mismatch',held.evidence)
         except BaseException as error:
@@ -361,7 +388,7 @@ class NeutralHeld(capture._Held):
 
     def _preserve_original_access(self, result, prewrite_events, *, aborted=False):
         """Mutate only the original BasicInfo after all observations are complete."""
-        self._ready(self._owner_kind)
+        self._ready(self._owner_kind,cleanup=aborted)
         original=self._original_baseline
         capture.require(self.evidence['acquisitionTransition']['accessTimeChanged'] is True
             and all(result[key]==self._baseline[key] for key in ('information','security','streams')),
@@ -384,6 +411,7 @@ class NeutralHeld(capture._Held):
         value=native.BasicInfo(*(expected[key] for key in capture.PRESERVED_BASIC_FIELDS))
         # From this point no further content read or directory sweep is admitted,
         # even if the one write fails or its response is uncertain.
+        if aborted and self._cleanup_budget is not None:capture._check(self._metadata_deadline())
         self._preservation_attempted=True;record['attempted']=True
         try:
             ok=p.call('SetFileInformationByHandle:source-basic-preservation',p.k.SetFileInformationByHandle,
@@ -538,9 +566,10 @@ class NeutralHeld(capture._Held):
             raise self._refused('neutral-source-enumeration-refused', error) from error
 
 
-def open_source(path, kind, deadline, *, expected_links=1, failure_evidence=None):
+def open_source(path, kind, deadline, *, expected_links=1, failure_evidence=None, cleanup_budget=None):
     if kind == 'junction':
         held = capture._Held(Path(path), kind, deadline)
         held.evidence['sourceObservationMode'] = 'metadata-only-junction'
         return held
-    return NeutralHeld(path, kind, deadline,expected_links=expected_links,failure_evidence=failure_evidence)
+    return NeutralHeld(path, kind, deadline,expected_links=expected_links,failure_evidence=failure_evidence,
+        cleanup_budget=cleanup_budget)
