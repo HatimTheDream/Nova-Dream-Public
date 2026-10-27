@@ -1,3 +1,8 @@
+## [2.28.11] - 2026-10-27
+
+- Read ChatGPT account readiness from the connected runtime's existing account snapshot, avoiding slow CLI checks.
+- Discard stale account results when the runtime connection, account support or host changes.
+
 ## [2.28.10] - 2026-10-25
 
 - Preserve explicitly configured system-CA trust for native ChatGPT sign-in without disabling TLS verification.
