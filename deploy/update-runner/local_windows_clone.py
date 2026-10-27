@@ -314,6 +314,10 @@ class Win32Target:
             (self.handle, 0, ctypes.byref(value), ctypes.sizeof(value)),
             {'handle': self.handle, 'information': {k: expected[k] for k in (*TIMES, 'attributes')}}), 'set-basic-information')
 
+    def _metadata_deadline(self):
+        # Shared metadata observation never extends a target's original deadline.
+        return self.deadline
+
     def observe(self):
         _check(self.deadline)
         p = self.port

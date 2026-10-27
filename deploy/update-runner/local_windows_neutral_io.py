@@ -183,7 +183,7 @@ class NeutralHeld(capture._Held):
             p.k.ReadFile.restype = native.BOOL
             p.k.GetSystemTimeAsFileTime.argtypes = [ctypes.POINTER(native.FileTime)]
             p.k.GetSystemTimeAsFileTime.restype = None
-            share = 3 if kind == 'directory' else 1
+            share = 0 if kind == 'directory' else 1
             clock = self.evidence['acquisitionClock'] = {}
             clock['beforeOpen'] = acquisition_clock(p)
             acquired_start = clock['beforeOpen']['value100ns']
