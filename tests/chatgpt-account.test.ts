@@ -60,10 +60,10 @@ test('concurrent account refreshes share sequential CLI probes and metadata fail
   finally { await failed.close(); }
 });
 
-test('update maintenance suppresses account probes and discards reads spanning the hold', async () => {
+test('update maintenance suppresses compatibility CLI probes and discards reads spanning the hold', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nova-account-maintenance-')), store = new Store(directory);
   let reads = 0, snapshots = 0, release: ((value: string) => void) | undefined;
-  const gateway = { status: () => ({ state: 'ready', generation: 'fixture', methods: ['e3.accounts.snapshot'] }), async request() { snapshots++; } } as unknown as AssistantTransport;
+  const gateway = { status: () => ({ state: 'ready', generation: 'fixture', methods: [] }), async request() { snapshots++; } } as unknown as AssistantTransport;
   const service = new ChatGptAccount({ accountCommand: () => command, accountOrderCommand: () => ({ ...command, args: ['order'] }) }, async cmd => {
     reads++;
     if (cmd.args[0] === 'order') return JSON.stringify({ agentId: 'main', provider: 'openai', order: null });
@@ -74,17 +74,17 @@ test('update maintenance suppresses account probes and discards reads spanning t
     assert.equal((await service.read(true)).state, 'unavailable'); assert.equal(reads, 0); assert.equal(snapshots, 0);
     store.setUpdateMaintenanceHeld(false);
     const initial = service.read(); release!(JSON.stringify(payload));
-    assert.equal((await initial).state, 'available'); assert.equal(reads, 2); assert.equal(snapshots, 1);
+    assert.equal((await initial).state, 'available'); assert.equal(reads, 2); assert.equal(snapshots, 0);
     store.setUpdateMaintenanceHeld(true);
     assert.equal((await service.read()).state, 'unavailable', 'a cached result must not claim current availability during maintenance');
     assert.equal(reads, 2);
     store.setUpdateMaintenanceHeld(false);
     const crossing = service.read(true); assert.equal(reads, 3);
     store.setUpdateMaintenanceHeld(true); release!(JSON.stringify(payload));
-    assert.equal((await crossing).state, 'unavailable'); assert.equal(reads, 3); assert.equal(snapshots, 1);
+    assert.equal((await crossing).state, 'unavailable'); assert.equal(reads, 3); assert.equal(snapshots, 0);
     store.setUpdateMaintenanceHeld(false);
     const resumed = service.read(true); release!(JSON.stringify(payload));
-    assert.equal((await resumed).state, 'available'); assert.equal(reads, 5); assert.equal(snapshots, 2);
+    assert.equal((await resumed).state, 'available'); assert.equal(reads, 5); assert.equal(snapshots, 0);
   } finally { await service.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

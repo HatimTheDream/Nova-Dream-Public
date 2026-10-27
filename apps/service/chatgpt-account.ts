@@ -34,13 +34,17 @@ export type ChatGptAccountRoute = { profileId: string; label: string; reason: 'p
 
 /** Bounded reads through the native owner's public CLI and credential-isolated usage adapter. */
 export class ChatGptAccount {
-  private cache?: { until: number; fingerprint: string; value: ChatGptAccountStatus };
+  private cache?: { until: number; fingerprint: string; epoch: string | undefined; capabilities: string; value: ChatGptAccountStatus };
   private pending?: Promise<ChatGptAccountStatus>;
   private abort = new AbortController();
   private ordering?: Promise<ChatGptAccountStatus>;
   private routingInvalidation = 0;
   constructor(private runtime: Pick<ManagedRuntime, 'accountCommand'> & Partial<Pick<ManagedRuntime, 'accountOrderCommand'>>, private run: ReadCommand = readCommand, private now = Date.now, private options?: Options) {}
   private fingerprint(command: Command) { return JSON.stringify([command, this.options?.gateway.status().generation, this.options?.gateway.status().url]); }
+  private readCapabilities() {
+    const state = this.options?.gateway.status();
+    return JSON.stringify([state?.state, state?.state === 'ready' && state.methods.includes('e3.accounts.snapshot'), state?.state === 'ready' && state.methods.includes('models.authOrderSet')]);
+  }
   private readsPaused() { return this.abort.signal.aborted || !!this.options?.store.updateMaintenanceHeld; }
   /** Synchronous routing observation only; no native probe or permission is issued.
    * Global dialogue activity blocks account mutations, not its own Feed worker. */
@@ -63,50 +67,63 @@ export class ChatGptAccount {
     if (this.readsPaused()) return unavailable();
     let command: Command;
     try { command = this.runtime.accountCommand(); } catch { this.cache = undefined; return unavailable(); }
-    const fingerprint = this.fingerprint(command);
+    const fingerprint = this.fingerprint(command), epoch = this.options?.store.epoch, capabilities = this.readCapabilities();
     if (this.pending) return this.pending;
-    if (!refresh && this.cache && this.cache.fingerprint === fingerprint && this.cache.until > this.now()) return this.cache.value;
+    if (!refresh && this.cache && this.cache.fingerprint === fingerprint && this.cache.epoch === epoch && this.cache.capabilities === capabilities && this.cache.until > this.now()) return this.cache.value;
+    this.cache = undefined;
+    const current = () => !this.readsPaused() && this.options?.store.epoch === epoch && this.fingerprint(this.runtime.accountCommand()) === fingerprint;
     const pending = (async () => {
-      // Check metadata first: slow or failed probes must not start another CLI.
-      const metadata = await this.run(command, this.abort.signal);
-      if (this.readsPaused() || this.fingerprint(this.runtime.accountCommand()) !== fingerprint) return unavailable();
       const state = this.options?.gateway.status();
-      const [ordered, exact] = await Promise.allSettled([
-        this.runtime.accountOrderCommand ? this.run(this.runtime.accountOrderCommand(), this.abort.signal) : Promise.resolve(undefined),
-        state?.state === 'ready' && state.methods.includes('e3.accounts.snapshot') ? this.options!.gateway.request('e3.accounts.snapshot', { epoch: this.options!.store.epoch, refresh }) : Promise.resolve(undefined),
-      ]);
-      try { if (this.readsPaused() || this.fingerprint(this.runtime.accountCommand()) !== fingerprint) return unavailable(); } catch { return unavailable(); }
-      const value = readChatGptAccount(metadata, this.now()), accounts = value.accounts!;
-      let nativeOrder: string[] | undefined;
-      if (ordered.status === 'fulfilled' && ordered.value) {
-        const parsed = z.object({ agentId: z.literal('main'), provider: z.literal('openai'), order: z.array(chatGptProfileIdSchema).max(100).nullable() }).safeParse(JSON.parse(ordered.value));
-        if (parsed.success) nativeOrder = parsed.data.order ?? undefined;
-      }
-      if (exact.status === 'fulfilled' && exact.value) {
-        const parsed = chatGptRuntimeSnapshotSchema.safeParse(exact.value);
-        if (parsed.success && parsed.data.epoch === this.options?.store.epoch) {
-          const snapshot = parsed.data;
-          for (const account of accounts) {
-            const match = snapshot.accounts.find(a => a.profileId === account.profileId);
-            if (!match || account.email && match.email && account.email.toLowerCase() !== match.email.toLowerCase()) continue;
-            Object.assign(account, match, { label: match.email ?? account.label });
-          }
-          nativeOrder ??= snapshot.order.length ? snapshot.order : undefined;
+      let value: ChatGptAccountStatus, nativeOrder: string[] | undefined, until: number;
+      if (state?.state === 'ready' && state.methods.includes('e3.accounts.snapshot')) {
+        if (!epoch || !state.generation || !state.url) return unavailable();
+        // The running native adapter already owns profile metadata and order.
+        // A failed advertised adapter must not silently change authority to CLI.
+        const snapshot = chatGptRuntimeSnapshotSchema.parse(await this.options!.gateway.request('e3.accounts.snapshot', { epoch, refresh }));
+        const after = this.options!.gateway.status(), now = this.now();
+        const ids = snapshot.accounts.map(account => account.profileId);
+        if (!current() || after.state !== 'ready' || after.generation !== state.generation || after.url !== state.url
+          || !after.methods.includes('e3.accounts.snapshot') || snapshot.epoch !== epoch
+          || !Number.isFinite(snapshot.checkedAt) || snapshot.checkedAt > now || snapshot.checkedAt + chatGptUsageFreshMs <= now
+          || new Set(ids).size !== ids.length || new Set(snapshot.order).size !== snapshot.order.length
+          || snapshot.order.some(id => !ids.includes(id))) return unavailable();
+        const accounts: Account[] = snapshot.accounts.map(account => ({ ...account, label: account.email ?? 'ChatGPT Account' }));
+        nativeOrder = snapshot.order;
+        value = { state: accounts.length ? 'available' : 'empty', emails: [...new Set(accounts.flatMap(account => account.email ? [account.email] : []))].sort(),
+          profileCount: accounts.length, checkedAt: snapshot.checkedAt, accounts, order: [], preferredProfileId: null, canManage: false,
+          message: accounts.length ? 'Connected accounts power Nova. Your conversations stay in Nova.' : 'No ChatGPT account is saved in this host’s connection.' };
+        until = snapshot.checkedAt + chatGptUsageFreshMs;
+      } else {
+        // Compatibility for hosts without the adapter: keep bounded sequential
+        // probes, so a slow or failed metadata check never starts another CLI.
+        const metadata = await this.run(command, this.abort.signal);
+        if (!current()) return unavailable();
+        value = readChatGptAccount(metadata, this.now());
+        if (this.runtime.accountOrderCommand) {
+          try {
+            const ordered = await this.run(this.runtime.accountOrderCommand(), this.abort.signal);
+            const parsed = z.object({ agentId: z.literal('main'), provider: z.literal('openai'), order: z.array(chatGptProfileIdSchema).max(100).nullable() }).safeParse(JSON.parse(ordered));
+            if (parsed.success) nativeOrder = parsed.data.order ?? undefined;
+          } catch { /* Account metadata remains useful without an explicit order. */ }
         }
+        if (!current()) return unavailable();
+        until = this.now() + chatGptUsageFreshMs;
       }
-      const order = [...(nativeOrder ?? []).filter(id => accounts.some(a => a.profileId === id)), ...accounts.map(a => a.profileId).filter(id => !nativeOrder?.includes(id))];
+      const accounts = value.accounts!;
+      const order = [...(nativeOrder ?? []).filter(id => accounts.some(account => account.profileId === id)), ...accounts.map(account => account.profileId).filter(id => !nativeOrder?.includes(id))];
       const identities = new Map<string, string>();
       for (const id of order) {
-        const account = accounts.find(a => a.profileId === id)!;
+        const account = accounts.find(account => account.profileId === id)!;
         if (!account.identityKey) continue;
         const first = identities.get(account.identityKey);
         if (first) account.duplicateOf = first;
         else identities.set(account.identityKey, id);
       }
-      value.accounts = order.map(id => accounts.find(a => a.profileId === id)!); value.order = order;
-      value.preferredProfileId = nativeOrder?.find(id => accounts.some(a => a.profileId === id)) ?? null;
-      value.canManage = !!this.options?.control && state?.state === 'ready' && state.methods.includes('models.authOrderSet');
-      this.cache = { until: this.now() + 30000, fingerprint, value }; return value;
+      value.accounts = order.map(id => accounts.find(account => account.profileId === id)!); value.order = order;
+      value.preferredProfileId = nativeOrder?.find(id => accounts.some(account => account.profileId === id)) ?? null;
+      const after = this.options?.gateway.status();
+      value.canManage = !!this.options?.control && after?.state === 'ready' && after.methods.includes('models.authOrderSet');
+      this.cache = { until, fingerprint, epoch, capabilities, value }; return value;
     })().catch(unavailable).finally(() => { if (this.pending === pending) this.pending = undefined; });
     this.pending = pending; return pending;
   }
