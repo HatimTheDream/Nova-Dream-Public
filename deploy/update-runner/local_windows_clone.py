@@ -573,7 +573,98 @@ def prepare_working_copy(before_capture, destination, *, node, limits, deadline)
     return report
 
 
-def finalize_renamed_root(expected_capture_or_clone, root, *, deadline):
+def root_metadata_sha256(row):
+    """Identity of the historical metadata, never an altered capture identity."""
+    value = {key: row[key] for key in ('information', 'security', 'streams')}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+        ensure_ascii=True, allow_nan=False).encode('ascii')).hexdigest()
+
+
+def _read_root_metadata_authority(policy, root, expected):
+    fields = {'format', 'kind', 'root', 'lowerAccess100ns', 'historicalMetadataSha256',
+              'renameChangeTime100ns', 'provenance'}
+    require(type(policy) is dict and set(policy) == fields and policy['format'] == 1
+            and policy['kind'] == 'qualified-current-directory-root-authority'
+            and policy['root'] == str(root)
+            and policy['historicalMetadataSha256'] == root_metadata_sha256(expected),
+            'exact-current-root-metadata-authority-required')
+    original = expected['information']
+    require(original['directory'] is True and original['reparseTag'] == 0 and original['links'] == 1
+            and type(policy['lowerAccess100ns']) is int
+            and policy['lowerAccess100ns'] >= original['access100ns']
+            and type(policy['renameChangeTime100ns']) is int and policy['renameChangeTime100ns'] > 0,
+            'ordinary-root-monotonic-access-authority-required')
+    ref = policy['provenance']
+    require(type(ref) is dict and set(ref) == {'path', 'bytes', 'sha256'}
+            and type(ref['path']) is str and type(ref['bytes']) is int and 0 < ref['bytes'] <= 2*1024**2
+            and type(ref['sha256']) is str and len(ref['sha256']) == 64
+            and all(c in '0123456789abcdef' for c in ref['sha256']),
+            'bounded-root-observation-reference-required')
+    path = Path(ref['path'])
+    require(path.is_absolute() and path == Path(os.path.abspath(path)) and '\x00' not in str(path)
+            and len(str(path)) <= 4096 and not path.is_relative_to(root), 'root-observation-must-stay-outside-source')
+    for ancestor in (path, *path.parents):
+        info = ancestor.lstat()
+        require(not info.st_file_attributes & 1024 and not stat.S_ISLNK(info.st_mode),
+                'ordinary-root-observation-path-required')
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == ref['bytes'],
+            'ordinary-root-observation-file-required')
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    with path.open('rb') as stream:
+        require(identity(os.fstat(stream.fileno())) == identity(before), 'root-observation-open-identity-changed')
+        raw = stream.read(ref['bytes'] + 1)
+        require(identity(os.fstat(stream.fileno())) == identity(before), 'root-observation-read-identity-changed')
+    require(identity(path.lstat()) == identity(before) and len(raw) == ref['bytes']
+            and hashlib.sha256(raw).hexdigest() == ref['sha256'], 'root-observation-content-changed')
+    receipt = json.loads(raw)
+    require(type(receipt) is dict and set(receipt) == {'format', 'kind', 'root', 'observation', 'renameChangeTime100ns'}
+            and receipt['format'] == 1 and receipt['kind'] == 'qualified-returned-root-observation'
+            and receipt['root'] == str(root) and receipt['renameChangeTime100ns'] == policy['renameChangeTime100ns'],
+            'exact-returned-root-observation-required')
+    observed = receipt['observation']; native = observed['nativeObservations']; current = observed['information']
+    require(observed.get('allHandlesClosed') is True and observed.get('sameHandleStable') is True
+            and native['path'] == str(root) and native.get('handleClosed') is True
+            and native['before'] == native['after'] == current
+            and native['ownerGroupDaclBeforeBase64'] == native['ownerGroupDaclAfterBase64']
+                == observed['security']['ownerGroupDaclBase64']
+            and native['streams'] == observed['streams'], 'complete-returned-root-observation-required')
+    require(set(current) == set(original)
+            and all(current[k] == original[k] for k in original if k not in ('access100ns', 'change100ns'))
+            and current['change100ns'] == policy['renameChangeTime100ns']
+            and type(current['access100ns']) is int and current['access100ns'] >= policy['lowerAccess100ns']
+            and observed['security'] == expected['security'] and observed['streams'] == expected['streams'],
+            'returned-root-authority-changed-nonaccess-state')
+    return receipt
+
+
+def _root_access_clock(port):
+    # Reuse the qualified native system-clock producer only in the optional path.
+    import local_windows_neutral_io as neutral
+    return neutral.acquisition_clock(port.port)
+
+
+def _root_finalization_expected(expected, before, policy, receipt, clock):
+    original = expected['information']; actual = before['information']
+    lower = receipt['observation']['information']['access100ns']; upper = clock['value100ns']
+    require(type(upper) is int and type(actual['access100ns']) is int
+            and lower <= actual['access100ns'] <= upper
+            and set(actual) == set(original)
+            and all(actual[k] == original[k] for k in original if k not in ('access100ns', 'change100ns'))
+            and actual['change100ns'] == policy['renameChangeTime100ns']
+            and before['security'] == expected['security'] and before['streams'] == expected['streams'],
+            'current-root-access-authority-refused', before)
+    derived = copy.deepcopy({key: expected[key] for key in ('information', 'security', 'streams')})
+    derived['information']['access100ns'] = actual['access100ns']
+    record = {'kind': 'explicit-current-root-access-derivation', 'authority': copy.deepcopy(policy),
+              'clockBeforeObservation': copy.deepcopy(clock), 'historicalAccess100ns': original['access100ns'],
+              'receiptAccess100ns': lower, 'currentAccess100ns': actual['access100ns'],
+              'historicalAccessEqual': actual['access100ns'] == original['access100ns'],
+              'historicalCaptureRewritten': False, 'expectedMetadata': copy.deepcopy(derived)}
+    return derived, record
+
+
+def finalize_renamed_root(expected_capture_or_clone, root, *, deadline, root_metadata_authority=None):
     """Restore only the declared root's rename-induced ChangeTime; never children.
 
     The caller must already have reconciled the no-replace rename and stopped
@@ -592,10 +683,19 @@ def finalize_renamed_root(expected_capture_or_clone, root, *, deadline):
                 'qualified-working-copy-root-required')
         expected = {'information': value['rootInformation'], 'security': value['rootSecurity'],
                     'streams': value['rootStreams']}
+    receipt = None
+    if root_metadata_authority is not None:
+        require(value['kind'] == 'local-windows-closed-tree', 'current-root-authority-requires-original-capture')
+        receipt = _read_root_metadata_authority(root_metadata_authority, root, expected)
     port, failure, close_error, result = None, None, None, None
     try:
         port = Win32Target(root, 'directory', deadline, root_finalization=True)
+        clock = _root_access_clock(port) if receipt is not None else None
         before = port.observe()
+        access_derivation = None
+        if receipt is not None:
+            expected, access_derivation = _root_finalization_expected(expected, before,
+                root_metadata_authority, receipt, clock)
         want, actual = expected['information'], before['information']
         require(set(want) == set(actual) and all(want[k] == actual[k] for k in want if k != 'change100ns')
                 and expected['security'] == before['security']
@@ -609,6 +709,8 @@ def finalize_renamed_root(expected_capture_or_clone, root, *, deadline):
         result = {'format': 1, 'kind': 'renamed-root-metadata-finalized', 'root': str(root),
                   'before': before, 'after': after, 'onlyExpectedDifference': 'change100ns',
                   'childrenAccessed': False, 'saclNotRequested': True}
+        if access_derivation is not None:
+            result['currentRootAccessDerivation'] = access_derivation
     except BaseException as error:
         failure = error
     finally:

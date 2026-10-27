@@ -1673,13 +1673,17 @@ def native_restart_rows(before, after, table, relative, after_path, replacements
     if old <= result:
         return result
     if table == 'session_key_contract':
-        require(columns == ['id', 'main_key', 'updated_at', 'canonical_ready']
+        require(columns in (['id', 'main_key', 'updated_at', 'canonical_ready'],
+                            ['id', 'main_key', 'canonical_ready', 'updated_at'])
                 and relative.name in {'openclaw-agent.sqlite', 'incognito-openclaw-agent.sqlite'}
                 and len(old) == len(result) == 1, 'Unreviewed native canonical receipt schema.')
         previous, current = next(iter(old)), next(iter(result))
-        require(previous[0] == current[0] == 1 and previous[:3] == current[:3], 'Retained native session key contract changed.')
+        previous_fields, current_fields = dict(zip(columns, previous)), dict(zip(columns, current))
+        require(previous_fields['id'] == current_fields['id'] == 1
+                and all(previous_fields[name] == current_fields[name] for name in ('id', 'main_key', 'updated_at')),
+                'Retained native session key contract changed.')
         receipts = []
-        for encoded in (previous[3], current[3]):
+        for encoded in (previous_fields['canonical_ready'], current_fields['canonical_ready']):
             require(isinstance(encoded, str) and len(encoded) <= 512, 'Unexpected native canonical receipt.')
             value = json.loads(encoded)
             require(isinstance(value, list) and len(value) == 4 and type(value[0]) is int and value[0] == 1
@@ -1896,13 +1900,25 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
     def observed_identity(info):
         return stat_identity(info) + (info.st_uid, info.st_gid)
 
+    local_windows_members = os.name == 'nt' and _LOCAL_WINDOWS.get() is not None
+
     def member_path(value):
-        require(isinstance(value, str) and len(value) <= 4096 and '\\' not in value
+        require(isinstance(value, str) and len(value) <= 4096
                 and '\0' not in value, 'Copied Codex member path changed.')
+        if local_windows_members:
+            path = pathlib.PureWindowsPath(value)
+            require('/' not in value and ':' not in value and not path.drive and not path.root
+                    and not path.is_absolute() and '..' not in path.parts
+                    and (value == '' or (value != '.' and str(path) == value)), 'Copied Codex member escaped its namespace.')
+            return path
+        require('\\' not in value, 'Copied Codex member path changed.')
         path = pathlib.PurePosixPath(value)
         require(not path.is_absolute() and '..' not in path.parts
                 and (value == '' or path.as_posix() == value), 'Copied Codex member escaped its namespace.')
         return path
+
+    def relative_member_name(path):
+        return str(path) if local_windows_members else path.as_posix()
 
     def namespace(value):
         require(isinstance(value, str) and len(value) <= 4096 and '\0' not in value,
@@ -1978,7 +1994,7 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
                 for folder in (physical_source, physical_capture):
                     require(folder.resolve(strict=True) == folder and folder.is_dir(), 'Copied Codex namespace was redirected.')
                     entries = list(retained_glob(folder,'*'))
-                    require(len(entries) < 2048 and {file.relative_to(folder).as_posix() for file in entries} | {''} == set(members),
+                    require(len(entries) < 2048 and {relative_member_name(file.relative_to(folder)) for file in entries} | {''} == set(members),
                             'Copied Codex physical member closure changed.')
                 owner = (root / selected / 'openclaw-runtime').lstat()
                 for guard in (root / capture_root.relative_to(logical), physical_capture.parent.parent.parent,
@@ -2006,7 +2022,7 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
             value = namespaces[artifact['namespace']]; source = pathlib.Path(source_name)
             directory = pathlib.Path(value['sourceDirectory'])
             require(source.is_relative_to(directory), 'Copied Codex native artifact escaped its source.')
-            relative = source.relative_to(directory).as_posix(); member = value['members'].get(relative)
+            relative = relative_member_name(source.relative_to(directory)); member = value['members'].get(relative)
             require(isinstance(member, dict) and artifact['capturedPath'] == str(pathlib.Path(artifact['namespace']) / 'content' / relative)
                     and all(artifact[field] == member.get(field) for field in ('sourceIdentity', 'capturedIdentity', 'contentHash', 'sizeBytes')),
                     'Copied Codex native artifact differs from its proven member.')

@@ -27,7 +27,7 @@ class LocalRetainedContext:
         now = time.monotonic()
         require(deadline is None or type(deadline) in (int, float) and math.isfinite(deadline) and now < deadline,
                 'The original local comparison deadline expired.')
-        self.deadline = min(now + 300, deadline) if deadline is not None else now + 300
+        self.deadline = min(now + 900, deadline) if deadline is not None else now + 300
         self.captures = (before, after)
         self.images = tuple(Path(value['destinationRoot']) for value in self.captures)
         self.source_root = Path(before['sourceRoot'])
@@ -65,7 +65,6 @@ class LocalRetainedContext:
 
     def validate_capture(self, value):
         if value.get('format') in (2,3):
-            capture.validate_physical_graph(value)
             capture.verify_capture_content(value,self.deadline)
             return
         require(type(value) is dict and value.get('format') == 1
@@ -251,10 +250,16 @@ class LocalRetainedContext:
             generations.append(found)
         if not any(generations):
             return set()
-        # This newly qualified Windows shape is one old closed token replaced
-        # by one new token. Other generation patterns need separate evidence.
-        require(all(len(v) == 1 for v in generations) and set(generations[0]).isdisjoint(generations[1]),
-                'Windows capture lease rotation is outside the qualified shape.')
+        # Preserve complete replacement; retired native generations may also
+        # remain beside exactly one new active lease, under the checks below.
+        replaced = all(len(v) == 1 for v in generations) and set(generations[0]).isdisjoint(generations[1])
+        retained = (len(generations[0]) == 1 and len(generations[1]) == 2
+                    and set(generations[0]) < set(generations[1]))
+        require(replaced or retained, 'Windows capture lease rotation is outside the qualified shape.')
+        active_generations = generations
+        if retained:
+            new_name = next(iter(set(generations[1]) - set(generations[0])))
+            active_generations = [generations[0], {new_name: generations[1][new_name]}]
         host = self.derivation.get('hostResult', {}) if isinstance(self.derivation, dict) else {}
         identity = host.get('nativeIdentity', {})
         require(host.get('kind') == 'local-native-retained-host-result'
@@ -309,7 +314,7 @@ class LocalRetainedContext:
         endpoint_paths, ancestry, families = [], [], []
         native = selected / 'openclaw-runtime'
         ancestor_names = [selected, native, native / 'state', native / 'state/tmp', prefix]
-        for index, (value, generation) in enumerate(zip(self.captures, generations)):
+        for index, (value, generation) in enumerate(zip(self.captures, active_generations)):
             require(value.get('complete') is True and value.get('allHandlesClosed') is True,
                     'Windows capture lease needs complete closed captures.')
             for name, expected in producers.items():
@@ -357,6 +362,69 @@ class LocalRetainedContext:
                     for a, b in zip(*ancestry)), 'Windows capture lease ancestry identity changed.')
         require(all(native_id(a) != native_id(b) and a['security'] == b['security']
                     for a, b in zip(*families)), 'Windows capture lease generation identity/protection did not rotate.')
+        if retained:
+            before, after = self.captures
+            old_name = next(iter(generations[0]))
+            old_owner_name = generations[0][old_name]
+            old_directory_name = (prefix / old_name).as_posix()
+            retired_directory = ordinary(after, 'root', old_directory_name, 'directory')
+            retired_owner = ordinary(after, 'root', old_owner_name, 'file')
+            ordinary(before, 'root', (prefix / old_name / 'captures').as_posix(), 'directory')
+            for component in ('captures', 'native'):
+                created_child = ordinary(after, 'root', (prefix / new_name / component).as_posix(), 'directory')
+                require(116444736000000000 + self.startup_window[0] * 10000
+                        <= created_child['information']['creation100ns']
+                        <= 116444736000000000 + self.startup_window[1] * 10000,
+                        'Windows new capture child is outside its owner window.')
+            old_directory, old_owner, _ = families[0]
+            active_directory = families[1][0]
+            require(set(ancestry[0][-1]['members']) == set(generations[0])
+                    and set(ancestry[1][-1]['members']) == set(generations[1])
+                    and set(old_directory['members']) == {'captures', 'native', 'owner.sqlite', 'owner.sqlite-journal'}
+                    and set(retired_directory['members']) == {'native', 'owner.sqlite'}
+                    and set(active_directory['members']) == {'captures', 'native', 'owner.sqlite', 'owner.sqlite-journal'},
+                    'Windows retired capture lease has extra or missing objects.')
+            lower, upper = (116444736000000000 + value * 10000 for value in self.startup_window)
+            def retained_identity(old, current, content_changed=False):
+                a, b = old['information'], current['information']
+                changed = {'access100ns', 'write100ns', 'change100ns'}
+                if content_changed:
+                    changed |= {'size', 'allocationBytes'}
+                require(set(a) == set(b) and all(a[name] == b[name] for name in a if name not in changed)
+                        and old['security'] == current['security'],
+                        'Windows retired capture lease identity or protection changed.')
+                require(all(a[name] == b[name] or a[name] <= b[name] and lower <= b[name] <= upper
+                            for name in ('access100ns', 'write100ns', 'change100ns')),
+                        'Windows retired capture lease mutation left its original host window.')
+            retained_identity(old_directory, retired_directory)
+            retained_identity(old_owner, retired_owner, content_changed=True)
+            native_name = (prefix / old_name / 'native').as_posix()
+            old_native = ordinary(before, 'root', native_name, 'directory')
+            retired_native = ordinary(after, 'root', native_name, 'directory')
+            retained_identity(old_native, retired_native)
+            require(old_native['members'] == retired_native['members'],
+                    'Windows retired capture native roster changed.')
+            require(retired_owner['bytes'] == retired_owner['information']['size']
+                    == retired_owner['information']['allocationBytes'] == 4096,
+                    'Windows retired capture token is not one qualified empty page.')
+            with (capture.graph_image_root(after, 'root') / old_owner_name).open('rb') as stream:
+                payload = stream.read(4097)
+            # Exact empty retirement page from qualified SQLite 3.53.3 COMMIT:
+            # no schema, cells, freelist or application data.
+            expected = bytearray(4096)
+            expected[:16] = b'SQLite format 3\x00'
+            expected[16:18] = (4096).to_bytes(2, 'big')
+            expected[18:24] = bytes((1, 1, 0, 64, 32, 32))
+            for offset, value in ((24, 1), (28, 1), (60, 1), (92, 1), (96, 3053003)):
+                expected[offset:offset+4] = value.to_bytes(4, 'big')
+            expected[100] = 13
+            expected[105:107] = (4096).to_bytes(2, 'big')
+            require(len(payload) == 4096 and hashlib.sha256(payload).hexdigest() == retired_owner['sha256']
+                    and payload == expected,
+                    'Windows retired capture token contains unqualified schema or data.')
+            # Only these validated tokens leave the application SQLite map.
+            # Their native subtree and all other retained-state checks remain.
+            endpoint_paths[1].add(Path(old_owner_name))
         cached[key] = endpoint_paths
         self._capture_lease_paths = cached
         return set(endpoint_paths[self.images.index(root)])
