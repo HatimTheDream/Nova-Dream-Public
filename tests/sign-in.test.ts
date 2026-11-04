@@ -14,6 +14,8 @@ import { Store } from '../apps/service/store.js';
 import { ChatGptSignIn, deviceCodeNote, signInProgress, browserSignInNote } from '../apps/service/sign-in.js';
 
 const note = '│ URL: https://auth.openai.com/codex/device │\n│ Code: TEST-CODE │\n';
+// OpenClaw 2026.9.8's actual CLI note; the values here are inert fixtures.
+const nativeNote = '│ Open this URL in your LOCAL browser and enter the code below. │\n│ URL: <https://auth.openai.com/codex/device> │\n│ Code: TEST-CODE │\n│ Code expires in 15 minutes. Never share it. │\n';
 class Terminal implements Pick<IPty, 'pid' | 'onData' | 'onExit' | 'kill'> {
   pid = 1073741824;
   private data = new Set<(data: string) => void>();
@@ -45,9 +47,34 @@ test('only the supported OpenAI code note is exposed; arbitrary URLs and token-l
   assert.equal(signInProgress('OpenAI device code request failed: private error detail'), 'OpenAI could not issue a sign-in code. Review its account setup before trying again.');
 });
 
-test('split code output stays ephemeral, exact retry starts one process, and an old receipt cannot select a newer code', () => fixture(async f => {
+test('only matched brackets around the exact device URL are accepted', () => {
+  assert.deepEqual(deviceCodeNote(nativeNote), { verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'TEST-CODE' });
+  assert.equal(deviceCodeNote(nativeNote.replaceAll('\n', '\r\n'))?.userCode, 'TEST-CODE');
+  for (const url of [
+    '<https://auth.openai.com/codex/device', 'https://auth.openai.com/codex/device>',
+    '<<https://auth.openai.com/codex/device>>', '<https://auth.openai.com/codex/device>>',
+    'https://example.com/codex/device', 'https://auth.openai.com.example.com/codex/device',
+    'http://auth.openai.com/codex/device', 'https://auth.openai.com:8443/codex/device',
+    'https://private@auth.openai.com/codex/device', 'https://auth.openai.com/codex/device/other',
+    'https://auth.openai.com/codex/device?access_token=FIXTURE_SECRET',
+    'https://auth.openai.com/codex/device#FIXTURE_SECRET',
+    'https://auth.openai.com/codex/device access_token=FIXTURE_SECRET',
+  ]) {
+    assert.equal(deviceCodeNote(note.replace('https://auth.openai.com/codex/device', url)), undefined, url);
+    assert.equal(deviceCodeNote(note.replace('https://auth.openai.com/codex/device', `<${url}>`)), undefined, url);
+  }
+  assert.equal(deviceCodeNote(nativeNote.replace('TEST-CODE', 'secret-token-material-that-is-not-a-device-code')), undefined);
+});
+
+test('split native code output stays ephemeral, exact retry starts one process, and an old receipt cannot select a newer code', () => fixture(async f => {
   const input = request(f.store), first = await f.service.start(f.device, input);
-  f.terminals[0].emit(note.slice(0,22)); f.terminals[0].emit(note.slice(22));
+  const closeBracket = nativeNote.indexOf('>'), codePrefixEnd = nativeNote.indexOf('TEST-CODE') + 'TEST-'.length;
+  f.terminals[0].emit(nativeNote.slice(0, closeBracket));
+  assert.equal(f.service.status().state, 'starting');
+  f.terminals[0].emit(nativeNote.slice(closeBracket, codePrefixEnd));
+  assert.equal(f.service.status().state, 'starting');
+  f.terminals[0].emit(nativeNote.slice(codePrefixEnd));
+  assert.equal(f.service.status().state, 'waiting');
   f.terminals[0].emit('access_token=FIXTURE_SECRET_VALUE\n');
   assert.equal(f.service.status().userCode, 'TEST-CODE');
   assert.equal((await f.service.start(f.device, input)).id, first.id); assert.equal(f.terminals.length, 1);

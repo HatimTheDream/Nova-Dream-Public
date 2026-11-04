@@ -36,7 +36,8 @@ export function browserSignInNote(output: string): { authorizationUrl: string } 
 /** Parse only the pinned CLI's code note. No raw terminal output reaches clients or logs. */
 export function deviceCodeNote(output: string): { verificationUrl: string; userCode: string } | undefined {
   const plain = stripVTControlCharacters(output);
-  if (!/(?:^|[\r\n│|])\s*URL:\s*https:\/\/auth\.openai\.com\/codex\/device(?=\s|[│|]|$)/.test(plain)) return;
+  // The pinned CLI emits either a bare URL or a matched angle-wrapped URL.
+  if (!/(?:^|[\r\n│|])[ \t]*URL:[ \t]*(?:https:\/\/auth\.openai\.com\/codex\/device|<https:\/\/auth\.openai\.com\/codex\/device>)[ \t]*(?=[│|\r\n]|$)/.test(plain)) return;
   // OpenClaw forwards OpenAI's user_code without imposing a fixed 4–4 shape.
   const code = /(?:^|[\r\n│|])\s*Code:\s*([A-Z0-9]{3,10}(?:-[A-Z0-9]{3,10}){1,2})\s*(?:[│|\r\n]|$)/.exec(plain)?.[1];
   if (code) return { verificationUrl: loginUrl, userCode: code };

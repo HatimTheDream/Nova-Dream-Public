@@ -1,3 +1,8 @@
+## [2.28.12] - 2026-11-04
+
+- Recognize the supported runtime's angle-wrapped ChatGPT device sign-in URL so its code appears without a false preparation timeout.
+- Keep sign-in codes ephemeral and reject malformed URLs, unmatched brackets and unexpected URL suffixes.
+
 ## [2.28.11] - 2026-10-27
 
 - Read ChatGPT account readiness from the connected runtime's existing account snapshot, avoiding slow CLI checks.
