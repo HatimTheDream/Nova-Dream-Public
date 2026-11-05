@@ -1,3 +1,8 @@
+## [2.28.18] - 2026-11-04
+
+- Wait for verified Group context and rejected-save reads in release checks.
+- Keep dependency preparation paths and source identities consistent throughout release admission.
+
 ## [2.28.17] - 2026-11-04
 
 - Make release checks wait for completed file verification and compile retained-configuration checks in isolated output.

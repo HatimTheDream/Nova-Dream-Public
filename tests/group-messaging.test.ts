@@ -272,15 +272,22 @@ function host(f: ReturnType<typeof fixture>, render = () => GroupMessaging(f.pro
       } catch (e: any) { return new Response(JSON.stringify({ code: e.code, message: e.message, current: e.current }), { status: e.status ?? 409 }); }
     },
   };
+  const pendingDigests = new Set<Promise<ArrayBuffer>>(), subtle = crypto.subtle;
+  const digestDescriptor = Object.getOwnPropertyDescriptor(subtle, 'digest'), digest = subtle.digest.bind(subtle);
+  subtle.digest = (...args: Parameters<SubtleCrypto['digest']>) => {
+    const result = digest(...args); pendingDigests.add(result);
+    void result.then(() => pendingDigests.delete(result), () => pendingDigests.delete(result)); return result;
+  };
   const original = Reflect.ownKeys(values).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   for (const key of Reflect.ownKeys(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: values[key] });
   return { calls, get tree() { return tree; },
     refresh() { dirty = true; },
-    async flush() { for (let pass = 0; pass < 20; pass++) {
+    async flush() { const deadline = performance.now() + 5000; for (let pass = 0; pass < 20 || pendingDigests.size || dirty; pass++) {
+      assert.ok(performance.now() < deadline, 'Group view did not settle its actual digest work within5seconds');
       if (dirty) { dirty = false; cursor = 0; tree = render(); while (effects.length) effects.shift()!(); }
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => pendingDigests.size ? setTimeout(resolve, 1) : setImmediate(resolve));
     } },
-    close() { for (const cell of cells) cell?.cleanup?.(); for (const [key, descriptor] of original) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); },
+    close() { for (const cell of cells) cell?.cleanup?.(); if (digestDescriptor) Object.defineProperty(subtle, 'digest', digestDescriptor); else Reflect.deleteProperty(subtle, 'digest'); for (const [key, descriptor] of original) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); },
   };
 }
 
@@ -368,7 +375,15 @@ test('composer explicitly reviews a known rejected preparation before creating a
     assert.match(text(app.tree), /Save Not Admitted/);
     const original = f.calls[1].requestId;
     assert.equal(f.calls.length, 2); assert.equal(button(app.tree, 'Prepare Message').props.disabled, true);
-    button(app.tree, 'Review Rejected Save').props.onClick(); await app.flush();
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }), hashStarted = new Promise<void>(resolve => { started = resolve; });
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    t.mock.method(crypto.subtle, 'digest', (...args: Parameters<SubtleCrypto['digest']>) => digest(...args).then(async result => {
+      started(); await gate; return result;
+    }));
+    button(app.tree, 'Review Rejected Save').props.onClick();
+    await hashStarted; assert.equal(f.calls.length, 2); assert.equal(button(app.tree, 'Prepare Message').props.disabled, true);
+    release(); await app.flush();
     assert.equal(f.calls.length, 2); assert.equal(nodes(app.tree).find(n => n.type === 'textarea').props.value, 'Keep this writing');
     button(app.tree, 'Prepare Message').props.onClick(); await app.flush();
     assert.equal(f.calls.length, 3); assert.notEqual(f.calls[2].requestId, original);
@@ -667,9 +682,15 @@ test('recovery UI shows complete writing and opens only after preserving the cur
 
 test('context inspector is readonly and exposes full input without changing selected context', async t => {
   const f = await historyFixture(t), before = f.calls.length;
+  let started!: () => void, release!: () => void;
+  const hashStarted = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  t.mock.method(crypto.subtle, 'digest', async (...args: Parameters<SubtleCrypto['digest']>) => { started(); await gate; return digest(...args); });
   const app = host(f, () => GroupContextInspector({ epoch: f.epoch, groupId: f.groupId, reference: f.ref, close() {} }));
   try {
-    await app.flush(); assert.match(text(app.tree), /The first complete message/);
+    let settled = false; const flushing = app.flush().then(() => { settled = true; });
+    await hashStarted; assert.equal(settled, false); assert.doesNotMatch(text(app.tree), /The first complete message/);
+    release(); await flushing; assert.match(text(app.tree), /The first complete message/);
     assert.equal(app.calls.every(row => row.method === 'GET'), true); assert.equal(f.calls.length, before);
   } finally { app.close(); }
 });
