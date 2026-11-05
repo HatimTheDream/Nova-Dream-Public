@@ -152,8 +152,8 @@ test('changed request and corrupt partial output cannot reuse original initializ
  f.input.sourceCommits.private='1'.repeat(40);writeFileSync(v.descriptor.path,'partial');await assert.rejects(initialize(f),/hash|changed|mismatch/i);
 });
 test('retained original installer bytes admit, changed content/hash refuse, legacy proof remains valid',t=>{
- const f=initializeFixture(t);verifyInstalledIdentity(f.identity,f.request);const old=structuredClone(f.identity);delete old.installationProof.installerResultBytesBase64;verifyInstalledIdentity(old,f.request);
- for(const raw of [Buffer.from('not json'),Buffer.from(JSON.stringify({...f.result,savedWorkVerified:false}))]){const changed=structuredClone(f.identity);changed.installationProof.installerResultBytesBase64=raw.toString('base64');assert.throws(()=>verifyInstalledIdentity(changed,f.request));}
+ const f=initializeFixture(t);verifyInstalledIdentity(f.identity,f.request,{allowLegacyProfile:true});const old=structuredClone(f.identity);delete old.installationProof.installerResultBytesBase64;verifyInstalledIdentity(old,f.request,{allowLegacyProfile:true});
+ for(const raw of [Buffer.from('not json'),Buffer.from(JSON.stringify({...f.result,savedWorkVerified:false}))]){const changed=structuredClone(f.identity);changed.installationProof.installerResultBytesBase64=raw.toString('base64');assert.throws(()=>verifyInstalledIdentity(changed,f.request,{allowLegacyProfile:true}));}
 });
 test('successor export requires actual installation and saved reply separately',async t=>{
  const f=initializeFixture(t),v=await initialize(f),descriptor=JSON.parse(readFileSync(v.descriptor.path));

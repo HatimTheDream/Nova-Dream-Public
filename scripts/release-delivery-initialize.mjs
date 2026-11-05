@@ -67,8 +67,8 @@ export function validateAcceptedProfile(profile,target,{candidate=verifyCandidat
   const base=target.bases[side];need(base.manifest.path===join(base.directory,'dist','candidate.json'),'accepted-manifest-path-changed');
   readEvidenceFile(base.manifest);bases[side]=candidate(base.directory);need(bases[side].id===base.candidateId,'accepted-candidate-changed');
  }
- const identity=json(profile.accepted.identity),request=validateInstalledIdentityRequest(identity.request);
- verifyInstalledIdentity(identity,request);const operation=request.operation;
+ const identity=json(profile.accepted.identity),request=validateInstalledIdentityRequest(identity.request,{allowLegacyProfile:true});
+ verifyInstalledIdentity(identity,request,{allowLegacyProfile:true});const operation=request.operation;
  need(operation.candidateId===bases.private.id&&operation.version===bases.private.manifest.version&&operation.buildVersion===bases.private.manifest.buildVersion,'accepted-service-base-changed');
  need(bases.public.manifest.version===operation.version&&bases.public.manifest.buildVersion===operation.buildVersion,'accepted-public-base-changed');
  const resultRaw=readEvidenceFile(profile.accepted.result,{maximum:4096}),result=JSON.parse(resultRaw);

@@ -11,21 +11,25 @@ import { planRelease, sha256 } from '../scripts/release-plan.mjs';
 
 export const now = 1791990000000; const canonical = value => JSON.stringify(value,(_k,v) => v && typeof v === 'object' && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k,v[k]])) : v);
-export async function coordinatorFixture(t) {
-  const f = fullFixture(), parent = resolve(tmpdir());
-  t.after(() => { assert.equal(dirname(f.root),parent); rmSync(f.root,{recursive:true,force:true}); });
+export async function coordinatorFixture(t, {seed, packaged: preparedPackage} = {}) {
+  const f = seed ?? fullFixture(), parent = resolve(tmpdir());
+  if (!seed) t.after(() => { assert.equal(dirname(f.root),parent); rmSync(f.root,{recursive:true,force:true}); });
   let count=0; const put = value => f.put(join(f.root,`coordinator-${++count}.json`),value);
   const keys = generateKeyPairSync('ed25519'), publicKey = put(Buffer.from(keys.publicKey.export({type:'spki',format:'pem'})));
   const timeline = {startedAtMs:now,original:{id:randomUUID(),step:'total',issuedAtMs:now,remainingMs:[1000,2000],confidence:'low',
     basis:'Synthetic coordinator fixture.',reason:'Original fixture deadline.',nextCheckpointAtMs:now+300000},revisions:[],reviews:[],lastCheckpointAtMs:now};
-  Object.assign(f.descriptor.operation,{stage:'draft',candidateId:null,publicCandidateId:null,bundleSha256:null,workspaceEpoch:randomUUID(),trustedPublicKeySha256:publicKey.sha256,changeClass:'application',helperHashes:null});
-  const op = f.descriptor.operation, pack = createFullBundleAdapter({options:f.options,pairProducer:f.pairProducer});
-  const input = await pack.input({prior:f.prior}), packContext = {descriptor:f.descriptor,intent:{input,key:randomUUID()},journal:{directory:f.root}};
-  await pack.validate({descriptor:f.descriptor,input}); const packaged = await pack.execute(packContext); await pack.verify(packaged,packContext);
+  Object.assign(f.descriptor.operation,{stage:'draft',candidateId:null,publicCandidateId:null,bundleSha256:null,workspaceEpoch:f.descriptor.operation.workspaceEpoch??randomUUID(),trustedPublicKeySha256:publicKey.sha256,changeClass:'application',helperHashes:null});
+  const op = f.descriptor.operation;
+  let packaged = preparedPackage;
+  if (!packaged) {
+    const pack = createFullBundleAdapter({options:f.options,pairProducer:f.pairProducer});
+    const input = await pack.input({prior:f.prior}), packContext = {descriptor:f.descriptor,intent:{input,key:randomUUID()},journal:{directory:f.root}};
+    await pack.validate({descriptor:f.descriptor,input}); packaged = await pack.execute(packContext); await pack.verify(packaged,packContext);
+  }
   const prior = {...f.prior,package:packaged.output};
   const bundle = JSON.parse(readFileSync(prior.package.bundle.path));
-  const helperHashes = Object.fromEntries(bundle.files.filter(x => !['app.tgz','reviewed-pair.json'].includes(x.name)).map(x => [x.name,x.sha256]));
-  helperHashes['operator_rehearsal.py']=sha256('synthetic operator rehearsal');
+  const helperHashes = Object.fromEntries(bundle.files.filter(x => !['app.tgz','reviewed-pair.json','startup-qualification.json'].includes(x.name)).map(x => [x.name,x.sha256]));
+  helperHashes['operator_rehearsal.py']??=sha256('synthetic operator rehearsal');
   for(const side of ['private','public']) f.artifacts[side].sourceHashes['deploy/update-runner/operator_rehearsal.py']={sha256:helperHashes['operator_rehearsal.py']};
   for(const side of ['private','public']){
     const log=put(Buffer.from('Run npm run quality\n# fail 0\npython tests/update-runner.test.py\n'));
@@ -51,7 +55,7 @@ export async function coordinatorFixture(t) {
   const verified={capacityEvidence,evidence:{receipt,feed,publicKey}},ssh=put(Buffer.from('Host fixture\n HostName example.invalid\n'));
   const transport=put({format:1,hostAlias:'fixture',sshConfig:ssh});f.descriptor.targetIdentity=sha256(canonical({hostAlias:'fixture',sshConfig:ssh.sha256}));
   const context={descriptor:f.descriptor,prior,intent:{key:randomUUID()},journal:{directory:f.root,deliveryTimeline:()=>({timeline})}};
-  mkdirSync(join(f.root,'delivery-evidence'));
+  mkdirSync(join(f.root,'delivery-evidence'),{recursive:true});
   const storeReceipt=(_j,key,name,bytes)=>{const path=join(f.root,'delivery-evidence',`${key}-${name}`);if(existsSync(path))assert.deepEqual(readFileSync(path),bytes);else writeFileSync(path,bytes,{flag:'wx'});return {path,sha256:sha256(bytes)};};
   const options={transport,base:f.base,storeReceipt,clock:()=>now};
   return {...f,prior,context,verified,options,put,timeline};

@@ -6,7 +6,7 @@ import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
-import { readEvidenceFile } from './release-plan.mjs';
+import { readEvidenceFile, qualifyApplicationPackage } from './release-plan.mjs';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const absolute = z.string().min(1).max(4096).refine(p => isAbsolute(p) && !p.includes('\0'));
@@ -18,13 +18,46 @@ export const releaseInstallSpecSchema = z.object({ format: z.literal(1), operati
   candidateId: digest, priorCandidateId: digest, workspaceEpoch: z.uuid(), version, buildVersion: version,
   priorVersion: version, priorBuildVersion: version, schemaVersion: z.number().int().min(1).max(100000),
   apiVersion: z.number().int().min(1).max(100000), agentVersion: version, priorAgentVersion: version,
-  bundleSha256: digest, rehearsalLeaseId: z.uuid(), rehearsalProofSha256: digest }).strict();
+  bundleSha256: digest, rehearsalLeaseId: z.uuid(), rehearsalProofSha256: digest,
+  applicationQualification: z.object({ priorSchemaVersion: z.literal(55), reviewedPairSha256: digest,
+    projectionSha256: digest }).strict().optional() }).strict().superRefine((value, ctx) => {
+    if (value.applicationQualification ? !(value.schemaVersion === 60 && value.apiVersion === 1
+      && value.agentVersion === '2026.9.8' && value.priorAgentVersion === '2026.9.8') : value.schemaVersion === 60)
+      ctx.addIssue({ code: 'custom', message: 'qualified-55-to-60-application-transition-required' });
+  });
 const helperPath = fileURLToPath(new URL('../deploy/update-runner/request_install.py', import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 function requireValue(condition, message) { if (!condition) throw Error(message); }
 function jsonRef(ref) { return JSON.parse(readEvidenceFile(reference.parse(ref), { maximum: 65536 })); }
+
+function applicationEvidenceFor(spec, operation, input) {
+  if (!spec.applicationQualification) return undefined;
+  const raw = readEvidenceFile(input.evidence.package.bundle, { maximum: 128 * 1024 ** 2 });
+  requireValue(hash(raw) === spec.bundleSha256, 'install-application-bundle-changed');
+  const bundle = JSON.parse(raw), contents = new Map();
+  requireValue(bundle.format === 1 && Array.isArray(bundle.files), 'install-application-bundle-invalid');
+  for (const entry of bundle.files) {
+    requireValue(typeof entry.name === 'string' && !contents.has(entry.name) && typeof entry.data === 'string', 'install-application-entry-invalid');
+    const bytes = Buffer.from(entry.data, 'base64');
+    requireValue(bytes.toString('base64') === entry.data && hash(bytes) === entry.sha256, 'install-application-entry-changed');
+    contents.set(entry.name, bytes);
+  }
+  const evidence = { pair: contents.get('reviewed-pair.json'), projection: contents.get('startup-qualification.json') };
+  validateApplicationEvidence(spec, evidence);
+  const pair = JSON.parse(evidence.pair);
+  requireValue(pair.candidateId === spec.candidateId && pair.priorCandidateId === spec.priorCandidateId, 'install-application-pair-changed');
+  qualifyApplicationPackage(pair, contents, operation);
+  return evidence;
+}
+function validateApplicationEvidence(spec, evidence) {
+  if (!spec.applicationQualification) { requireValue(evidence === undefined, 'install-unexpected-application-evidence'); return; }
+  requireValue(evidence && Buffer.isBuffer(evidence.pair) && evidence.pair.length <= 1024 * 1024
+    && Buffer.isBuffer(evidence.projection) && evidence.projection.length <= 512 * 1024
+    && hash(evidence.pair) === spec.applicationQualification.reviewedPairSha256
+    && hash(evidence.projection) === spec.applicationQualification.projectionSha256, 'install-application-evidence-changed');
+}
 
 function adapterInputs({ transport, installSpec, operation, input }) {
   const target = releaseTransportSchema.parse(jsonRef(transport));
@@ -45,7 +78,7 @@ function adapterInputs({ transport, installSpec, operation, input }) {
   const identity = hash(canonical({ transport: transport.sha256, sshConfig: target.sshConfig.sha256,
     installSpec: installSpec.sha256, helper: hash(helper) }));
   const scopeIdentity = hash(canonical({ hostAlias: target.hostAlias, sshConfig: target.sshConfig.sha256 }));
-  return { target, spec, helper, identity, scopeIdentity };
+  return { target, spec, helper, identity, scopeIdentity, applicationEvidence: applicationEvidenceFor(spec, operation, input) };
 }
 
 export function describeInstallAdapter(context) { const { identity, scopeIdentity } = adapterInputs(context); return { identity, scopeIdentity }; }
@@ -53,10 +86,14 @@ export function describeInstallAdapter(context) { const { identity, scopeIdentit
 /** Source is fixed; the only substituted bytes are canonical base64 data. The
  * bootstrap stages immutable helper/input bytes and delegates to that helper.
  * Observe mode performs no staging writes, and absence never authorizes replay. */
-export function buildInstallTransportProgram({ helper, spec, idempotencyKey, mode }) {
+export function buildInstallTransportProgram({ helper, spec, idempotencyKey, mode, applicationEvidence }) {
   requireValue(['execute', 'observe'].includes(mode) && z.uuid().safeParse(idempotencyKey).success, 'invalid-install-mode');
+  spec = releaseInstallSpecSchema.parse(spec);
+  validateApplicationEvidence(spec, applicationEvidence);
+  requireValue(Buffer.byteLength(canonical({ ...spec, idempotencyKey }) + '\n') <= 8192, 'install-operation-too-large');
   const payload = Buffer.from(canonical({ helper: helper.toString('base64'), helperSha256: hash(helper),
-    operation: { ...releaseInstallSpecSchema.parse(spec), idempotencyKey }, mode })).toString('base64');
+    operation: { ...spec, idempotencyKey }, mode, ...(applicationEvidence ? { applicationEvidence: {
+      pair: applicationEvidence.pair.toString('base64'), projection: applicationEvidence.projection.toString('base64') } } : {}) })).toString('base64');
   return `import base64,hashlib,json,os,pathlib,stat,sys
 P=pathlib.Path
 data=json.loads(base64.b64decode('${payload}'))
@@ -82,8 +119,9 @@ def directory(path):
  protected(path.parent,True)
  if not os.path.lexists(path): path.mkdir(mode=0o700);sync(path.parent)
  protected(path,True,True)
-def exact(path,value):
- if os.path.lexists(path): require(read(path,262144,True)==value);return
+def exact(path,value,bound=262144):
+ require(len(value)<=bound)
+ if os.path.lexists(path): require(read(path,bound,True)==value);return
  fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(fd,'wb') as f: f.write(value);f.flush();os.fsync(f.fileno())
  sync(path.parent)
@@ -95,11 +133,23 @@ try:
  toolroot=P('/opt/nova-release-tools');toolversion=toolroot/data['helperSha256'];tool=toolversion/'request_install.py'
  root=state/'release-coordinator';inputs=root/'inputs';operation=inputs/(data['operation']['operationId']+'.json')
  value=(json.dumps(data['operation'],sort_keys=True,separators=(',',':'))+'\\n').encode()
+ require(len(value)<=8192)
+ evidence=data.get('applicationEvidence');qualification=data['operation'].get('applicationQualification')
+ require(bool(evidence)==bool(qualification))
+ sidecars=[];qualified=inputs/(data['operation']['operationId']+'.qualification')
+ if qualification:
+  for key,name,digest,bound in (('pair','reviewed-pair.json','reviewedPairSha256',1048576),('projection','startup-qualification.json','projectionSha256',524288)):
+   content=base64.b64decode(evidence[key],validate=True);require(len(content)<=bound and hashlib.sha256(content).hexdigest()==qualification[digest])
+   sidecars.append((qualified/name,content,bound))
  if data['mode']=='execute':
   for path in (toolroot,toolversion,root,inputs): directory(path)
-  exact(tool,helper);exact(operation,value)
+  if sidecars: directory(qualified)
+  for path,content,bound in sidecars: exact(path,content,bound)
+  exact(tool,helper);exact(operation,value,8192)
  else:
-  require(read(tool,262144,True)==helper and read(operation,65536,True)==value)
+  require(read(tool,262144,True)==helper and read(operation,8192,True)==value)
+  if sidecars: protected(qualified,True,True)
+  for path,content,bound in sidecars: require(read(path,bound,True)==content)
  os.execv('/usr/bin/python3',['/usr/bin/python3','-B',str(tool),'--operation',str(operation),'--'+data['mode']])
 except Exception:
  print(json.dumps({'kind':'nova-release-adapter-error','reasonCode':'remote-request-unavailable','automaticResubmissionPermitted':False}))

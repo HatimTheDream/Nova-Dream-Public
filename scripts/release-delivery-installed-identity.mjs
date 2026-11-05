@@ -34,7 +34,8 @@ export function originalInstalledIdentityRequest(context, completed, { transport
     runtime: { startupReview, hostConfig } });
 }
 
-export function verifyInstalledIdentity(proof, request) {
+export function verifyInstalledIdentity(proof, request, {allowLegacyProfile=false} = {}) {
+  validateInstalledIdentityRequest(request, {allowLegacyProfile});
   const op = request.operation;
   need(proof?.format === 1 && proof.kind === 'maintained-installed-acceptance-identity' && proof.readOnly === true
     && proof.savedReplyAccepted === false && proof.browserUiVerified === false && equal(proof.request, request)
@@ -52,6 +53,7 @@ export function verifyInstalledIdentity(proof, request) {
     && proof.runtimeProof.configurationSha256 === request.runtime.hostConfig.sha256
     && proof.appProcess?.ActiveState === 'active' && proof.appProcess.SubState === 'running' && Number(proof.appProcess.MainPID) > 1,
   'full-actual-installed-runtime-or-result-changed');
+  need(equal(proof.installationProof.applicationQualification, op.applicationQualification), 'full-installed-qualification-binding-changed');
   if(Object.hasOwn(proof.installationProof,'installerResultBytesBase64')){
     const value=proof.installationProof.installerResultBytesBase64;
     need(typeof value==='string'&&value.length<=5464,'full-original-result-bytes-invalid');

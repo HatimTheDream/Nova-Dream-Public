@@ -3,7 +3,7 @@ No staging, installation dispatch, session creation or saved-reply admission.
 """
 import base64,hashlib,json,pathlib,re,time,uuid
 P=pathlib.Path
-REQUESTER_SHA='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06'
+REQUESTER_SHA='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941'
 def need(v,r):
     if not v:raise RuntimeError(r)
 def enc(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
@@ -25,19 +25,30 @@ def validate_health(health,access,operation):
       and re.fullmatch('[a-f0-9]{64}',health.get('serviceInputsSha256','')) and str(uuid.UUID(health['processIdentity']))==health['processIdentity']
       and isinstance(health.get('frontend'),dict),'full-current-health-identity-required')
     return {k:health[k] for k in ('candidateId','serviceInputsSha256','apiVersion','schemaVersion','processIdentity','frontend')}|{'epoch':access['workspaceEpoch']}
+def validate_staged_qualification(operation,qualification,pair_raw,projection_raw):
+    """Compare installed bytes with the original requester's verified sidecars."""
+    expected=operation['applicationQualification']
+    need(sha(pair_raw)==qualification['reviewedPairSha256']==expected['reviewedPairSha256']
+      and json.loads(pair_raw)==qualification['pair']
+      and sha(projection_raw)==qualification['projectionSha256']==expected['projectionSha256']
+      and json.loads(projection_raw)==qualification['proof'],'full-installed-startup-qualification-changed')
 def original(binding,s):
     need(set(binding)=={'format','operation','jobId','requester','runtime'} and binding['format']==1,'full-identity-binding-shape')
     op=binding['operation'];need(str(uuid.UUID(binding['jobId']))==binding['jobId'],'full-original-job-id')
     helper=binding['requester'];need(helper=={'path':'/opt/nova-release-tools/'+REQUESTER_SHA+'/request_install.py','sha256':REQUESTER_SHA},'full-maintained-requester-required')
     client_module=s.load_module('full_identity_original_requester',helper['path'],s.ref(helper,262144,True))
     client_module.validate_operation(op)
-    need(op['apiVersion']==1 and op['schemaVersion']==55,'full-supported-api-schema-required')
+    need(op['apiVersion']==1 and op['schemaVersion'] in (55,60),'full-supported-api-schema-required')
     config_raw=s.ref(binding['runtime']['hostConfig'],65536);config=json.loads(config_raw)
     need(binding['runtime']['hostConfig']['path']=='/etc/nova-update/config.json' and config.get('stateDirectory')=='/var/lib/nova-update','full-configured-state-root-required')
     state=P(config['stateDirectory']);path=state/'release-coordinator/inputs'/(op['operationId']+'.json')
     operation_raw=s.raw(path,8192,True);need(json.loads(operation_raw)==op,'full-original-operation-changed')
     io=client_module.SystemIO();client=client_module.InstallRequest(str(path),io)
     need(client.operation==op and client.config_sha==sha(config_raw),'full-requester-config-or-operation-changed')
+    qualification=client.application_qualification()
+    need((op['schemaVersion']==55 and qualification is None and 'applicationQualification' not in op)
+      or (op['schemaVersion']==60 and qualification is not None and 'applicationQualification' in op),
+      'full-qualified-schema-transition-required')
     intent=client.load_intent();observed=client.observe(0);validate_observation(observed,op,binding['jobId'])
     journal=client.read(str(state/'jobs/journal.json'),16*1024**2);job=client_module.matched_job(journal,op)
     need(job and job['id']==binding['jobId']==journal.get('currentId') and job.get('state')=='completed' and job.get('hold') is False,'full-exact-current-original-job-required')
@@ -49,9 +60,12 @@ def original(binding,s):
     s.protected(current.parent,True);target=current.resolve(strict=True);s.protected(target,True)
     package=s.raw(target/'package.json',1024**2);candidate=s.raw(target/'dist/candidate.json',2*1024**2);manifest=json.loads(candidate)
     need(sha(package+candidate)==op['candidateId'] and target==P('/opt/nova/releases')/(op['version']+'-'+op['candidateId'][:12])
-      and manifest.get('version')==op['version'],'full-installed-candidate-changed')
+      and all(manifest.get(k)==op[k] for k in ('version','buildVersion','apiVersion','schemaVersion')),'full-installed-candidate-changed')
     pair_raw=s.raw(staged/'reviewed-pair.json',1024**2,True);pair=json.loads(pair_raw)
     need(pair.get('format')==1 and pair.get('candidateId')==op['candidateId'] and pair.get('priorCandidateId')==op['priorCandidateId'],'full-installed-pair-changed')
+    if qualification is not None:
+        projection_raw=s.raw(staged/'startup-qualification.json',512*1024,True)
+        validate_staged_qualification(op,qualification,pair_raw,projection_raw)
     dependencies=None;d=pair.get('applicationDependencies');signed=release.get('applicationDependenciesBundle')
     if d is not None or signed is not None:
         need(isinstance(d,dict) and isinstance(signed,dict) and d['archiveSha256']==signed['sha256'] and d['archiveBytes']==signed['bytes'],'full-signed-dependency-pair-changed')
@@ -68,6 +82,7 @@ def original(binding,s):
       'operationReference':{'path':str(path),'sha256':sha(operation_raw)},'intentSha256':sha(enc(intent)),
       'installerResult':{'path':str(result_path),'sha256':sha(result_raw)},'installerResultBytesBase64':base64.b64encode(result_raw).decode('ascii'),'reviewedPairSha256':sha(pair_raw),
       'applicationDependencies':dependencies,'candidateId':op['candidateId'],'candidateFilesSha256':sha(package+candidate),'hostConfigSha256':sha(config_raw)}
+    if qualification is not None:proof['applicationQualification']=op['applicationQualification']
     return proof,client
 def observe(binding,s):
     proof,client=original(binding,s);process=s.process_identity();runtime=s.runtime_identity(binding['runtime'],True)

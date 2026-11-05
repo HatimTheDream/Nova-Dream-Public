@@ -71,7 +71,8 @@ def absolute(value):
 
 
 def validate_operation(value):
-    require(isinstance(value, dict) and set(value) == OPERATION_FIELDS and type(value['format']) is int
+    fields = OPERATION_FIELDS | ({'applicationQualification'} if isinstance(value, dict) and 'applicationQualification' in value else set())
+    require(isinstance(value, dict) and set(value) == fields and type(value['format']) is int
             and value['format'] == 1, 'invalid-operation-shape')
     for name in ('operationId', 'workspaceEpoch', 'rehearsalLeaseId', 'idempotencyKey'):
         require(is_uuid(value[name]), 'invalid-operation-identity')
@@ -82,6 +83,17 @@ def validate_operation(value):
                 'invalid-operation-version')
     for name in ('schemaVersion', 'apiVersion'):
         require(type(value[name]) is int and 1 <= value[name] <= 100000, 'invalid-operation-version')
+    qualification = value.get('applicationQualification')
+    if qualification is not None:
+        require(type(qualification) is dict and set(qualification) == {'priorSchemaVersion', 'reviewedPairSha256', 'projectionSha256'}
+                and type(qualification['priorSchemaVersion']) is int and qualification['priorSchemaVersion'] == 55
+                and value['schemaVersion'] == 60 and value['apiVersion'] == 1
+                and value['priorAgentVersion'] == value['agentVersion'] == '2026.9.8'
+                and is_hash(qualification['reviewedPairSha256']) and is_hash(qualification['projectionSha256']),
+                'invalid-application-qualification-operation')
+    else:
+        require('applicationQualification' not in value and value['schemaVersion'] != 60,
+                'application-qualification-required')
     return value
 
 
@@ -138,10 +150,105 @@ def matched_job(journal, operation):
             and isinstance(compatibility, dict) and compatibility.get('reviewed') is True
             and compatibility.get('gatewayProtocol') == 4 and compatibility.get('fromNovaVersion') == operation['priorVersion']
             and compatibility.get('fromAgentVersion') == operation['priorAgentVersion']
-            and compatibility.get('fromSchemaVersion') == operation['schemaVersion']
+            and compatibility.get('fromSchemaVersion') == prior_schema(operation)
             and compatibility.get('toSchemaVersion') == operation['schemaVersion'], 'original-request-identity-mismatch')
     require(is_uuid(job.get('id')) and job.get('state') in STATES and type(job.get('hold')) is bool, 'invalid-original-job')
     return job
+
+
+# The standalone requester carries these exact pure recovery predicates. The
+# transport authenticates every bundled helper before staging the two original
+# qualification sidecars; the installer's complete on-host check remains required.
+def _qualification_require(value, _message):
+    require(value, 'actual-application-qualification-mismatch')
+
+def _validate_application_transition(value):
+    """One application transition; this validates shape, not delivery authority."""
+    expected = {'format': 1, 'kind': 'schema-55-to-60-same-runtime',
+                'fromSchemaVersion': 55, 'toSchemaVersion': 60, 'apiVersion': 1,
+                'fromAgentVersion': '2026.9.8', 'toAgentVersion': '2026.9.8'}
+    _qualification_require(type(value) is dict and value == expected
+            and all(type(value[key]) is type(item) for key, item in expected.items()),
+            'The application schema transition is outside its reviewed exact pair.')
+    return dict(expected)
+
+
+def _validate_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
+    """Consume the fixed collector's original, hash-bound settled projection.
+
+    The caller authenticates the protected projection file and every helper
+    byte before calling. A synthetic migration or qualification plan is not a
+    completed proof and cannot satisfy this contract.
+    """
+    transition = _validate_application_transition(pair.get('applicationTransition'))
+    qualification = pair.get('startupQualification')
+    _qualification_require(type(qualification) is dict and set(qualification) == {'projection', 'binding'}
+            and type(qualification['projection']) is dict
+            and set(qualification['projection']) == {'path', 'sha256'}
+            and qualification['projection']['path'] == 'startup-qualification.json'
+            and re.fullmatch('[a-f0-9]{64}', qualification['projection']['sha256'] or ''),
+            'The application transition lacks its original bundled qualification.')
+    binding = qualification['binding']
+    _qualification_require(type(binding) is dict and binding.get('format') == 1
+            and binding.get('kind') == 'same-runtime-startup-candidate-binding'
+            and binding.get('applicationTransition') == transition
+            and binding.get('workspaceEpoch') == workspace_epoch
+            and binding.get('prior', {}).get('candidateId') == prior_id
+            and binding.get('targets', {}).get('private', {}).get('candidateId') == target_id
+            and prior_id != target_id
+            and binding.get('runtime', {}).get('agentVersion') == '2026.9.8'
+            and binding.get('helpers') == helper_hashes,
+            'The actual application qualification belongs to another pair or verifier.')
+    dependencies = pair.get('applicationDependencies')
+    _qualification_require(type(dependencies) is dict
+            and dependencies.get('dependencyGraphSha256') == binding.get('dependencyGraphSha256')
+            and dependencies.get('packageLockSha256') == binding.get('targets', {}).get('private', {}).get('packageLockSha256')
+            == binding.get('targets', {}).get('public', {}).get('packageLockSha256')
+            and type(dependencies.get('dependencyGraphSha256')) is str
+            and re.fullmatch('[a-f0-9]{64}', dependencies['dependencyGraphSha256'])
+            and type(dependencies.get('packageLockSha256')) is str
+            and re.fullmatch('[a-f0-9]{64}', dependencies['packageLockSha256'])
+            and ('applicationDependencies' not in binding or binding['applicationDependencies'] == dependencies),
+            'The installed application dependencies differ from the actual qualification.')
+    _qualification_require(type(proof) is dict and proof.get('format') == 1
+            and proof.get('kind') == 'actual-retained-startup-qualification-observation'
+            and proof.get('scope') == 'retained-same-runtime-startup-restart-restoration'
+            and proof.get('readOnly') is True and proof.get('hostEffects') is False
+            and proof.get('productionAdmission') is False
+            and proof.get('qualificationBinding') == binding
+            and all(proof.get(name) is True for name in ('actualSettledQualification',
+                'independentOriginalRestored', 'completeMaintainedSavedAndNativeState',
+                'heldBootstrapVerified', 'workerClosed', 'freshFullRehearsalStillRequired',
+                'liveAcceptanceStillRequired')),
+            'The complete settled application qualification is unavailable.')
+    scenarios = proof.get('scenarios')
+    names = ('target-first-start', 'target-restart', 'pristine-prior-restoration')
+    _qualification_require(type(scenarios) is list and len(scenarios) == 3, 'All application qualification scenarios are required.')
+    previous = None
+    for name, scenario in zip(names, scenarios):
+        _qualification_require(type(scenario) is dict and scenario.get('scenario') == name
+                and scenario.get('candidateId') == (prior_id if name == names[-1] else target_id)
+                and type(scenario.get('startedAtSeconds')) is int
+                and type(scenario.get('closedAtSeconds')) is int
+                and 0 <= scenario['closedAtSeconds'] - scenario['startedAtSeconds'] <= 3600
+                and (previous is None or scenario['startedAtSeconds'] >= previous - 1),
+                'The application qualification scenario identity or clock changed.')
+        preserved = scenario.get('preservation', {})
+        observed = proof.get('references', {}).get(name + '/preservation', {})
+        _qualification_require(type(preserved) is dict and set(preserved) in ({'path', 'sha256'}, {'path', 'bytes', 'sha256'})
+                and type(preserved['path']) is str and preserved['path'].endswith('/preservation.json')
+                and type(preserved['sha256']) is str and re.fullmatch('[a-f0-9]{64}', preserved['sha256'])
+                and type(observed) is dict and set(observed) == {'path', 'bytes', 'sha256'}
+                and all(observed.get(key) == value for key, value in preserved.items())
+                and type(observed['bytes']) is int and observed['bytes'] > 0,
+                'The application qualification omitted its closed retained-state comparison.')
+        previous = scenario['closedAtSeconds']
+    return transition
+
+
+def prior_schema(operation):
+    qualification = operation.get('applicationQualification')
+    return qualification['priorSchemaVersion'] if qualification is not None else operation['schemaVersion']
 
 
 def file_identity(info):
@@ -303,6 +410,7 @@ class InstallRequest:
         self.audit = posixpath.join(self.root, self.operation['operationId'])
         self.intent_path = posixpath.join(self.audit, 'intent.json')
         self.request = request_for(self.operation)
+        self.qualification = self.application_qualification()
 
     def read(self, path, maximum=65536):
         return json.loads(self.io.read_bytes(path, maximum))
@@ -310,12 +418,46 @@ class InstallRequest:
     def control(self, action, body=None):
         return self.io.control(action, body or {}, self.config['socketGroup'])
 
+    def application_qualification(self):
+        o = self.operation
+        selected = o.get('applicationQualification')
+        if selected is None:
+            return None
+        expected = posixpath.join(self.state, 'release-coordinator/inputs', o['operationId'] + '.json')
+        require(self.operation_path == expected, 'application-qualification-operation-path')
+        directory = posixpath.join(self.state, 'release-coordinator/inputs', o['operationId'] + '.qualification')
+        self.io.protect(directory, directory=True)
+        pair_raw = self.io.read_bytes(posixpath.join(directory, 'reviewed-pair.json'), 1024 * 1024)
+        proof_raw = self.io.read_bytes(posixpath.join(directory, 'startup-qualification.json'), 512 * 1024)
+        require(sha(pair_raw) == selected['reviewedPairSha256'] and sha(proof_raw) == selected['projectionSha256'],
+                'application-qualification-bytes-changed')
+        pair, proof = json.loads(pair_raw), json.loads(proof_raw)
+        require(type(pair) is dict and pair.get('format') == 1 and pair.get('candidateId') == o['candidateId']
+                and pair.get('priorCandidateId') == o['priorCandidateId'], 'application-qualification-pair-changed')
+        qualification = pair.get('startupQualification', {})
+        require(type(qualification) is dict and qualification.get('projection') == {'path': 'startup-qualification.json', 'sha256': selected['projectionSha256']},
+                'application-qualification-projection-changed')
+        helpers = pair.get('helpers')
+        names = {'install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
+            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs',
+            'hosted_retained_configuration.py', 'local-retained-configuration.mjs',
+            'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs'}
+        require(type(helpers) is dict and set(helpers) == names and all(is_hash(v) for v in helpers.values()),
+                'application-qualification-helper-closure')
+        _validate_application_qualification(pair, proof, prior_id=o['priorCandidateId'], target_id=o['candidateId'],
+            workspace_epoch=o['workspaceEpoch'], helper_hashes=helpers)
+        binding = qualification['binding']; target = binding['targets']['private']
+        require(binding['prior'].get('version') == o['priorVersion'] and target.get('version') == o['version']
+                and target.get('buildVersion') == o['buildVersion'], 'application-qualification-version-changed')
+        return {'pair': pair, 'proof': proof, 'binding': binding, 'reviewedPairSha256': selected['reviewedPairSha256'],
+                'projectionSha256': selected['projectionSha256']}
+
     def prior_identity(self):
         o = self.operation
         health, context = self.io.get_json('health'), self.io.get_json('access/context')
         require(health.get('status') == 'ready' and health.get('candidateId') == o['priorCandidateId']
                 and health.get('version') == o['priorVersion'] and health.get('buildVersion') == o['priorBuildVersion']
-                and health.get('schemaVersion') == o['schemaVersion'] and health.get('apiVersion') == o['apiVersion']
+                and health.get('schemaVersion') == prior_schema(o) and health.get('apiVersion') == o['apiVersion']
                 and context.get('workspaceEpoch') == o['workspaceEpoch'], 'prior-live-identity-changed')
         require(self.io.runtime_version(self.config) == o['priorAgentVersion'], 'prior-runtime-changed')
         return {key: health[key] for key in ('status', 'candidateId', 'version', 'buildVersion', 'schemaVersion', 'apiVersion')}
@@ -362,6 +504,7 @@ class InstallRequest:
 
     def observe(self, wait_seconds=0):
         self.load_intent()
+        require(self.application_qualification() == self.qualification, 'application-qualification-changed')
         deadline = min(self.io.deadline, self.io.monotonic() + wait_seconds)
         while True:
             try:
@@ -395,7 +538,8 @@ class InstallRequest:
                 break
             require(self.io.monotonic() < heartbeat_deadline, 'fresh-real-heartbeat-not-observed')
             self.io.sleep(1)
-        require(self.prior_identity() == health and self.rehearsal_release() == rehearsal, 'prior-authority-changed')
+        require(self.prior_identity() == health and self.rehearsal_release() == rehearsal
+                and self.application_qualification() == self.qualification, 'prior-authority-changed')
         require(sha(self.io.read_bytes(self.operation_path, 8192)) == self.operation_sha
                 and sha(self.io.read_bytes(CONFIG, 65536, private=False)) == self.config_sha, 'operation-or-config-changed')
         status, view = self.control('status')

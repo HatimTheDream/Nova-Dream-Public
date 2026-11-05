@@ -9,6 +9,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpat
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { applicationTransitionSchema, verifyStartupRetainedProjection } from './release-delivery-startup-retained.mjs';
 
 export const PHASES = Object.freeze(['private-ci', 'public-ci', 'package', 'capacity', 'recovery', 'publication', 'installation', 'acceptance']);
 export const RELEASE_PLAN_LIMITS = Object.freeze({ inputBytes: 256 * 1024, receiptBytes: 2 * 1024 ** 2, logBytes: 8 * 1024 ** 2, bundleBytes: 128 * 1024 ** 2, totalBytes: 160 * 1024 ** 2, freshMs: 5 * 60_000 });
@@ -20,6 +21,7 @@ const reference = z.object({ path: z.string().min(1).max(4096).refine(v => !v.in
 const runtimeVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/);
 const packagedHelpers = ['install.py', 'recovery.py', 'codex_log_retention.py', 'app_dependencies.py', 'workspace_key.py', 'verify-session-bindings.mjs'];
 const helperNames = [...packagedHelpers, 'operator_rehearsal.py'];
+const applicationHelperNames = [...helperNames, 'hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs'];
 export const releaseOperationSchema = z.object({
   id: z.uuid(), stage: z.enum(['draft', 'frozen']).default('frozen'),
   candidateId: hash.nullable(), publicCandidateId: hash.nullable(), priorCandidateId: hash, workspaceEpoch: z.uuid(),
@@ -28,7 +30,7 @@ export const releaseOperationSchema = z.object({
   sourceCommits: z.object({ private: commit.nullable(), public: commit.nullable() }).strict(), bundleSha256: hash.nullable(),
   trustedPublicKeySha256: hash.nullable().default(null),
   changeClass: z.enum(['presentation', 'application', 'runtime', 'dependency', 'schema', 'updater', 'security', 'unknown']),
-  helperHashes: z.record(z.enum(helperNames), hash).nullable(),
+  helperHashes: z.union([z.record(z.enum(helperNames), hash), z.record(z.enum(applicationHelperNames), hash)]).nullable(),
 }).strict().refine(v => v.stage === 'draft' || [v.candidateId, v.publicCandidateId, v.bundleSha256, v.sourceCommits.private, v.sourceCommits.public, v.helperHashes].every(Boolean), 'Frozen identities must be known');
 const estimate = z.object({ id: z.uuid(), step: z.enum(['total', ...PHASES]), issuedAtMs: timestamp,
   remainingMs: range.nullable(), confidence: z.enum(['low', 'medium', 'high', 'unknown']), basis: text,
@@ -123,6 +125,51 @@ function fresh(value, now, maxAge = RELEASE_PLAN_LIMITS.freshMs) {
 }
 function flags(value) { need(['savedWorkVerified', 'accountsVerified', 'recoveryVerified', 'healthVerified'].every(k => value[k] === true), 'acceptance-incomplete'); }
 
+/** The additional helpers are admitted only with the original complete startup
+ * projection inside the exact bundle, bound to both frozen sources and targets.
+ * This remains planning evidence; live requester and installer verify it again. */
+export function qualifyApplicationPackage(pair, contents, operation) {
+  const migration = pair.applicationTransition;
+  if (migration === undefined) {
+    need(!pair.startupQualification && !contents.has('startup-qualification.json'), 'package-unexpected-startup-proof');
+    same(Object.keys(operation.helperHashes).sort(), helperNames.slice().sort(), 'package-unqualified-helper-closure');
+    same(pair.helpers, Object.fromEntries(packagedHelpers.filter(name => name !== 'install.py').map(name => [name, operation.helperHashes[name]])), 'package-pair-helpers-changed');
+    return packagedHelpers;
+  }
+  applicationTransitionSchema.parse(migration);
+  const raw = contents.get('startup-qualification.json');
+  need(raw && raw.length <= 512 * 1024 && pair.startupQualification?.projection?.path === 'startup-qualification.json'
+    && pair.startupQualification.projection.sha256 === sha256(raw), 'package-startup-proof-required');
+  const proof = JSON.parse(raw.toString('utf8'));
+  verifyStartupRetainedProjection(proof, proof.request);
+  const binding = proof.qualificationBinding;
+  same(binding, pair.startupQualification.binding, 'package-startup-binding-changed');
+  same(binding.applicationTransition, migration, 'package-startup-transition-changed');
+  same(binding.sourceCommits, operation.sourceCommits, 'package-startup-sources-changed');
+  same(binding.workspaceEpoch, operation.workspaceEpoch, 'package-startup-workspace-changed');
+  same(binding.prior.candidateId, operation.priorCandidateId, 'package-startup-prior-changed');
+  need(operation.agentVersion === migration.toAgentVersion && operation.priorAgentVersion === migration.fromAgentVersion
+    && binding.runtime.agentVersion === operation.agentVersion, 'package-startup-runtime-changed');
+  same(Object.keys(operation.helperHashes).sort(), applicationHelperNames.slice().sort(), 'package-startup-helper-closure');
+  same(binding.helpers, operation.helperHashes, 'package-startup-helpers-changed');
+  same(pair.helpers, operation.helperHashes, 'package-pair-helpers-changed');
+  if (binding.applicationDependencies) same(binding.applicationDependencies, pair.applicationDependencies, 'package-startup-dependencies-changed');
+  need(pair.applicationDependencies && binding.dependencyGraphSha256 === pair.applicationDependencies.dependencyGraphSha256,
+    'package-startup-dependency-graph-changed');
+  for (const side of ['private', 'public']) {
+    const target = binding.targets[side];
+    need(target.candidateId === operation[side === 'private' ? 'candidateId' : 'publicCandidateId']
+      && target.version === operation.version && target.buildVersion === operation.buildVersion
+      && target.packageLockSha256 === pair.applicationDependencies.packageLockSha256, 'package-startup-target-changed');
+  }
+  need(binding.targets.private.archiveSha256 === pair.archiveSha256 && binding.targets.private.archiveBytes === pair.archiveBytes,
+    'package-startup-archive-changed');
+  same([...contents.keys()].sort(), [...applicationHelperNames, 'app.tgz', 'reviewed-pair.json', 'startup-qualification.json'].sort(),
+    'package-startup-file-closure');
+  need(applicationHelperNames.every(name => sha256(contents.get(name)) === binding.helpers[name]), 'package-startup-helper-bytes-changed');
+  return applicationHelperNames;
+}
+
 /** Same reserve as recovery.py; allowanceBytes is the aggregate TWO allowances
  * (at least 2 * 128 MiB), matching maintained closedCapacity receipts. Online projections never
  * replace stopped admission, and no expected cleanup reclaim is counted.
@@ -190,7 +237,8 @@ function qualify(phase, files, operation, read, now) {
     same(pair.candidateId, operation.candidateId, 'package-pair-candidate-changed'); same(pair.priorCandidateId, operation.priorCandidateId, 'package-pair-prior-changed');
     same(pair.archiveSha256, sha256(contents.get('app.tgz')), 'package-archive-changed'); same(pair.archiveBytes, contents.get('app.tgz').length, 'package-archive-size-changed');
     same(review.archiveSha256, pair.archiveSha256, 'package-review-archive-changed');
-    same(pair.helpers, Object.fromEntries(packagedHelpers.filter(name => name !== 'install.py').map(name => [name, operation.helperHashes[name]])), 'package-pair-helpers-changed');
+    const requiredHelpers = qualifyApplicationPackage(pair, contents, operation);
+    need(requiredHelpers.every(name => names.has(name)), 'package-required-entry-missing');
     return { reuse: 'exact-source-artifacts', bundleSha256: operation.bundleSha256 };
   }
   if (phase === 'capacity') {

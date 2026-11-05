@@ -1,3 +1,8 @@
+## [2.28.20] - 2026-11-04
+
+- Carry verified saved-work migration proof through release planning, installation requests, and post-install checks.
+- Preserve complete helper copies, original-request recovery, and historical same-schema acceptance.
+
 ## [2.28.19] - 2026-11-04
 
 - Keep migration recovery checks bound to exact application identities and current installer capacity rules.

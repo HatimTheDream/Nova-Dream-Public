@@ -10,15 +10,19 @@ const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArr
 const encoded=v=>Buffer.from(canonical(v)+'\n');
 const source=()=>readFileSync(new URL('release-assistant-transport.py',import.meta.url));
 const full=()=>readFileSync(new URL('release-installed-identity.py',import.meta.url));
-const REQUESTER='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
+const REQUESTER='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941';
+// Original accepted schema55 profiles retain their genuine requester identity.
+// It is not authority for a new schema60 application transition.
+const LEGACY_REQUESTER='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
 const SUPPORT='8146ea044aaec3e06c29f663ddab5aabcab59a3b9e88c15bd7576ef1fc305d0d';
 const ref=v=>v&&Object.keys(v).sort().join(',')==='path,sha256'&&typeof v.path==='string'&&/^[a-f0-9]{64}$/.test(v.sha256);
 export const fullAssistantTransportIdentity=()=>sha256(Buffer.concat([source(),full(),readFileSync(new URL(import.meta.url))]));
-export function validateInstalledIdentityRequest(binding){
+export function validateInstalledIdentityRequest(binding,{allowLegacyProfile=false}={}){
  need(binding&&Object.keys(binding).sort().join(',')==='format,jobId,operation,requester,runtime'&&binding.format===1,'full-original-identity-input-required');
  const {idempotencyKey,...spec}=binding.operation;releaseInstallSpecSchema.parse(spec);
  need(/^[a-f0-9-]{36}$/.test(idempotencyKey)&&/^[a-f0-9-]{36}$/.test(binding.jobId),'full-original-key-job-required');
- need(equal(binding.requester,{path:`/opt/nova-release-tools/${REQUESTER}/request_install.py`,sha256:REQUESTER}),'full-maintained-requester-required');
+ const allowed=[REQUESTER,...(allowLegacyProfile&&spec.schemaVersion===55&&!spec.applicationQualification?[LEGACY_REQUESTER]:[])];
+ need(allowed.some(sha256=>equal(binding.requester,{path:`/opt/nova-release-tools/${sha256}/request_install.py`,sha256})),'full-maintained-requester-required');
  need(Object.keys(binding.runtime).sort().join(',')==='hostConfig,startupReview'&&ref(binding.runtime.hostConfig)&&binding.runtime.hostConfig.path==='/etc/nova-update/config.json'&&ref(binding.runtime.startupReview)&&/^\/opt\/nova-release-tools\/[a-zA-Z0-9/_-]+\/startup-review\.json$/.test(binding.runtime.startupReview.path),'full-reviewed-runtime-inputs-required');
  return binding;
 }

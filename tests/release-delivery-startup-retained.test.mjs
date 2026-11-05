@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {join,dirname} from 'node:path';
 import {readFileSync,writeFileSync} from 'node:fs';
-import {sha256} from '../scripts/release-plan.mjs';
+import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-plan.mjs';
+import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
+import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
 import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
@@ -168,6 +170,37 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
     const envelope=JSON.parse(readFileSync(packaged.output.bundle.path));
     assert.equal(envelope.files.length,14);assert.equal(envelope.files.filter(x=>x.name==='startup-qualification.json').length,1);
     assert.equal(commands.length,qualifiedDependencies?0:2);
+    if(qualifiedDependencies){
+      const seed={...f,prior:{route:f.route,artifacts:{repositories:f.artifacts}}};
+      const coordinated=await coordinatorFixture(t,{seed,packaged});
+      const result=buildFullCoordinatorDescriptor(coordinated.context,coordinated.verified,coordinated.options);
+      assert.equal(Object.keys(result.input.operation.helperHashes).length,11);
+      assert.equal(planRelease(result.input,{nowMs:coordinatorNow}).phases.filter(p=>p.state==='passed').length,6);
+      const spec=JSON.parse(readFileSync(result.adapter.installSpec.path));
+      assert.equal(spec.schemaVersion,60);assert.equal(spec.applicationQualification.priorSchemaVersion,55);
+      assert.equal(spec.applicationQualification.projectionSha256,proofRef.sha256);
+      const entries=new Map(envelope.files.map(row=>[row.name,Buffer.from(row.data,'base64')]));
+      const actualPair=JSON.parse(entries.get('reviewed-pair.json'));
+      assert.equal(spec.applicationQualification.reviewedPairSha256,sha256(entries.get('reviewed-pair.json')));
+      assert.equal(qualifyApplicationPackage(actualPair,entries,result.input.operation).length,11);
+      for(const mutate of [p=>p.heldBootstrapVerified=false,p=>p.workerClosed=false,
+        p=>p.qualificationBinding.sourceCommits.public='c'.repeat(40),p=>p.qualificationBinding.workspaceEpoch='11111111-1111-4111-8111-111111111111',
+        p=>p.qualificationBinding.targets.public.candidateId='0'.repeat(64),p=>p.qualificationBinding.helpers['hosted_retained_catalog.py']='0'.repeat(64),
+        p=>p.qualificationBinding.applicationDependencies.archiveSha256='0'.repeat(64),p=>p.qualificationBinding.applicationTransition.toSchemaVersion=61]){
+        const changedProof=structuredClone(f.proof);mutate(changedProof);
+        const proofBytes=Buffer.from(JSON.stringify(changedProof)+'\n'),changedPair=structuredClone(actualPair),changedEntries=new Map(entries);
+        changedPair.startupQualification={projection:{path:'startup-qualification.json',sha256:sha256(proofBytes)},binding:changedProof.qualificationBinding};
+        changedEntries.set('startup-qualification.json',proofBytes);changedEntries.set('reviewed-pair.json',Buffer.from(JSON.stringify(changedPair)));
+        assert.throws(()=>qualifyApplicationPackage(changedPair,changedEntries,result.input.operation));
+      }
+      for(const name of ['startup-qualification.json','hosted-retained-catalog.mjs']){
+        const missing=new Map(entries);missing.delete(name);assert.throws(()=>qualifyApplicationPackage(actualPair,missing,result.input.operation));
+      }
+      const changedHelper=new Map(entries);changedHelper.set('hosted-retained-catalog.mjs',Buffer.from('different helper'));
+      assert.throws(()=>qualifyApplicationPackage(actualPair,changedHelper,result.input.operation),/helper-bytes-changed/);
+      const unqualified={...actualPair};delete unqualified.applicationTransition;delete unqualified.startupQualification;
+      assert.throws(()=>qualifyApplicationPackage(unqualified,entries,result.input.operation));
+    }
   }
   writeFileSync(proofRef.path,JSON.stringify({...f.proof,heldBootstrapVerified:false})+'\n');
   await assert.rejects(reloaded.inspect(f.context));

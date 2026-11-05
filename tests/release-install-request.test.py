@@ -262,5 +262,103 @@ class InstallRequestTests(unittest.TestCase):
         self.assertNotIn('NEVER-PRINT-THIS', output.getvalue())
 
 
+class MigrationIO(FakeIO):
+    """Synthetic complete three-scenario proof; never actual qualification."""
+    def __init__(self):
+        super().__init__()
+        self.operation.update(schemaVersion=60, priorAgentVersion='2026.9.8')
+        helpers = {name: M.sha(name.encode()) for name in ('install.py', 'recovery.py', 'operator_rehearsal.py',
+            'app_dependencies.py', 'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs',
+            'hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')}
+        transition = {'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,
+            'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
+        binding = {'format':1,'kind':'same-runtime-startup-candidate-binding','applicationTransition':transition,
+            'workspaceEpoch':UUIDS[1], 'prior':{'candidateId':'b'*64,'version':'9.0.1'},
+            'targets':{'private':{'candidateId':'a'*64,'version':'9.0.2','buildVersion':'1.0.2','packageLockSha256':'7'*64},
+                'public':{'candidateId':'6'*64,'packageLockSha256':'7'*64}},
+            'dependencyGraphSha256':'8'*64,'runtime':{'agentVersion':'2026.9.8'},'helpers':helpers}
+        self.startup = {'format':1,'kind':'actual-retained-startup-qualification-observation',
+            'scope':'retained-same-runtime-startup-restart-restoration','readOnly':True,'hostEffects':False,
+            'productionAdmission':False,'qualificationBinding':binding,'scenarios':[],'references':{}}
+        for key in ('actualSettledQualification','independentOriginalRestored','completeMaintainedSavedAndNativeState',
+            'heldBootstrapVerified','workerClosed','freshFullRehearsalStillRequired','liveAcceptanceStillRequired'):
+            self.startup[key] = True
+        for i,name in enumerate(('target-first-start','target-restart','pristine-prior-restoration')):
+            ref = {'path':f'/fixture/{name}/preservation.json','sha256':'f'*64}
+            self.startup['scenarios'].append({'scenario':name,'candidateId':('b' if i==2 else 'a')*64,
+                'startedAtSeconds':100+i*20,'closedAtSeconds':110+i*20,'preservation':ref})
+            self.startup['references'][name+'/preservation'] = {**ref,'bytes':123}
+        self.pair = {'format':1,'candidateId':'a'*64,'priorCandidateId':'b'*64,'helpers':helpers,
+            'applicationTransition':transition,'startupQualification':{'binding':binding},
+            'applicationDependencies':{'dependencyGraphSha256':'8'*64,'packageLockSha256':'7'*64}}
+        self.sidecar = self.operation_path.removesuffix('.json') + '.qualification'
+        self.directories.add(self.sidecar)
+        self.bind_sidecars()
+
+    def bind_sidecars(self):
+        proof = M.canonical(self.startup)
+        self.pair['startupQualification']['projection'] = {'path':'startup-qualification.json','sha256':M.sha(proof)}
+        pair = M.canonical(self.pair)
+        self.operation['applicationQualification'] = {'priorSchemaVersion':55,'reviewedPairSha256':M.sha(pair),'projectionSha256':M.sha(proof)}
+        self.files[self.sidecar+'/reviewed-pair.json'] = pair
+        self.files[self.sidecar+'/startup-qualification.json'] = proof
+
+    def runtime_version(self, _config):
+        return '2026.9.8'
+
+    def make_job(self):
+        job = super().make_job()
+        job['release']['compatibility']['toSchemaVersion'] = 60
+        return job
+
+
+class ApplicationMigrationTests(unittest.TestCase):
+    def test_qualified_migration_keeps_prior55_and_target60_and_original_wire(self):
+        io = MigrationIO(); client = io.client(); result = client.execute()
+        self.assertEqual(result['state'], 'checking')
+        self.assertEqual(set(next(body for action,body in io.calls if action=='install')),
+            {'epoch','candidateId','releaseId','currentCandidateId','idempotencyKey','when'})
+        self.assertLess(len(M.canonical(io.operation)),8192)
+        io.journal['jobs'][0].update(state='completed',hold=False)
+        io.view['job']['state']='completed'; io.view['holdFor']=None
+        io.health['schemaVersion']=60
+        io.calls.clear(); self.assertEqual(io.client().observe()['state'],'completed')
+        self.assertEqual([action for action,_ in io.calls],['status'])
+        self.assertEqual(client.application_qualification()['pair'],io.pair)
+
+    def test_unqualified_or_changed_prior_schema_never_dispatches(self):
+        for change in (lambda io: io.operation.pop('applicationQualification'),
+            lambda io: io.operation['applicationQualification'].update(priorSchemaVersion=60),
+            lambda io: io.operation.update(priorAgentVersion='2026.9.6'),
+            lambda io: io.health.update(schemaVersion=60)):
+            io=MigrationIO(); change(io)
+            with self.assertRaises(M.Refusal): io.client().execute()
+            self.assertFalse(any(action=='install' for action,_ in io.calls))
+
+    def test_incomplete_or_different_proof_is_rejected_even_when_rehashed(self):
+        for change in (lambda io: io.startup.update(workerClosed=False),
+            lambda io: io.startup['scenarios'].pop(),
+            lambda io: io.pair['helpers'].pop('hosted-retained-catalog.mjs'),
+            lambda io: io.startup['qualificationBinding'].update(workspaceEpoch=UUIDS[0]),
+            lambda io: io.startup['qualificationBinding']['targets']['private'].update(version='9.0.9')):
+            io=MigrationIO(); change(io); io.bind_sidecars()
+            with self.assertRaises(M.Refusal): io.client().execute()
+            self.assertFalse(any(action=='install' for action,_ in io.calls))
+
+    def test_sidecar_change_and_same_schema_job_cannot_be_adopted(self):
+        io=MigrationIO(); client=io.client(); client.execute()
+        io.journal['jobs'][0]['release']['compatibility']['toSchemaVersion']=55
+        self.assertEqual(client.observe()['reason'],'original-request-identity-mismatch')
+        io.files[io.sidecar+'/startup-qualification.json'] += b' '
+        with self.assertRaisesRegex(M.Refusal,'application-qualification-bytes-changed'): client.observe()
+
+    def test_lost_reply_migration_observes_original_without_second_install(self):
+        io=MigrationIO(); io.install_mode='lost-record'; client=io.client()
+        self.assertEqual(client.execute()['state'],'checking')
+        self.assertEqual(client.observe()['state'],'checking')
+        self.assertEqual(sum(action=='install' for action,_ in io.calls),1)
+        with self.assertRaisesRegex(M.Refusal,'intent-exists'): client.execute()
+
+
 if __name__ == '__main__':
     unittest.main()

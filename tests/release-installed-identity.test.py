@@ -28,4 +28,15 @@ class Identity(unittest.TestCase):
   access={'workspaceEpoch':self.op['workspaceEpoch'],'recovery':False,'recoveryLocal':False}
   self.assertEqual(m.validate_health(health,access,self.op)['epoch'],self.op['workspaceEpoch'])
   with self.assertRaises(RuntimeError):m.validate_health(health,{**access,'workspaceEpoch':str(uuid.uuid4())},self.op)
+ def test_installed_schema60_must_retain_exact_requester_qualified_pair_and_projection(self):
+  pair={'candidateId':self.op['candidateId'],'priorCandidateId':self.op['priorCandidateId']}
+  proof={'qualificationBinding':{'workspaceEpoch':self.op['workspaceEpoch']}}
+  pair_raw=m.enc(pair);projection_raw=m.enc(proof)
+  qualification={'pair':pair,'proof':proof,'reviewedPairSha256':m.sha(pair_raw),'projectionSha256':m.sha(projection_raw)}
+  operation={**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':55,'reviewedPairSha256':m.sha(pair_raw),'projectionSha256':m.sha(projection_raw)}}
+  m.validate_staged_qualification(operation,qualification,pair_raw,projection_raw)
+  for a,b in [(pair_raw+b' ',projection_raw),(pair_raw,projection_raw+b' '),(m.enc({**pair,'candidateId':'e'*64}),projection_raw)]:
+   with self.assertRaises(RuntimeError):m.validate_staged_qualification(operation,qualification,a,b)
+  changed=copy.deepcopy(qualification);changed['proof']['qualificationBinding']['workspaceEpoch']=str(uuid.uuid4())
+  with self.assertRaises(RuntimeError):m.validate_staged_qualification(operation,changed,pair_raw,projection_raw)
 if __name__=='__main__':unittest.main()

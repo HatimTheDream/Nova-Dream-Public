@@ -1,8 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
 import {assistantAcceptanceInput} from '../scripts/release-delivery-assistant.mjs';
 import {validateInstalledIdentityRequest,buildInstalledIdentityProgram,fullAssistantBinding} from '../scripts/release-delivery-assistant-full.mjs';
+import {readFileSync} from 'node:fs';
+import {sha256} from '../scripts/release-plan.mjs';
 function fixture(){
- const requester='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
+ const requester=sha256(readFileSync(new URL('../deploy/update-runner/request_install.py',import.meta.url)));
  const operation={format:1,operationId:randomUUID(),idempotencyKey:randomUUID(),candidateId:'a'.repeat(64),priorCandidateId:'b'.repeat(64),workspaceEpoch:randomUUID(),version:'2.3.0',buildVersion:'1.0.287',priorVersion:'2.2.4',priorBuildVersion:'1.0.285',schemaVersion:55,apiVersion:1,agentVersion:'2026.9.8',priorAgentVersion:'2026.9.8',bundleSha256:'c'.repeat(64),rehearsalLeaseId:randomUUID(),rehearsalProofSha256:'d'.repeat(64)};
  const runtime={startupReview:{path:'/opt/nova-release-tools/actual/startup-review.json',sha256:'e'.repeat(64)},hostConfig:{path:'/etc/nova-update/config.json',sha256:'f'.repeat(64)}};
  const request={format:1,operation,jobId:randomUUID(),requester:{path:`/opt/nova-release-tools/${requester}/request_install.py`,sha256:requester},runtime};
@@ -25,4 +27,20 @@ test('full binding retains original parent deadline/job/runtime and refuses chan
 });
 test('unsupported requester or mutable runtime path is refused before any transport',()=>{
  const f=fixture();for(const change of [v=>v.requester.sha256='0'.repeat(64),v=>v.runtime.hostConfig.path='/tmp/config.json']){const v=structuredClone(f.request);change(v);assert.throws(()=>validateInstalledIdentityRequest(v));}
+});
+test('original accepted55 requester remains historical authority only; migration pins current exact bytes',()=>{
+ const f=fixture(),current=sha256(readFileSync(new URL('../deploy/update-runner/request_install.py',import.meta.url)));
+ const old='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
+ f.request.requester={path:`/opt/nova-release-tools/${old}/request_install.py`,sha256:old};
+ validateInstalledIdentityRequest(f.request,{allowLegacyProfile:true});
+ assert.throws(()=>validateInstalledIdentityRequest(f.request),/maintained-requester/);
+ assert.throws(()=>buildInstalledIdentityProgram(f.request),/maintained-requester/);
+ const changed=structuredClone(f.request);
+ changed.operation.schemaVersion=60;changed.operation.applicationQualification={priorSchemaVersion:55,reviewedPairSha256:'a'.repeat(64),projectionSha256:'b'.repeat(64)};
+ assert.throws(()=>validateInstalledIdentityRequest(changed),/maintained-requester/);
+ assert.throws(()=>validateInstalledIdentityRequest(changed,{allowLegacyProfile:true}),/maintained-requester/);
+ changed.requester={path:`/opt/nova-release-tools/${current}/request_install.py`,sha256:current};
+ assert.deepEqual(validateInstalledIdentityRequest(changed),changed);
+ changed.operation.schemaVersion=55;delete changed.operation.applicationQualification;
+ assert.deepEqual(validateInstalledIdentityRequest(changed),changed);
 });

@@ -164,6 +164,12 @@ test('main registry connects full Assistant to original identity and retains its
 test('installed identity reads schema60 from the authenticated original spec and rejects another schema',t=>{
   const f=fixture(t),request=structuredClone(f.request),proof=structuredClone(f.proof);
   request.operation.schemaVersion=60;proof.request=request;proof.health.schemaVersion=60;
+  request.operation.applicationQualification={priorSchemaVersion:55,reviewedPairSha256:sha256('qualified pair'),projectionSha256:sha256('qualified projection')};
+  proof.installationProof.applicationQualification=structuredClone(request.operation.applicationQualification);
   assert.deepEqual(verifyInstalledIdentity(proof,request),proof);
   assert.throws(()=>verifyInstalledIdentity({...proof,health:{...proof.health,schemaVersion:55}},request),/installed-health/);
+  const changed=structuredClone(proof);changed.installationProof.applicationQualification.projectionSha256=sha256('other projection');
+  assert.throws(()=>verifyInstalledIdentity(changed,request),/qualification-binding-changed/);
+  const absent=structuredClone(request);delete absent.operation.applicationQualification;
+  assert.throws(()=>verifyInstalledIdentity({...proof,request:absent},absent));
 });
