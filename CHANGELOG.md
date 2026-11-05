@@ -1,3 +1,8 @@
+## [2.28.21] - 2026-11-05
+
+- Distinguish forward startup checks from prior-version restoration when verifying saved work.
+- Keep strict preservation checks and bind delivery to the corrected qualification controller.
+
 ## [2.28.20] - 2026-11-04
 
 - Carry verified saved-work migration proof through release planning, installation requests, and post-install checks.
