@@ -13,9 +13,10 @@ import {verifyCandidate} from './candidate.mjs';
 import {verifyRetainedCandidate} from './release-delivery-package.mjs';
 import {validateJournalDirectory} from './release-coordinate.mjs';
 import {retainedRuntimeOptionsSchema,assertRuntimeQualifiedCandidate} from './release-delivery-runtime-retained.mjs';
-import {startupQualificationOptionsSchema,assertStartupQualifiedCandidate,QUALIFIED_STARTUP_SOURCES} from './release-delivery-startup-retained.mjs';
+import {startupQualificationOptionsSchema,assertStartupQualifiedCandidate,assertStartupApplicationTransition,applicationTransitionSchema,startupHelperNames,QUALIFIED_STARTUP_SOURCES} from './release-delivery-startup-retained.mjs';
 import {verifyRuntimeArtifact} from './release-runtime-artifact.mjs';
 import {verificationOnce} from './release-verification-pass.mjs';
+import {qualifiedDependenciesSchema,verifyQualifiedApplicationDependencies} from './release-delivery-qualified-dependencies.mjs';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/),ref=z.object({path:z.string().min(1).max(4096),sha256:hash}).strict();
 const transportFields={mode:z.literal('retained-native-metadata-successor'),python:ref,helper:ref,nativeInput:ref,selectedPair:ref,selectedInstaller:ref,selectedBundle:ref};
@@ -29,14 +30,17 @@ export const dependencyTransportSchema=z.discriminatedUnion('format',[
  z.object({format:z.literal(4),...transportFields,metadataPolicy:z.literal('release-deliver-quality-script-v1')}).strict(),
  z.object({format:z.literal(5),...transportFields,mode:z.literal('retained-startup-qualified-native-successor'),
   metadataPolicy:z.literal('release-deliver-quality-script-v1'),startupQualification:startupQualificationOptionsSchema}).strict(),
+ z.object({format:z.literal(6),...transportFields,mode:z.literal('qualified-application-dependency-successor'),
+  metadataPolicy:z.literal('release-deliver-quality-script-v1'),startupQualification:startupQualificationOptionsSchema,qualifiedDependencies:qualifiedDependenciesSchema}).strict(),
 ]);
-export const DEPENDENCY_SUCCESSOR_SHA='2acaf64f7a41b0a3299f7893c6649a2372f367c263ca57def6bab1eb46b1449a';
+export const DEPENDENCY_SUCCESSOR_SHA='ed677a2cef593a81db160faf03262f6be6eaeffd073fa2610da2b3927f22907b';
 export const DEPENDENCY_PARSER_SHA='e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290';
 const producer=fileURLToPath(new URL('./release-dependency-metadata-successor.py',import.meta.url));
-export const DEPENDENCY_WORKER_SHA='a08ac43e2d6acc0d39ec0d42dc8f118cad915c946184b7e3cb4f5b58a2176aea';
+export const DEPENDENCY_WORKER_SHA='8e384d3924da55be3610023ec3644671c2e410cb0f8df9cb049ac03eda1af405';
 const workerPath=fileURLToPath(new URL('./release-dependency-local-worker.py',import.meta.url));
 const MAX=128*1024**2,RESERVE=256*1024**2,WINDOW=600000;
-const helpers=['install.py','recovery.py','codex_log_retention.py','app_dependencies.py','workspace_key.py','verify-session-bindings.mjs'];
+const helpers=startupHelperNames().filter(n=>n!=='operator_rehearsal.py');
+const pairHelpers=transition=>startupHelperNames(transition??null).filter(n=>transition||n!=='operator_rehearsal.py');
 const startup=['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(x=>'dist/service/apps/service/'+x);
 const need=(value,reason)=>{if(!value)throw Error(reason);};
 const canonical=value=>JSON.stringify(value,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -51,7 +55,7 @@ const pIntent=c=>c.parentIntent??c.intent;
 const rootPath=c=>join(c.journal.directory,'dependency-'+pIntent(c).key);
 const assertKeys=(value,keys,reason)=>need(same(Object.keys(value).sort(),keys.slice().sort()),reason);
 function writeExclusive(path,bytes){const fd=openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|(constants.O_NOFOLLOW??0),0o600);try{writeFileSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}}
-function versionMetadataOnly(oldPackage,oldLock,newPackage,newLock,policy='version-only'){
+function versionMetadataOnly(oldPackage,oldLock,newPackage,newLock,policy='version-only',applicationTransition=null){
  const a=structuredClone(oldPackage),b=structuredClone(newPackage),x=structuredClone(oldLock),y=structuredClone(newLock);
  need(a.edition3&&b.edition3&&x.packages?.['']&&y.packages?.[''],'dependency-metadata-shape-required');
  need(['version-only','release-deliver-script-v1',QUALITY_POLICY].includes(policy),'unsupported-dependency-metadata-policy');
@@ -67,6 +71,7 @@ function versionMetadataOnly(oldPackage,oldLock,newPackage,newLock,policy='versi
   if(!Object.hasOwn(a.scripts,'test:quality'))delete b.scripts['test:quality'];
   b.scripts.quality=a.scripts.quality;
  }
+ if(applicationTransition){applicationTransitionSchema.parse(applicationTransition);need(a.edition3.schemaVersion===55&&b.edition3.schemaVersion===60&&a.edition3.apiVersion===1&&b.edition3.apiVersion===1,'dependency-application-transition-changed');b.edition3.schemaVersion=a.edition3.schemaVersion;}
  b.version=a.version;b.edition3.buildVersion=a.edition3.buildVersion;y.version=x.version;y.packages[''].version=x.packages[''].version;
  need(same(a,b)&&same(x,y),'changed-dependency-qualification-producer-required');
 }
@@ -74,14 +79,18 @@ export {versionMetadataOnly};
 function capacity(directory,archiveBudget=MAX){const v=statfsSync(directory,{bigint:true}),free=v.bavail*v.bsize,required=BigInt(RESERVE+archiveBudget+4*1024**2);need(free>=required,'local-dependency-capacity-insufficient');return{freeBytes:String(free),requiredBytes:String(required),archiveBudgetBytes:archiveBudget,reserveBytes:RESERVE};}
 function exactBundle(referenceValue,pairReference){
  const bundle=json(referenceValue,MAX);need(bundle.format===1&&Array.isArray(bundle.files),'selected-bundle-invalid');
- assertKeys(Object.fromEntries(bundle.files.map(x=>[x.name,x])),[...helpers,'app.tgz','reviewed-pair.json'],'selected-bundle-file-set-changed');
- need(bundle.files.length===helpers.length+2,'selected-bundle-duplicate-file');
+ const selectedPair=json(pairReference),migration=selectedPair.applicationTransition;
+ if(migration)applicationTransitionSchema.parse(migration);
+ const names=[...pairHelpers(migration),'app.tgz','reviewed-pair.json',...(migration?['startup-qualification.json']:[])];
+ assertKeys(Object.fromEntries(bundle.files.map(x=>[x.name,x])),names,'selected-bundle-file-set-changed');
+ need(bundle.files.length===names.length,'selected-bundle-duplicate-file');
  const files={};for(const entry of bundle.files){const raw=Buffer.from(entry.data,'base64');need(raw.toString('base64')===entry.data&&sha256(raw)===entry.sha256,'selected-bundle-file-changed');files[entry.name]=raw;}
- need(sha256(files['reviewed-pair.json'])===pairReference.sha256&&files['reviewed-pair.json'].equals(readEvidenceFile(pairReference)),'selected-bundle-pair-changed');return files;
+ need(sha256(files['reviewed-pair.json'])===pairReference.sha256&&files['reviewed-pair.json'].equals(readEvidenceFile(pairReference)),'selected-bundle-pair-changed');
+ if(migration)need(selectedPair.startupQualification?.projection?.path==='startup-qualification.json'&&sha256(files['startup-qualification.json'])===selectedPair.startupQualification.projection.sha256,'selected-startup-projection-changed');return files;
 }
 
 export function createMaintainedDependencyTransport({options:rawOptions,base,storeReceipt,run,runtimeCollector=null,startupCollector=null,startupSources=QUALIFIED_STARTUP_SOURCES,clock=Date.now}){
- const options=dependencyTransportSchema.parse(rawOptions),runtimeRoute=options.format===3,startupRoute=options.format===5,producerFormat=runtimeRoute?2:[4,5].includes(options.format)?3:options.format;
+ const options=dependencyTransportSchema.parse(rawOptions),runtimeRoute=options.format===3,qualifiedRoute=options.format===6,startupRoute=[5,6].includes(options.format),producerFormat=runtimeRoute?2:[4,5,6].includes(options.format)?3:options.format;
  let retainedProof=null,startupProof=null;
  const ensureQualification=async()=>{
   if(runtimeRoute&&!retainedProof){need(typeof runtimeCollector==='function','actual-settled-runtime-qualification-producer-required');retainedProof=await runtimeCollector();}
@@ -110,7 +119,12 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
    assertRuntimeQualifiedCandidate(retainedProof,{operation:descriptor.operation,prior:selected,nativeAnchor:nativeSelected,candidates,runtime:runtimeDescription,helpers:retainedProof.helpers});
    need(options.runtime.archive.sha256===runtimeDescription.archiveSha256,'qualified-runtime-archive-changed');verifyRuntimeArtifact(options.runtime.archive,runtimeDescription.archiveBytes);
   }
-  for(const candidate of [selected,nativeSelected,...Object.values(candidates)])need(candidate.manifest.schemaVersion===55&&candidate.manifest.apiVersion===1,'changed-schema-qualification-producer-required');
+  const applicationTransition=startupRoute?assertStartupApplicationTransition(startupProof.qualificationBinding,selected.manifest,candidates.private.manifest):null;
+  for(const candidate of Object.values(candidates)){
+   if(startupRoute)assertStartupApplicationTransition(startupProof.qualificationBinding,selected.manifest,candidate.manifest);
+   else need([55,60].includes(selected.manifest.schemaVersion)&&candidate.manifest.schemaVersion===selected.manifest.schemaVersion&&candidate.manifest.apiVersion===1&&selected.manifest.apiVersion===1,'changed-schema-qualification-producer-required');
+  }
+  need(nativeSelected.manifest.schemaVersion===selected.manifest.schemaVersion&&nativeSelected.manifest.apiVersion===1,'changed-schema-qualification-producer-required');
   const pair=json(options.selectedPair),installed=json(options.selectedInstaller),files=exactBundle(options.selectedBundle,options.selectedPair),anchor=json(options.nativeInput);
   need(pair.format===1&&pair.candidateId===nativeSelected.id&&installed.format===1&&installed.outcome==='completed'&&installed.candidateId===nativeSelected.id&&['savedWorkVerified','accountsVerified','recoveryVerified','healthVerified'].every(k=>installed[k]===true),'actual-selected-accepted-pair-required');
   if(runtimeRoute)need(same(pair,retainedProof.qualifiedPair)&&options.selectedBundle.sha256===retainedProof.acceptedSource.bundle.sha256
@@ -121,14 +135,15 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   const oldDescription=json(anchor.oldMetadata);need(oldDescription.dependencyGraphSha256===pair.applicationDependencies?.dependencyGraphSha256&&oldDescription.platform==='linux'&&oldDescription.arch==='x64'&&oldDescription.nodeVersion==='22.23.2'&&oldDescription.nodeAbi===127,'selected-native-dependency-graph-changed');
   need(pair.startupBarrier?.format===1,'selected-startup-barrier-required');assertKeys(pair.startupBarrier.target,startup,'complete-selected-startup-barrier-required');
   const barrier={},priorBarrier={};for(const path of startup){const priorBytes=selected.bytes.get(path);need(priorBytes,'actual-selected-prior-startup-required');priorBarrier[path]=sha256(priorBytes);const bytes=nativeSelected.bytes.get(path);need(bytes&&sha256(bytes)===pair.startupBarrier.target[path],'selected-startup-bytes-changed');const targetBytes=startupRoute?candidates.private.bytes.get(path):bytes;need(targetBytes,'actual-qualified-target-startup-required');barrier[path]=sha256(targetBytes);for(const value of Object.values(candidates))need(value.bytes.get(path)&&sha256(value.bytes.get(path))===barrier[path],'changed-startup-qualification-producer-required');}
-  const helperBytes={};for(const name of helpers){if(runtimeRoute)need(sha256(files[name])===retainedProof.helpers[name],'runtime-qualified-helper-changed');need(files[name]&&(name==='install.py'||pair.helpers?.[name]===sha256(files[name])),'selected-helper-description-changed');for(const side of ['private','public']){const artifact=input.artifacts[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];need(claimed?.sha256===sha256(files[name]),'changed-updater-qualification-producer-required');const raw=frontendRegular(join(artifact.frozenSourceDirectory,'deploy/update-runner',name),2*1024**2);need(sha256(raw)===claimed.sha256,'authenticated-helper-source-changed');helperBytes[name]=raw;}}
+  const helperNames=pairHelpers(applicationTransition),helperBytes={};for(const name of helperNames){if(runtimeRoute)need(sha256(files[name])===retainedProof.helpers[name],'runtime-qualified-helper-changed');if(helpers.includes(name)||pair.applicationTransition)need(files[name]&&(name==='install.py'||pair.helpers?.[name]===sha256(files[name])),'selected-helper-description-changed');for(const side of ['private','public']){const artifact=input.artifacts[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];need(claimed?.sha256===(applicationTransition?startupProof.qualificationBinding.helpers[name]:sha256(files[name])),'changed-updater-qualification-producer-required');const raw=frontendRegular(join(artifact.frozenSourceDirectory,'deploy/update-runner',name),2*1024**2);need(sha256(raw)===claimed.sha256,'authenticated-helper-source-changed');helperBytes[name]=raw;}}
   const pkg=candidates.private.bytes.get('package.json'),lock=frontendRegular(join(input.artifacts.private.applicationDirectory,'package-lock.json'),8*1024**2);
   for(const side of ['private','public']){const artifact=input.artifacts[side],receipt=json(artifact.ciSourceReceipt),sideLock=frontendRegular(join(artifact.applicationDirectory,'package-lock.json'),8*1024**2);need(receipt.application.packageLockSha256===sha256(sideLock)&&sideLock.equals(lock)&&candidates[side].bytes.get('package.json').equals(pkg),'paired-official-dependency-metadata-changed');}
   const selectedPackage=nativeSelected.bytes.get('package.json'),selectedLock=frontendRegular(join(nativeBase.directory,'package-lock.json'),8*1024**2);
   need(sha256(selectedLock)===pair.applicationDependencies.packageLockSha256,'selected-official-lock-changed');
-  versionMetadataOnly(JSON.parse(selectedPackage),JSON.parse(selectedLock),JSON.parse(pkg),JSON.parse(lock),producerFormat>=2?options.metadataPolicy:'version-only');
+  const qualifiedDependencies=qualifiedRoute?verifyQualifiedApplicationDependencies(options.qualifiedDependencies,startupProof.qualificationBinding,{producerSha256:DEPENDENCY_PARSER_SHA,packageSha256:sha256(pkg),packageLockSha256:sha256(lock)}):null;
+  if(!qualifiedRoute)versionMetadataOnly(JSON.parse(selectedPackage),JSON.parse(selectedLock),JSON.parse(pkg),JSON.parse(lock),producerFormat>=2?options.metadataPolicy:'version-only',applicationTransition);
   if(startupRoute)assertStartupQualifiedCandidate(startupProof,{operation:descriptor.operation,prior:selected,candidates,artifacts:input.artifacts,
-   helpers:Object.fromEntries(Object.entries(helperBytes).map(([name,bytes])=>[name,sha256(bytes)])),dependencyGraphSha256:oldDescription.dependencyGraphSha256},startupSources);
+   helpers:Object.fromEntries(Object.entries(helperBytes).map(([name,bytes])=>[name,sha256(bytes)])),dependencyGraphSha256:(qualifiedDependencies?.description??oldDescription).dependencyGraphSha256,applicationDependencies:qualifiedDependencies?.description??null},startupSources);
   let releaseCommand,qualityCommand;
   if(producerFormat>=2){
    const sources={};let commandBytes;
@@ -154,13 +169,13 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   }
   // The maintained outer adapter validates before reserving its package phase.
   // This path validates sources only and cannot derive effect paths or identities.
-  if(!parent)return{pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,pkg,lock};
+  if(!parent)return{pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,pkg,lock,applicationTransition,qualifiedDependencies};
   const directory=rootPath(c),targetPackage={path:join(directory,'package.json'),sha256:sha256(pkg)},targetLock={path:join(directory,'package-lock.json'),sha256:sha256(lock)};
-  const successor={...anchor,...(releaseCommand?{format:producerFormat,releaseCommand}:{}),...(qualityCommand?{qualityCommand}:{}),helper:options.helper,targetPackage,targetLock,transition:{...anchor.transition,toVersion:descriptor.operation.version,toBuild:descriptor.operation.buildVersion}};
-  const identity={format:1,operationId:descriptor.operation.id,parentKey:parent.key,parentInputSha256:parent.inputSha256,sourceCommits:descriptor.operation.sourceCommits,candidateId:candidates.private.id,publicCandidateId:candidates.public.id,priorCandidateId:selected.id,producerSha256:DEPENDENCY_SUCCESSOR_SHA,options,base,...(runtimeRoute?{runtimeQualification:retainedProof}: {}),...(startupRoute?{startupQualification:startupProof}: {})};
+  const successor=qualifiedRoute?{format:1,kind:'qualified-application-dependency-reference',targetPackage,targetLock,qualifiedDependencies:options.qualifiedDependencies,applicationTransition,startupBinding:startupProof.qualificationBinding}:{...anchor,...(releaseCommand?{format:producerFormat,releaseCommand}:{}),...(qualityCommand?{qualityCommand}:{}),helper:options.helper,targetPackage,targetLock,transition:{...anchor.transition,toVersion:descriptor.operation.version,toBuild:descriptor.operation.buildVersion},...(applicationTransition?{applicationTransition,startupQualification:{projection:{path:join(directory,'startup-qualification.json'),sha256:sha256(encoded(startupProof))},binding:startupProof.qualificationBinding}}:{})};
+  const identity={format:1,operationId:descriptor.operation.id,parentKey:parent.key,parentInputSha256:parent.inputSha256,sourceCommits:descriptor.operation.sourceCommits,candidateId:candidates.private.id,publicCandidateId:candidates.public.id,priorCandidateId:selected.id,producerSha256:qualifiedRoute?DEPENDENCY_PARSER_SHA:DEPENDENCY_SUCCESSOR_SHA,options,base,...(runtimeRoute?{runtimeQualification:retainedProof}: {}),...(startupRoute?{startupQualification:startupProof}: {})};
   const runtime=runtimeRoute?{...options.runtime,description:runtimeDescription,qualificationBinding:{candidateId:candidates.private.id,priorCandidateId:selected.id,nativeAnchorCandidateId:nativeSelected.id,sourceCommits:descriptor.operation.sourceCommits},qualification:{path:join(directory,'runtime-qualification.json'),sha256:sha256(encoded(retainedProof))}}:null;
   const startupQualification=startupRoute?{projection:{path:join(directory,'startup-qualification.json'),sha256:sha256(encoded(startupProof))},binding:startupProof.qualificationBinding}:null;
-  return{identity,directory,pkg,lock,successor,pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,runtime,startupQualification};
+  return{identity,directory,pkg,lock,successor,pair,barrier,priorBarrier,helperBytes,selected,nativeSelected,candidates,runtime,startupQualification,applicationTransition,qualifiedDependencies};
  });
  const stageOutput=c=>{const value=check(c);return{...value.identity,kind:'maintained-dependency-local-stage',directory:value.directory,input:{path:join(value.directory,'input.json'),sha256:sha256(encoded(value.successor))},package:value.successor.targetPackage,lock:value.successor.targetLock,...(value.runtime?{runtime:value.runtime}: {}),...(value.startupQualification?{retainedStartupQualification:value.startupQualification}: {})};};
  const readStaged=c=>{const output=stageOutput(c);for(const key of ['input','package','lock'])readEvidenceFile(output[key],{maximum:8*1024**2});if(output.runtime)need(same(json(output.runtime.qualification),retainedProof),'original-runtime-qualification-projection-changed');if(output.retainedStartupQualification)need(same(json(output.retainedStartupQualification.projection),startupProof),'original-startup-qualification-projection-changed');return output;};
@@ -171,10 +186,18 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   if(out.state==='completed'){need(out.finishedAtMs<request.deadlineAtMs,'original-dependency-worker-completed-late');if(phase==='plan')need(same(out.result,{passed:true,readOnly:true,hostEffects:false}),'maintained-dependency-plan-result-changed');else need(same(out.result,reference(paths(c).result)),'maintained-dependency-execute-result-changed');}else need(out.result===null,'failed-dependency-worker-result-changed');return{out,reference:reference(path)};};
  const runWorker=async(c,phase,milliseconds)=>{const request=workerRequest(c,phase),path=join(rootPath(c),phase+'-request.json');writeExclusive(path,encoded(request));await run(options.python.path,[workerPath,'--request',path,'--approved-request-sha',reference(path).sha256],{timeoutMs:milliseconds,maximum:8*1024**2,acceptJsonFailure:true});const outcome=workerOutcome(c,phase);need(outcome,'original-dependency-worker-outcome-missing');return outcome;};
  const failure=(c,value)=>result('failed',value.out.reason,c,null,value.reference);
- const checkPlan=c=>{const staged=readStaged(c),path=paths(c).plan,p=json(reference(path)),worker=workerOutcome(c,'plan');need(worker?.out.state==='completed'&&p.kind==='maintained-dependency-local-plan'&&same(p.stage,staged)&&p.readOnly===true&&p.hostEffects===false&&p.plannedAtMs===worker.out.finishedAtMs&&same(p.workerOutcome,worker.reference),'original-dependency-plan-changed');return p;};
+ const checkPlan=c=>{const staged=readStaged(c),path=paths(c).plan,p=json(reference(path));if(qualifiedRoute){need(p.kind==='qualified-dependency-local-plan'&&same(p.stage,staged)&&same(p.dependencyExecution,options.qualifiedDependencies.execution)&&p.readOnly===true&&p.hostEffects===false&&Number.isSafeInteger(p.plannedAtMs),'original-qualified-dependency-plan-changed');return p;}const worker=workerOutcome(c,'plan');need(worker?.out.state==='completed'&&p.kind==='maintained-dependency-local-plan'&&same(p.stage,staged)&&p.readOnly===true&&p.hostEffects===false&&p.plannedAtMs===worker.out.finishedAtMs&&same(p.workerOutcome,worker.reference),'original-dependency-plan-changed');return p;};
  const checkIntent=c=>{const plan=checkPlan(c),v=json(reference(paths(c).intent));need(v.kind==='maintained-dependency-execution-intent'&&v.operationId===c.descriptor.operation.id&&v.parentKey===pIntent(c).key&&same(v.plan,reference(paths(c).plan))&&v.outputDirectory===paths(c).output,'original-dependency-intent-changed');return{plan,intent:v};};
  const readProduced=c=>{
   const v=check(c),{intent}=checkIntent(c),p=paths(c);if(!existsSync(p.execution)||!existsSync(p.result))return null;
+  if(qualifiedRoute){
+   const row=c.journal.deliveryPhase(c.descriptor.operation.id,'package/dependency-execute');
+   const expected={kind:'qualified-application-dependency-reference',input:v.successor,dependencies:v.qualifiedDependencies};
+   need(row&&same(json(reference(p.execution)),{format:1,kind:'original-qualified-dependency-reference',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,phaseKey:row.key,inputSha256:row.inputSha256,reservedAtMs:row.createdAtMs,intent:reference(p.intent),dependencyExecution:options.qualifiedDependencies.execution})
+     &&same(json(reference(p.result)),expected),'original-qualified-dependency-reference-changed');
+   assertKeys(Object.fromEntries(readdirSync(p.output).map(x=>[x,true])),['result.json'],'qualified-dependency-output-set-changed');
+   return{kind:'maintained-local-dependency-result',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,executionKey:row.key,result:reference(p.result),dispatch:reference(p.execution),dependencies:v.qualifiedDependencies,freshFullRehearsalStillRequired:true,newNativeExecutionClaimed:false};
+  }
   const completedWorker=workerOutcome(c,'execute');if(!completedWorker||completedWorker.out.state!=='completed')return null;
   const witness=json(reference(p.execution)),executeRow=c.journal.deliveryPhase(c.descriptor.operation.id,'package/dependency-execute');
   need(executeRow&&same(witness,{format:1,kind:'original-local-dependency-dispatch',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,phaseKey:executeRow.key,inputSha256:executeRow.inputSha256,reservedAtMs:executeRow.createdAtMs,deadlineAtMs:executeRow.createdAtMs+615000,intent:reference(p.intent),producerSha256:DEPENDENCY_SUCCESSOR_SHA}),'original-dependency-dispatch-changed');
@@ -184,13 +207,22 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   assertKeys(Object.fromEntries(readdirSync(p.output).map(x=>[x,true])),['app-dependencies.tgz','app-dependencies.tgz.metadata.json','result.json'],'produced-dependency-file-set-changed');
   return{kind:'maintained-local-dependency-result',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,executionKey:executeRow.key,result:reference(p.result),dispatch:reference(p.execution),dependencies:{archive:out.archive,metadata:out.metadata,description:out.description,qualification:reference(p.result),unchangedNativeDependencies:true,nativeQualification:v.successor.nativeReceipt},freshFullRehearsalStillRequired:true,newNativeExecutionClaimed:false};
  };
+ const pairedDescription=(value,produced,archiveBytes,archiveSha256)=>{
+  const {applicationTransition:_oldTransition,startupQualification:_oldQualification,...selectedPair}=value.pair;
+  return{...selectedPair,priorCandidateId:value.selected.id,candidateId:value.candidates.private.id,archiveBytes,archiveSha256,
+   helpers:Object.fromEntries(Object.keys(value.helperBytes).filter(n=>value.applicationTransition||n!=='install.py').map(n=>[n,sha256(value.helperBytes[n])])),
+   applicationDependencies:produced.dependencies.description,startupBarrier:{format:1,prior:value.priorBarrier,target:value.barrier},
+   ...(value.runtime?{runtime:value.runtime.description}:{}),...(value.applicationTransition?{applicationTransition:value.applicationTransition,
+    startupQualification:{projection:{path:'startup-qualification.json',sha256:value.startupQualification.projection.sha256},binding:value.startupQualification.binding}}:{})};
+ };
  const observePair=c=>{
   const value=check(c),produced=readProduced(c),p=paths(c);if(!produced||!existsSync(p.pairResult))return null;
-  const output=json(reference(p.pairResult));const pair={...value.pair,priorCandidateId:value.selected.id,candidateId:value.candidates.private.id,archiveBytes:frontendRegular(pIntent(c).input.artifacts.private.archive.path,MAX).length,archiveSha256:pIntent(c).input.artifacts.private.archive.sha256,applicationDependencies:produced.dependencies.description,startupBarrier:{format:1,prior:value.priorBarrier,target:value.barrier},...(value.runtime?{runtime:value.runtime.description}: {})};
+  const output=json(reference(p.pairResult));const pair=pairedDescription(value,produced,frontendRegular(pIntent(c).input.artifacts.private.archive.path,MAX).length,pIntent(c).input.artifacts.private.archive.sha256);
   need(output.kind==='maintained-qualified-update-pair'&&output.operationId===c.descriptor.operation.id&&output.key===pIntent(c).key&&same(output.sourceCommits,c.descriptor.operation.sourceCommits)&&output.candidateId===pair.candidateId&&output.publicCandidateId===value.candidates.public.id&&output.priorCandidateId===pair.priorCandidateId&&output.directory===p.pair&&same(output.dependencies,produced.dependencies)&&same(output.preparation,reference(p.pairResult+'.preparation.json')),'maintained-pair-output-changed');
-  assertKeys(Object.fromEntries(readdirSync(p.pair).map(x=>[x,true])),[...helpers,'app.tgz','reviewed-pair.json'],'maintained-pair-file-set-changed');
+  assertKeys(Object.fromEntries(readdirSync(p.pair).map(x=>[x,true])),[...Object.keys(value.helperBytes),'app.tgz','reviewed-pair.json',...(value.applicationTransition?['startup-qualification.json']:[])],'maintained-pair-file-set-changed');
+  if(value.applicationTransition)need(frontendRegular(join(p.pair,'startup-qualification.json'),512*1024).equals(encoded(startupProof)),'maintained-pair-startup-proof-changed');
   need(same(json(reference(join(p.pair,'reviewed-pair.json'))),pair),'maintained-pair-description-changed');
-  for(const name of helpers)need(frontendRegular(join(p.pair,name),2*1024**2).equals(value.helperBytes[name]),'maintained-pair-helper-changed');
+  for(const name of Object.keys(value.helperBytes))need(frontendRegular(join(p.pair,name),2*1024**2).equals(value.helperBytes[name]),'maintained-pair-helper-changed');
   need(sha256(frontendRegular(join(p.pair,'app.tgz'),MAX))===pair.archiveSha256,'maintained-pair-archive-changed');
   const expectedRelease=release(value,c);need(same(output.release,expectedRelease)&&same(output.runtime,value.runtime),'maintained-pair-release-changed');
   need(same(output.startupQualification??null,value.startupQualification),'maintained-pair-startup-qualification-changed');
@@ -213,10 +245,14 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
  // A lost process response can still leave the producer's complete immutable result.
  steps['dependency-execute'].observe=async c=>{const value=workerOutcome(c,'execute');if(value?.out.state==='failed')return failure(c,value);const output=readProduced(c);return output?completed(c,'dependency-execute',output):result('uncertain','original-dependency-execution-incomplete',c);};
  steps['dependency-retrieval']=step('dependency-retrieval',readProduced,async c=>{deadline(c);const output=readProduced(c);need(output,'maintained-dependency-result-missing');return completed(c,'dependency-retrieval',output);});
- steps.pair=step('pair',observePair,async c=>{const value=check(c),produced=readProduced(c),p=paths(c);deadline(c);need(produced&&!existsSync(p.pair)&&!existsSync(p.pairResult),'original-pair-output-present-or-dependency-missing');const archive=readEvidenceFile(pIntent(c).input.artifacts.private.archive,{maximum:MAX}),pair={...value.pair,priorCandidateId:value.selected.id,candidateId:value.candidates.private.id,archiveBytes:archive.length,archiveSha256:sha256(archive),applicationDependencies:produced.dependencies.description,startupBarrier:{format:1,prior:value.priorBarrier,target:value.barrier},...(value.runtime?{runtime:value.runtime.description}: {})},flatBytes=archive.length+Object.values(value.helperBytes).reduce((n,b)=>n+b.length,0)+encoded(pair).length;capacity(c.journal.directory,flatBytes+Math.ceil(flatBytes*4/3)+2*1024**2);validateJournalDirectory(p.pair,{create:true});
-  for(const name of helpers)writeExclusive(join(p.pair,name),value.helperBytes[name]);writeExclusive(join(p.pair,'app.tgz'),archive);writeExclusive(join(p.pair,'reviewed-pair.json'),encoded(pair));
-  const preparation={format:1,kind:'automatic-retained-native-pair-preparation',identity:value.identity,dependencies:produced,sourceHelpers:Object.fromEntries(helpers.map(name=>[name,sha256(value.helperBytes[name])])),startupBarrier:pair.startupBarrier,...(value.startupQualification?{startupQualification:value.startupQualification}:{}),hostEffects:false,newNativeExecutionClaimed:false,newTargetStartupClaimed:false,freshFullRehearsalStillRequired:true,liveAcceptanceStillRequired:true};writeExclusive(p.pairResult+'.preparation.json',encoded(preparation));
+ steps.pair=step('pair',observePair,async c=>{const value=check(c),produced=readProduced(c),p=paths(c);deadline(c);need(produced&&!existsSync(p.pair)&&!existsSync(p.pairResult),'original-pair-output-present-or-dependency-missing');const archive=readEvidenceFile(pIntent(c).input.artifacts.private.archive,{maximum:MAX}),pair=pairedDescription(value,produced,archive.length,sha256(archive)),flatBytes=(value.applicationTransition?encoded(startupProof).length:0)+archive.length+Object.values(value.helperBytes).reduce((n,b)=>n+b.length,0)+encoded(pair).length;capacity(c.journal.directory,flatBytes+Math.ceil(flatBytes*4/3)+2*1024**2);validateJournalDirectory(p.pair,{create:true});
+  for(const name of Object.keys(value.helperBytes))writeExclusive(join(p.pair,name),value.helperBytes[name]);if(value.applicationTransition)writeExclusive(join(p.pair,'startup-qualification.json'),encoded(startupProof));writeExclusive(join(p.pair,'app.tgz'),archive);writeExclusive(join(p.pair,'reviewed-pair.json'),encoded(pair));
+  const preparation={format:1,kind:'automatic-retained-native-pair-preparation',identity:value.identity,dependencies:produced,sourceHelpers:Object.fromEntries(Object.keys(value.helperBytes).map(name=>[name,sha256(value.helperBytes[name])])),startupBarrier:pair.startupBarrier,...(value.startupQualification?{startupQualification:value.startupQualification}:{}),hostEffects:false,newNativeExecutionClaimed:false,newTargetStartupClaimed:false,freshFullRehearsalStillRequired:true,liveAcceptanceStillRequired:true};writeExclusive(p.pairResult+'.preparation.json',encoded(preparation));
   const output={kind:'maintained-qualified-update-pair',operationId:c.descriptor.operation.id,key:pIntent(c).key,sourceCommits:c.descriptor.operation.sourceCommits,candidateId:pair.candidateId,publicCandidateId:value.candidates.public.id,priorCandidateId:pair.priorCandidateId,directory:p.pair,dependencies:produced.dependencies,runtime:value.runtime,...(value.startupQualification?{startupQualification:value.startupQualification}:{}),release:release(value,c),preparation:reference(p.pairResult+'.preparation.json')};writeExclusive(p.pairResult,encoded(output));return completed(c,'pair',observePair(c));});
  steps.pair.observe=async c=>{const output=observePair(c);return output?completed(c,'pair',output):result('uncertain','original-pair-output-incomplete',c);};
+ if(qualifiedRoute){
+  steps['dependency-plan']=step('dependency-plan',checkPlan,async c=>{readStaged(c);deadline(c);capacity(c.journal.directory,0);need(!existsSync(paths(c).plan),'original-qualified-dependency-plan-present');writeExclusive(paths(c).plan,encoded({kind:'qualified-dependency-local-plan',stage:readStaged(c),dependencyExecution:options.qualifiedDependencies.execution,plannedAtMs:clock(),readOnly:true,hostEffects:false}));return completed(c,'dependency-plan',checkPlan(c));});
+  steps['dependency-execute']=step('dependency-execute',readProduced,async c=>{const v=check(c),{plan}=checkIntent(c),p=paths(c);deadline(c);need(clock()-plan.plannedAtMs<=WINDOW&&!existsSync(p.execution)&&!existsSync(p.output),'original-qualified-dependency-effect-present-or-expired');capacity(c.journal.directory,0);writeExclusive(p.execution,encoded({format:1,kind:'original-qualified-dependency-reference',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,phaseKey:c.intent.key,inputSha256:c.intent.inputSha256,reservedAtMs:c.intent.createdAtMs,intent:reference(p.intent),dependencyExecution:options.qualifiedDependencies.execution}));validateJournalDirectory(p.output,{create:true});writeExclusive(p.result,encoded({kind:'qualified-application-dependency-reference',input:v.successor,dependencies:v.qualifiedDependencies}));return completed(c,'dependency-execute',readProduced(c));});
+ }
  return{validate:async c=>{await ensureQualification();check(c);},steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};
 }

@@ -5,8 +5,10 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
 import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
-import {createMaintainedDependencyTransport,dependencyTransportSchema} from '../scripts/release-delivery-dependency-transport.mjs';
+import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
+import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
+import {DEPENDENCY_PACK_PROBE_SHA} from '../scripts/release-delivery-qualified-dependencies.mjs';
 
 test('startup request is strict and requires independently frozen producer sources',t=>{
   const f=startupCommandFixture(t);
@@ -88,8 +90,21 @@ test('fixed collector source is part of the adapter graph and does not launch a 
   assert.match(sha256(source),/^[a-f0-9]{64}$/);
 });
 
-test('format5 stages, qualifies, pairs and reloads the same proof without replay; persisted drift refuses',async t=>{
-  const f=startupCommandFixture(t),commands=[];
+async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false){
+  const f=startupCommandFixture(t,{schemaMigration,newDependencyGraph:qualifiedDependencies,...(schemaMigration?{sources:QUALIFIED_STARTUP_SOURCES}:{})}),commands=[];
+  if(qualifiedDependencies){
+    const binding=f.proof.qualificationBinding,archive=f.put(join(f.root,'qualified-dependencies.tgz'),Buffer.from('synthetic freshly qualified different Linux graph'));
+    const description={format:1,archiveBytes:readFileSync(archive.path).length,archiveSha256:archive.sha256,expandedBytes:100,fileCount:3,packageLockSha256:binding.targets.private.packageLockSha256,dependencyGraphSha256:sha256('different installed fixture2 graph'),platform:'linux',arch:'x64',nodeVersion:'22.23.2',nodeAbi:127};
+    const metadata=f.put(join(f.root,'qualified-dependencies.metadata.json'),description);
+    binding.applicationDependencies=description;binding.dependencyGraphSha256=description.dependencyGraphSha256;
+    binding.runtime.node='/runtime/node';binding.runtime.nodeSha256=sha256('synthetic application Node22');
+    const execution=f.put(join(f.root,'qualified-dependencies.execution.json'),{format:1,kind:'qualified-application-dependency-pack',producerSha256:DEPENDENCY_PARSER_SHA,
+      node:{path:binding.runtime.node,sha256:binding.runtime.nodeSha256,platform:'linux',arch:'x64',nodeVersion:'22.23.2',nodeAbi:127},
+      source:{packageSha256:binding.targets.private.packageSha256,packageLockSha256:description.packageLockSha256,dependencyGraphSha256:description.dependencyGraphSha256,inventoryBeforeSha256:sha256('closed source'),inventoryAfterSha256:sha256('closed source')},
+      archive:{sha256:archive.sha256,bytes:description.archiveBytes},metadataSha256:metadata.sha256,description,execution:{probeSha256:DEPENDENCY_PACK_PROBE_SHA,identity:{platform:'linux',arch:'x64',nodeVersion:'22.23.2',nodeAbi:127},exitCode:0},
+      ...Object.fromEntries(['planRef','intentRef','closureRef'].map(n=>[n,{path:'/synthetic/'+n+'.json',sha256:sha256(n),bytes:1}]))});
+    f.transportOptions={...f.transportOptions,format:6,mode:'qualified-application-dependency-successor',qualifiedDependencies:{archive,metadata,execution}};
+  }
   // Only the pre-existing dependency worker boundary is synthetic. The actual
   // transport, SQLite reservations, stage, intent, pair and reload code run.
   const run=async(executable,argv)=>{
@@ -123,13 +138,18 @@ test('format5 stages, qualifies, pairs and reloads the same proof without replay
   assert.equal(commands.length,0);
   const completed=await producer.execute(f.context);
   assert.equal(completed.state,'completed',JSON.stringify({completed,executionErrors}));
-  assert.deepEqual(commands.map(x=>JSON.parse(readFileSync(x.argv[2])).phase),['plan','execute']);
+  assert.deepEqual(commands.map(x=>JSON.parse(readFileSync(x.argv[2])).phase),qualifiedDependencies?[]:['plan','execute']);
   const output=completed.output,proofRef=output.startupQualification.projection;
   assert.deepEqual(JSON.parse(readFileSync(proofRef.path)),f.proof);
   assert.deepEqual(output.startupQualification.binding,f.proof.qualificationBinding);
   const pair=JSON.parse(readFileSync(join(output.directory,'reviewed-pair.json'))),preparation=JSON.parse(readFileSync(output.preparation.path));
   assert.notDeepEqual(pair.startupBarrier.prior,pair.startupBarrier.target);
-  assert.equal(Object.hasOwn(pair,'startupQualification'),false);
+  assert.equal(Object.hasOwn(pair,'startupQualification'),schemaMigration);
+  if(schemaMigration){
+    assert.deepEqual(pair.applicationTransition,f.proof.qualificationBinding.applicationTransition);
+    assert.deepEqual(pair.startupQualification,{projection:{path:'startup-qualification.json',sha256:proofRef.sha256},binding:output.startupQualification.binding});
+    assert.deepEqual(readFileSync(join(output.directory,'startup-qualification.json')),readFileSync(proofRef.path));
+  }
   assert.deepEqual(preparation.startupQualification,output.startupQualification);
   assert.equal(preparation.newTargetStartupClaimed,false);
   assert.equal(preparation.freshFullRehearsalStillRequired,true);
@@ -138,8 +158,43 @@ test('format5 stages, qualifies, pairs and reloads the same proof without replay
   assert.deepEqual(await reloaded.inspect(f.context),completed);
   await reloaded.verify(completed,f.context);
   assert.deepEqual(Object.keys(transport.steps).map(name=>{const row=f.journal.deliveryPhase(f.descriptor.operation.id,'package/'+name);return[row.phase,row.key,row.createdAtMs];}),rows);
-  assert.equal(commands.length,2);
+  assert.equal(commands.length,qualifiedDependencies?0:2);
+  if(schemaMigration){
+    const options={bundleUrl:'https://example.invalid/migration.json',dependenciesUrl:'https://example.invalid/dependencies.tgz'};
+    const full=createFullBundleAdapter({options,pairProducer:{execute:async()=>completed,inspect:async()=>completed,verify:async()=>reloaded.verify(completed,f.context)}});
+    const context={...f.context,intent:{...f.intent,input:{...f.intent.input,options}}};
+    const packaged=await full.execute(context);assert.equal(packaged.state,'completed');
+    assert.deepEqual(await full.observe(context),packaged);
+    const envelope=JSON.parse(readFileSync(packaged.output.bundle.path));
+    assert.equal(envelope.files.length,14);assert.equal(envelope.files.filter(x=>x.name==='startup-qualification.json').length,1);
+    assert.equal(commands.length,qualifiedDependencies?0:2);
+  }
   writeFileSync(proofRef.path,JSON.stringify({...f.proof,heldBootstrapVerified:false})+'\n');
   await assert.rejects(reloaded.inspect(f.context));
-  assert.equal(commands.length,2);
+  assert.equal(commands.length,qualifiedDependencies?0:2);
+}
+test('format5 stages, qualifies, pairs and reloads the same proof without replay; persisted drift refuses',t=>pairLifecycle(t));
+test('schema55-to60 pair and full package carry the exact actual startup projection and remain observation-only on resume',t=>pairLifecycle(t,true));
+
+test('format6 qualifies a different application dependency graph and packages it without replaying native execution',t=>pairLifecycle(t,true,true));
+
+test('only the explicit schema55-to60 actual startup proof admits migration; unqualified same-schema60 refuses',async t=>{
+  const f=startupCommandFixture(t,{schemaMigration:true});
+  assert.doesNotThrow(()=>assertStartupQualifiedCandidate(f.proof,f.assertion,f.sources));
+  for(const change of [v=>delete v.qualificationBinding.applicationTransition,
+    v=>v.qualificationBinding.applicationTransition.fromSchemaVersion=54,
+    v=>v.qualificationBinding.applicationTransition.toSchemaVersion=61,
+    v=>v.qualificationBinding.applicationTransition.apiVersion=2,
+    v=>v.qualificationBinding.applicationTransition.toAgentVersion='2026.10.0',
+    v=>v.independentOriginalRestored=false,v=>v.scenarios.pop()]){
+    const proof=structuredClone(f.proof);change(proof);
+    assert.throws(()=>assertStartupQualifiedCandidate(proof,f.assertion,f.sources));
+  }
+  const transport=createMaintainedDependencyTransport({options:f.transportOptions,base:f.base,run:async()=>{throw Error('No command allowed');},startupCollector:async()=>f.proof,startupSources:f.sources});
+  await transport.validate({descriptor:f.descriptor,input:f.intent.input});
+  assert.equal(f.calls.length,0);
+  const same=startupCommandFixture(t,{sameSchema60:true});
+  assert.throws(()=>assertStartupQualifiedCandidate(same.proof,same.assertion,same.sources),/same-schema60-producer-unavailable/);
+  const stale=structuredClone(same.proof);stale.qualificationBinding.applicationTransition=f.proof.qualificationBinding.applicationTransition;
+  assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/unexpected-startup|startup-qualified-artifact-closure/);
 });

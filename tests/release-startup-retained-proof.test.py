@@ -21,6 +21,45 @@ fixture = load('startup_fixture', ROOT / 'support/startup-retained-fixture.py').
 class Checks(unittest.TestCase):
     def consume(self, f): return subject.consume(f['request'], f['read'], f['sources'])
 
+    def test_explicit_schema_migration_retains_pristine55_and_qualifies_two_actual60_starts(self):
+        result=self.consume(fixture(schema_migration=True))
+        self.assertEqual(result['qualificationBinding']['applicationTransition'],subject.APPLICATION_TRANSITION)
+        self.assertEqual(len(result['qualificationBinding']['helpers']),11)
+        self.assertTrue(result['independentOriginalRestored'])
+        self.assertFalse(result['productionAdmission'])
+
+    def test_rehashed_schema_migration_wrong_pristine_target_or_proof_refuses(self):
+        cases=[('binding',lambda v:v['applicationTransition'].update(toSchemaVersion=61)),
+               ('binding',lambda v:v['helpers'].pop('hosted_retained_catalog.py')),
+               ('prior-package',lambda v:v['edition3'].update(schemaVersion=60)),
+               ('manifest',lambda v:v.update(schemaVersion=55)),
+               ('package',lambda v:v['edition3'].update(apiVersion=2)),
+               ('target-restart/ready',lambda v:v['heldReadiness']['health'].update(schemaVersion=55)),
+               ('pristine-prior-restoration/ready',lambda v:v['heldReadiness']['health'].update(schemaVersion=60))]
+        for role,change in cases:
+            with self.subTest(role=role),self.assertRaises(RuntimeError):
+                self.consume(fixture({role:change},schema_migration=True))
+
+    def test_fresh_application_dependency_description_binds_graph_locks_and_exact_linux_abi(self):
+        def bind(value, change=lambda description: None):
+            description={'format':1,'archiveBytes':64,'archiveSha256':'a'*64,
+                'expandedBytes':128,'fileCount':2,
+                'packageLockSha256':value['targets']['private']['packageLockSha256'],
+                'dependencyGraphSha256':value['dependencyGraphSha256'],
+                'platform':'linux','arch':'x64','nodeVersion':'22.23.2','nodeAbi':127}
+            change(description);value['applicationDependencies']=description
+        actual=self.consume(fixture({'binding':bind},schema_migration=True))
+        self.assertEqual(actual['qualificationBinding']['applicationDependencies']['nodeAbi'],127)
+        for change in (lambda v:v.update(nodeAbi=True),lambda v:v.update(nodeAbi=137),
+                       lambda v:v.update(nodeVersion='24.21.0'),lambda v:v.update(platform='win32'),
+                       lambda v:v.update(archiveBytes=512*1024**2+1),
+                       lambda v:v.update(packageLockSha256='0'*64),
+                       lambda v:v.update(dependencyGraphSha256='0'*64),lambda v:v.update(unreviewed=True)):
+            with self.subTest(change=change),self.assertRaises(RuntimeError):
+                self.consume(fixture({'binding':lambda v:bind(v,change)},schema_migration=True))
+        with self.assertRaises(RuntimeError):
+            self.consume(fixture({'binding':bind}))
+
     def replica_fixture(self, changes=None):
         changes = dict(changes or {})
         review_change = changes.get('review', lambda value: None)

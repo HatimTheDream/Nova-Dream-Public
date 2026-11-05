@@ -1,3 +1,9 @@
+## [2.28.16] - 2026-11-04
+
+- Add guarded hosted upgrades to the current workspace schema, checking saved records and native configuration through first startup, restart, and restoration of the prior app.
+- Bind new application libraries to their exact package lock, native runtime checks, and retained-workspace qualification before installation.
+- Preserve existing rollback checks and refuse incomplete migration evidence, changed helper files, or mismatched dependency archives.
+
 ## [2.28.15] - 2026-11-04
 
 - Move verified empty legacy Direct scratch workspaces to a fresh owned generation while preserving existing conversation history, accounts and original workspace records.

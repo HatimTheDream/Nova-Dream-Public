@@ -31,7 +31,7 @@ def collect(spec):
  BASE=spec['base'];PRIOR=BASE['candidateId'];SOURCE=spec['sourceCommit']
  need(set(BASE)=={'candidateId','priorVersion','priorBuildVersion','agentVersion','priorJobId'} and re.fullmatch('[a-f0-9]{64}',PRIOR) and re.fullmatch('[a-f0-9]{40}',SOURCE),'exact-current-base-required')
  need(sys.platform=='linux' and os.geteuid()==0,'root-linux-required')
- need(set(spec)=={'format','sourceCommit','helperDirectory','helperHashes','hostConfiguration','startupGuardFile','workspaceEpoch','leaseId','acceptedInstallation','base','hostConfigurationSha256'},'exact-facts-spec-required')
+ need(set(spec)=={'format','sourceCommit','helperDirectory','helperHashes','hostConfiguration','startupGuardFile','workspaceEpoch','leaseId','acceptedInstallation','base','hostConfigurationSha256'}|({'applicationTransition'} if 'applicationTransition' in spec else set()),'exact-facts-spec-required')
  need(spec['format']==2 and spec['sourceCommit']==SOURCE,'exact-source-required')
  for name in ('workspaceEpoch','leaseId'):need(str(uuid.UUID(spec[name]))==spec[name],'canonical-identity-required')
  directory=P(spec['helperDirectory']);need(directory.is_absolute() and directory.resolve(strict=True)==directory,'helper-path-redirected')
@@ -44,7 +44,7 @@ def collect(spec):
   need(path.is_file() and path.stat().st_nlink==1 and path.stat().st_size<=2*1024*1024 and digest(path)==expected,'helper-changed')
  sys.path.insert(0,str(directory));sys.dont_write_bytecode=True
  import install,app_dependencies,operator_rehearsal
- need(set(spec['helperHashes'])==operator_rehearsal.HELPERS,'complete-helper-set-required')
+ need(set(spec['helperHashes'])==(operator_rehearsal.helper_names(spec) if 'applicationTransition' in spec else operator_rehearsal.HELPERS),'complete-helper-set-required')
  for module in (install,app_dependencies,operator_rehearsal):need(P(module.__file__).parent==directory,'helper-import-redirected')
  class ReadOnly(operator_rehearsal.Rehearsal):
   def request_failure(self,*args):raise RuntimeError('read-only-status-failed')
@@ -94,6 +94,7 @@ def collect(spec):
  need(health.get('status')=='ready' and health.get('candidateId')==PRIOR and health.get('version')==BASE['priorVersion'] and context.get('workspaceEpoch')==spec['workspaceEpoch'],'current-live-identity-changed')
  artifacts={item['path']:item['sha256'] for item in manifest['artifacts']}
  review={'format':1,'kind':'operator-rehearsal-review','leaseId':spec['leaseId'],'candidateId':PRIOR,'workspaceEpoch':spec['workspaceEpoch'],'novaVersion':BASE['priorVersion'],'agentVersion':BASE['agentVersion'],'hostConfiguration':str(host_path),'baselineDirectory':str(baseline),'baselineManifestSha256':digest(baseline_manifest),'labParent':'/var/lib/nova-operator-rehearsals','startupGuardFile':str(guard),'startupGuardSha256':digest(guard),'startupBarrier':{name:artifacts[name] for name in sorted(install.STARTUP_FILES)},'helperHashes':spec['helperHashes'],'nodeSha256':digest(node),'sourceDependencies':description,'sourceHostHashes':{name:digest(prior/name) for name in ('scripts/host.mjs','scripts/candidate.mjs')}}
+ if 'applicationTransition' in spec:review['applicationTransition']=spec['applicationTransition']
  tracked=[P(accepted['path']),host_path,runner_path,current,guard,baseline_manifest,baseline_receipt,node,*[P(name) for name in runner['protectedFiles']]]
  hashes={str(path):digest(path) for path in tracked}
  need(hashes[accepted['path']]==accepted['sha256'],'accepted-installation-changed-during-collection')

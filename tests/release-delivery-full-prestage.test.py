@@ -69,7 +69,7 @@ class MetadataStageTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   source=HERE/'full-host-primitives/metadata-stage.py';tree=ast.parse(source.read_bytes())
-  functions={'need','sha','metadata_capacity'};assignments={'FROZEN_HELPERS','HELPERS','NAMES'}
+  functions={'need','sha','metadata_capacity'};assignments={'FROZEN_HELPERS','FROZEN_APPLICATION_HELPERS','HELPERS','NAMES'}
   nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in functions) or
    (isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id in assignments)]
   cls.scope={'ast':ast,'hashlib':hashlib}
@@ -77,12 +77,13 @@ class MetadataStageTests(unittest.TestCase):
   # the remote entrypoint, signal alarm, file writes and operator calls are absent.
   exec(compile(ast.Module(body=nodes,type_ignores=[]),str(source),'exec'),cls.scope)
   module=(HERE/'release-delivery-full-host.mjs').read_text(encoding='utf-8')
-  cls.helpers=ast.literal_eval(re.search(r'export const FULL_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
+  cls.legacy_helpers=ast.literal_eval(re.search(r'export const FULL_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
+  cls.helpers=ast.literal_eval(re.search(r'export const FULL_APPLICATION_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
   cls.payload={name:(HERE.parent/'deploy/update-runner'/name).read_bytes() for name in cls.helpers}
   cls.payload['operator-review.json']=b'{}\n'
  def test_every_static_primitive_helper_map_matches_qualified_source_bytes(self):
   actual={name:hashlib.sha256(self.payload[name]).hexdigest() for name in self.helpers}
-  self.assertEqual(self.helpers,actual);self.assertEqual(len(actual),7)
+  self.assertEqual(self.helpers,actual);self.assertEqual(len(actual),11);self.assertEqual(len(self.legacy_helpers),7)
   maps=[]
   for path in sorted((HERE/'full-host-primitives').glob('*.py')):
    for node in ast.walk(ast.parse(path.read_bytes())):
@@ -90,14 +91,18 @@ class MetadataStageTests(unittest.TestCase):
     try:value=ast.literal_eval(node.value)
     except (ValueError,TypeError,SyntaxError):continue
     if isinstance(value,dict) and any(name in actual and isinstance(pin,str) and re.fullmatch('[a-f0-9]{64}',pin) for name,pin in value.items()):
-     maps.append((path.name,ast.unparse(node.targets[0])));self.assertEqual(value,actual,str(path))
-  self.assertIn(('metadata-stage.py','FROZEN_HELPERS'),maps)
+     maps.append((path.name,ast.unparse(node.targets[0])));self.assertIn(value,(actual,self.legacy_helpers),str(path))
+  self.assertIn(('metadata-stage.py','FROZEN_HELPERS'),maps);self.assertIn(('metadata-stage.py','FROZEN_APPLICATION_HELPERS'),maps)
  def test_actual_helper_payload_keeps_metadata_only_operating_reserve(self):
   result=self.scope['metadata_capacity'](self.payload,4096,2**40)
   self.assertEqual(result['operatingFloorBytes'],1879048192)
   self.assertEqual(result['requiredFreeBytes'],1879048192+result['incrementalAllocatedBytesMaximum'])
   self.assertEqual(result['futureReclaimCreditBytes'],0)
   self.assertFalse(result['fullRehearsalCapacityAdmitted']);self.assertTrue(result['fullMaintainedPlanStillRequired'])
+ def test_migration_payload_cannot_drop_any_imported_helper(self):
+  for name in self.helpers:
+   with self.subTest(name=name),self.assertRaises(RuntimeError):
+    self.scope['metadata_capacity']({n:v for n,v in self.payload.items() if n!=name},4096,2**40)
  def test_changed_recovery_payload_is_rejected_before_capacity_admission(self):
   changed={**self.payload,'recovery.py':self.payload['recovery.py']+b'\n# changed fixture\n'}
   with self.assertRaisesRegex(RuntimeError,'unchanged-maintained-recovery-reserve'):

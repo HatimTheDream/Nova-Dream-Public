@@ -7,14 +7,15 @@ def load(name,path):
 m=load('metadata_successor',ROOT/'scripts/release-dependency-metadata-successor.py')
 deps=load('maintained_dependency_parser',ROOT/'deploy/update-runner/app_dependencies.py')
 class MetadataPolicy(unittest.TestCase):
- def fixture(self,format=2,script=True):
+ def fixture(self,format=2,script=True,schema_migration=False):
   temp=tempfile.TemporaryDirectory(prefix='nova-metadata-policy-');self.addCleanup(temp.cleanup);root=pathlib.Path(temp.name).resolve()
   def put(name,value):
    path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value if isinstance(value,bytes) else m.enc(value));return m.ref(path)
-  old={'name':'nova-dream-edition-3','version':'2.3.5','edition3':{'buildVersion':'1.0.292'},'dependencies':{'fixture':'1.0.0'},'engines':{'node':'>=22.19.0'},'scripts':{'build':'node build.mjs','postinstall':'node prepare.mjs'}}
+  old={'name':'nova-dream-edition-3','version':'2.3.5','edition3':{'buildVersion':'1.0.292','schemaVersion':55,'apiVersion':1},'dependencies':{'fixture':'1.0.0'},'engines':{'node':'>=22.19.0'},'scripts':{'build':'node build.mjs','postinstall':'node prepare.mjs'}}
   if format==3:old['scripts'].update(quality=m.OLD_QUALITY,test=m.OLD_TEST)
   lock={'name':old['name'],'version':old['version'],'lockfileVersion':3,'packages':{'':{'name':old['name'],'version':old['version'],'dependencies':old['dependencies']},'node_modules/fixture':{'version':'1.0.0'}}}
   new=copy.deepcopy(old);new['version']='2.4.0';new['edition3']['buildVersion']='1.0.293'
+  if schema_migration:new['edition3']['schemaVersion']=60
   if script:new['scripts']['release:deliver']='node scripts/release-deliver.mjs'
   if format==3:new['scripts'].update(quality=m.QUALITY_COMMAND,**{'test:quality':m.QUALITY_TEST})
   target_lock=copy.deepcopy(lock);target_lock['version']=target_lock['packages']['']['version']=new['version']
@@ -32,7 +33,32 @@ class MetadataPolicy(unittest.TestCase):
   value={'format':format,'kind':'metadata-only-dependency-successor','helper':helper,'oldArchive':m.ref(archive),'oldMetadata':put('metadata.json',description),'nativeReceipt':put('native-synthetic.json',native),'acceptedPair':pair_ref,'acceptedInstaller':put('installed-synthetic.json',{'outcome':'completed','candidateId':'a'*64,**{k:True for k in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')}}),'acceptedBundle':put('bundle-synthetic.json',{'format':1,'files':[{'name':'reviewed-pair.json','data':base64.b64encode(m.read(pair_ref)).decode(),'sha256':pair_ref['sha256']}]}),'acceptedCandidate':'a'*64,'targetPackage':put('target/package.json',new),'targetLock':put('target/package-lock.json',target_lock),'transition':{'fromVersion':old['version'],'toVersion':new['version'],'fromBuild':old['edition3']['buildVersion'],'toBuild':new['edition3']['buildVersion']}}
   if format in (2,3):value['releaseCommand']={'policy':'release-deliver-script-v1','command':'node scripts/release-deliver.mjs','sourceCommits':{'private':'b'*40,'public':'c'*40},'sources':{side:put(side+'/scripts/release-deliver.mjs',b'// synthetic authenticated command\n') for side in ('private','public')}}
   if format==3:value['qualityCommand']={'policy':m.QUALITY_POLICY,'command':m.QUALITY_COMMAND,'sourceCommits':dict(value['releaseCommand']['sourceCommits']),'sources':{side:put(side+'/scripts/quality.mjs',b'// synthetic paired committed quality runner\n') for side in ('private','public')}}
+  if schema_migration:
+   binding={'applicationTransition':copy.deepcopy(m.APPLICATION_TRANSITION),'prior':{'candidateId':value['acceptedCandidate']},'sourceCommits':value['qualityCommand']['sourceCommits'],'dependencyGraphSha256':description['dependencyGraphSha256'],'runtime':{'agentVersion':'2026.9.8'},'targets':{side:{'packageSha256':value['targetPackage']['sha256'],'packageLockSha256':value['targetLock']['sha256']} for side in ('private','public')}}
+   proof={'kind':'actual-retained-startup-qualification-observation','qualificationBinding':binding,'productionAdmission':False,**{k:True for k in ('actualSettledQualification','completeMaintainedSavedAndNativeState','independentOriginalRestored','heldBootstrapVerified','workerClosed')}}
+   value.update(applicationTransition=copy.deepcopy(m.APPLICATION_TRANSITION),startupQualification={'projection':put('startup-qualification.json',proof),'binding':binding})
   return root,value,old,lock,new,target_lock,put
+ def test_explicit_schema_metadata_change_still_preserves_every_native_dependency_member(self):
+  root,v,*_=self.fixture(format=3,schema_migration=True);out=m.produce(v,root/'produced')
+  self.assertTrue(out['everyRetainedMemberIdentical']);self.assertFalse(out['newTargetStartupClaimed']);self.assertFalse(out['deliveryQualification'])
+  self.assertEqual(out['input']['applicationTransition'],m.APPLICATION_TRANSITION)
+  with tarfile.open(out['archive']['path'],'r:gz') as archive:self.assertEqual(json.load(archive.extractfile('package.json'))['edition3']['schemaVersion'],60)
+ def test_schema_metadata_refuses_missing_or_unbound_startup_proof_before_output(self):
+  for change in ('absent','rollback','package','prior','source','api','runtime'):
+   root,v,old,lock,new,new_lock,put=self.fixture(format=3,schema_migration=True)
+   if change=='absent':del v['startupQualification']
+   else:
+    q=v['startupQualification'];proof=json.loads(m.read(q['projection']))
+    if change=='rollback':proof['independentOriginalRestored']=False
+    elif change=='package':q['binding']['targets']['public']['packageSha256']='0'*64
+    elif change=='prior':q['binding']['prior']['candidateId']='0'*64
+    elif change=='source':q['binding']['sourceCommits']={**q['binding']['sourceCommits'],'public':'d'*40}
+    elif change=='api':v['applicationTransition']['apiVersion']=2
+    elif change=='runtime':q['binding']['runtime']['agentVersion']='2026.9.6'
+    if change!='rollback':proof['qualificationBinding']=q['binding']
+    q['projection']=put('changed-proof.json',proof)
+   with self.assertRaises((RuntimeError,KeyError)):m.produce(v,root/'must-not-exist')
+   self.assertFalse((root/'must-not-exist').exists())
  def test_explicit_v2_parser_pack_preserves_every_module_member_and_native_claim(self):
   root,v,*_=self.fixture();out=m.produce(v,root/'produced')
   self.assertEqual(out['format'],2);self.assertEqual(out['metadataPolicy'],'release-deliver-script-v1');self.assertTrue(out['everyRetainedMemberIdentical']);self.assertEqual(out['retainedMemberCount'],6)

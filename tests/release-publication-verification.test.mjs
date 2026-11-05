@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {gunzipSync} from 'node:zlib';
 import {syncBuiltinESMExports} from 'node:module';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -12,14 +13,21 @@ import {createFullPublicationAdapter,fullPublicationHelpers,verifyFullPublicatio
 import {withVerificationPass,verificationEffect} from '../scripts/release-verification-pass.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
 
-function fixture(t){
+const historicalHelpers=JSON.parse(fs.readFileSync(new URL('../support/legacy-full-helper-fixture.json',import.meta.url)));
+function helperBytes(name,current=false){
+ const archived=historicalHelpers.files[name];
+ const bytes=!current&&archived?gunzipSync(Buffer.from(archived.gzipBase64,'base64'),{maxOutputLength:256*1024}):fs.readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url));
+ if(!current){assert.equal(sha256(bytes),FULL_HELPERS[name]);if(archived)assert.equal(bytes.length,archived.bytes);}
+ return bytes;
+}
+function fixture(t,{currentHelpers=false}={}){
  const root=fs.mkdtempSync(join(tmpdir(),'nova-publication-verification-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const put=(name,v)=>{const path=join(root,name),b=Buffer.isBuffer(v)?v:Buffer.from(JSON.stringify(v)+'\n');fs.writeFileSync(path,b);return{path,sha256:sha256(b)};};
  const {descriptor:original,completed,values}=fullHostFixture(),descriptor=structuredClone(original);
  const sourceCommits={private:'a'.repeat(40),public:'b'.repeat(40)};
  descriptor.operation={...descriptor.operation,id:randomUUID(),version:'2.5.0',buildVersion:'1.0.294',candidateId:'e'.repeat(64),sourceCommits};
  descriptor.sources=Object.fromEntries(['private','public'].map(side=>[side,{commit:sourceCommits[side],root:join(root,side)}]));
- const files=Object.entries(FULL_HELPERS).filter(([name])=>name!=='operator_rehearsal.py').map(([name,sha256])=>({name,sha256,data:fs.readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url)).toString('base64')}));
+ const files=Object.entries(FULL_HELPERS).filter(([name])=>name!=='operator_rehearsal.py').map(([name,sha256])=>({name,sha256,data:helperBytes(name,currentHelpers).toString('base64')}));
  files.push({name:'app.tgz',data:''},{name:'reviewed-pair.json',data:''});
  const bundle=put('bundle.json',{files}),archive=put('dependencies.tgz',Buffer.from('synthetic complete dependency bytes'));
  const description={archiveBytes:fs.statSync(archive.path).size,archiveSha256:archive.sha256},metadata=put('dependencies.metadata.json',description),nativeQualification=put('native.json',{synthetic:true});
@@ -97,4 +105,9 @@ test('pending and failed publication claims skip completed-input reads; complete
  await assert.rejects(async()=>adapter.verify(completed,{...c,intent:{...c.intent,input:bad}}),/signature-invalid/);
  const changed=structuredClone(f.descriptor);changed.operation.id=randomUUID();
  await assert.rejects(async()=>adapter.verify(completed,{...c,descriptor:changed}),/operation/);
+});
+
+test('legacy publication authority rejects current migration helper bytes',t=>{
+ const f=fixture(t,{currentHelpers:true});
+ assert.throws(()=>verifyFullPublicationInput(f.input,f.descriptor,f.now,{}),/full-reviewed-helper-changed/);
 });

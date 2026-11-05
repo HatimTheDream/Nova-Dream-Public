@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { ReleaseJournal } from '../scripts/release-coordinate.mjs';
 import { sha256 } from '../scripts/release-plan.mjs';
 import { createCoordinatorInstallationAdapter } from '../scripts/release-delivery-install.mjs';
-import { createFullInstalledIdentityObserver, originalInstalledIdentityRequest } from '../scripts/release-delivery-installed-identity.mjs';
+import { createFullInstalledIdentityObserver, originalInstalledIdentityRequest, verifyInstalledIdentity } from '../scripts/release-delivery-installed-identity.mjs';
 import { createDeliveryRegistry, deliveryPhaseIntegrationGaps } from '../scripts/release-delivery-adapters.mjs';
 
 const encoded = value => Buffer.from(JSON.stringify(value) + '\n'), now = 1791990000000;
@@ -159,4 +159,11 @@ test('main registry connects full Assistant to original identity and retains its
   assert.equal(f.context.journal.deliveryPhase(f.descriptor.operation.id, 'assistant/session').input.deadlineAtMs, now + 300002);
   assert.equal(f.context.journal.deliveryPhase(f.descriptor.operation.id, 'assistant/submit'), null);
   assert.ok(deliveryPhaseIntegrationGaps('browser', f.target, prior).includes('browser-capability-unavailable'));
+});
+
+test('installed identity reads schema60 from the authenticated original spec and rejects another schema',t=>{
+  const f=fixture(t),request=structuredClone(f.request),proof=structuredClone(f.proof);
+  request.operation.schemaVersion=60;proof.request=request;proof.health.schemaVersion=60;
+  assert.deepEqual(verifyInstalledIdentity(proof,request),proof);
+  assert.throws(()=>verifyInstalledIdentity({...proof,health:{...proof.health,schemaVersion:55}},request),/installed-health/);
 });

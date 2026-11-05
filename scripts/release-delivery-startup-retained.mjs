@@ -8,6 +8,7 @@ import {z} from 'zod';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {frontendRegular} from './frontend-contract.mjs';
 import {releaseTransportSchema,runInstallTransport} from './release-adapters.mjs';
+import {applicationDependencyDescriptionSchema,applicationTransitionSchema} from './release-delivery-qualified-dependencies.mjs';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/);
 const hostPath=z.string().regex(/^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/).refine(p=>!p.split('/').some(x=>x==='.'||x==='..'));
@@ -16,24 +17,38 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'972c8a639bd20dd38c67dc2ba2280673bfa898b66e4b1acb1266c95b3de8d363',
+  'qualified-startup.py':'abc3d282cd455b333a5bbd18272eba8b6566aae7790d4406b72d87ea373ea428',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
-  'produce-startup-inputs.py':'9d8052a91ac5d0f810635125b8de35942ba5b66a85361e53d6c18e791369f269',
-  'contracts.py':'dd74e4e8d34207320777e93c6e2f74f1de20cb64563d296dc91197eee9acedff',
+  'produce-startup-inputs.py':'18e65f26acce29baec593f9330f89e45afd0f6d938daac5f21581eb34f9e5fc5',
+  'contracts.py':'4d784bc3998c8a756d6fb3dda9c9c9c370ca513d01bfed9b5bc9fd0e2631c242',
 });
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
 const HELPERS=['install.py','recovery.py','operator_rehearsal.py','app_dependencies.py','codex_log_retention.py','workspace_key.py','verify-session-bindings.mjs'];
+export const APPLICATION_TRANSITION_HELPERS=Object.freeze(['hosted_retained_configuration.py','local-retained-configuration.mjs','hosted_retained_catalog.py','hosted-retained-catalog.mjs']);
+export function startupHelperNames(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return [...HELPERS,...(transition?APPLICATION_TRANSITION_HELPERS:[])];}
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 const encoded=v=>Buffer.from(canonical(v)+'\n');
 const digestMap=z.record(z.string().min(1).max(512),hash);
+export {applicationTransitionSchema};
+/** This describes the only supported schema change; it grants no qualification.
+ * The caller must still authenticate the complete original startup projection. */
+export function assertStartupApplicationTransition(binding,prior,target){
+  need(prior.apiVersion===1&&target.apiVersion===1,'actual-startup-schema-or-api-unsupported');
+  if(prior.schemaVersion===target.schemaVersion&&[55,60].includes(prior.schemaVersion)){
+    need(!Object.hasOwn(binding,'applicationTransition'),'unexpected-startup-application-transition');return null;
+  }
+  need(prior.schemaVersion===55&&target.schemaVersion===60,'actual-startup-schema-transition-unsupported');
+  return applicationTransitionSchema.parse(binding.applicationTransition);
+}
 const targetSchema=z.object({candidateId:hash,version:z.string(),buildVersion:z.string(),archiveSha256:hash,
   archiveBytes:z.number().int().positive(),ciSourceSha256:hash,packageSha256:hash,packageLockSha256:hash,candidateManifestSha256:hash}).strict();
 export const startupQualificationBindingSchema=z.object({format:z.literal(1),kind:z.literal('same-runtime-startup-candidate-binding'),
   sourceCommits:z.object({private:commit,public:commit}).strict(),prior:z.object({candidateId:hash,version:z.string()}).strict(),
   targets:z.object({private:targetSchema,public:targetSchema}).strict(),serviceArtifacts:digestMap,
   hostEntrypointSha256:hash,dependencyGraphSha256:hash,helpers:digestMap,runtime:z.record(z.string(),z.unknown()),workspaceEpoch:z.uuid(),
+  applicationTransition:applicationTransitionSchema.optional(),applicationDependencies:applicationDependencyDescriptionSchema.optional(),
 }).strict();
 function sourcesReviewed(sources){
   need(same(Object.keys(sources).sort(),Object.keys(QUALIFIED_STARTUP_SOURCES).sort())
@@ -66,11 +81,13 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
     &&v.workerIdentity.controlGroup==='/system.slice/nova-qa-qualified-'+v.qualificationOperationId+'.service','startup-proof-original-worker-identity-required');
   const binding=startupQualificationBindingSchema.parse(v.qualificationBinding);
   need(binding.prior.candidateId!==binding.targets.private.candidateId&&binding.runtime.agentVersion==='2026.9.8'
-    &&same(Object.keys(binding.helpers).sort(),HELPERS.slice().sort())
+    &&same(Object.keys(binding.helpers).sort(),startupHelperNames(binding.applicationTransition??null).sort())
     &&Object.keys(binding.serviceArtifacts).length<=1000
     &&Object.keys(binding.serviceArtifacts).every(p=>/^dist\/service\/[a-zA-Z0-9_./-]+$/.test(p)&&!p.split('/').some(v=>['','.','..'].includes(v)))
     &&binding.serviceArtifacts['dist/service/apps/service/main.js']
     &&STARTUP_BARRIER_FILES.every(p=>binding.serviceArtifacts[p]),'startup-qualified-artifact-closure-required');
+  if(binding.applicationDependencies)need(binding.applicationTransition&&binding.applicationDependencies.dependencyGraphSha256===binding.dependencyGraphSha256
+    &&Object.values(binding.targets).every(t=>t.packageLockSha256===binding.applicationDependencies.packageLockSha256),'startup-qualified-dependencies-changed');
   need(Array.isArray(v.scenarios)&&same(v.scenarios.map(x=>x.scenario),STARTUP_SCENARIOS)
     &&v.scenarios.every(x=>x.candidateId===(x.scenario==='pristine-prior-restoration'?binding.prior.candidateId:binding.targets.private.candidateId)
       &&Number.isSafeInteger(x.startedAtSeconds)&&Number.isSafeInteger(x.closedAtSeconds)&&x.closedAtSeconds>=x.startedAtSeconds
@@ -89,19 +106,22 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
 }
 /** This is the sole new exception to byte-identical prior startup files. It
  * requires the actual candidate, including files outside the eight-file barrier. */
-export function assertStartupQualifiedCandidate(proof,{operation,prior,candidates,artifacts,helpers,dependencyGraphSha256},sources=QUALIFIED_STARTUP_SOURCES){
+export function assertStartupQualifiedCandidate(proof,{operation,prior,candidates,artifacts,helpers,dependencyGraphSha256,applicationDependencies=null},sources=QUALIFIED_STARTUP_SOURCES){
   verifyStartupRetainedProjection(proof,proof.request,sources);
   const b=proof.qualificationBinding;
   need(operation.agentVersion==='2026.9.8'&&operation.priorAgentVersion==='2026.9.8'
     &&operation.priorCandidateId===prior.id&&b.prior.candidateId===prior.id&&b.prior.version===prior.manifest.version
     &&operation.workspaceEpoch===b.workspaceEpoch&&same(operation.sourceCommits,b.sourceCommits)
     &&b.dependencyGraphSha256===dependencyGraphSha256,'actual-startup-prior-runtime-or-source-changed');
+  if(b.applicationDependencies)need(same(b.applicationDependencies,applicationDependencies),'actual-startup-dependency-archive-changed');
   need(Object.entries(helpers).every(([name,digest])=>b.helpers[name]===digest),'actual-startup-helper-changed');
   for(const side of ['private','public']){
     const candidate=candidates[side],artifact=artifacts[side],qualified=b.targets[side];
+    assertStartupApplicationTransition(b,prior.manifest,candidate.manifest);
+    need(b.applicationTransition||candidate.manifest.schemaVersion===55,'actual-startup-same-schema60-producer-unavailable');
     need(candidate.id===qualified.candidateId&&candidate.manifest.version===operation.version
       &&candidate.manifest.version===qualified.version&&candidate.manifest.buildVersion===operation.buildVersion
-      &&candidate.manifest.buildVersion===qualified.buildVersion&&candidate.manifest.schemaVersion===55&&candidate.manifest.apiVersion===1,
+      &&candidate.manifest.buildVersion===qualified.buildVersion,
       'actual-startup-target-candidate-changed');
     const compiled=Object.fromEntries([...candidate.bytes].filter(([p])=>p.startsWith('dist/service/')).map(([p,bytes])=>[p,sha256(bytes)]));
     need(same(compiled,b.serviceArtifacts)&&sha256(candidate.bytes.get('package.json'))===qualified.packageSha256

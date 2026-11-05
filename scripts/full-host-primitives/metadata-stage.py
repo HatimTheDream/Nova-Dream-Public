@@ -28,6 +28,7 @@ def put(p,b):
 
 import http.client,socket,subprocess
 FROZEN_HELPERS={'app_dependencies.py': 'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290', 'codex_log_retention.py': 'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4', 'install.py': 'd417d652163cb134583b1d766c650ad0a8597084bfa25ee876d7cf5155f013c4', 'operator_rehearsal.py': 'cec0f65413550a5872c2e97c0835434647a7aeadccd73e8c812ecda0fe251c3c', 'recovery.py': '520c337ceb9deb252bdeaaa7d5a4a7ca1e6c4fc09c8d001f91e2e8ad9b3946bf', 'verify-session-bindings.mjs': '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0', 'workspace_key.py': 'e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2'}
+FROZEN_APPLICATION_HELPERS={'install.py': '82b4bc0cd8ee80f8e8905dce92fcd6c61db55d4610132f554e78b5946e8b5d66', 'recovery.py': 'e5e816ba3ed66207f1efd1be0b17b59ce8eb710ec757f7c1a8bc66f9047aa97a', 'operator_rehearsal.py': '7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d', 'app_dependencies.py': 'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290', 'codex_log_retention.py': 'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4', 'workspace_key.py': 'e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2', 'verify-session-bindings.mjs': '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0', 'hosted_retained_configuration.py': '6e9d8601221bd48e8ca5503d8b9f4cf20db74534c1571107f3408143a7bdf58b', 'local-retained-configuration.mjs': '805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de', 'hosted_retained_catalog.py': '23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b', 'hosted-retained-catalog.mjs': '431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db'}
 HELPERS=FROZEN_HELPERS
 NAMES=('app_dependencies.py', 'codex_log_retention.py', 'install.py', 'operator_rehearsal.py', 'recovery.py', 'verify-session-bindings.mjs', 'workspace_key.py', 'operator-review.json')
 def sync(path):
@@ -70,9 +71,11 @@ def operator_status():
         client.close()
 
 def metadata_capacity(payload, fragment, free):
-    need(set(payload) == set(NAMES) and all((isinstance(b, bytes) and 0 < len(b) <= 2 * 1024 ** 2 for b in payload.values())) and (sum(map(len, payload.values())) <= 4 * 1024 ** 2), 'bounded-exact-eight-file-capacity')
+    helper_map = FROZEN_APPLICATION_HELPERS if set(payload)-{'operator-review.json'} == set(FROZEN_APPLICATION_HELPERS) else FROZEN_HELPERS
+    names = set(helper_map)|{'operator-review.json'}
+    need(set(payload) == names and all((isinstance(b, bytes) and 0 < len(b) <= 2 * 1024 ** 2 for b in payload.values())) and (sum(map(len, payload.values())) <= 4 * 1024 ** 2), 'bounded-exact-fixed-helper-capacity')
     need(type(fragment) is int and 512 <= fragment <= 65536 and (fragment & fragment - 1 == 0) and (type(free) is int) and (free >= 0), 'actual-capacity-observation')
-    need(sha(payload['recovery.py']) == HELPERS['recovery.py'], 'unchanged-maintained-recovery-reserve')
+    need(sha(payload['recovery.py']) == helper_map['recovery.py'], 'unchanged-maintained-recovery-reserve')
     tree = ast.parse(payload['recovery.py'])
     assignments = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and (n.targets[0].id in ('RESERVE', 'ALLOWANCE'))]
     need(len(assignments) == 2, 'exact-maintained-reserve-constants')
@@ -85,22 +88,24 @@ def metadata_capacity(payload, fragment, free):
     increment = sum((allocated(len(b)) for b in payload.values())) + allocated(2 * 1024 ** 2) + 4 * fragment
     floor = reserve + 2 * allowance
     need(free >= floor + increment, 'metadata-stage-plus-maintained-operating-reserve')
-    return {'format': 1, 'kind': 'eight-file-metadata-stage-capacity', 'scope': 'metadata-stage-only', 'reserveBytes': reserve, 'allowanceBytes': 2 * allowance, 'operatingFloorBytes': floor, 'allocationFragmentBytes': fragment, 'incrementalAllocatedBytesMaximum': increment, 'recordEnvelopeBytes': 2 * 1024 ** 2, 'directoryAllocationAllowanceBytes': 4 * fragment, 'requiredFreeBytes': floor + increment, 'futureReclaimCreditBytes': 0, 'fullRehearsalCapacityAdmitted': False, 'fullMaintainedPlanStillRequired': True}
+    return {'format': 1, 'kind': 'fixed-helper-metadata-stage-capacity', 'scope': 'metadata-stage-only', 'reserveBytes': reserve, 'allowanceBytes': 2 * allowance, 'operatingFloorBytes': floor, 'allocationFragmentBytes': fragment, 'incrementalAllocatedBytesMaximum': increment, 'recordEnvelopeBytes': 2 * 1024 ** 2, 'directoryAllocationAllowanceBytes': 4 * fragment, 'requiredFreeBytes': floor + increment, 'futureReclaimCreditBytes': 0, 'fullRehearsalCapacityAdmitted': False, 'fullMaintainedPlanStillRequired': True}
 
 v=REQUEST;packet=v['packet'];root=P(packet['root']);stage_parent=P(packet['stageParent'])
 need(packet['format']==2 and packet['capacityScope']=='metadata-stage-only','explicit-stage-only-packet')
 need(sha(enc(packet))==v['packetSha256'] and packet['runnerSha256']==v['runnerSha256'],'frozen-rehearsal-stage-packet')
 need(stage_parent.is_absolute() and stage_parent.is_relative_to(P('/opt/nova-release-tools')) and stage_parent!=P('/opt/nova-release-tools') and not any(x in ('.','..') for x in packet['stageParent'].split('/')),'configured-private-stage-parent')
 need(root.parent==stage_parent and root.name=='rehearsal-'+packet['leaseId'],'exact-new-rehearsal-child');protected(root.parent,True)
-names={'app_dependencies.py','codex_log_retention.py','install.py','operator_rehearsal.py','recovery.py','verify-session-bindings.mjs','workspace_key.py','operator-review.json'}
-need(set(packet['files'])==set(v['files'])==names,'exact-eight-file-allowlist');payload={}
+selected_names=set(packet['files'])-{'operator-review.json'}
+selected_helpers=FROZEN_APPLICATION_HELPERS if selected_names==set(FROZEN_APPLICATION_HELPERS) else FROZEN_HELPERS
+names=set(selected_helpers)|{'operator-review.json'}
+need(set(packet['files'])==set(v['files'])==names,'exact-fixed-helper-allowlist');payload={}
 for n,r in packet['files'].items():
- b=base64.b64decode(v['files'][n],validate=True);need(0<len(b)<=2*1024**2 and len(b)==r['bytes'] and sha(b)==r['sha256'] and r['path']==str(root/n),'frozen-eight-file-bytes');payload[n]=b
-need(sum(map(len,payload.values()))<=4*1024**2,'bounded-eight-file-payload')
+ b=base64.b64decode(v['files'][n],validate=True);need(0<len(b)<=2*1024**2 and len(b)==r['bytes'] and sha(b)==r['sha256'] and r['path']==str(root/n),'frozen-fixed-helper-bytes');payload[n]=b
+need(sum(map(len,payload.values()))<=4*1024**2,'bounded-fixed-helper-payload')
 facts=packet['facts'];review=json.loads(payload['operator-review.json']);need(review==facts['review'] and review['leaseId']==packet['leaseId'] and facts['sourceCommit']==packet['sourceCommit'] and re.fullmatch('[a-f0-9]{40}',packet['sourceCommit']),'actual-current-review-lineage')
-need(review['helperHashes']==FROZEN_HELPERS=={n:sha(b) for n,b in payload.items() if n!='operator-review.json'},'all-current-helper-bytes')
+need(review['helperHashes']==selected_helpers=={n:sha(b) for n,b in payload.items() if n!='operator-review.json'},'all-current-helper-bytes')
 def result_identity(result):
- need(result['format']==1 and result['staged']==str(root) and result['leaseId']==packet['leaseId'] and result['sourceCommit']==packet['sourceCommit'] and result['reviewSha256']==sha(payload['operator-review.json']) and result['helperHashes']==review['helperHashes'],'original-eight-file-result')
+ need(result['format']==1 and result['staged']==str(root) and result['leaseId']==packet['leaseId'] and result['sourceCommit']==packet['sourceCommit'] and result['reviewSha256']==sha(payload['operator-review.json']) and result['helperHashes']==review['helperHashes'],'original-fixed-helper-result')
  need(result.get('capacityScope')=='metadata-stage-only' and result.get('fullRehearsalCapacityAdmitted') is False and result.get('fullMaintainedPlanStillRequired') is True,'metadata-is-not-rehearsal-admission')
  need(result['metadataOnly'] is True and result['leaseAcquired'] is False and result['appRestarted'] is False and result['packetSha256']==v['packetSha256'] and result['runnerSha256']==v['runnerSha256'],'original-stage-no-maintenance')
 if v['mode']=='observe':
@@ -110,7 +115,7 @@ if v['mode']=='observe':
    b=raw(root/n);records[n]={'path':str(root/n),'sha256':sha(b),'bytes':len(b),'rawBase64':base64.b64encode(b).decode()}
  if 'stage-result.json' in records:
   result_identity(json.loads(base64.b64decode(records['stage-result.json']['rawBase64'])))
-  for n,b in payload.items():need(raw(root/n)==b,'original-eight-files-changed')
+  for n,b in payload.items():need(raw(root/n)==b,'original-fixed-helpers-changed')
   verified='stage-failure.json' not in records
  print(json.dumps({'readOnly':True,'stageVerified':verified,'records':records,'automaticReplayPermitted':False}));sys.exit(0)
 need(facts['kind']=='current-rehearsal-facts' and facts['readOnly'] is True and facts['noHostWrites'] is True and 0<=time.time_ns()//1000000-facts['observedAtMilliseconds']<=900000,'original-facts-window-not-reset')

@@ -9,6 +9,8 @@ import {runtimeAdmissionCapability,runtimeSourceRequestSchema,runtimeSourceImple
 test('existing unchanged9.8 route remains separate; every runtime transition is closed',()=>{
  const base={fromVersion:'2026.9.8',toVersion:'2026.9.8',schemaVersion:55,apiVersion:1};
  assert.deepEqual(runtimeAdmissionCapability(base),{supported:true,runtimeRequired:false,gaps:[]});
+ assert.deepEqual(runtimeAdmissionCapability({...base,schemaVersion:60}),{supported:true,runtimeRequired:false,gaps:[]});
+ assert.equal(runtimeAdmissionCapability({...base,schemaVersion:60,fromVersion:'2026.9.6'}).supported,false);
  assert.deepEqual(runtimeAdmissionCapability({...base,fromVersion:'2026.9.6'}).gaps,[{code:SETTLED_RUNTIME_GAP}]);
  assert.equal(runtimeAdmissionCapability({...base,fromVersion:'2026.9.2',toVersion:'2026.9.6'}).gaps[0].code,'authenticated-runtime-producer-unavailable');
  for(const input of [{...base,toVersion:'2026.10.0'},{...base,schemaVersion:56},{...base,apiVersion:2}])assert.equal(runtimeAdmissionCapability(input).supported,false);

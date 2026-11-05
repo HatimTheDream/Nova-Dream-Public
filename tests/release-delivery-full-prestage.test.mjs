@@ -38,7 +38,8 @@ test('copy observation must retain exact original preparation, identities, files
 test('fixed prestage closure includes root authority and read-only install facts',()=>{
  const helpers=fullPrestageHelpers();assert.equal(Object.keys(helpers).length,4);for(const h of Object.values(helpers))assert.match(h,/^[a-f0-9]{64}$/);
 });
-for(const runtimeEnabled of [false,true])test('lost original '+(runtimeEnabled?'runtime upload and ':'')+'copy response resumes by observation without duplicate effects',async t=>{
+for(const variant of ['legacy','runtime','qualified-dependencies'])test('lost original '+(variant==='runtime'?'runtime upload and ':variant==='qualified-dependencies'?'qualified dependencies ':'')+'copy response resumes by observation without duplicate effects',async t=>{
+ const runtimeEnabled=variant==='runtime';
  const f=fullHostFixture(),root=mkdtempSync(join(tmpdir(),'nova-full-prestage-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
  const put=(n,b)=>{const path=join(root,n);writeFileSync(path,b);return{path,sha256:sha256(Buffer.from(b))};};
  const bundle=put('bundle','synthetic bundle'),archive=put('archive','synthetic dependencies'),metadata=put('metadata',JSON.stringify({archiveBytes:100,expandedBytes:200,fileCount:3}));
@@ -48,6 +49,7 @@ for(const runtimeEnabled of [false,true])test('lost original '+(runtimeEnabled?'
   sign:{candidateId:h('9'),bundle,release:{bundle:{bytes:16}},dependencies:{archive,description:{archiveBytes:22,expandedBytes:500,fileCount:10}}},
   artifacts:{repositories:{private:{metadata}}},capacity:{facts:{protectedHashes:{'/etc/nova-update/runner.json':h('6')}}},
   recovery:{kind:'nova-delivery-full-rehearsal',leaseId:f.values.leaseId,values:f.values,completion:f.completed,evidence:{proof}}}};
+ if(variant==='qualified-dependencies')c.prior.sign.dependencies.newNativeDependenciesQualified=true;
  const assets=[['bundle',bundle,16],['dependencies',archive,22]].map(([role,ref,bytes])=>({role,operationId:f.descriptor.operation.id,key:f.key,inputSha256:h('8'),asset:{authenticatedDownloadVerified:true,sha256:ref.sha256,bytes,localPath:ref.path}}));
  if(runtimeEnabled){
   const runtimeArchive=put('runtime','synthetic runtime'),description={format:1,fromVersion:'2026.9.6',toVersion:'2026.9.8',nodeVersion:'24.21.0',companion:{pluginVersion:'2026.9.8',codexVersion:'0.158.0'},archiveBytes:17,archiveSha256:runtimeArchive.sha256,expandedBytes:2000,fileCount:12};
@@ -87,4 +89,5 @@ for(const runtimeEnabled of [false,true])test('lost original '+(runtimeEnabled?'
   assert.throws(()=>verifyFullProtectedAssets(result,{operationId:f.key,publicationKey:f.key,bundle,dependencies:c.prior.sign.dependencies}),/runtime-binding/);
  }
  const count2=calls.length;assert.equal((await advanceFullPrestage(c,options)).state,'completed');assert.equal(calls.length,count2);
+ if(variant==='qualified-dependencies'){writeFileSync(archive.path,'changed dependencies');assert.throws(()=>verifyFullProtectedAssets(result,{operationId:f.key,publicationKey:f.key,bundle,dependencies:c.prior.sign.dependencies}),/qualified-dependency-changed/);}
 });

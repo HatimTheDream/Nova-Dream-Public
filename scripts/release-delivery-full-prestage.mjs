@@ -5,11 +5,16 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,readReleaseInputFile,sha256} from './release-plan.mjs';
-import {FULL_HELPERS,verifyFullCompletion,fullHostOptionsSchema} from './release-delivery-full-host.mjs';
+import {frontendRegular} from './frontend-contract.mjs';
+import {reviewedFullHelperHashes,verifyFullCompletion,fullHostOptionsSchema} from './release-delivery-full-host.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
 import {awaitObservationTime} from './release-observation-clock.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
+function qualifiedDependencyAsset(ref,size){
+ const raw=frontendRegular(ref.path,512*1024**2);
+ need(raw.length===size&&sha256(raw)===ref.sha256,'full-prestage-qualified-dependency-changed');
+}
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const encoded=v=>Buffer.from(canonical(v)+'\n');
 const names=['release-delivery-full-prestage.py','release-full-publication-primitives.py','full-host-primitives/asset-stage.py','full-host-primitives/install-facts.py'];
@@ -59,7 +64,9 @@ export function fullPrestageBinding(c,options,facts,assets){
  const files={};for(const [role,name,ref,size]of specs){
   const row=rows[role];need(row.operationId===op.id&&row.key===c.intent.key&&row.inputSha256===c.intent.inputSha256&&row.asset.authenticatedDownloadVerified===true&&row.asset.sha256===ref.sha256&&row.asset.bytes===size,'full-prestage-authenticated-asset-required');
   files[name]={path:row.asset.localPath,sha256:ref.sha256};
-  if(role==='runtime')verifyRuntimeArtifact(files[name],size);else need(readEvidenceFile(files[name],{maximum:128*1024**2}).length===size,'full-prestage-asset-bytes-changed');
+  if(role==='runtime')verifyRuntimeArtifact(files[name],size);
+  else if(role==='dependencies'&&s.dependencies.newNativeDependenciesQualified===true)qualifiedDependencyAsset(files[name],size);
+  else need(readEvidenceFile(files[name],{maximum:128*1024**2}).length===size,'full-prestage-asset-bytes-changed');
  }
  const metadata=JSON.parse(readEvidenceFile(c.prior.artifacts.repositories.private.metadata)),completed=r.completion;
  const binding={BUNDLE:s.bundle.sha256,BUNDLE_BYTES:s.release.bundle.bytes,TARGET:s.candidateId,PRIOR:op.priorCandidateId,PRIOR_VERSION:options.priorVersion,
@@ -67,7 +74,7 @@ export function fullPrestageBinding(c,options,facts,assets){
   SPECS:Object.fromEntries(specs.map(([_role,name,ref,size])=>[name,[size,ref.sha256]])),CURRENT_FACTS:facts,
   ...(runtime?{RUNTIME:runtime.description,PRIOR_AGENT_VERSION:op.priorAgentVersion}:{}),
   CAPACITY:{application:Object.fromEntries(['archiveBytes','expandedBytes','fileCount'].map(k=>[k,metadata[k]])),dependencyDescription:s.dependencies.description,
-   helperHashes:Object.fromEntries(['recovery.py','install.py','app_dependencies.py'].map(n=>[n,FULL_HELPERS[n]])),helperRoot:r.values.stage,
+   helperHashes:Object.fromEntries(['recovery.py','install.py','app_dependencies.py'].map(n=>[n,reviewedFullHelperHashes(r.helperHashes??r.completion.helperHashes)[n]])),helperRoot:r.values.stage,
    runnerSha256:c.prior.capacity.facts.protectedHashes['/etc/nova-update/runner.json'],rehearsal:{completedEvidenceSha256:completed.rehearsalEvidenceSha256,
     snapshotManifestSha256:completed.completedProof.snapshotManifestSha256,finalPhaseSha256:completed.completedProof.finalPhaseSha256,unitName:completed.unitName}},
   EXCLUDED:options.excludedIdentities,acceptedInstallation:options.acceptedInstallation,hostConfiguration:options.hostConfiguration,STAGE_PLAN:null,STAGE_INTENT:null,STAGE_PLAN_RAW_BASE64:null};
@@ -120,7 +127,9 @@ export function verifyFullProtectedAssets(value,{operationId,publicationKey,bund
  need(same(facts,input.binding.CURRENT_FACTS)&&same(bindFullPrestagePlan({...input.binding,STAGE_PLAN:null,STAGE_INTENT:null,STAGE_PLAN_RAW_BASE64:null},plan),input.binding),'full-protected-assets-original-plan-changed');
  for(const [name,ref]of Object.entries(input.files)){
   need(ref.sha256===input.binding.SPECS[name][1],'full-protected-assets-source-changed');
-  if(name==='runtime.tgz')verifyRuntimeArtifact(ref,input.binding.SPECS[name][0]);else need(readEvidenceFile(ref,{maximum:128*1024**2}).length===input.binding.SPECS[name][0],'full-protected-assets-source-changed');
+  if(name==='runtime.tgz')verifyRuntimeArtifact(ref,input.binding.SPECS[name][0]);
+  else if(name==='app-dependencies.tgz'&&dependencies.newNativeDependenciesQualified===true)qualifiedDependencyAsset(ref,input.binding.SPECS[name][0]);
+  else need(readEvidenceFile(ref,{maximum:128*1024**2}).length===input.binding.SPECS[name][0],'full-protected-assets-source-changed');
  }
  verifyPrepared(o.prepared,input.binding);return verifyFullPrestageResult(o.stage,input.binding,o.prepared);
 }

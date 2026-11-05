@@ -26,11 +26,20 @@ from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, pro
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
+from recovery import APPLICATION_TRANSITION_HELPERS, validate_application_transition
 from workspace_key import read_workspace_key
 
 OPERATOR_SOCKET = '/run/nova-update/operator.sock'
 HELPERS = {'operator_rehearsal.py', 'install.py', 'recovery.py', 'codex_log_retention.py',
            'app_dependencies.py', 'workspace_key.py', 'verify-session-bindings.mjs'}
+
+
+def helper_names(review):
+    if 'applicationTransition' not in review:
+        return frozenset(HELPERS)
+    validate_application_transition(review['applicationTransition'])
+    return APPLICATION_TRANSITION_HELPERS
+
 OPERATOR_REJECTIONS = {
     'A fresh idle workspace identity is required.': 'fresh_idle_identity_required',
     'An existing installation must settle before operator maintenance.': 'installation_unsettled',
@@ -231,7 +240,8 @@ class Rehearsal(Driver):
                   'hostConfiguration', 'baselineDirectory', 'baselineManifestSha256', 'labParent',
                   'startupGuardFile', 'startupGuardSha256', 'startupBarrier', 'helperHashes', 'nodeSha256',
                   'sourceDependencies', 'sourceHostHashes'}
-        require(set(review) == fields and review['format'] == 1 and review['kind'] == 'operator-rehearsal-review',
+        require(set(review) in (fields, fields | {'applicationTransition'})
+                and review['format'] == 1 and review['kind'] == 'operator-rehearsal-review',
                 'Unexpected operator rehearsal review.')
         self.job_id = fixed_uuid(review['leaseId'])
         self.prior_id = self.target_id = review['candidateId']
@@ -243,7 +253,16 @@ class Rehearsal(Driver):
         require(re.fullmatch(r'\d+\.\d+\.\d+', review['novaVersion']), 'Invalid reviewed prior version.')
         self.release = {'novaVersion': review['novaVersion'], 'compatibility': {'fromNovaVersion': review['novaVersion']},
                         'recovery': {'readinessTimeoutSeconds': 300}}
-        require(set(review['helperHashes']) == HELPERS, 'All rehearsal and verifier helpers must be pinned.')
+        migration_helpers = review.get('applicationTransition')
+        if migration_helpers is not None:
+            validate_application_transition(migration_helpers)
+            require(self.active_engine == '2026.9.8', 'The schema transition helpers require the unchanged qualified runtime.')
+        require(set(review['helperHashes']) == helper_names(review),
+                'All rehearsal and verifier helpers must be pinned.')
+        # This is the unchanged PRIOR rehearsal, even when it shares the new
+        # helper closure. Only the separate target qualification may migrate.
+        self.from_schema = self.to_schema = 55
+        self.application_transition = None
         for name, expected in review['helperHashes'].items():
             protected(self.bundle / name, private=True)
             require(re.fullmatch('[a-f0-9]{64}', expected) and digest(self.bundle / name) == expected, 'Reviewed operator helper changed.')

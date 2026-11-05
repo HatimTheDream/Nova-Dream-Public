@@ -15,7 +15,7 @@ def sha(value):
 
 
 # Synthetic complete capture graph; no real source paths, records or credentials.
-def emitted_capture(put, source_files, technical, op, epoch):
+def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
     operation = '33333333-3333-4333-8333-333333333333'
     root = PurePosixPath('/opt/nova-release-tools/qualified-startup-inputs-' + op)
     destination = root / ('home-capture-' + operation); seed = destination / 'home-seed'
@@ -58,7 +58,7 @@ def emitted_capture(put, source_files, technical, op, epoch):
     unit_ref = put('homeCapture/effectiveUnit', str(root / 'materialized/effective-unit.json'), effective)
     host_config = {'path': '/etc/nova-update/config.json', 'sha256': '7' * 64}
     context = {'sourceRootAuthority': authority, 'liveContext': live, 'effectiveUnit': effective,
-               'hostConfiguration': host_config, 'prior': {'path': '/apps/prior', 'candidateId': 'a' * 64, 'version': '2.7.11'},
+               'hostConfiguration': host_config, 'prior': {'path': '/apps/prior', 'candidateId': prior_id, 'version': '2.7.11'},
                'selectedApp': '/apps/prior'}
     plan = {'format': 1, 'kind': 'coherent-home-capture-plan', 'operationId': operation, 'startupOperationId': op,
             'inputSha256': input_ref['sha256'], 'producerSha256': source_sha, 'startupInputSha256': sha(encoded(base)),
@@ -93,7 +93,7 @@ def emitted_capture(put, source_files, technical, op, epoch):
             'liveContext': live_ref, 'effectiveUnit': unit_ref, 'hostConfiguration': host_config}
 
 
-def fixture(changes=None, *, fixture_parent='/fixture'):
+def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
     changes = changes or {}; files = {}; roles = {}
     op = '11111111-1111-4111-8111-111111111111'; epoch = '22222222-2222-4222-8222-222222222222'
     root = fixture_parent + '/' + op; evidence = root + '/evidence'; target = '/apps/target'; prior = '/apps/prior'
@@ -110,14 +110,20 @@ def fixture(changes=None, *, fixture_parent='/fixture'):
                     ('qualified-startup.py', 'qualified-parent.py', 'produce-startup-inputs.py', 'contracts.py')}
     sources = {n: r['sha256'] for n, r in source_files.items()}; roles['producer'] = source_files['qualified-startup.py']
     runner = sources['qualified-startup.py']
-    package = put('package', target + '/package.json', {'version': '2.8.2'})
+    if schema_migration:
+        helpers.update({n:sha(n.encode()) for n in ('hosted_retained_configuration.py','local-retained-configuration.mjs','hosted_retained_catalog.py','hosted-retained-catalog.mjs')})
+    package = put('package', target + '/package.json', {'version': '2.8.2', **({'edition3':{'schemaVersion':60,'apiVersion':1}} if schema_migration else {})})
     lock = put('lock', target + '/package-lock.json', {'version': '2.8.2'})
     host = put('host', target + '/scripts/host.mjs', b'// synthetic host')
     service = {p: put(p, target + '/' + p, ('// ' + p).encode())['sha256'] for p in
         ['dist/service/apps/service/' + n for n in ('main.js', 'gateway.js', 'http.js', 'runtime.js', 'software-updates.js', 'store.js', 'update-maintenance.js', 'update-native-idle.js', 'update-native-startup.js')]}
-    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.2', 'buildVersion': '1.0.313', 'schemaVersion': 55, 'apiVersion': 1,
+    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.2', 'buildVersion': '1.0.313', 'schemaVersion': 60 if schema_migration else 55, 'apiVersion': 1,
         'artifacts': [{'path': p, 'sha256': v} for p, v in service.items()]})
     target_id = sha(files[package['path']] + files[manifest['path']]); prior_id = 'a' * 64
+    if schema_migration:
+        old_package=put('prior-package',prior+'/package.json',{'version':'2.7.11','edition3':{'schemaVersion':55,'apiVersion':1}})
+        old_manifest=put('prior-manifest',prior+'/dist/candidate.json',{'version':'2.7.11','schemaVersion':55,'apiVersion':1})
+        prior_id=sha(files[old_package['path']]+files[old_manifest['path']])
     runtime = {'agentVersion': '2026.9.8', 'agent': '/runtime/openclaw', 'agentNodeSha256': 'b' * 64}
     target_binding = {'candidateId': target_id, 'version': '2.8.2', 'buildVersion': '1.0.313', 'archiveSha256': 'c' * 64,
         'archiveBytes': 123, 'ciSourceSha256': 'd' * 64, 'packageSha256': package['sha256'], 'packageLockSha256': lock['sha256'],
@@ -126,13 +132,14 @@ def fixture(changes=None, *, fixture_parent='/fixture'):
         'prior': {'candidateId': prior_id, 'version': '2.7.11'}, 'targets': {'private': target_binding, 'public': {**target_binding, 'candidateId': 'e' * 64}},
         'serviceArtifacts': service, 'hostEntrypointSha256': host['sha256'], 'dependencyGraphSha256': 'f' * 64,
         'helpers': helpers, 'runtime': runtime, 'workspaceEpoch': epoch}
+    if schema_migration:binding['applicationTransition']={'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
     if 'binding' in changes: changes['binding'](binding)
     negative_source = put('negativeVerifierSource', '/sources/negative-verifier.py', b'# synthetic negative fixture')
     negative_result = put('negativeVerifierResult', '/sources/negative-verifier.log', b'Synthetic test result; not production qualification')
     technical = put('technical', '/sources/independent-review.json', {'status': 'passed', 'sourceHashes': sources,
         'callContractsReviewed': True, 'isolationReviewed': True, 'heldBootstrapReviewed': True,
         'negativeVerifierEvidence': {'source': negative_source, 'result': negative_result}})
-    coherent = emitted_capture(put, source_files, technical, op, epoch)
+    coherent = emitted_capture(put, source_files, technical, op, epoch, prior_id)
     review = put('review', root + '/review.json', {'format': 1, 'kind': 'actual-retained-startup-qualification', 'operationId': op,
         'reviewReceipt': technical, 'qualificationBinding': binding, 'baseline': {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
         **coherent, 'runtime': runtime,
@@ -160,7 +167,7 @@ def fixture(changes=None, *, fixture_parent='/fixture'):
             'cwd': app['path'], 'uid': 999, 'nodeSha256': '9' * 64, 'namespaces': child_ns})
         ready = put(name + '/ready', folder + '/ready.json', {'candidateId': app['candidateId'], 'epoch': epoch,
             'startedSha256': started['sha256'], 'processSha256': process['sha256'], 'process': doc(name + '/process'), 'readyAtSeconds': i * 100 + 20,
-            'heldReadiness': {'epoch': epoch, 'accounts': [], 'health': {'status': 'ready', 'candidateId': app['candidateId'], 'version': app['version'], 'schemaVersion': 55, 'apiVersion': 1}},
+            'heldReadiness': {'epoch': epoch, 'accounts': [], 'health': {'status': 'ready', 'candidateId': app['candidateId'], 'version': app['version'], 'schemaVersion': 60 if schema_migration and i!=3 else 55, 'apiVersion': 1}},
             'nativeProcess': {'pid': 20 + i, 'startTicks': 2000 + i, 'uid': 999, 'namespaces': child_ns,
                 'cwd': '/var/lib/nova/workspace/' + selected + '/openclaw-runtime', 'nodeSha256': runtime['agentNodeSha256']}})
         closed = put(name + '/closed', folder + '/closed.json', {'readySha256': ready['sha256'], 'owningServiceFullyStopped': True, 'closedAtSeconds': i * 100 + 30})

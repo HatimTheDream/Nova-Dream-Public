@@ -24,7 +24,7 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
-import { fullHostOptionsSchema, FULL_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity } from './release-delivery-full-host.mjs';
+import { fullHostOptionsSchema, FULL_HELPERS, FULL_APPLICATION_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
@@ -98,7 +98,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
     'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',
-    'release-delivery-startup-retained.mjs', 'release-startup-retained-proof.py', 'release-delivery-capability-disposition.mjs',
+    'release-delivery-startup-retained.mjs', 'release-delivery-qualified-dependencies.mjs', 'release-startup-retained-proof.py', 'release-delivery-capability-disposition.mjs',
     'release-deliver.mjs', 'release-storage-default.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
   return files;
 }
@@ -202,7 +202,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
     ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}),
-    ...(target.full.dependencyTransport.format===5?{startupCollector:createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})}: {}) });
+    ...([5,6].includes(target.full.dependencyTransport.format)?{startupCollector:createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})}: {}) });
   // This command currently has the maintained schema55/API1 host closure.
   // Actual candidate schema/runtime comparisons still run after authenticated
   // artifact retrieval; declared operation fields cannot override those bytes.
@@ -224,7 +224,9 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       'changed-startup-qualification-producer-required','changed-updater-qualification-producer-required','changed-dependency-qualification-producer-required']);
     try { await dependency(target).validate({descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
     catch(error) { if(capabilities.has(error?.message))return [error.message];throw error; }
-    for(const side of ['private','public'])for(const [name,digest] of Object.entries(FULL_HELPERS)) {
+    const schema=JSON.parse(readEvidenceFile(prior.artifacts.repositories.private.manifest)).schemaVersion;
+    const helperHashes=schema===60?FULL_APPLICATION_HELPERS:FULL_HELPERS;
+    for(const side of ['private','public'])for(const [name,digest] of Object.entries(helperHashes)) {
       const artifact=prior.artifacts.repositories[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];
       if(claimed?.sha256!==digest)return ['full-helper-qualification-capability-required'];
       readEvidenceFile({path:join(artifact.frozenSourceDirectory,'deploy','update-runner',name),sha256:digest},{maximum:2*1024**2});

@@ -31,6 +31,137 @@ ALLOWANCE = 128 * 1024 ** 2
 SESSION_BINDINGS_VERIFIER_SHA256 = '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0'
 _VERIFICATION_SCRATCH = ContextVar('nova_verification_scratch', default=None)
 _LOCAL_WINDOWS = ContextVar('nova_local_windows_retained', default=None)
+_APPLICATION_TRANSITION = ContextVar('nova_hosted_application_transition', default=None)
+APPLICATION_TRANSITION_HELPERS = frozenset({'install.py', 'recovery.py', 'operator_rehearsal.py',
+    'app_dependencies.py', 'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs',
+    'hosted_retained_configuration.py', 'local-retained-configuration.mjs',
+    'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs'})
+
+
+def validate_application_transition(value):
+    """One application transition; this validates shape, not delivery authority."""
+    expected = {'format': 1, 'kind': 'schema-55-to-60-same-runtime',
+                'fromSchemaVersion': 55, 'toSchemaVersion': 60, 'apiVersion': 1,
+                'fromAgentVersion': '2026.9.8', 'toAgentVersion': '2026.9.8'}
+    require(type(value) is dict and value == expected
+            and all(type(value[key]) is type(item) for key, item in expected.items()),
+            'The application schema transition is outside its reviewed exact pair.')
+    return dict(expected)
+
+
+def current_application_transition():
+    """Detached phase inputs for the maintained native derivation, never a waiver."""
+    scope = _APPLICATION_TRANSITION.get()
+    return None if scope is None else {**scope, 'transition': dict(scope['transition'])}
+
+
+def validate_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
+    """Consume the fixed collector's original, hash-bound settled projection.
+
+    The caller authenticates the protected projection file and every helper
+    byte before calling. A synthetic migration or qualification plan is not a
+    completed proof and cannot satisfy this contract.
+    """
+    transition = validate_application_transition(pair.get('applicationTransition'))
+    qualification = pair.get('startupQualification')
+    require(type(qualification) is dict and set(qualification) == {'projection', 'binding'}
+            and type(qualification['projection']) is dict
+            and set(qualification['projection']) == {'path', 'sha256'}
+            and qualification['projection']['path'] == 'startup-qualification.json'
+            and re.fullmatch('[a-f0-9]{64}', qualification['projection']['sha256'] or ''),
+            'The application transition lacks its original bundled qualification.')
+    binding = qualification['binding']
+    require(type(binding) is dict and binding.get('format') == 1
+            and binding.get('kind') == 'same-runtime-startup-candidate-binding'
+            and binding.get('applicationTransition') == transition
+            and binding.get('workspaceEpoch') == workspace_epoch
+            and binding.get('prior', {}).get('candidateId') == prior_id
+            and binding.get('targets', {}).get('private', {}).get('candidateId') == target_id
+            and prior_id != target_id
+            and binding.get('runtime', {}).get('agentVersion') == '2026.9.8'
+            and binding.get('helpers') == helper_hashes,
+            'The actual application qualification belongs to another pair or verifier.')
+    dependencies = pair.get('applicationDependencies')
+    require(type(dependencies) is dict
+            and dependencies.get('dependencyGraphSha256') == binding.get('dependencyGraphSha256')
+            and dependencies.get('packageLockSha256') == binding.get('targets', {}).get('private', {}).get('packageLockSha256')
+            == binding.get('targets', {}).get('public', {}).get('packageLockSha256')
+            and type(dependencies.get('dependencyGraphSha256')) is str
+            and re.fullmatch('[a-f0-9]{64}', dependencies['dependencyGraphSha256'])
+            and type(dependencies.get('packageLockSha256')) is str
+            and re.fullmatch('[a-f0-9]{64}', dependencies['packageLockSha256'])
+            and ('applicationDependencies' not in binding or binding['applicationDependencies'] == dependencies),
+            'The installed application dependencies differ from the actual qualification.')
+    require(type(proof) is dict and proof.get('format') == 1
+            and proof.get('kind') == 'actual-retained-startup-qualification-observation'
+            and proof.get('scope') == 'retained-same-runtime-startup-restart-restoration'
+            and proof.get('readOnly') is True and proof.get('hostEffects') is False
+            and proof.get('productionAdmission') is False
+            and proof.get('qualificationBinding') == binding
+            and all(proof.get(name) is True for name in ('actualSettledQualification',
+                'independentOriginalRestored', 'completeMaintainedSavedAndNativeState',
+                'heldBootstrapVerified', 'workerClosed', 'freshFullRehearsalStillRequired',
+                'liveAcceptanceStillRequired')),
+            'The complete settled application qualification is unavailable.')
+    scenarios = proof.get('scenarios')
+    names = ('target-first-start', 'target-restart', 'pristine-prior-restoration')
+    require(type(scenarios) is list and len(scenarios) == 3, 'All application qualification scenarios are required.')
+    previous = None
+    for name, scenario in zip(names, scenarios):
+        require(type(scenario) is dict and scenario.get('scenario') == name
+                and scenario.get('candidateId') == (prior_id if name == names[-1] else target_id)
+                and type(scenario.get('startedAtSeconds')) is int
+                and type(scenario.get('closedAtSeconds')) is int
+                and 0 <= scenario['closedAtSeconds'] - scenario['startedAtSeconds'] <= 3600
+                and (previous is None or scenario['startedAtSeconds'] >= previous - 1),
+                'The application qualification scenario identity or clock changed.')
+        preserved = scenario.get('preservation', {})
+        observed = proof.get('references', {}).get(name + '/preservation', {})
+        require(type(preserved) is dict and set(preserved) in ({'path', 'sha256'}, {'path', 'bytes', 'sha256'})
+                and type(preserved['path']) is str and preserved['path'].endswith('/preservation.json')
+                and type(preserved['sha256']) is str and re.fullmatch('[a-f0-9]{64}', preserved['sha256'])
+                and type(observed) is dict and set(observed) == {'path', 'bytes', 'sha256'}
+                and all(observed.get(key) == value for key, value in preserved.items())
+                and type(observed['bytes']) is int and observed['bytes'] > 0,
+                'The application qualification omitted its closed retained-state comparison.')
+        previous = scenario['closedAtSeconds']
+    return transition
+
+
+@contextlib.contextmanager
+def hosted_application_transition(value, before_root, after_root, *, restored=False):
+    """Bind comparison roles after the caller authenticates its plan/qualification.
+
+    The producer uses its reviewed isolated plan. Installation additionally
+    requires the original settled qualification bound to the signed pair. This
+    context itself grants no process, migration, or filesystem mutation rights.
+    """
+    transition = validate_application_transition(value)
+    require(_APPLICATION_TRANSITION.get() is None and _LOCAL_WINDOWS.get() is None
+            and type(restored) is bool, 'Nested or mixed application transition authority is refused.')
+    before, after = pathlib.Path(before_root), pathlib.Path(after_root)
+    require(all(path.is_absolute() and path.resolve(strict=True) == path and path.is_dir()
+                and not path.is_symlink() for path in (before, after))
+            and before != after and not before.is_relative_to(after) and not after.is_relative_to(before),
+            'Application comparison requires independent canonical roots.')
+    scope = {'transition': transition, 'beforeRoot': before, 'afterRoot': after,
+             'fromSchemaVersion': 55, 'toSchemaVersion': 55 if restored else 60,
+             'restored': restored}
+    token = _APPLICATION_TRANSITION.set(scope)
+    try:
+        yield current_application_transition()
+    finally:
+        _APPLICATION_TRANSITION.reset(token)
+
+
+def application_schema(root):
+    scope = _APPLICATION_TRANSITION.get()
+    if scope is None:
+        return 60 if _LOCAL_WINDOWS.get() is not None else 55
+    root = pathlib.Path(root)
+    require(root in (scope['beforeRoot'], scope['afterRoot']),
+            'Application comparison escaped its bound roots.')
+    return scope['fromSchemaVersion'] if root == scope['beforeRoot'] else scope['toSchemaVersion']
 
 
 def retained_image_path(path):
@@ -801,13 +932,28 @@ def saved_state(snapshot, live, restored=False):
     before_paths = paths(snapshot)
     require(before_paths and before_paths == paths(live), 'The saved database set changed.')
     reports = []
+    scope = _APPLICATION_TRANSITION.get()
+    selected_relative = None
+    if scope is not None:
+        require(pathlib.Path(snapshot) == scope['beforeRoot'] and pathlib.Path(live) == scope['afterRoot']
+                and restored is scope['restored'], 'Saved-state comparison changed its bound phase.')
+        selected, epoch = selected_workspace(snapshot, closed=True)
+        current, _ = selected_workspace(live, epoch, closed=True)
+        selected_relative = selected.relative_to(snapshot) / 'workspace.sqlite'
+        require(current.relative_to(live) / 'workspace.sqlite' == selected_relative,
+                'The application migration changed workspace selection.')
     for relative in sorted(before_paths):
         old, current = snapshot / relative, live / relative
         with contextlib.closing(database(old, True)) as before, contextlib.closing(database(current, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Saved database integrity failed.')
             old_schema, new_schema = before.execute('pragma user_version').fetchone()[0], after.execute('pragma user_version').fetchone()[0]
             allowed = {60} if _LOCAL_WINDOWS.get() is not None else {53, 55}
-            require(old_schema in allowed and new_schema == old_schema, 'An app-only update changed a saved database schema.')
+            expected_schema = scope['toSchemaVersion'] if scope is not None and relative == selected_relative else old_schema
+            require(old_schema in allowed and new_schema == expected_schema,
+                    'An app-only update changed an unqualified saved database schema.')
+            if scope is not None:
+                require(schema_definitions(before) == schema_definitions(after),
+                        'The application transition changed unqualified SQL definitions.')
             for table in ('entities', 'history', 'blobs', 'blob_refs', 'receipts', 'meta'):
                 retained = rows(before, table)
                 require(retained == rows(after, table), 'Saved content, history, attachment, request receipt or workspace metadata changed.')
@@ -822,7 +968,7 @@ def saved_state(snapshot, live, restored=False):
                 if retained_image_path(old.parent / name).exists():
                     require(retained_image_path(old.parent / name).read_bytes() == retained_image_path(current.parent / name).read_bytes(), 'Workspace identity, key or selection changed.')
             reports.append({'beforeSchema': old_schema, 'afterSchema': new_schema})
-    expected = 60 if _LOCAL_WINDOWS.get() is not None else 55
+    expected = application_schema(snapshot)
     require(any(item['beforeSchema'] == expected for item in reports), 'The prior selected schema' + str(expected) + ' store is missing.')
     return reports
 
@@ -862,7 +1008,7 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     marker = selected / 'edition3.identity'
     require(marker.is_file() and not marker.is_symlink() and marker.read_bytes() == b'private.novadream.edition3.preview\n', 'Selected workspace identity changed.')
     with contextlib.closing(database(selected / 'workspace.sqlite', closed)) as connection:
-        require(connection.execute('pragma user_version').fetchone()[0] == (60 if _LOCAL_WINDOWS.get() is not None else 55), 'The selected workspace schema changed.')
+        require(connection.execute('pragma user_version').fetchone()[0] == application_schema(original_root), 'The selected workspace schema changed.')
         row = connection.execute("select value from meta where key='epoch'").fetchone()
         require(row is not None and isinstance(row[0], str) and str(uuid.UUID(row[0])) == row[0]
                 and (expected_epoch is None or row[0] == expected_epoch), 'The selected workspace does not match authenticated acceptance.')
@@ -1406,10 +1552,21 @@ def verified_session_bindings(snapshot, selected, configuration, node, key):
 
 
 def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.2', to_version=None, app_releases=None,
-                                 *, session_binding_key=None, session_binding_node=None, logical_workspace_root=None):
+                                 *, session_binding_key=None, session_binding_node=None, logical_workspace_root=None,
+                                 hosted_configuration_authority=None, startup_window=None, catalog_runtime_root=None):
     local = _LOCAL_WINDOWS.get()
     if local is not None:
         return local.configuration(selected)
+    application = _APPLICATION_TRANSITION.get()
+    if application is not None and not application['restored']:
+        require(from_version == to_version == '2026.9.8' and logical_workspace_root is None
+                and hosted_configuration_authority is not None,
+                'The application transition needs its actual closed configuration derivation.')
+        from hosted_retained_configuration import derive_configuration
+        return derive_configuration(snapshot, live, selected, node=session_binding_node,
+            app_releases=app_releases, session_binding_key=session_binding_key,
+            startup_window=startup_window, catalog_runtime_root=catalog_runtime_root,
+            authority=hosted_configuration_authority)
     relative = selected / 'openclaw-runtime' / 'openclaw.json'
     paths = (snapshot / relative, live / relative)
     if not any(path.exists() or path.is_symlink() for path in paths):
@@ -2434,6 +2591,17 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
     if from_version == to_version:
         require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
+        application = current_application_transition()
+        if application is not None and not application['restored']:
+            require(from_version == '2026.9.8' and configuration is not None and startup_window is not None,
+                    'The application catalog transition needs its exact settled native inputs.')
+            from hosted_retained_catalog import qualify_application_catalog
+            indexes = qualify_application_catalog(indexes, node=node, app_releases=app_releases,
+                workspace_roots=workspace_roots, configuration=configuration, startup_window=startup_window,
+                catalog_runtime_root=catalog_runtime_root, transition=application)
+            require(type(indexes) in (tuple, list) and len(indexes) == 2 and all(type(value) is dict for value in indexes),
+                    'The exact application catalog derivation did not return its complete pair.')
+            old_index, new_index = indexes
         retained_catalog_files(indexes, app_releases, workspace_roots, engine_version=to_version, startup_window=startup_window,
                                catalog_runtime_root=catalog_runtime_root)
         effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
@@ -3054,7 +3222,7 @@ def retained_native_event_history(before, after, relative, selected, runtime_roo
 
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
                        log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
-                       logical_workspace_root=None, catalog_runtime_root=None):
+                        logical_workspace_root=None, catalog_runtime_root=None, hosted_configuration_authority=None):
     to_version = to_version or from_version
     local_authority = _LOCAL_WINDOWS.get().source_root if _LOCAL_WINDOWS.get() is not None else live
     migrating = from_version != to_version
@@ -3077,7 +3245,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                 'The pre-start copy differs from the authoritative selected workspace.')
     configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases,
                                                   session_binding_key=session_binding_key, session_binding_node=session_binding_node,
-                                                  logical_workspace_root=logical_workspace_root)
+                                                   logical_workspace_root=logical_workspace_root,
+                                                   hosted_configuration_authority=hosted_configuration_authority,
+                                                   startup_window=log_retention_window, catalog_runtime_root=catalog_runtime_root)
     embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version,
                                           log_retention_window, log_retention_reports)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version,

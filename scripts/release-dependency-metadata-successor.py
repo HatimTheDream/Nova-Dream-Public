@@ -43,7 +43,10 @@ def ref(path):return {'path':str(P(path).absolute()),'sha256':digest(P(path).abs
 def module(reference):
  raw=read(reference);need(sha(raw)==HELPER_SHA,'maintained-parser-changed')
  m=types.ModuleType('unchanged_maintained_dependency_contract');m.__file__=reference['path'];exec(compile(raw,m.__file__,'exec'),m.__dict__);return m
-def metadata_delta(old_package,old_lock,new_package,new_lock,transition,policy='version-only'):
+APPLICATION_TRANSITION={'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
+def exact_application_transition(value):
+ return value==APPLICATION_TRANSITION and all(type(value[k]) is int for k in ('format','fromSchemaVersion','toSchemaVersion','apiVersion'))
+def metadata_delta(old_package,old_lock,new_package,new_lock,transition,policy='version-only',application_transition=None):
  need(set(transition)=={'fromVersion','toVersion','fromBuild','toBuild'},'exact-transition-required')
  a,b=copy.deepcopy(old_package),copy.deepcopy(new_package)
  need(a['version']==transition['fromVersion'] and b['version']==transition['toVersion'] and a['edition3']['buildVersion']==transition['fromBuild'] and b['edition3']['buildVersion']==transition['toBuild'],'official-transition-differs')
@@ -56,6 +59,10 @@ def metadata_delta(old_package,old_lock,new_package,new_lock,transition,policy='
   need(a['scripts'].get('test')==b['scripts'].get('test')==OLD_TEST and b['scripts'].get('test:quality')==QUALITY_TEST and ('test:quality' not in a['scripts'] or a['scripts']['test:quality']==QUALITY_TEST),'quality-test-command-metadata-differs')
   if 'test:quality' not in a['scripts']:del b['scripts']['test:quality']
   b['scripts']['quality']=a['scripts']['quality']
+ if application_transition is not None:
+  need(exact_application_transition(application_transition),'dependency-application-transition-changed')
+  need(a['edition3'].get('schemaVersion')==55 and b['edition3'].get('schemaVersion')==60 and a['edition3'].get('apiVersion')==b['edition3'].get('apiVersion')==1,'dependency-application-transition-changed')
+  b['edition3']['schemaVersion']=a['edition3']['schemaVersion']
  b['version']=a['version'];b['edition3']['buildVersion']=a['edition3']['buildVersion'];need(a==b,'package-change-exceeds-release-metadata')
  a,b=copy.deepcopy(old_lock),copy.deepcopy(new_lock)
  need(a['version']==a['packages']['']['version']==transition['fromVersion'] and b['version']==b['packages']['']['version']==transition['toVersion'],'root-lock-transition-differs')
@@ -103,9 +110,24 @@ def quality_command(value):
   sources.append(read(source))
  need(sources[0] and sources[0]==sources[1],'paired-quality-command-source-changed')
  return command['policy']
+def application_qualification(value,package,lock,description):
+ if 'applicationTransition' not in value:return None
+ transition=value['applicationTransition']
+ need(value['format']==3 and exact_application_transition(transition),'dependency-application-transition-changed')
+ qualified=value['startupQualification'];need(set(qualified)=={'projection','binding'},'dependency-startup-binding-required')
+ proof=json.loads(read(qualified['projection'],512*1024));binding=qualified['binding']
+ need(proof.get('kind')=='actual-retained-startup-qualification-observation' and proof.get('qualificationBinding')==binding
+  and all(proof.get(k) is True for k in ('actualSettledQualification','completeMaintainedSavedAndNativeState','independentOriginalRestored','heldBootstrapVerified','workerClosed'))
+  and proof.get('productionAdmission') is False,'dependency-actual-startup-proof-required')
+ need(binding.get('applicationTransition')==transition and binding.get('prior',{}).get('candidateId')==value['acceptedCandidate']
+  and binding.get('sourceCommits')==value['qualityCommand']['sourceCommits']
+  and binding.get('dependencyGraphSha256')==description['dependencyGraphSha256']
+  and binding.get('runtime',{}).get('agentVersion')=='2026.9.8','dependency-startup-identity-changed')
+ need(set(binding.get('targets',{}))=={'private','public'} and all(t.get('packageSha256')==sha(package) and t.get('packageLockSha256')==sha(lock) for t in binding['targets'].values()),'dependency-startup-package-changed')
+ return transition
 def validate(value):
  fields={'format','kind','helper','oldArchive','oldMetadata','nativeReceipt','acceptedPair','acceptedInstaller','acceptedBundle','acceptedCandidate','targetPackage','targetLock','transition'}
- need(set(value)==fields|({'releaseCommand','qualityCommand'} if value.get('format')==3 else {'releaseCommand'} if value.get('format')==2 else set()),'exact-input-schema-required')
+ need(set(value)==fields|({'releaseCommand','qualityCommand'} if value.get('format')==3 else {'releaseCommand'} if value.get('format')==2 else set())|({'applicationTransition','startupQualification'} if 'applicationTransition' in value else set()),'exact-input-schema-required')
  need(value['format'] in (1,2,3) and value['kind']=='metadata-only-dependency-successor','unsupported-successor')
  policy=quality_command(value) if value['format']==3 else release_command(value) if value['format']==2 else 'version-only'
  deps=module(value['helper']);old=P(value['oldArchive']['path']);need(digest(old)==value['oldArchive']['sha256'],'old-archive-changed')
@@ -124,7 +146,8 @@ def validate(value):
  with archive_read(old,value['oldArchive']['sha256']) as archive:
   exact_members(archive,members)
   old_package=json.load(archive.extractfile('package.json'));old_lock=json.load(archive.extractfile('package-lock.json'))
- metadata_delta(old_package,old_lock,json.loads(package),json.loads(lock),value['transition'],policy)
+ application_transition=application_qualification(value,package,lock,description)
+ metadata_delta(old_package,old_lock,json.loads(package),json.loads(lock),value['transition'],policy,application_transition)
  need(deps.dependency_graph_sha256(json.loads(lock))==description['dependencyGraphSha256'],'dependency-graph-changed')
  return deps,old,description,members,package,lock
 def produce(value,directory):

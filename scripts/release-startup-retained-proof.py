@@ -20,6 +20,9 @@ SCENARIOS = ('target-first-start', 'target-restart', 'pristine-prior-restoration
 SCOPE = 'retained-same-runtime-startup-restart-restoration'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
+APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
+APPLICATION_TRANSITION = {'format': 1, 'kind': 'schema-55-to-60-same-runtime', 'fromSchemaVersion': 55, 'toSchemaVersion': 60, 'apiVersion': 1, 'fromAgentVersion': '2026.9.8', 'toAgentVersion': '2026.9.8'}
+
 
 
 def need(value, reason):
@@ -323,13 +326,36 @@ def consume(request, read, sources):
          and request['parent']['path'] == str(fixture / 'evidence/parent-verified.json')
          and parent['originalIntention']['path'] == str(fixture / 'intention.json'), 'startup-proof-fixture-binding-changed')
     binding = review.get('qualificationBinding')
+    transition = binding.get('applicationTransition') if isinstance(binding, dict) else None
+    if transition is not None:
+        need(transition == APPLICATION_TRANSITION and all(type(transition[k]) is int for k in ('format','fromSchemaVersion','toSchemaVersion','apiVersion')), 'startup-proof-application-transition-changed')
+        prior_root = PurePosixPath(review['prior']['path'])
+        prior_package_raw = read(str(prior_root / 'package.json'), 1024**2)
+        prior_manifest_raw = read(str(prior_root / 'dist/candidate.json'), 2*1024**2)
+        prior_package, prior_manifest = parse(prior_package_raw), parse(prior_manifest_raw)
+        need(sha(prior_package_raw + prior_manifest_raw) == review['prior']['candidateId']
+             and prior_package.get('version') == prior_manifest.get('version') == review['prior']['version']
+             and prior_package.get('edition3',{}).get('schemaVersion') == prior_manifest.get('schemaVersion') == 55
+             and prior_package.get('edition3',{}).get('apiVersion') == prior_manifest.get('apiVersion') == 1, 'startup-proof-prior-schema-changed')
+    target_schema = 60 if transition is not None else 55
+    dependencies = binding.get('applicationDependencies') if isinstance(binding,dict) else None
+    if dependencies is not None:
+        fields={'format','archiveBytes','archiveSha256','expandedBytes','fileCount','packageLockSha256','dependencyGraphSha256','platform','arch','nodeVersion','nodeAbi'}
+        need(transition is not None and type(dependencies) is dict and set(dependencies)==fields
+             and type(dependencies['format']) is int and dependencies['format']==1
+             and all(type(dependencies[k]) is int and 0<dependencies[k]<=limit for k,limit in [('archiveBytes',512*1024**2),('expandedBytes',2*1024**3),('fileCount',200000)])
+             and all(HASH.fullmatch(dependencies[k]) for k in ('archiveSha256','packageLockSha256','dependencyGraphSha256'))
+             and dependencies['platform']=='linux' and dependencies['arch']=='x64' and dependencies['nodeVersion']=='22.23.2'
+             and type(dependencies['nodeAbi']) is int and dependencies['nodeAbi']==127
+             and dependencies['dependencyGraphSha256']==binding['dependencyGraphSha256']
+             and all(t['packageLockSha256']==dependencies['packageLockSha256'] for t in binding['targets'].values()), 'startup-proof-application-dependencies-changed')
     need(isinstance(binding, dict) and all(v.get('qualificationBinding') == binding for v in (parent, plan, child))
          and binding.get('format') == 1 and binding.get('kind') == 'same-runtime-startup-candidate-binding'
          and binding.get('workspaceEpoch') == review.get('baseline', {}).get('epoch') == plan.get('workspaceEpoch')
          and UUID.fullmatch(binding.get('workspaceEpoch', ''))
          and binding.get('runtime') == review.get('runtime') and binding['runtime'].get('agentVersion') == '2026.9.8'
          and binding.get('helpers') == plan.get('helperHashes') == review.get('helpers', {}).get('sha256')
-         and set(binding['helpers']) == set(HELPERS), 'startup-proof-complete-binding-required')
+         and set(binding['helpers']) == set(HELPERS + (APPLICATION_HELPERS if transition is not None else ())), 'startup-proof-complete-binding-required')
     need(binding['prior'] == {k: review['prior'][k] for k in ('candidateId', 'version')}
          and binding['targets']['private']['candidateId'] == review['target']['candidateId']
          and binding['targets']['private']['version'] == review['target']['version']
@@ -397,7 +423,7 @@ def consume(request, read, sources):
         held = ready.get('heldReadiness', {}); health = held.get('health', {})
         need(held.get('epoch') == binding['workspaceEpoch'] and isinstance(held.get('accounts'), list)
              and health.get('status') == 'ready' and health.get('candidateId') == app['candidateId']
-             and health.get('version') == app['version'] and health.get('schemaVersion') == 55 and health.get('apiVersion') == 1,
+             and health.get('version') == app['version'] and health.get('schemaVersion') == (55 if scenario == 'pristine-prior-restoration' else target_schema) and health.get('apiVersion') == 1,
              'startup-proof-held-readiness-changed')
         native = ready.get('nativeProcess', {})
         need(native.get('namespaces') == namespaces and native.get('uid') == review['serviceUid']
@@ -466,7 +492,8 @@ def consume(request, read, sources):
          and sha(read(str(target / 'scripts/host.mjs'), 2 * 1024**2)) == binding['hostEntrypointSha256']
          and package.get('version') == manifest.get('version') == qualified['version']
          and manifest.get('buildVersion') == qualified['buildVersion']
-         and manifest.get('schemaVersion') == 55 and manifest.get('apiVersion') == 1, 'startup-proof-tested-candidate-changed')
+         and manifest.get('schemaVersion') == target_schema and manifest.get('apiVersion') == 1
+         and (transition is None or (package.get('edition3',{}).get('schemaVersion') == target_schema and package.get('edition3',{}).get('apiVersion') == 1)), 'startup-proof-tested-candidate-changed')
     service_files = {}
     for item in manifest.get('artifacts', []):
         path = item.get('path', '')

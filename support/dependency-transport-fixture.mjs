@@ -14,16 +14,16 @@ const reference=path=>({path,sha256:sha256(readFileSync(path))});
 const schema=readFileSync(new URL('../scripts/release-coordinate.mjs',import.meta.url),'utf8').match(/this\.db\.exec\(`(PRAGMA journal_mode=WAL;[\s\S]+?PRAGMA user_version=1; COMMIT;)`\);/)[1].replace('${APPLICATION_ID}',String(0x4e56524c));
 const startup=['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(x=>'dist/service/apps/service/'+x);
 const helpers=['install.py','recovery.py','codex_log_retention.py','app_dependencies.py','workspace_key.py','verify-session-bindings.mjs'];
-export function dependencyFixture(t,{format=1,change,runHook,includeHost=false}={}){
+export function dependencyFixture(t,{format=1,change,runHook,includeHost=false,targetSchema,priorSchema=55,migrationHelpers=[],targetDependencyVersion='1.0.0'}={}){
  const root=mkdtempSync(join(tmpdir(),'nova-dependency-portable-')),journal=Object.create(ReleaseJournal.prototype);journal.directory=root;journal.readOnly=false;journal.db=new DatabaseSync(join(root,'journal.sqlite'));journal.db.exec(schema);
  t.after(()=>{journal.close();if(dirname(root)!==resolve(tmpdir()))throw Error('fixture-cleanup-scope');rmSync(root,{recursive:true,force:true});});
  const put=(path,bytes)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,Buffer.isBuffer(bytes)?bytes:raw(bytes));return reference(path);};
  const parser=readFileSync(new URL('../deploy/update-runner/app_dependencies.py',import.meta.url)),helperBytes=Object.fromEntries(helpers.map(n=>[n,n==='app_dependencies.py'?parser:Buffer.from('# synthetic helper '+n+'\n')]));
  const candidate=(side,base=false)=>{
   const directory=join(root,side+(base?'-base':'-target')),commit=(side==='private'?'a':'b').repeat(40);
-  const pkg={name:'nova-dream-edition-3',type:'module',version:base?'2.3.5':'2.4.0',edition3:{buildVersion:base?'1.0.292':'1.0.293',schemaVersion:!base&&change==='schema'?56:55,apiVersion:1,appId:'fixture.nova'},dependencies:{fixture:'1.0.0'},engines:{node:'>=22.19.0'},scripts:{build:'node build.mjs',postinstall:'node prepare.mjs',...(!base&&[2,4].includes(format)?{'release:deliver':'node scripts/release-deliver.mjs'}:{})}};
+  const pkg={name:'nova-dream-edition-3',type:'module',version:base?'2.3.5':'2.4.0',edition3:{buildVersion:base?'1.0.292':'1.0.293',schemaVersion:base?priorSchema:targetSchema??(change==='schema'?56:55),apiVersion:1,appId:'fixture.nova'},dependencies:{fixture:base?'1.0.0':targetDependencyVersion},engines:{node:'>=22.19.0'},scripts:{build:'node build.mjs',postinstall:'node prepare.mjs',...(!base&&[2,4].includes(format)?{'release:deliver':'node scripts/release-deliver.mjs'}:{})}};
   if(format===4)Object.assign(pkg.scripts,{test:'tsx --test --test-concurrency=2 tests/*.test.ts tests/*.test.mjs',quality:base?'npm run typecheck && npm test && npm run security:audit && npm run validate:release && npm run build':'node scripts/quality.mjs',...(!base?{'test:quality':'tsx --test --test-concurrency=4 tests/*.test.ts tests/*.test.mjs'}:{})});
-  const lock={name:pkg.name,version:pkg.version,lockfileVersion:3,packages:{'':{name:pkg.name,version:pkg.version,dependencies:pkg.dependencies},'node_modules/fixture':{version:'1.0.0'}}};
+  const lock={name:pkg.name,version:pkg.version,lockfileVersion:3,packages:{'':{name:pkg.name,version:pkg.version,dependencies:pkg.dependencies},'node_modules/fixture':{version:base?'1.0.0':targetDependencyVersion}}};
   put(join(directory,'package.json'),pkg);const lockRef=put(join(directory,'package-lock.json'),lock);
   const files={'dist/client/index.html':Buffer.from('<html/>'),'dist/service/apps/service/main.js':Buffer.from(base?'oldBackend()':'newBackend()'),...Object.fromEntries(startup.map(n=>[n,Buffer.from(!base&&change==='startup'&&n===startup[0]?'changed startup':'unchanged '+n)]))};
   const plugin='dist/service/apps/service/worker-plugin/';for(const n of ['index.js','identity.js','journal.js'])files[plugin+n]=Buffer.from('export {};');
@@ -36,10 +36,17 @@ export function dependencyFixture(t,{format=1,change,runHook,includeHost=false}=
    files[direct+'package.json']=raw({openclaw:{extensions:['./index.js']}});
    for(const name of ['direct-agent-tool-calls.js','direct-agent-runtime-policy.js','direct-agent-owner.js'])files['dist/service/apps/service/'+name]=Buffer.from('export {};');
   }
+  if(pkg.edition3.schemaVersion>=59){
+   for(const name of ['assistant-group-execution.js','group-execution-gateway.js','group-execution-owner.js','group-execution-request.js','group-runtime-policy.js','direct-agent-runtime-config.js','direct-agent-runtime-files.js','account-plugin/index.js'])files['dist/service/apps/service/'+name]=Buffer.from('export {};');
+   files['dist/service/apps/service/account-plugin/openclaw.plugin.json']=raw({id:'edition3-accounts'});
+   files['dist/service/apps/service/account-plugin/package.json']=raw({openclaw:{extensions:['./index.js']}});
+   for(const name of ['assistant-group-execution.js','assistant-group-conversation.js'])files['dist/service/packages/domain/'+name]=Buffer.from('export {};');
+  }
   const manifest=put(join(directory,'dist/candidate.json'),{version:pkg.version,...pkg.edition3,artifacts:Object.entries(files).map(([path,b])=>({path,sha256:put(join(directory,path),b).sha256})),frontendCompatibility:{format:2,eligibility:'client-behavior',sourceRevision:commit,serviceInputsSha256:(base?'c':'d').repeat(64)}});
   const verified=verifyCandidate(directory),archive=put(join(root,side+(base?'-base':'')+'.tgz'),Buffer.from('synthetic application archive '+side+(base?' base':''))),repository='fixture/'+side;
   const metadata={candidateId:verified.id,archiveSha256:archive.sha256},frozenSourceDirectory=join(directory,'frozen-source'),sourceHashes={};
   for(const [n,b]of Object.entries(helperBytes))sourceHashes['deploy/update-runner/'+n]=put(join(frozenSourceDirectory,'deploy/update-runner',n),b);
+  if(!base)for(const name of migrationHelpers)sourceHashes['deploy/update-runner/'+name]=put(join(frozenSourceDirectory,'deploy/update-runner',name),Buffer.from('synthetic migration helper '+name));
   if(includeHost){const host=Buffer.from('// synthetic host.mjs');sourceHashes['scripts/host.mjs']=put(join(frozenSourceDirectory,'scripts/host.mjs'),host);put(join(directory,'scripts/host.mjs'),host);}
   if(!base&&[2,4].includes(format))sourceHashes['scripts/release-deliver.mjs']=put(join(frozenSourceDirectory,'scripts/release-deliver.mjs'),readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));
   if(!base&&format===4)sourceHashes['scripts/quality.mjs']=put(join(frozenSourceDirectory,'scripts/quality.mjs'),readFileSync(new URL('../scripts/quality.mjs',import.meta.url)));

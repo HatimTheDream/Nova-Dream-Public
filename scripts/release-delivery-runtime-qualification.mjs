@@ -22,8 +22,11 @@ export function runtimeAdmissionCapability(input){
  const fields=z.object({fromVersion:z.string(),toVersion:z.string(),schemaVersion:z.number().int(),apiVersion:z.number().int()}).strict().parse(input);
  const {fromVersion:from,toVersion:to,schemaVersion,apiVersion}=fields;
  const gap=code=>({supported:false,runtimeRequired:from!==to,gaps:[{code}]});
- if(schemaVersion!==55||apiVersion!==1)return gap('unsupported-application-schema-or-api');
+ if(![55,60].includes(schemaVersion)||apiVersion!==1)return gap('unsupported-application-schema-or-api');
  if(from==='2026.9.8'&&to===from)return{supported:true,runtimeRequired:false,gaps:[]};
+ // Schema60 here describes an unchanged native runtime only. Application
+ // migration admission remains owned by the exact retained startup proof.
+ if(schemaVersion!==55)return gap('unsupported-application-schema-or-api');
  if(from==='2026.9.6'&&to==='2026.9.8')return gap(SETTLED_RUNTIME_GAP);
  if(from==='2026.9.2'&&to==='2026.9.6')return gap('authenticated-runtime-producer-unavailable');
  return gap('unsupported-runtime-transition');

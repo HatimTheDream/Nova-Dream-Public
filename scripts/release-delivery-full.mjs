@@ -12,10 +12,10 @@ import { verifyCandidate } from './candidate.mjs';
 import { frontendRegular } from './frontend-contract.mjs';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { withVerificationPass, verificationOnce, verificationEffect } from './release-verification-pass.mjs';
+import { assertStartupQualifiedCandidate, applicationTransitionSchema, startupHelperNames } from './release-delivery-startup-retained.mjs';
 
 const need = (value, code) => { if (!value) throw Error(code); };
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
-const helpers = ['install.py', 'recovery.py', 'codex_log_retention.py', 'app_dependencies.py', 'workspace_key.py', 'verify-session-bindings.mjs'];
 const ref = (path, maximum = 128 * 1024 ** 2) => ({ path, sha256: sha256(frontendRegular(path, maximum)) });
 const largeArtifact = reference => { const raw = frontendRegular(reference.path, 512 * 1024 ** 2); need(sha256(raw) === reference.sha256, 'full-retained-artifact-changed'); return raw; };
 const response = (state, reason, key, output = null) => ({ state, reason, externalId: key, receipt: null, output });
@@ -45,16 +45,38 @@ function pairCheck(value, context) {
     && isDeepStrictEqual(output.sourceCommits, descriptor.operation.sourceCommits)
     && output.candidateId === input.route.targetCandidateId && output.publicCandidateId === input.route.publicCandidateId
     && output.priorCandidateId === descriptor.operation.priorCandidateId, 'full-pair-producer-identity-changed');
-  need(resolve(output.directory) === output.directory && isDeepStrictEqual(readdirSync(output.directory).sort(), [...helpers, 'app.tgz', 'reviewed-pair.json'].sort()), 'full-pair-file-closure-changed');
   const pairRaw = frontendRegular(join(output.directory, 'reviewed-pair.json'), 1024 ** 2), pair = JSON.parse(pairRaw);
+  const migration = pair.applicationTransition;
+  const helpers = startupHelperNames(migration??null).filter(n=>migration||n!=='operator_rehearsal.py');
+  const names = [...helpers, 'app.tgz', 'reviewed-pair.json', ...(migration ? ['startup-qualification.json'] : [])];
+  need(resolve(output.directory) === output.directory && isDeepStrictEqual(readdirSync(output.directory).sort(), names.slice().sort()), 'full-pair-file-closure-changed');
+  if (migration) {
+    applicationTransitionSchema.parse(migration);
+    const qualification = output.startupQualification;
+    need(qualification && pair.startupQualification?.projection?.path === 'startup-qualification.json'
+      && pair.startupQualification.projection.sha256 === qualification.projection.sha256
+      && isDeepStrictEqual(pair.startupQualification.binding, qualification.binding), 'full-pair-startup-binding-changed');
+    const proofRaw = readEvidenceFile(qualification.projection, { maximum: 512 * 1024 });
+    need(frontendRegular(join(output.directory, 'startup-qualification.json'), 512 * 1024).equals(proofRaw), 'full-pair-startup-proof-changed');
+    const proof = JSON.parse(proofRaw), compatibility = output.release?.compatibility;
+    need(isDeepStrictEqual(proof.qualificationBinding, qualification.binding)
+      && isDeepStrictEqual(proof.qualificationBinding.applicationTransition, migration), 'full-pair-startup-binding-changed');
+    assertStartupQualifiedCandidate(proof, { operation: descriptor.operation,
+      prior: { id: output.priorCandidateId, manifest: { version: compatibility?.fromNovaVersion, schemaVersion: compatibility?.fromSchemaVersion, apiVersion: 1 } },
+      candidates, artifacts: input.artifacts, helpers: Object.fromEntries(helpers.map(name => [name, input.artifacts.private.sourceHashes?.['deploy/update-runner/' + name]?.sha256])),
+      dependencyGraphSha256: pair.applicationDependencies?.dependencyGraphSha256, applicationDependencies:pair.applicationDependencies });
+  } else {
+    need(!pair.startupQualification && output.release?.compatibility?.fromSchemaVersion === candidates.private.manifest.schemaVersion,
+      'full-schema-transition-proof-required');
+  }
   need(pair.candidateId === output.candidateId && pair.priorCandidateId === output.priorCandidateId
     && pair.archiveSha256 === input.artifacts.private.archive.sha256, 'full-pair-candidate-changed');
   const entries = [];
-  for (const name of [...helpers, 'app.tgz', 'reviewed-pair.json'].sort()) {
+  for (const name of names.sort()) {
     const path = join(output.directory, name), raw = frontendRegular(path, name === 'app.tgz' ? 128 * 1024 ** 2 : 2 * 1024 ** 2), digest = sha256(raw);
     if (helpers.includes(name)) {
       need(['private', 'public'].every(side => input.artifacts[side].sourceHashes?.[`deploy/update-runner/${name}`]?.sha256 === digest), 'full-paired-helper-changed');
-      if (name !== 'install.py') need(pair.helpers?.[name] === digest, 'full-pair-helper-description-changed');
+      if (migration || name !== 'install.py') need(pair.helpers?.[name] === digest, 'full-pair-helper-description-changed');
     }
     if (name === 'app.tgz') need(digest === input.artifacts.private.archive.sha256 && raw.length === pair.archiveBytes, 'full-application-archive-changed');
     entries.push({ name, data: raw.toString('base64'), sha256: digest });

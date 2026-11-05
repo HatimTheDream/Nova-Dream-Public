@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-export async function deriveConfiguration(input) {
+export async function deriveConfiguration(input, options = {}) {
+assert.deepEqual(Object.keys(options).sort(), Object.hasOwn(options,'browserHeadless') ? ['browserHeadless'] : []);
+const browserHeadless = Object.hasOwn(options,'browserHeadless') ? options.browserHeadless : false;
+assert.equal(typeof browserHeadless, 'boolean');
 assert.deepEqual(Object.keys(input).sort(), ['before','bridge','epoch','nativeRoot','proxy','releaseRoot','runtimeEntry','sessionBindings'].sort());
 const service = join(input.releaseRoot, 'dist/service/apps/service');
 const load = name => import(pathToFileURL(join(service, name + '.js')).href);
@@ -26,7 +29,7 @@ assert.deepEqual(raw.browser.extraArgs.slice(1), ['--proxy-bypass-list=<-loopbac
 assert.deepEqual(Object.keys(raw.browser).sort(), ['enabled','defaultProfile','evaluateEnabled','ssrfPolicy','extraArgs','profiles'].sort());
 assert.deepEqual(Object.keys(raw.browser.profiles), ['nova-work']);
 assert.deepEqual(Object.keys(raw.browser.profiles['nova-work']).sort(), ['cdpPort','headless']);
-assert.equal(raw.browser.profiles['nova-work'].headless, false);
+assert.equal(raw.browser.profiles['nova-work'].headless, browserHeadless);
 assert(Number.isSafeInteger(raw.browser.profiles['nova-work'].cdpPort) && raw.browser.profiles['nova-work'].cdpPort > 0 && raw.browser.profiles['nova-work'].cdpPort < 65536);
 raw.browser.extraArgs[0] = '--proxy-server=' + input.proxy;
 raw.tools = {...raw.tools,deny:[...new Set([...(raw.tools?.deny??[]),'browser'])]};
@@ -42,13 +45,21 @@ assert(Buffer.byteLength(rawResult) <= 4*1024*1024);
 return result;
 }
 
-export async function assertConfiguration(input, actual) {
-  const expected = await deriveConfiguration(input);
+export async function assertConfiguration(input, actual, options = {}) {
+  const expected = await deriveConfiguration(input, options);
   assert.deepEqual(actual, expected, 'Complete generated configuration differs from maintained BEFORE derivation');
   return expected;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  assert(process.argv.length === 2 || process.argv.length === 3 && process.argv[2] === '--hosted-schema-55-to-60');
+  const hosted = process.argv.length === 3;
   const { after, ...input } = JSON.parse(readFileSync(0, 'utf8'));
-  process.stdout.write(JSON.stringify(await assertConfiguration(input, after)));
+  const result = await assertConfiguration(input, after, hosted ? { browserHeadless:true } : {});
+  if (hosted) {
+    const service = join(input.releaseRoot,'dist/service/apps/service');
+    const { qualifyDirectRuntimeConfiguration } = await import(pathToFileURL(join(service,'direct-agent-runtime-config.js')).href);
+    assert.equal(qualifyDirectRuntimeConfiguration(after,input.nativeRoot,service,'2026.9.8'),true);
+  }
+  process.stdout.write(JSON.stringify(result));
 }
