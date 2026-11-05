@@ -1,3 +1,8 @@
+## [2.28.17] - 2026-11-04
+
+- Make release checks wait for completed file verification and compile retained-configuration checks in isolated output.
+- Keep historical recovery fixtures exact and bind the corrected release to its own dependency preparation evidence.
+
 ## [2.28.16] - 2026-11-04
 
 - Add guarded hosted upgrades to the current workspace schema, checking saved records and native configuration through first startup, restart, and restoration of the prior app.

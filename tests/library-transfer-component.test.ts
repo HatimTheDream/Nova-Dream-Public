@@ -108,7 +108,8 @@ test('actual file review selects only explicit portable rows and keeps full inva
  try {
   render();const input=nodes(render()).find(n=>n.type==='input'&&n.props.type==='file');
   input.props.onChange({target:{files:[{name:'original.json',size:bytes.length,arrayBuffer:async()=>bytes.buffer}],value:'original.json'}});
-  await tick();let tree=render();
+  const deadline=performance.now()+5000;let tree=render();
+  while(!nodes(tree).some(n=>n.props['aria-label']==='File entries')){assert.ok(performance.now()<deadline,'File review did not finish within5seconds');await new Promise<void>(done=>setTimeout(done,1));tree=render();}
   const group=nodes(tree).find(n=>n.props['aria-label']==='File entries'), checks=nodes(group).filter(n=>n.type==='input');
   assert.equal(checks.length,2);assert.equal(checks[0].props.checked,false);assert.equal(checks[1].props.disabled,true);assert.equal(commands,0);
   checks[0].props.onChange({target:{checked:true}});tree=render();

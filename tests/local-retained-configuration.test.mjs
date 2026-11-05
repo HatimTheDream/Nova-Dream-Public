@@ -1,12 +1,26 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import ts from 'typescript';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { deriveConfiguration, assertConfiguration } from '../deploy/update-runner/local-retained-configuration.mjs';
 
+// Compile the actual builders into this test's isolated output. The quality
+// build lane owns dist and may not have produced it yet on a clean checkout.
+const applicationRoot=fileURLToPath(new URL('../',import.meta.url));
+const scratch=join(applicationRoot,'.tmp-qa');mkdirSync(scratch,{recursive:true});
+const releaseRoot=mkdtempSync(join(scratch,'retained-configuration-'));
+after(()=>{assert.equal(dirname(resolve(releaseRoot)),resolve(scratch));rmSync(releaseRoot,{recursive:true,force:true});});
+const config=ts.readConfigFile(join(applicationRoot,'tsconfig.service.json'),ts.sys.readFile);
+assert.equal(config.error,undefined);
+const parsed=ts.parseJsonConfigFileContent(config.config,ts.sys,applicationRoot);
+assert.deepEqual(parsed.errors,[]);
+const builders=['worker','source','account','module','direct-agent'].map(name=>join(applicationRoot,'apps/service',name+'-runtime-config.ts'));
+const program=ts.createProgram(builders,{...parsed.options,outDir:join(releaseRoot,'dist/service'),noEmit:false,incremental:false});
+const emitted=program.emit();assert.equal(emitted.emitSkipped,false);assert.deepEqual(emitted.diagnostics,[]);
 // Actual compiled builders; synthetic values only. No Store/native/host start.
 test('complete maintained local configuration rejects an unrelated AFTER policy change', async () => {
-  const releaseRoot = fileURLToPath(new URL('../', import.meta.url));
   const before = {
     gateway:{bind:'loopback',controlUi:{enabled:false}},
     agents:{defaults:{heartbeat:{every:'0m'}}},
@@ -33,7 +47,6 @@ test('complete maintained local configuration rejects an unrelated AFTER policy 
 });
 
 test('hosted schema transition derives headless policy without broadening local admission', async () => {
-  const releaseRoot=fileURLToPath(new URL('../',import.meta.url));
   const before={gateway:{bind:'loopback',controlUi:{enabled:false}},agents:{defaults:{heartbeat:{every:'0m'}}},
     plugins:{enabled:true,allow:['openai','codex'],entries:{openai:{enabled:true},codex:{enabled:true}}},
     cron:{enabled:false},update:{checkOnStart:false,auto:{enabled:false}},models:{catalogRefresh:{enabled:false}},

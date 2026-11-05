@@ -56,24 +56,24 @@ function host(initial:Attachment,respond:(url:string,init:RequestInit)=>Response
   };
   const originals=Reflect.ownKeys(values).map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]as const),create=URL.createObjectURL,revoke=URL.revokeObjectURL;
   for(const k of Reflect.ownKeys(values))Object.defineProperty(globalThis,k,{configurable:true,writable:true,value:values[k]});URL.createObjectURL=(blob:Blob)=>{const url=`blob:controlled-${created.length}`;created.push({url,blob});return url;};URL.revokeObjectURL=url=>{revoked.push(url);};
-  const flush=async()=>{for(let i=0;i<25;i++){if(dirty&&mounted){dirty=false;cursor=0;tree=AssistantFilePreview({file});while(effects.length)effects.shift()!();}await new Promise<void>(r=>setImmediate(r));}};
-  return{calls,created,revoked,get tree(){return tree;},flush,async update(next:Attachment){file=next;dirty=true;await flush();},unmount(){mounted=false;for(const c of cells)c?.cleanup?.();},close(){this.unmount();URL.createObjectURL=create;URL.revokeObjectURL=revoke;for(const[k,d]of originals)if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}};
+  const flush=async(until?:()=>boolean)=>{const deadline=performance.now()+5000;for(let i=0;until||i<25;i++){if(dirty&&mounted){dirty=false;cursor=0;tree=AssistantFilePreview({file});while(effects.length)effects.shift()!();}if(until?.())return;if(until)assert.ok(performance.now()<deadline,'Preview did not reach the expected state within5seconds');await new Promise<void>(r=>until?setTimeout(r,1):setImmediate(r));}};
+  return{calls,created,revoked,get tree(){return tree;},flush,async ready(){await flush(()=>nodes(tree).some(n=>['pre','img','p'].includes(n.type)));},async update(next:Attachment){file=next;dirty=true;await flush();},unmount(){mounted=false;for(const c of cells)c?.cleanup?.();},close(){this.unmount();URL.createObjectURL=create;URL.revokeObjectURL=revoke;for(const[k,d]of originals)if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}};
 }
 test('actual preview verifies original saved bytes and SHA before showing text; download remains the fallback',async()=>{
   const data=utf8('Original exact text'),file=attachment('original.txt',data),app=host(file,()=>stream([data],{'content-length':String(data.length)}).response);
-  try{await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'Original exact text');assert.equal(app.calls[0].url,`/api/attachments/${file.id}?preview=1`);assert.equal(app.calls[0].init.credentials,'same-origin');assert.equal(app.created.length,0);}finally{app.close();}
-  for(const mode of ['hash','invalid-text','unsupported']as const){const bytes=mode==='invalid-text'?new Uint8Array([255]):data,f=attachment(mode==='unsupported'?'original.pdf':'original.txt',bytes);if(mode==='hash')f.sha256='0'.repeat(64);const h=host(f,()=>stream([bytes]).response);try{await h.flush();assert.equal(nodes(h.tree).find(n=>n.type==='pre'),undefined);assert.match(text(h.tree),mode==='hash'?/version could not be verified/:/Download/);}finally{h.close();}}
+  try{await app.ready();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'Original exact text');assert.equal(app.calls[0].url,`/api/attachments/${file.id}?preview=1`);assert.equal(app.calls[0].init.credentials,'same-origin');assert.equal(app.created.length,0);}finally{app.close();}
+  for(const mode of ['hash','invalid-text','unsupported']as const){const bytes=mode==='invalid-text'?new Uint8Array([255]):data,f=attachment(mode==='unsupported'?'original.pdf':'original.txt',bytes);if(mode==='hash')f.sha256='0'.repeat(64);const h=host(f,()=>stream([bytes]).response);try{await h.ready();assert.equal(nodes(h.tree).find(n=>n.type==='pre'),undefined);assert.match(text(h.tree),mode==='hash'?/version could not be verified/:/Download/);}finally{h.close();}}
 });
 test('oversized or invalid saved metadata refuses before any fetch and keeps an original-download explanation',async()=>{
   for(const change of ['large','hash','size']as const){const f=attachment('original.txt',utf8('abc'));if(change==='large')f.size=previewByteLimit+1;if(change==='hash')f.sha256='bad';if(change==='size')f.size=-1;const app=host(f,()=>{throw Error('Must not fetch');});try{await app.flush();assert.equal(app.calls.length,0);assert.match(text(app.tree),/Download the original/);}finally{app.close();}}
 });
 test('old image errors cannot alter the next file and each original object URL is revoked',async()=>{
   const data=utf8('synthetic image bytes'),first=attachment('one.png',data),second=attachment('two.png',data),app=host(first,()=>stream([data],{'content-type':'image/png'}).response);
-  try{await app.flush();const old=nodes(app.tree).find(n=>n.type==='img');assert.equal(old.props.alt,first.name);await app.update(second);const current=nodes(app.tree).find(n=>n.type==='img');assert.equal(current.props.alt,second.name);assert.notEqual(current.props.src,old.props.src);old.props.onError();await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='img').props.src,current.props.src);assert.deepEqual(app.revoked,[old.props.src]);current.props.onError();await app.flush();assert.match(text(app.tree),/image could not be displayed/);assert.deepEqual(app.revoked,[old.props.src,current.props.src]);app.unmount();assert.equal(app.revoked.length,2);}finally{app.close();}
+  try{await app.ready();const old=nodes(app.tree).find(n=>n.type==='img');assert.equal(old.props.alt,first.name);await app.update(second);await app.ready();const current=nodes(app.tree).find(n=>n.type==='img');assert.equal(current.props.alt,second.name);assert.notEqual(current.props.src,old.props.src);old.props.onError();await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='img').props.src,current.props.src);assert.deepEqual(app.revoked,[old.props.src]);current.props.onError();await app.flush();assert.match(text(app.tree),/image could not be displayed/);assert.deepEqual(app.revoked,[old.props.src,current.props.src]);app.unmount();assert.equal(app.revoked.length,2);}finally{app.close();}
 });
 test('late fetch for an old file is cancelled and cannot replace current saved text',async()=>{
   const oldBytes=utf8('old'),newBytes=utf8('current'),old=attachment('old.txt',oldBytes),current=attachment('current.txt',newBytes),wait=deferred<Response>(),app=host(old,url=>url.includes(old.id)?wait.promise:stream([newBytes]).response);
-  try{await app.flush();await app.update(current);assert.equal(app.calls[0].init.signal!.aborted,true);const late=stream([oldBytes]);wait.resolve(late.response);await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'current');assert.equal(late.cancelled,1);assert.equal(app.created.length,0);}finally{app.close();}
+  try{await app.flush();await app.update(current);await app.ready();assert.equal(app.calls[0].init.signal!.aborted,true);const late=stream([oldBytes]);wait.resolve(late.response);await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'current');assert.equal(late.cancelled,1);assert.equal(app.created.length,0);}finally{app.close();}
 });
 test('same ID with a different saved hash/name fences old digest completion and image callbacks',{timeout:5000},async t=>{
   const firstData=utf8('first'),nextData=utf8('next'),first=attachment('first.png',firstData),next={...attachment('next.txt',nextData),id:first.id};
@@ -88,7 +88,7 @@ test('same ID with a different saved hash/name fences old digest completion and 
   try{
     await app.flush();await firstStarted.promise;await app.update(next);await nextStarted.promise;
     assert.equal(count,2);assert.equal(nodes(app.tree).find(n=>n.type==='pre'),undefined,'current text waits for its own digest');
-    nextDigest.resolve(digestBytes(nextData));await app.flush();
+    let settled=false;const ready=app.ready().then(()=>{settled=true;});await app.flush();assert.equal(settled,false,'readiness must wait for the actual digest');nextDigest.resolve(digestBytes(nextData));await ready;
     assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');
     firstDigest.resolve(digestBytes(firstData));await app.flush();
     assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'next');assert.equal(app.created.length,0);
@@ -105,5 +105,5 @@ test('the finite preview deadline cancels its pending body and exposes the origi
 });
 test('supported text is bounded visually without changing the verified original download bytes',async()=>{
   const bytes=utf8('a'.repeat(200005)),app=host(attachment('long.txt',bytes),()=>stream([bytes]).response);
-  try{await app.flush();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children.length,200000);assert.match(text(app.tree),/Download includes the full file/);}finally{app.close();}
+  try{await app.ready();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children.length,200000);assert.match(text(app.tree),/Download includes the full file/);}finally{app.close();}
 });

@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import {join} from 'node:path';
 import {writeFileSync,readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
 import {createDeliveryRegistry,deliveryTargetSchema,deliveryPhaseIntegrationGaps} from '../scripts/release-delivery-adapters.mjs';
 import {dependencyFixture} from '../support/dependency-transport-fixture.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
 import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
 import {sha256} from '../scripts/release-plan.mjs';
+const historicalHelpers=JSON.parse(readFileSync(new URL('../support/legacy-full-helper-fixture.json',import.meta.url)));
 
 function fixture(t,options={}) {
   const f=dependencyFixture(t,{format:2,...options}),host=fullHostFixture().options,effects=[];
@@ -54,7 +56,9 @@ test('qualified source reaches the fixed missing-host-parent preflight before pa
   // so the registry's existing source gate can reach the mocked directory read.
   const pair=JSON.parse(readFileSync(f.options.selectedPair.path)),bundle=JSON.parse(readFileSync(f.options.selectedBundle.path));
   for(const [name,digest] of Object.entries(FULL_HELPERS)){
-    const raw=readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url));assert.equal(sha256(raw),digest);
+    const archived=historicalHelpers.files[name];
+    const raw=archived?gunzipSync(Buffer.from(archived.gzipBase64,'base64'),{maxOutputLength:256*1024}):readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url));
+    assert.equal(sha256(raw),digest);if(archived)assert.equal(raw.length,archived.bytes);
     for(const a of Object.values(f.artifacts))a.sourceHashes['deploy/update-runner/'+name]=f.put(join(a.frozenSourceDirectory,'deploy/update-runner',name),raw);
     const entry=bundle.files.find(x=>x.name===name);if(entry){entry.data=raw.toString('base64');entry.sha256=digest;if(name!=='install.py')pair.helpers[name]=digest;}
   }
