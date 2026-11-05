@@ -1,3 +1,8 @@
+## [2.28.19] - 2026-11-04
+
+- Keep migration recovery checks bound to exact application identities and current installer capacity rules.
+- Capture all retained-work migration helpers from the verified source commit before preparing the hosted update.
+
 ## [2.28.18] - 2026-11-04
 
 - Wait for verified Group context and rejected-save reads in release checks.

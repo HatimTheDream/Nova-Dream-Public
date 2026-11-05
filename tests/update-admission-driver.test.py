@@ -213,6 +213,7 @@ class AdmissionDriverTests(unittest.TestCase):
         instance.adoption_source_prior=original;instance.dependencies=deps;instance.target=target
         instance.configured_dependencies=anchor;instance.dependency_root=anchor.parent
         instance.prior_id=hashlib.sha256((original/'package.json').read_bytes()+(original/'dist/candidate.json').read_bytes()).hexdigest()
+        instance.target_id=hashlib.sha256(b'synthetic unstarted target').hexdigest()
         instance.prior_manifest=manifest;instance.release={'compatibility':{'fromNovaVersion':'2.0.2'},'novaVersion':'2.0.4'}
         instance.pair={'adoptPrior':{'sourceDependencies':source_receipt,'dependencies':receipt}}
         instance.adopting_prior=True

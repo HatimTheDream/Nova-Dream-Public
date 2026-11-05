@@ -162,6 +162,10 @@ def frozen_source(repo, commit, git, *, checkout=None, output_root=None, committ
                 'operator_rehearsal.py'))]
     package_path = prefix + '/package.json' if prefix else 'package.json'
     package = json.loads(command('show', commit + ':' + package_path))
+    if package.get('edition3', {}).get('schemaVersion') == 60:
+        paths.extend('deploy/update-runner/' + name for name in (
+            'hosted_retained_configuration.py', 'local-retained-configuration.mjs',
+            'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs'))
     if 'release:deliver' in package.get('scripts', {}):
         # Bind the exact committed command source; never take it from a mutable
         # checkout or infer its presence from a package script alone.

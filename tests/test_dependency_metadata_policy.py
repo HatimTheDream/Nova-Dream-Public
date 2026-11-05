@@ -1,4 +1,5 @@
 import base64,copy,hashlib,importlib.util,io,json,pathlib,tarfile,tempfile,unittest
+import subprocess
 from unittest.mock import patch
 from types import SimpleNamespace
 ROOT=pathlib.Path(__file__).resolve().parent.parent
@@ -145,4 +146,52 @@ class FrozenCommandSource(unittest.TestCase):
       self.assertEqual('scripts/'+filename in bound,enabled)
       if enabled:self.assertEqual((source/'scripts'/filename).read_bytes(),b'exact committed source')
     self.assertEqual(['show',commit+':scripts/'+filename] in calls,enabled)
+
+class FrozenMigrationSource(unittest.TestCase):
+ def test_actual_git_capture_preserves_legacy_and_requires_complete_schema60_closure(self):
+  c=load('migration_artifact_primitives',ROOT/'scripts/release-artifact-primitives.py')
+  helpers=('hosted_retained_configuration.py','local-retained-configuration.mjs',
+           'hosted_retained_catalog.py','hosted-retained-catalog.mjs')
+  for repo,prefix,workflow in (('Nova-Dream','edition3/','.github/workflows/nova-release.yml'),
+                               ('Nova-Dream-Public','','.github/workflows/quality.yml')):
+   with self.subTest(repository=repo), tempfile.TemporaryDirectory(prefix='nova-frozen-migration-') as temporary:
+    root=pathlib.Path(temporary).resolve();checkout=root/'checkout';checkout.mkdir()
+    def git(*args):
+     result=subprocess.run(['git','-c','maintenance.auto=false','-c','commit.gpgsign=false',*args],cwd=checkout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+     self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))
+     return result.stdout
+    git('init','--quiet');git('config','user.name','Synthetic Test');git('config','user.email','test@example.invalid')
+    git('config','core.autocrlf','false');git('remote','add','origin','https://github.com/HatimTheDream/'+repo+'.git')
+    def put(name,raw):
+     path=checkout/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+    common=('package-lock.json','scripts/host.mjs','scripts/candidate.mjs','scripts/update-app-archive.py',
+            'scripts/retain-ci-candidate.py',*( 'deploy/update-runner/'+name for name in (
+            'install.py','recovery.py','app_dependencies.py','codex_log_retention.py','workspace_key.py',
+            'verify-session-bindings.mjs','request_install.py','operator_rehearsal.py')))
+    for name in common:put(prefix+name,('synthetic committed '+name+'\n').encode())
+    put(workflow,b'name: synthetic\n')
+    def commit(schema):
+     put(prefix+'package.json',json.dumps({'edition3':{'schemaVersion':schema},'scripts':{}}).encode())
+     git('add','.');git('commit','--quiet','-m','Synthetic capture fixture')
+     return git('rev-parse','HEAD').decode().strip()
+    legacy=commit(55)
+    _,bound=c.frozen_source(repo,legacy,'git',checkout=checkout,output_root=root,committed_only=True)
+    self.assertFalse(any('deploy/update-runner/'+name in bound for name in helpers))
+    for missing in helpers:
+     for name in helpers:put(prefix+'deploy/update-runner/'+name,('exact '+name+'\n').encode())
+     (checkout/(prefix+'deploy/update-runner/'+missing)).unlink()
+     incomplete=commit(60)
+     with self.assertRaisesRegex(RuntimeError,'Frozen Git source check failed'):
+      c.frozen_source(repo,incomplete,'git',checkout=checkout,output_root=root,committed_only=True)
+     self.assertFalse((root/('frozen-source-'+repo+'-'+incomplete)).exists())
+    for name in helpers:put(prefix+'deploy/update-runner/'+name,('exact '+name+'\n').encode())
+    complete=commit(60)
+    for name in helpers:put(prefix+'deploy/update-runner/'+name,b'uncommitted mutation must never be captured')
+    source,bound=c.frozen_source(repo,complete,'git',checkout=checkout,output_root=root,committed_only=True)
+    for name in helpers:
+     relative='deploy/update-runner/'+name;expected=('exact '+name+'\n').encode()
+     self.assertEqual((source/relative).read_bytes(),expected)
+     self.assertEqual(bound[relative],{'path':prefix+relative,'sha256':hashlib.sha256(expected).hexdigest()})
+    self.assertEqual(c.frozen_source(repo,complete,'git',checkout=checkout,output_root=root,committed_only=True),(source,bound))
+
 if __name__=='__main__':unittest.main()

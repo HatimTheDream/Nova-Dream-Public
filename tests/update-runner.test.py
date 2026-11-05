@@ -1266,6 +1266,7 @@ class RunnerTests(unittest.TestCase):
         instance = driver.Driver(self.root / 'request.json')
         instance.active_engine = '2026.9.2'
         instance.job_id, instance.client_candidate = 'job', 'a' * 64
+        instance.prior_id = instance.target_id = instance.client_candidate
         health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.0', 'schemaVersion': 55, 'apiVersion': 1}
         guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch'}
         responses = {'health': health, 'software-update/acceptance': guard, 'assistant/service': {'id': 'openclaw', 'state': 'ready', 'version': '2026.9.2'},
@@ -1293,6 +1294,7 @@ class RunnerTests(unittest.TestCase):
                 instance = driver.Driver(self.root / 'request.json')
                 instance.active_engine = '2026.9.6'
                 instance.job_id, instance.client_candidate = 'job', 'a' * 64
+                instance.prior_id = instance.target_id = instance.client_candidate
                 health = {'status': 'ready', 'candidateId': 'a' * 64, 'version': '1.13.2', 'schemaVersion': 55, 'apiVersion': 1}
                 guard = {'candidateId': 'a' * 64, 'heldFor': 'job', 'maintenanceHeld': True, 'nativeSuspended': True, 'blockers': [], 'epoch': 'epoch', 'resumeReadinessRequired': post_resume_gate}
                 connection = {'state': 'ready', 'modelAuthReady': False, 'grantedScopes': ['operator.read', 'operator.write']}
