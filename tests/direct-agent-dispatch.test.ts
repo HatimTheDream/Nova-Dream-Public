@@ -32,7 +32,7 @@ function fixture() {
   const configuration = {
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: { policySha256: '' } } } },
     cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } }, models: { catalogRefresh: { enabled: false } },
-    agents: { defaults: { heartbeat: { every: '0m' } }, entries: { 'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
+    agents: { defaults: { skipBootstrap: true, heartbeat: { every: '0m' } }, entries: { 'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
     gateway: { bind: 'loopback', controlUi: { enabled: false } },
   };
   const policySha256 = directConfigurationHash(configuration);

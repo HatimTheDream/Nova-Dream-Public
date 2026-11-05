@@ -251,9 +251,9 @@ export class ManagedRuntime {
       const moduleConfig = this.moduleBridge ? withModulePlugin(stagedConfig,this.store.epoch,join(dirname(bundlePath),'module-plugin'),{...this.moduleBridge(),sessionBindings}) : stagedConfig;
       const nativeVersion=JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version;
       const directSupported = this.moduleBridge && nativeVersion === '2026.9.8';
-      if (directSupported) { prepareDirectWorkspace(root); prepareGroupWorkspace(root); }
       const updatedConfig = JSON.stringify(directSupported ? withDirectAgentPlugin(moduleConfig, this.store.epoch, root,
         join(dirname(bundlePath), 'direct-agent-plugin'), this.moduleBridge!(), { group: true }) : moduleConfig, null, 2);
+      if (directSupported) { prepareGroupWorkspace(root); prepareDirectWorkspace(root, moduleConfig); }
       this.directPluginSha256 = directSupported ? directPluginFiles(dirname(bundlePath)) : undefined;
       if (this.store.updateMaintenanceHeld) {
         const blockers=qualifyNativeUpdateStartup(root,dirname(bundlePath),JSON.parse(updatedConfig),JSON.parse(readFileSync(join(dirname(entry),'package.json'),'utf8')).version);

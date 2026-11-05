@@ -13,7 +13,7 @@ function fixture(group = false) {
   const config = {
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: pluginConfig } } },
     cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } }, models: { catalogRefresh: { enabled: false } },
-    agents: { defaults: { heartbeat: { every: '0m' }, model: { primary: 'openai/default-model' } }, entries: { [directRuntimeAgent]: { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
+    agents: { defaults: { skipBootstrap: true, heartbeat: { every: '0m' }, model: { primary: 'openai/default-model' } }, entries: { [directRuntimeAgent]: { ...structuredClone(directRuntimePolicy), workspace: '/owned/direct-workspace', agentDir: '/owned/direct-agent' } } },
     gateway: { bind: 'loopback', controlUi: { enabled: false } },
   };
   if (group) Object.assign(config.agents.entries, { [groupRuntimeAgent]: {

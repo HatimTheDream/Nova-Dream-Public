@@ -1,3 +1,18 @@
+## [2.28.15] - 2026-11-04
+
+- Move verified empty legacy Direct scratch workspaces to a fresh owned generation while preserving existing conversation history, accounts and original workspace records.
+- Refuse partial or changed workspace transitions and keep the original scratch folder and initialization evidence intact.
+
+## [2.28.14] - 2026-11-04
+
+- Allow separate Direct chats with the same agent name without conflicting with an existing native session label.
+- Preserve each chat's original request, session identity and uncertain-connection recovery checks.
+
+## [2.28.13] - 2026-11-04
+
+- Prevent native starter files from appearing in the isolated Direct and Group workspaces after the first reply.
+- Require bootstrap protection during runtime validation while preserving existing models, agent settings and saved sessions.
+
 ## [2.28.12] - 2026-11-04
 
 - Recognize the supported runtime's angle-wrapped ChatGPT device sign-in URL so its code appears without a false preparation timeout.

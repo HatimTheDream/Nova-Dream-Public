@@ -47,6 +47,7 @@ export function assertDirectConfigurationShape(raw: unknown) {
   const empty = (value: unknown) => value === undefined || Object.keys(object(value)).length === 0;
   if (config.$include || agents.list || !empty(config.hooks) || !empty(config.channels)
     || config.bindings !== undefined && (!Array.isArray(config.bindings) || config.bindings.length)
+    || object(agents.defaults).skipBootstrap !== true
     || object(config.cron).enabled !== false || object(object(agents.defaults).heartbeat).every !== '0m'
     || object(config.update).checkOnStart !== false || object(object(config.update).auto).enabled !== false
     || object(object(config.models).catalogRefresh).enabled !== false)

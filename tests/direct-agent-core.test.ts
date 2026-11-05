@@ -32,7 +32,7 @@ function fixture(t: TestContext) {
     cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } },
     models: { catalogRefresh: { enabled: false } },
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: { policySha256: '' } } } },
-    agents: { defaults: { heartbeat: { every: '0m' } }, entries: {
+    agents: { defaults: { skipBootstrap: true, heartbeat: { every: '0m' } }, entries: {
       'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/synthetic/workspace', agentDir: '/synthetic/agent' },
     } }, gateway: { bind: 'loopback', controlUi: { enabled: false } },
   };
@@ -45,6 +45,7 @@ function fixture(t: TestContext) {
   let onHistory = () => {}, onAccount = () => {};
   const calls: { method: string; input: any }[] = [], messages: any[] = [];
   const sessions = new Map<string, { id: string; accountId: string | null }>();
+  const explicitLabels = new Map<string, string>();
   const listeners = new Set<(event: any) => void>();
   const gateway: AssistantTransport = {
     status: (): AssistantConnection => ({ state: 'ready', url: 'ws://127.0.0.1:49111', generation,
@@ -71,6 +72,12 @@ function fixture(t: TestContext) {
       }
       if (method === 'sessions.create') {
         assert.equal(input.emitCommandHooks, false); assert.equal(input.permissionMode, 'read-only');
+        // Native 9.8 labels are unique within an agent; display names are not.
+        if (typeof input.label === 'string') {
+          const claimed = explicitLabels.get(input.label);
+          if (claimed && claimed !== input.key) throw Error('label already in use: ' + input.label);
+          explicitLabels.set(input.label, input.key);
+        }
         const id = randomUUID(); sessions.set(input.key, { id, accountId: null });
         if (lostCreate) throw Error('Synthetic lost create reply');
         return { key: input.key, sessionId: id, runStarted: false,
@@ -148,6 +155,27 @@ test('one exact direct setup and captured turn use the original engine without g
   f.messages.push({ id: 'unbound', role: 'assistant', text: 'Aster says so', runId: randomUUID() });
   assert.equal((await f.service.history(chat.id)).messages[2].author, undefined);
 });
+test('two chats with the same agent name keep distinct native identities without a unique label claim', async t => {
+  const f = fixture(t), secondInput = { ...f.createInput, requestId: randomUUID() };
+  const first = await f.service.create(f.device, f.createInput);
+  const firstSaved = f.service.conversations().find(chat => chat.id === first.id);
+  const second = await f.service.create(f.device, secondInput);
+  assert.equal(first.state, 'ready'); assert.equal(second.state, 'ready');
+  assert.equal(first.title, 'Aster'); assert.equal(second.title, first.title);
+  assert.notEqual(second.id, first.id); assert.notEqual(second.nativeKey, first.nativeKey);
+  assert.ok(first.nativeId); assert.ok(second.nativeId); assert.notEqual(second.nativeId, first.nativeId);
+  assert.equal(f.sessions.size, 2);
+  assert.deepEqual(f.service.conversations().find(chat => chat.id === first.id), firstSaved);
+  const creates = f.calls.filter(call => call.method === 'sessions.create');
+  assert.deepEqual(creates.map(call => call.input), [first, second].map((chat, index) => ({
+    key: chat.nativeKey, idempotencyKey: [f.createInput.requestId, secondInput.requestId][index],
+    displayName: 'Aster', model: 'openai/synthetic', permissionMode: 'read-only', emitCommandHooks: false,
+  })));
+  assert.equal((await f.service.create(f.device, f.createInput)).id, first.id);
+  assert.equal((await f.service.create(f.device, secondInput)).id, second.id);
+  assert.equal(f.counts('sessions.create'), 2); assert.equal(f.counts('agent'), 0);
+});
+
 test('lost setup reply is original observation only and never creates another session', async t => {
   const f = fixture(t); f.loseCreate();
   const chat = await f.service.create(f.device, f.createInput);

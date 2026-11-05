@@ -10,32 +10,53 @@ const object = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('The managed direct-agent configuration is unavailable.');
   return value as Record<string, any>;
 };
-export const directWorkspaceMarker = 'edition3-direct-workspace\n';
+const legacyDirectWorkspaceMarker = 'edition3-direct-workspace\n';
+export const directWorkspaceMarker = 'edition3-direct-workspace-v2\n';
 export function directRuntimePaths(root: string) {
-  return { workspace: join(root, 'direct-workspace'), agentDir: join(root, 'state', 'agents', directRuntimeAgent, 'agent') };
+  return { workspace: join(root, 'direct-workspace-v2'), agentDir: join(root, 'state', 'agents', directRuntimeAgent, 'agent') };
 }
-/** Called only from the existing owned runtime preparation. Existing unknown
- * content is never removed or adopted as an empty direct-agent workspace. */
-export function prepareDirectWorkspace(root: string) {
-  const { workspace } = directRuntimePaths(root), marker = join(root, 'direct-workspace.identity');
-  if (!existsSync(workspace)) {
-    if (existsSync(marker)) throw Error('The original direct-agent workspace is missing.');
-    mkdirSync(workspace);
-    writeFileSync(marker, directWorkspaceMarker, { flag: 'wx', mode: 0o600 });
-  }
-  assertDirectWorkspace(root);
-}
-export function assertDirectWorkspace(root: string) {
-  const { workspace } = directRuntimePaths(root), marker = join(root, 'direct-workspace.identity');
+const present = (path: string) => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+const legacyPaths = (root: string) => ({ ...directRuntimePaths(root), workspace: join(root, 'direct-workspace') });
+function assertOwnedEmptyWorkspace(workspace: string, marker: string, markerBytes: string) {
   const folder = lstatSync(workspace), identity = lstatSync(marker);
   if (!folder.isDirectory() || folder.isSymbolicLink() || realpathSync(workspace) !== resolve(workspace)
     || !identity.isFile() || identity.isSymbolicLink() || identity.nlink !== 1
-    || identity.size !== Buffer.byteLength(directWorkspaceMarker) || readFileSync(marker, 'utf8') !== directWorkspaceMarker)
+    || identity.size !== Buffer.byteLength(markerBytes) || readFileSync(marker, 'utf8') !== markerBytes)
     throw Error('The original empty direct-agent workspace changed.');
-  // The dedicated policy disables context injection. Until actual native
-  // bootstrap output is independently qualified, even a generated file blocks
-  // a new turn rather than silently becoming persona/source authority.
   if (readdirSync(workspace).length) throw Error('The direct-agent workspace contains unqualified content.');
+}
+function assertLegacyDirectWorkspace(root: string) {
+  assertOwnedEmptyWorkspace(legacyPaths(root).workspace, join(root, 'direct-workspace.identity'), legacyDirectWorkspaceMarker);
+}
+function directWorkspaceGeneration(raw: unknown, root: string): 'fresh' | 'legacy' | 'current' {
+  const existing = raw === undefined ? undefined : object(object(raw).agents).entries?.[directRuntimeAgent];
+  if (existing === undefined) return 'fresh';
+  if (canonical(existing) === canonical({ ...structuredClone(directRuntimePolicy), ...directRuntimePaths(root) })) return 'current';
+  if (canonical(existing) === canonical({ ...structuredClone(directRuntimePolicy), ...legacyPaths(root) })) return 'legacy';
+  throw Error('The existing direct-agent configuration must be reviewed before replacement.');
+}
+function assertFreshDirectTarget(root: string) {
+  if (present(directRuntimePaths(root).workspace) || present(join(root, 'direct-workspace-v2.identity')))
+    throw Error('The new direct-agent workspace has uncommitted or partial state.');
+}
+/** Prepare a new owned generation only after validating the exact prior config.
+ * Legacy bytes, marker, native attestation and agent/session storage are retained.
+ * A partial migration is refused; it is never adopted or silently repaired. */
+export function prepareDirectWorkspace(root: string, priorConfig?: unknown) {
+  const generation = directWorkspaceGeneration(priorConfig, root);
+  if (generation === 'current') { assertDirectWorkspace(root); return; }
+  if (generation === 'legacy') assertLegacyDirectWorkspace(root);
+  else if (present(legacyPaths(root).workspace) || present(join(root, 'direct-workspace.identity')))
+    throw Error('The legacy direct-agent workspace has no matching configuration.');
+  assertFreshDirectTarget(root);
+  const { workspace } = directRuntimePaths(root);
+  mkdirSync(workspace);
+  writeFileSync(join(root, 'direct-workspace-v2.identity'), directWorkspaceMarker, { flag: 'wx', mode: 0o600 });
+  assertDirectWorkspace(root);
+}
+export function assertDirectWorkspace(root: string) {
+  assertOwnedEmptyWorkspace(directRuntimePaths(root).workspace, join(root, 'direct-workspace-v2.identity'), directWorkspaceMarker);
+  if (present(legacyPaths(root).workspace) || present(join(root, 'direct-workspace.identity'))) assertLegacyDirectWorkspace(root);
 }
 export const groupWorkspaceMarker = 'edition3-group-workspace\n';
 export function groupRuntimePaths(root: string) {
@@ -64,10 +85,12 @@ export function withDirectAgentPlugin(raw: unknown, epoch: string, root: string,
   const prior = plugins.entries?.[directPluginId], paths = directRuntimePaths(root);
   if (plugins.enabled !== true || prior?.enabled === false || agents.list || config.$include)
     throw Error('The original runtime does not permit the controlled direct-agent plugin.');
-  const existing = agents.entries?.[directRuntimeAgent];
+  // Native bootstrap creation is separate from workspace context injection.
+  agents.defaults = { ...object(agents.defaults), skipBootstrap: true };
+  const generation = directWorkspaceGeneration(config, root);
+  if (generation === 'legacy') { assertLegacyDirectWorkspace(root); assertFreshDirectTarget(root); }
+  else if (generation === 'current') assertDirectWorkspace(root);
   const expectedAgent = { ...structuredClone(directRuntimePolicy), ...paths };
-  if (existing && canonical(existing) !== canonical(expectedAgent))
-    throw Error('The existing direct-agent configuration must be reviewed before replacement.');
   agents.entries = { ...agents.entries, [directRuntimeAgent]: expectedAgent };
   if (options.group) {
     const expectedGroup = { ...structuredClone(groupRuntimePolicy), ...groupRuntimePaths(root) };

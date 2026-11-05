@@ -644,7 +644,7 @@ export class AssistantService {
       setup = this.store.internalWrite(key, { ...setup, state: 'dispatching' as const, dispatchStarted: true });
       this.saveConversation({ ...current, state: 'creating' });
       const result = await this.gateway.request<{ key: string; sessionId?: string; runStarted?: boolean; entry?: Record<string, unknown> }>('sessions.create', {
-        key: original.nativeKey, idempotencyKey: requestId, label: original.title,
+        key: original.nativeKey, idempotencyKey: requestId, displayName: original.title,
         ...(original.model ? { model: original.model } : {}), ...(nativeThinking(original.thinking) ? { thinkingLevel: nativeThinking(original.thinking) } : {}),
         ...(original.fastMode != null ? { fastMode: original.fastMode } : {}), permissionMode: 'read-only', emitCommandHooks: false,
       });

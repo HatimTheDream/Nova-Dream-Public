@@ -61,7 +61,7 @@ function fixture(t: TestContext, members = 1, privateOwner = false) {
     cron: { enabled: false }, update: { checkOnStart: false, auto: { enabled: false } },
     models: { catalogRefresh: { enabled: false } },
     plugins: { enabled: true, allow: [directPluginId], entries: { [directPluginId]: { enabled: true, config: { policySha256: '' } } } },
-    agents: { defaults: { heartbeat: { every: '0m' } }, entries: {
+    agents: { defaults: { skipBootstrap: true, heartbeat: { every: '0m' } }, entries: {
       'edition3-direct': { ...structuredClone(directRuntimePolicy), workspace: '/fixture/direct', agentDir: '/fixture/direct-agent' },
       'edition3-group': { ...structuredClone(groupRuntimePolicy), workspace: '/fixture/group', agentDir: '/fixture/group-agent' },
     } }, gateway: { bind: 'loopback', controlUi: { enabled: false } },
