@@ -1,6 +1,6 @@
 # Nova Dream
 
-![Version](https://img.shields.io/badge/Version-2.28.22-blue)
+![Version](https://img.shields.io/badge/Version-2.28.23-blue)
 
 The living [design system](docs/DESIGN-SYSTEM.md) records accepted UI principles, current visual tokens and open design decisions.
 

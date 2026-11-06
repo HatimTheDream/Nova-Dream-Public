@@ -231,3 +231,15 @@ test('only the explicit schema55-to60 actual startup proof admits migration; unq
   const stale=structuredClone(same.proof);stale.qualificationBinding.applicationTransition=f.proof.qualificationBinding.applicationTransition;
   assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/unexpected-startup|startup-qualified-artifact-closure/);
 });
+
+test('the current replica qualification rejects omitted device and stale queue-cutoff evidence',t=>{
+  const fixture=startupCommandFixture(t,{sources:QUALIFIED_STARTUP_SOURCES,schemaMigration:true});
+  verifyStartupRetainedProjection(fixture.proof,fixture.proof.request,fixture.sources);
+  for(const change of [s=>delete s[0].replicaConfigObservation,
+    s=>{s[1].replicaConfigObservation.queueExpiry.authenticatedStartSeconds=s[1].startedAtSeconds;},
+    s=>{s[0].replicaConfigObservation.observations[0].changedFields=['uid'];},
+    s=>{s[2].replicaConfigObservation.observations[0].mode='same-filesystem-original-equality';}]){
+    const copy=structuredClone(fixture.proof);change(copy.scenarios);
+    assert.throws(()=>verifyStartupRetainedProjection(copy,copy.request,fixture.sources));
+  }
+});

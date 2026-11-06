@@ -1,3 +1,8 @@
+## [2.28.23] - 2026-11-06
+
+- Verify the configured runtime path against the installed package when checking saved work after an update.
+- Check the disk identity of isolated workspace copies and recognize expired acknowledgements for completed deliveries. Pending deliveries, message contents and destinations retain their existing checks.
+
 ## [2.28.22] - 2026-11-06
 
 - Update release checks to open the Search and Add Task controls before checking focus and draft recovery. The checks also support the compact Content search.

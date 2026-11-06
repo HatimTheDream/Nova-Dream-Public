@@ -327,5 +327,106 @@ class HostedConfigurationInputsTests(unittest.TestCase):
                 hosted.attest_builder_closure(release, manifest, dependency, deps)
 
 
+
+class HostedRuntimeEntryTests(unittest.TestCase):
+    """Exercise actual filenames, published-byte checks and two spellings."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='nova-entry-', dir=os.getenv('NOVA_TEST_TEMP'))
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve() / 'runtime'
+        self.physical = self.root / 'managed-updates' / 'openclaw-package'
+        self.physical.mkdir(parents=True)
+        self.selector = self.root / 'openclaw'
+        self.host = self.root.parent / 'config.json'
+        self.metadata = self.physical / 'package.json'
+        self.entry = self.physical / 'openclaw.mjs'
+        self.metadata.write_text(json.dumps({'name': 'openclaw', 'version': '2026.9.8'}))
+        self.entry.write_text('fixture entry')
+        self.pins = {p.name: (p.stat().st_size, hashlib.sha256(p.read_bytes()).hexdigest())
+                     for p in (self.entry, self.metadata)}
+        stack = self.enterContext(contextlib.ExitStack())
+        stack.enter_context(patch.dict(sys.modules, {'install': install}))
+        stack.enter_context(patch.object(hosted, '_RUNTIME_ROOT', self.root))
+        stack.enter_context(patch.object(hosted, '_HOSTED_CONFIG', self.host))
+        stack.enter_context(patch.object(hosted, '_OPENCLAW_FILES', self.pins))
+        # The Linux host qualification owns UID0 checks. Use same-volume real
+        # files in this portable test, including a real directory selector.
+        stack.enter_context(patch.object(install, 'protected', lambda p, directory=False: self.assertEqual(p.resolve(strict=True), p)))
+        stack.enter_context(patch.object(install, 'protected_selector',
+                                       lambda p, root, directory: p.resolve(strict=True)))
+        if os.name == 'nt':
+            # Windows may report different change times for fstat and lstat on
+            # the same file. These Linux-only service checks use the real ctime
+            # in Linux; keep the other eight identity fields in portable tests.
+            identity = hosted._authority_identity
+            stack.enter_context(patch.object(hosted, '_authority_identity', lambda info: identity(info)[:-1]))
+        if not hasattr(os, 'O_NOFOLLOW'):
+            stack.enter_context(patch.object(os, 'O_NOFOLLOW', 0, create=True))
+        self.alias(self.selector)
+
+    def alias(self, path):
+        if os.name == 'nt':
+            import _winapi
+            _winapi.CreateJunction(str(self.physical), str(path))
+        else:
+            path.symlink_to(self.physical, target_is_directory=True)
+
+    def configured(self, path):
+        self.host.write_text(json.dumps({'runtimeDirectory': str(self.root), 'agentDirectory': str(path)}))
+        return str(path / 'openclaw.mjs')
+
+    @staticmethod
+    def before(name):
+        return {'plugins': {'entries': {'edition3-accounts': {'config': {'runtimeEntry': name}}}}}
+
+    def test_canonical_spelling_preserved_and_same_file(self):
+        name = self.configured(self.selector)
+        self.assertTrue(Path(name).samefile(self.entry))
+        observed = hosted.retained_runtime_entry(self.before(name), self.physical)
+        self.assertEqual(observed[0], name)
+        self.assertEqual(observed, hosted.retained_runtime_entry(self.before(name), self.physical))
+
+    def test_physical_and_truly_absent_account_supported(self):
+        name = self.configured(self.physical)
+        for before in (self.before(name), {'plugins': {'entries': {'openai': {}, 'codex': {}}}}):
+            self.assertEqual(hosted.retained_runtime_entry(before, self.physical)[0], name)
+
+    def test_different_alias_to_identical_inode_refused(self):
+        other = self.root / 'different'
+        self.alias(other)
+        name = self.configured(other)
+        self.assertTrue(Path(name).samefile(self.entry))
+        with self.assertRaisesRegex(RuntimeError, 'configured runtime selector'):
+            hosted.retained_runtime_entry(self.before(name), self.physical)
+
+    def test_missing_or_wrong_retained_entry_refused(self):
+        name = self.configured(self.selector)
+        for before in ({}, self.before(str(self.entry)), self.before(name + '-different'),
+                       {'plugins': {'entries': {'edition3-accounts': None}}}):
+            with self.subTest(before=before), self.assertRaises(RuntimeError):
+                hosted.retained_runtime_entry(before, self.physical)
+        self.configured(self.physical)
+        for row in (None, {}, {'config': {}}, {'config': {'runtimeEntry': name}}):
+            with self.subTest(row=row), self.assertRaises(RuntimeError):
+                hosted.retained_runtime_entry({'plugins': {'entries': {'edition3-accounts': row}}}, self.physical)
+
+    def test_changed_entry_and_wrong_package_version_refused(self):
+        name = self.configured(self.selector)
+        self.entry.write_text('changed entry')
+        with self.assertRaises(RuntimeError):
+            hosted.retained_runtime_entry(self.before(name), self.physical)
+        self.entry.write_text('fixture entry')
+        self.metadata.write_text(json.dumps({'name': 'openclaw', 'version': '2026.9.7'}))
+        self.pins['package.json'] = (self.metadata.stat().st_size, hashlib.sha256(self.metadata.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(RuntimeError, 'package or runtime version'):
+            hosted.retained_runtime_entry(self.before(name), self.physical)
+
+    def test_changed_host_authority_changes_the_postcheck(self):
+        name = self.configured(self.selector)
+        first = hosted.retained_runtime_entry(self.before(name), self.physical)
+        self.host.write_text(self.host.read_text() + ' ')
+        self.assertNotEqual(first, hosted.retained_runtime_entry(self.before(name), self.physical))
+
+
 if __name__ == '__main__':
     unittest.main()

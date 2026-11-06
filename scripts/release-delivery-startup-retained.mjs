@@ -17,10 +17,10 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'a9e7707a8c72802eccd5f42783f9f8c88be84cbff077a984049d5237bccaf0fe',
+  'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
   'produce-startup-inputs.py':'8538ccf1be387997037dde375a06d564871ef5200884449ebcbd2edad33a72ec',
-  'contracts.py':'4d784bc3998c8a756d6fb3dda9c9c9c370ca513d01bfed9b5bc9fd0e2631c242',
+  'contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642',
 });
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
@@ -92,6 +92,23 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
     &&v.scenarios.every(x=>x.candidateId===(x.scenario==='pristine-prior-restoration'?binding.prior.candidateId:binding.targets.private.candidateId)
       &&Number.isSafeInteger(x.startedAtSeconds)&&Number.isSafeInteger(x.closedAtSeconds)&&x.closedAtSeconds>=x.startedAtSeconds
       &&x.closedAtSeconds-x.startedAtSeconds<=3600),'startup-retained-scenarios-incomplete');
+  if(sources['qualified-startup.py']==='3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'){
+    const ack=z.object({ordinaryAcknowledgements:z.number().int().min(0).max(1_000_000),
+      authenticatedStartSeconds:z.number().int().positive(),retentionDays:z.literal(30)}).strict();
+    const original=z.object({mode:z.enum(['unchanged-original-record','same-filesystem-original-equality']),changedFields:z.tuple([])}).strict();
+    const relocated=z.object({mode:z.literal('proved-independent-filesystems'),changedFields:z.tuple([z.literal('dev')]),
+      configurationHashes:z.tuple([hash,hash]),configurationBytes:z.tuple([z.number().int().positive().max(4*1024*1024),z.number().int().positive().max(4*1024*1024)]),
+      observationWriterHashes:z.object({'io.factory-DBfPTl1R.mjs':z.literal('c0cb4b39847898580ac68ca0154498838bf32f028cd4ccfbfbd894e373e50056'),
+        'io.warnings-AdNkx0te.mjs':z.literal('836fb6dcdfb3057f581d91e74d791e1c310188dca20815814c12e89d5ec20ab0')}).strict()}).strict();
+    const receipt=z.object({kind:z.literal('closed-selected-replica-config-observation'),sourceDevice:z.number().int().nonnegative(),
+      replicaDevice:z.number().int().nonnegative(),queueExpiry:ack,observations:z.tuple([z.union([original,relocated])])}).strict();
+    for(const [i,scenario] of v.scenarios.entries()){
+      const proof=receipt.parse(scenario.replicaConfigObservation),mode=proof.observations[0].mode;
+      need(proof.queueExpiry.authenticatedStartSeconds===v.scenarios[i===1?0:i].startedAtSeconds
+        &&(mode!=='proved-independent-filesystems'||proof.sourceDevice!==proof.replicaDevice)
+        &&(mode!=='same-filesystem-original-equality'||proof.sourceDevice===proof.replicaDevice),'original-replica-evidence-required');
+    }
+  }
   const required=['producer','parent',...Object.keys(sources).map(k=>'source/'+k),'review','originalPlan','executionIntent',
     'technicalReview','originalIntention','childResult','outsideClosure','restorationIntent','restorationCompleted','effectiveProfile','negativeVerifierSource','negativeVerifierResult',
     ...['result','closure','input','plan','intent','sourceCapture','sourceBefore','sourceAfter','sourcePhysical','sourceMetadata','seedInventory','seedPhysical','seedMetadata','liveContext','effectiveUnit'].map(role=>'homeCapture/'+role),

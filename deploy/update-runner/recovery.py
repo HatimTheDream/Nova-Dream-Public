@@ -1732,6 +1732,110 @@ def native_title_replacements(before, after, tables, node):
     return result
 
 
+_REPLICA_OBSERVATION = ContextVar('nova_verified_replica_observation', default=None)
+_OBSERVATION_WRITERS = {
+    'io.factory-DBfPTl1R.mjs': 'c0cb4b39847898580ac68ca0154498838bf32f028cd4ccfbfbd894e373e50056',
+    'io.warnings-AdNkx0te.mjs': '836fb6dcdfb3057f581d91e74d791e1c310188dca20815814c12e89d5ec20ab0',
+}
+
+
+@contextlib.contextmanager
+def qualified_replica_observation(snapshot, live, selected, runtime_root, source_device, replica_device,
+                                  first_window, closed_window):
+    """Bind only a stopped isolated replica comparison to independent storage devices."""
+    require(os.name == 'posix' and os.geteuid() == 0 and os.getpid() == 1
+            and _REPLICA_OBSERVATION.get() is None, 'A single isolated replica verifier is required.')
+    for root, dev in ((snapshot, source_device), (live, replica_device)):
+        require(isinstance(root, pathlib.Path) and root.is_absolute() and root.resolve(strict=True) == root
+                and type(dev) is int and root.stat().st_dev == dev, 'Replica root storage identity changed.')
+    require(snapshot != live and not snapshot.is_relative_to(live) and not live.is_relative_to(snapshot)
+            and os.statvfs(snapshot).f_flag & os.ST_RDONLY and isinstance(selected, pathlib.Path)
+            and bool(selected.parts) and not selected.is_absolute() and '..' not in selected.parts,
+            'Independent selected replica roots are required.')
+    for window in (first_window, closed_window):
+        require(type(window) is tuple and len(window) == 2 and all(type(x) is int and x > 0 for x in window)
+                and 0 <= window[1] - window[0] <= MAX_STARTUP_WINDOW_SECONDS,
+                'Actual bounded closed startup windows are required.')
+    require(first_window == closed_window or first_window[1] <= closed_window[0], 'Replica startup windows overlap.')
+    report = {'kind': 'closed-selected-replica-config-observation', 'sourceDevice': source_device,
+              'replicaDevice': replica_device, 'observations': []}
+    scope = {'roots': (snapshot, live), 'selected': selected, 'runtime': runtime_root,
+             'first': first_window, 'closed': closed_window, 'report': report}
+    token = _REPLICA_OBSERVATION.set(scope)
+    try:
+        yield report
+        require(len(report['observations']) == 1 and 'queueExpiry' in report,
+                'One selected shared configuration and queue observation is required.')
+    finally:
+        _REPLICA_OBSERVATION.reset(token)
+
+
+def verify_replica_observation_call(snapshot, live, selected, runtime_root, closed_window, versions):
+    scope = _REPLICA_OBSERVATION.get()
+    if scope is not None:
+        require(scope['roots'] == (snapshot, live) and scope['selected'] == selected
+                and scope['runtime'] == runtime_root and scope['closed'] == closed_window
+                and versions == ('2026.9.8', '2026.9.8'), 'Replica comparison call differs from its original proof.')
+    return scope
+
+
+def verify_replica_config_observation(scope, before, after, configuration, prior_raw, current_raw):
+    """Verify genuine observations; return true only for a proved filesystem relocation."""
+    selected = scope['selected']
+    paths = [root / selected / 'openclaw-runtime/openclaw.json' for root in scope['roots']]
+    databases = [root / selected / 'openclaw-runtime/state/state/openclaw.sqlite' for root in scope['roots']]
+    require([before.source_path, after.source_path] == databases and configuration['path'] == str(paths[1]),
+            'Replica observation belongs to another database or configuration.')
+    report = scope['report']
+    require(not report['observations'], 'Duplicate selected replica observation.')
+    require(all(isinstance(raw, str) and 0 < len(raw) <= 1024 * 1024 for raw in (prior_raw, current_raw)),
+            'Bounded selected configuration observation records are required.')
+    if prior_raw == current_raw:
+        report['observations'].append({'mode': 'unchanged-original-record', 'changedFields': []})
+        return False
+    def unique_pairs(pairs):
+        require(len(dict(pairs)) == len(pairs), 'Duplicate native observation fields.')
+        return dict(pairs)
+    entries = [json.loads(value, object_pairs_hook=unique_pairs) for value in (prior_raw, current_raw)]
+    devices = [report['sourceDevice'], report['replicaDevice']]
+    if devices[0] == devices[1]:
+        report['observations'].append({'mode': 'same-filesystem-original-equality', 'changedFields': []})
+        return False
+    required = {'hash', 'bytes', 'mtimeMs', 'ctimeMs', 'dev', 'ino', 'mode', 'nlink', 'uid', 'gid',
+                'hasMeta', 'gatewayMode', 'observedAt'}
+    require(all(type(row) is dict and set(row) == required and type(row['hasMeta']) is bool
+                and all(type(row[k]) is int for k in ('mode', 'uid', 'gid', 'nlink')) for row in entries),
+            'Unexpected official 9.8 configuration observation fields.')
+    attest_native_writer_sources(scope['runtime'], _OBSERVATION_WRITERS)
+    require(digest(pathlib.Path(scope['runtime']) / 'package.json') ==
+            'd2e734563bfb126d273beeb1e2cc5d4525b4d59efe00fdfec50a39b427524f56',
+            'Replica observation requires the exact official 9.8 package.')
+    for i, (path, record, device) in enumerate(zip(paths, entries, devices)):
+        require(path.resolve(strict=True) == path, 'Replica configuration path was redirected.')
+        ident = path.lstat()
+        expected_hash = configuration['hashes'][i]
+        require(stat.S_ISREG(ident.st_mode) and ident.st_dev == device and record['dev'] == str(device)
+                and ident.st_size == configuration['byteSizes'][i] == record['bytes'] <= 4 * 1024 * 1024
+                and record['hash'] == expected_hash and digest(path) == expected_hash
+                and record['mode'] == stat.S_IMODE(ident.st_mode) and record['uid'] == ident.st_uid
+                and record['gid'] == ident.st_gid and (i == 0 or record['ino'] == str(ident.st_ino)
+                and record['nlink'] == ident.st_nlink), 'Replica configuration fingerprint differs from its file.')
+        latest = path.lstat()
+        require(all(getattr(ident, k) == getattr(latest, k) for k in ('st_dev', 'st_ino', 'st_mode', 'st_size',
+                'st_uid', 'st_gid', 'st_nlink', 'st_mtime_ns', 'st_ctime_ns')),
+                'Replica configuration file changed during verification.')
+    stamp = datetime.fromisoformat(entries[1]['observedAt'].replace('Z', '+00:00'))
+    require(stamp.tzinfo is not None and any(a <= stamp.timestamp() < b + 1 for a,b in (scope['first'], scope['closed'])),
+            'Replica observation time is outside its authenticated startup windows.')
+    stable = required - {'hash', 'bytes', 'mtimeMs', 'ctimeMs', 'dev', 'ino', 'observedAt'}
+    require(all(type(entries[0][k]) is type(entries[1][k]) and entries[0][k] == entries[1][k] for k in stable),
+            'Retained native config observation content changed.')
+    report['observations'].append({'mode': 'proved-independent-filesystems', 'changedFields': ['dev'],
+        'configurationHashes': list(configuration['hashes']), 'configurationBytes': list(configuration['byteSizes']),
+        'observationWriterHashes': dict(_OBSERVATION_WRITERS)})
+    return True
+
+
 def native_boot_replacements(before, after, tables, configuration, from_version, to_version, node):
     """Qualify only the two startup fingerprints and the selected config cache.
     Return after-side field replacements; all other row fields stay exact.
@@ -1771,7 +1875,14 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
                             'Native startup build differs from the verified runtime package.')
                 replacements['app_version'] = previous['app_version']
             if table == 'config_health_entries' and configuration is not None and value[key] == configuration['path']:
+                selected_relocation = _REPLICA_OBSERVATION.get()
+                if selected_relocation is not None and getattr(before, 'source_path', None) != (selected_relocation['roots'][0]
+                        / selected_relocation['selected'] / 'openclaw-runtime/state/state/openclaw.sqlite'):
+                    selected_relocation = None
                 for field in ('last_known_good_json', 'last_promoted_good_json'):
+                    relocated = (selected_relocation is not None and field == 'last_known_good_json'
+                                 and verify_replica_config_observation(selected_relocation, before, after, configuration,
+                                                                      previous.get(field), value.get(field)))
                     if value.get(field) == previous.get(field):
                         continue
                     observations = []
@@ -1797,7 +1908,8 @@ def native_boot_replacements(before, after, tables, configuration, from_version,
                             require(name in observation, 'Native config observation format changed.')
                             observation.pop(name)
                         observations.append(observation)
-                    require(observations[0] == observations[1], 'Retained native config observation content changed.')
+                    require(observations[0] == observations[1] or relocated,
+                            'Retained native config observation content changed.')
                     replacements[field] = previous[field]
                 if replacements:
                     replacements['updated_at_ms'] = previous['updated_at_ms']
@@ -3108,6 +3220,10 @@ CREATE TABLE session_state_heads (
 
 
 def attest_native_event_retention(runtime_root):
+    attest_native_writer_sources(runtime_root, NATIVE_EVENT_RETENTION_SOURCES)
+
+
+def attest_native_writer_sources(runtime_root, sources):
     """Bind the reviewed 9.8 startup writers, not a caller-selected expiry policy."""
     require(runtime_root is not None, 'Native event retention lacks runtime authority.')
     runtime = pathlib.Path(runtime_root)
@@ -3117,7 +3233,7 @@ def attest_native_event_retention(runtime_root):
                  or _LOCAL_WINDOWS.get() is not None and runtime == _LOCAL_WINDOWS.get().catalog_runtime_root),
             'Native event retention runtime is outside the reviewed managed engine.')
     paths = [runtime.parent.parent, runtime.parent, runtime, runtime / 'dist', runtime / 'package.json']
-    paths += [runtime / 'dist' / name for name in NATIVE_EVENT_RETENTION_SOURCES]
+    paths += [runtime / 'dist' / name for name in sources]
     identities = {}
     for path in paths:
         require(path.resolve(strict=True) == path and (path.is_dir() or path.is_file()),
@@ -3129,7 +3245,7 @@ def attest_native_event_retention(runtime_root):
     package = bounded_json(runtime / 'package.json', 1024 * 1024)
     require(package.get('name') == 'openclaw' and package.get('version') == '2026.9.8',
             'Native event retention runtime identity changed.')
-    for name, expected in NATIVE_EVENT_RETENTION_SOURCES.items():
+    for name, expected in sources.items():
         path = runtime / 'dist' / name
         require(path.stat().st_size <= 1024 * 1024 and digest(path) == expected,
                 'Native event retention implementation changed.')
@@ -3137,6 +3253,98 @@ def attest_native_event_retention(runtime_root):
         info = path.lstat()
         require(expected == (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
                 and path.resolve(strict=True) == path, 'Native event retention source changed during verification.')
+
+
+NATIVE_QUEUE_ACK_SOURCES = {
+    'server-maintenance-JTPX7aox.mjs': '8f3a140de457cd110c0226fd2d611b651f5df2850b972933e96477636dbcb615',
+    'delivery-queue-state-context-BtpRP2xf.mjs': 'bec1dda42dd2a7aea5909fafca2311a46012343d891fe4b7f4e8840775ed5b4c',
+    'delivery-queue-sqlite-BLFBXqlF.mjs': '73c7c6de513050abc6f06a737c88edfaf15b07ab5766e8206fd16e65cc70de37',
+    'openclaw-state-worker-store-DwGcGmZn.mjs': 'a09018246c0edab79d9c90a127129e53bf04db95014eed0229170c5c31a5fbdb',
+    'openclaw-state-worker-runtime-CckKB9al.mjs': '70fd0b674f23dec869fbefb10bbcf38afb1a7a4798070fa51a257b093dd6c892',
+    'delivery-queue-sqlite.kernel-B9U98VOY.mjs': 'a43ee1b4b4c5b6922e99051ffb1dd20978a816b1049a6b735ea47fd53f676031',
+    'openclaw-state-db-legacy-backfills-xddLXhvs.mjs': '30d85b93e8e8958e84d94f20f6d3abe3e13020f13624b4c6fd3ab36b4032e3ff',
+}
+NATIVE_QUEUE_ACK_SQL = '''
+CREATE TABLE delivery_queue_entries (
+    queue_name TEXT NOT NULL, id TEXT NOT NULL, status TEXT NOT NULL, entry_kind TEXT, session_key TEXT,
+    channel TEXT, target TEXT, account_id TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER, last_error TEXT, recovery_state TEXT, platform_send_started_at INTEGER,
+    entry_json TEXT NOT NULL, enqueued_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, failed_at INTEGER,
+    PRIMARY KEY (queue_name, id)
+) STRICT
+'''
+
+
+def retained_queue_acknowledgements(before, after, relative, selected, runtime_root, startup_window):
+    """Prove the complete ordinary 30-day acknowledgement purge on a genuinely stopped 9.8 startup."""
+    table = 'delivery_queue_entries'
+    old, current = rows(before, table), rows(after, table)
+    if old <= current:
+        return 0
+    scope = current_application_transition()
+    require(scope is not None and _LOCAL_WINDOWS.get() is None and os.name == 'posix'
+            and pathlib.Path(relative) == pathlib.Path(selected) / 'openclaw-runtime/state/state/openclaw.sqlite'
+            and isinstance(before, CopiedDatabase) and isinstance(after, CopiedDatabase)
+            and before.source_path == scope['beforeRoot'] / relative and after.source_path == scope['afterRoot'] / relative,
+            'Delivery acknowledgement expiry needs the selected closed hosted comparison.')
+    require(isinstance(startup_window, (list, tuple)) and len(startup_window) == 2
+            and all(type(value) is int for value in startup_window)
+            and 0 < startup_window[0] <= startup_window[1] <= (2**53 - 1) // 1000
+            and startup_window[1] - startup_window[0] <= MAX_STARTUP_WINDOW_SECONDS,
+            'Delivery acknowledgement expiry needs an authenticated bounded startup window.')
+    attest_native_writer_sources(runtime_root, NATIVE_QUEUE_ACK_SOURCES)
+    require(digest(pathlib.Path(runtime_root) / 'package.json') ==
+            'd2e734563bfb126d273beeb1e2cc5d4525b4d59efe00fdfec50a39b427524f56',
+            'Delivery acknowledgement expiry requires the exact reviewed runtime package.')
+    verify_ordinary_ack_expiry(before, after, old, current, startup_window[0])
+    return sum((old - current).values())
+
+
+def verify_ordinary_ack_expiry(before, after, old, current, started_at):
+    table = 'delivery_queue_entries'
+    require(current <= old and all(count == 1 for count in old.values()),
+            'The delivery queue contains an additional, changed or duplicated row during expiry.')
+    with contextlib.closing(sqlite3.connect(':memory:')) as model:
+        model.execute(NATIVE_QUEUE_ACK_SQL)
+        expected = list(model.execute('pragma table_xinfo(delivery_queue_entries)'))
+    table_info = lambda db: list(db.execute('pragma table_xinfo(delivery_queue_entries)'))
+    # Upgraded databases appended metadata columns. Name, affinity, defaults, keys and flags must all match.
+    actual = table_info(before)
+    require(actual == table_info(after) and {row[1:] for row in actual} == {row[1:] for row in expected},
+            'The retained delivery queue column contract changed.')
+    for db in (before, after):
+        tables = list(db.execute('pragma table_list(delivery_queue_entries)'))
+        require(tables == [('main', table, 'table', len(expected), 0, 1)]
+                and not db.execute('select 1 from sqlite_schema where type=? and tbl_name=?',
+                                   ('trigger', table)).fetchone()
+                and not db.execute('select 1 from sqlite_schema s, pragma_foreign_key_list(s.name) f '
+                                   'where s.type=? and f."table"=?', ('table', table)).fetchone(),
+                'Delivery acknowledgement expiry encountered an unreviewed queue schema or reference.')
+    columns = [column[1] for column in actual]
+    id_column = columns.index('id')
+    id_counts = Counter(row[id_column] for row in old)
+    last_unexpired = started_at * 1000 - 2_592_000_000
+    for original in old:
+        value = dict(zip(columns, original))
+        # The official maintenance predicate applies to all ordinary completed rows in a single DELETE.
+        expired = (value['status'] == 'completed' and type(value['enqueued_at']) is int
+                   and value['enqueued_at'] < last_unexpired
+                   and value['recovery_state'] not in {'completed_bounded', 'completed_permanent'})
+        if original in current:
+            require(not expired, 'The delivery queue retained only part of an ordinary expiry sweep.')
+            continue
+        require(expired and value['recovery_state'] is None and value['retry_count'] == 0
+                and 0 < value['enqueued_at'] == value['updated_at']
+                and all(value[field] is None for field in ('entry_kind', 'session_key', 'channel', 'target',
+                    'account_id', 'last_attempt_at', 'last_error', 'platform_send_started_at', 'failed_at'))
+                and all(type(value[field]) is str and 0 < len(value[field]) <= 1024 for field in ('queue_name', 'id'))
+                and id_counts[value['id']] == 1,
+                'A missing delivery row is outside the exact ordinary acknowledgement contract.')
+        # Rebuild the four fields in the precise order emitted by the pinned JSON.stringify writer.
+        stamp = value['enqueued_at']
+        document = {'id': value['id'], 'enqueuedAt': stamp, 'retryCount': 0, 'acknowledgedAt': stamp}
+        require(value['entry_json'] == json.dumps(document, ensure_ascii=False, separators=(',', ':')),
+                'The historical delivery acknowledgement contains unverified work or metadata.')
 
 
 def retained_native_event_history(before, after, relative, selected, runtime_root, startup_window):
@@ -3248,6 +3456,8 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                                                    logical_workspace_root=logical_workspace_root,
                                                    hosted_configuration_authority=hosted_configuration_authority,
                                                    startup_window=log_retention_window, catalog_runtime_root=catalog_runtime_root)
+    replica = verify_replica_observation_call(snapshot, live, selected, catalog_runtime_root, log_retention_window,
+                                              (from_version, to_version))
     embedded = retained_embedded_databases(snapshot, live, selected, paths, from_version, to_version,
                                           log_retention_window, log_retention_reports)
     quarantine = retained_quarantine_cache(snapshot, live, selected, paths, from_version, to_version,
@@ -3296,6 +3506,13 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                                               catalog_runtime_root=catalog_runtime_root)
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
+                elif from_version == to_version == '2026.9.8' and table == 'delivery_queue_entries':
+                    queue_window = replica['first'] if replica is not None else log_retention_window
+                    expired = retained_queue_acknowledgements(before, after, relative, selected, catalog_runtime_root, queue_window)
+                    if replica is not None and relative == selected / 'openclaw-runtime/state/state/openclaw.sqlite':
+                        require('queueExpiry' not in replica['report'], 'Repeated delivery queue expiry comparison.')
+                        replica['report']['queueExpiry'] = {'ordinaryAcknowledgements': expired,
+                            'authenticatedStartSeconds': queue_window[0], 'retentionDays': 30}
                 elif to_version == '2026.9.8' and table == 'session_nodes':
                     current = rows(after, table)
                     require(settled_session_validity_rows(before, node, current) <= current,

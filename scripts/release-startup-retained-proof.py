@@ -455,6 +455,9 @@ def consume(request, read, sources):
              and guard.get('candidateId') == app['candidateId'] and guard.get('epoch') == binding['workspaceEpoch']
              and guard.get('heldFor') == started['leaseId'] and guard.get('maintenanceHeld') is True
              and guard.get('nativeSuspended') is True and guard.get('blockers') == [], 'startup-proof-held-bootstrap-required')
+        if runner_sha == '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af':
+            first_start = summaries[0]['startedAtSeconds'] if index == 2 else started['startedAtSeconds']
+            validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
         child_ref = child['scenarios'][index - 1]
         need(type(child_ref) is dict and type(child_ref.get('bytes')) is int and child_ref['bytes'] > 0
              and child_ref == {'path': '/qualification/evidence/attempt-' + str(index) + '/preservation.json',
@@ -462,6 +465,8 @@ def consume(request, read, sources):
                  'bytes': refs[scenario + '/preservation']['bytes']}, 'startup-proof-child-canonical-receipt-changed')
         summaries.append({'scenario': scenario, 'candidateId': app['candidateId'], 'preservation': item['preservation'],
                           'startedAtSeconds': started['startedAtSeconds'], 'closedAtSeconds': closed['closedAtSeconds']})
+        if runner_sha == '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af':
+            summaries[-1]['replicaConfigObservation'] = preserved['replicaConfigObservation']
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')
          and parent['restorationCompleted']['path'] == str(fixture / 'evidence/workspace-restoration-result.json')
          and restoration_intent.get('kind') == 'restore-independent-pristine-private-state'
@@ -543,6 +548,35 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
                     need(not entry.is_symlink(), 'startup-proof-worker-cgroup-redirected')
                     if entry.is_dir(follow_symlinks=False): pending.append(Path(entry.path))
     original_owner_absent()
+
+
+def validate_replica_observation_receipt(proof, plan, startup_start):
+    need(isinstance(proof, dict) and set(proof) == {'kind', 'sourceDevice', 'replicaDevice', 'observations', 'queueExpiry'}
+            and proof['kind'] == 'closed-selected-replica-config-observation'
+            and proof['sourceDevice'] == plan['baselineRootIdentity'][0]
+            and proof['replicaDevice'] == plan['fixtureStorageAuthority']['device']
+            and isinstance(proof['observations'], list) and len(proof['observations']) == 1,
+            'Original selected replica observation proof is required.')
+    entry, queue = proof['observations'][0], proof['queueExpiry']
+    need(type(queue) is dict and set(queue) == {'ordinaryAcknowledgements', 'authenticatedStartSeconds', 'retentionDays'}
+            and queue['retentionDays'] == 30 and queue['authenticatedStartSeconds'] == startup_start
+            and type(queue['ordinaryAcknowledgements']) is int and 0 <= queue['ordinaryAcknowledgements'] <= 1000000,
+            'Original selected queue expiry accounting is required.')
+    if entry.get('mode') == 'proved-independent-filesystems':
+        need(proof['sourceDevice'] != proof['replicaDevice'] and entry.get('changedFields') == ['dev']
+                and set(entry) == {'mode', 'changedFields', 'configurationHashes', 'configurationBytes', 'observationWriterHashes'}
+                and isinstance(entry['configurationHashes'], list) and len(entry['configurationHashes']) == 2
+                and all(type(h) is str and re.fullmatch('[0-9a-f]{64}', h) for h in entry['configurationHashes'])
+                and isinstance(entry['configurationBytes'], list) and len(entry['configurationBytes']) == 2
+                and all(type(n) is int and 0 < n <= 4 * 1024 * 1024 for n in entry['configurationBytes'])
+                and entry['observationWriterHashes'] == {
+                    'io.factory-DBfPTl1R.mjs': 'c0cb4b39847898580ac68ca0154498838bf32f028cd4ccfbfbd894e373e50056',
+                    'io.warnings-AdNkx0te.mjs': '836fb6dcdfb3057f581d91e74d791e1c310188dca20815814c12e89d5ec20ab0'},
+                'The independently proved observation writer, files or storage changed.')
+    else:
+        need(entry == {'mode': 'unchanged-original-record', 'changedFields': []}
+                or proof['sourceDevice'] == proof['replicaDevice'] and entry == {'mode': 'same-filesystem-original-equality', 'changedFields': []},
+                'An unqualified configuration observation projection was requested.')
 
 
 def invoke(request, sources):

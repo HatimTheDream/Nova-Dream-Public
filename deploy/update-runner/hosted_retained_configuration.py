@@ -114,6 +114,78 @@ def attest_new_workspaces(before, after):
                 'The maintained dedicated workspace is not the exact owned empty generation.')
 
 
+# Public openclaw@2026.9.8 package release files, verified against npm dist.integrity.
+_HOSTED_CONFIG = Path('/etc/nova-update/config.json')
+_RUNTIME_ROOT = Path('/opt/nova/runtime')
+_OPENCLAW_FILES = {
+    'openclaw.mjs': (24881, 'aa8606ca0d62ff133ef5b7bd2323ec8ff3f8eb384404399cd5e742918d63b0a1'),
+    'package.json': (145254, 'd2e734563bfb126d273beeb1e2cc5d4525b4d59efe00fdfec50a39b427524f56'),
+}
+
+
+def _authority_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _authority_file(path, maximum):
+    from install import protected
+    protected(path)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+        identity = _authority_identity(os.fstat(stream.fileno()))
+        require(identity[6] <= maximum, 'Runtime authority file exceeds its bound.')
+        data = stream.read(maximum + 1)
+        require(len(data) == identity[6] and identity == _authority_identity(os.fstat(stream.fileno()))
+                == _authority_identity(path.lstat()), 'Runtime authority changed during verification.')
+    return data, identity
+
+
+def retained_runtime_entry(before, physical_package):
+    """Preserve the configured spelling while authenticating its installed package."""
+    from install import protected, protected_selector
+    raw_host, host_identity = _authority_file(_HOSTED_CONFIG, 65536)
+    host = json.loads(raw_host)
+    root, physical = _RUNTIME_ROOT, Path(physical_package)
+    require(host.get('runtimeDirectory') == str(root) and physical.is_relative_to(root)
+            and physical != root, 'Runtime package is outside the protected configured root.')
+    protected(root, True)
+    protected(physical, True)
+    configured = host.get('agentDirectory')
+    entry = physical / 'openclaw.mjs'
+    selector_identity = None
+    if configured == str(physical):
+        name = str(entry)
+    else:
+        selector = root / 'openclaw'
+        name = str(selector / 'openclaw.mjs')
+        require(configured == str(selector) and protected_selector(selector, root, True) == physical
+                and Path(name).resolve(strict=True) == entry and Path(name).samefile(entry),
+                'The configured runtime selector differs from its protected package.')
+        selector_identity = _authority_identity(selector.lstat())
+    entries = before.get('plugins', {}).get('entries', {})
+    require(isinstance(entries, dict), 'Invalid original account plugin registry.')
+    if 'edition3-accounts' not in entries:
+        # The existing builder can add the account plugin at the physical package
+        # location. An alias spelling needs a retained entry to corroborate it.
+        require(configured == str(physical), 'An aliased runtime needs its retained account entry.')
+    else:
+        account = entries['edition3-accounts']
+        config = account.get('config') if isinstance(account, dict) else None
+        require(isinstance(config, dict) and config.get('runtimeEntry') == name,
+                'The retained account runtime entry disagrees with the protected host configuration.')
+    files = {}
+    for filename, (length, digest) in _OPENCLAW_FILES.items():
+        raw, identity = _authority_file(physical / filename, length)
+        require(len(raw) == length and hashlib.sha256(raw).hexdigest() == digest,
+                'The configured OpenClaw 2026.9.8 package or entry bytes changed.')
+        if filename == 'package.json':
+            package = json.loads(raw)
+            require(package.get('name') == 'openclaw' and package.get('version') == '2026.9.8',
+                    'The configured package or runtime version differs.')
+        files[filename] = identity
+    return name, (host_identity, hashlib.sha256(raw_host).hexdigest(), selector_identity, files)
+
+
 def derive_configuration(snapshot, live, selected, *, node, app_releases, session_binding_key,
                          startup_window, catalog_runtime_root, authority):
     import recovery as r
@@ -157,9 +229,10 @@ def derive_configuration(snapshot, live, selected, *, node, app_releases, sessio
     arguments = after.get('browser', {}).get('extraArgs', [])
     match = re.fullmatch(r'--proxy-server=(http://127\.0\.0\.1:([0-9]{1,5}))', arguments[0]) if arguments and type(arguments[0]) is str else None
     require(match is not None and 0 < int(match[2]) < 65536, 'Generated browser proxy is outside the retained contract.')
+    runtime_entry, runtime_authority = retained_runtime_entry(before, catalog_runtime_root)
     payload = {'before': before, 'after': after, 'bridge': {name: bridge[name] for name in ('url', 'token')},
         'proxy': match[1], 'epoch': epoch, 'releaseRoot': str(release), 'nativeRoot': str(native_root),
-        'runtimeEntry': str(Path(catalog_runtime_root) / 'openclaw.mjs'), 'sessionBindings': bindings}
+        'runtimeEntry': runtime_entry, 'sessionBindings': bindings}
     script = Path(__file__).with_name('local-retained-configuration.mjs')
     call = subprocess.run([str(executable), str(script), '--hosted-schema-55-to-60'],
         input=json.dumps(payload).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -169,6 +242,8 @@ def derive_configuration(snapshot, live, selected, *, node, app_releases, sessio
     require(json.loads(call.stdout) == after, 'Retained native configuration or permissions changed.')
     require(all(path.stat().st_size == value['size'] and r.digest(path) == value['sha256'] for path, value in closure.items()),
             'The complete builder closure changed during derivation.')
+    require(retained_runtime_entry(before, catalog_runtime_root) == (runtime_entry, runtime_authority),
+            'The protected runtime selector or package changed during derivation.')
     closed_authority(authority, candidate_id=candidate_id, epoch=epoch, window=startup_window)
     return {'path': str(new_path), 'hashes': [r.digest(old_path), r.digest(new_path)],
             'byteSizes': [old_path.stat().st_size, new_path.stat().st_size]}
