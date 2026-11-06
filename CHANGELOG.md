@@ -1,3 +1,8 @@
+## [2.28.22] - 2026-11-06
+
+- Update release checks to open the Search and Add Task controls before checking focus and draft recovery. The checks also support the compact Content search.
+- Wait for the main workspace to finish opening before testing navigation and saved drafts.
+
 ## [2.28.21] - 2026-11-05
 
 - Distinguish forward startup checks from prior-version restoration when verifying saved work.

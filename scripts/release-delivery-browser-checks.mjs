@@ -52,7 +52,9 @@ export async function documentIdentity(page) {
     return {candidateId:meta('e3-candidate'),frontendId:meta('e3-frontend'),version:meta('e3-frontend-version'),buildVersion:meta('e3-frontend-build'),assets:meta('e3-assets')};});
 }
 export async function ready(page,baseUrl) {
-  await page.locator('.app-shell').waitFor({state:'visible',timeout:45000});
+  // The startup crossfade mounts a temporary workspace. Navigation and drafts
+  // must begin in the workspace that stays mounted after the crossfade.
+  await page.locator('.app-shell:not(.startup-handoff .app-shell)').waitFor({state:'visible',timeout:45000});
   const identity=await documentIdentity(page),headers={'X-Edition3-Client':'1','X-Edition3-Candidate':identity.candidateId};
   const [h,s]=await Promise.all([page.request.get(baseUrl+'/api/health'),page.request.get(baseUrl+'/api/snapshot',{headers})]);
   need(h.ok()&&s.ok(),'browser-authenticated-readiness-unavailable');
@@ -81,8 +83,33 @@ async function nav(page,label) {
   if(!await rail.isVisible()){const show=page.getByRole('button',{name:'Show main navigation',exact:true});if(await show.isVisible())await show.click();}
   await page.locator('#main-navigation').getByRole('button',{name:label,exact:true}).click();
 }
-export async function tasks(page) {await nav(page,'Tasks');await page.getByRole('textbox',{name:'Search tasks',exact:true}).waitFor({state:'visible'});}
-export async function draft(page) {return page.getByRole('textbox',{name:'Quick task title',exact:true});}
+export async function tasks(page) {
+  await nav(page,'Tasks');
+  // The compact Tasks layout keeps its inputs mounted inside disclosures.
+  // Wait for the view before deciding whether to reveal a field; older layouts
+  // already expose it and must not have their writing or focus reset.
+  const search=page.getByRole('textbox',{name:'Search tasks',exact:true,includeHidden:true});
+  await search.waitFor({state:'attached'});
+  if(!await search.isVisible())await page.getByRole('button',{name:/^Search Tasks(?:, Active Query)?$/}).click();
+  await search.waitFor({state:'visible'});
+}
+export async function draft(page) {
+  const field=page.getByRole('textbox',{name:'Quick task title',exact:true,includeHidden:true});
+  await field.waitFor({state:'attached'});
+  if(!await field.isVisible())await page.getByRole('button',{name:'Add Task',exact:true}).click();
+  await field.waitFor({state:'visible'});return field;
+}
+export async function contentSearch(page) {
+  await nav(page,'Content');
+  const legacy=page.getByRole('textbox',{name:'Search content records',exact:true});
+  const search=page.getByRole('searchbox',{name:'Search Content Records',exact:true});
+  const trigger=page.getByRole('button',{name:'Search Content',exact:true});
+  // Content mounts its current search field only after the control is opened.
+  await legacy.or(search).or(trigger).first().waitFor({state:'visible'});
+  if(await legacy.isVisible())return;
+  if(!await search.isVisible())await trigger.click();
+  await search.waitFor({state:'visible'});
+}
 export async function ownedDraftCleanup(page,text) {
   await tasks(page);const field=await draft(page);need(await field.inputValue()===text,'browser-owned-draft-changed');await field.fill('');
   need(await field.inputValue()==='','browser-owned-draft-cleanup-unconfirmed');
@@ -113,7 +140,7 @@ export async function accept(context,oldPage,prepared,request,dir,original) {
   }
   need(hash(await documentIdentity(oldPage))===hash(prepared.document),'browser-old-document-replaced');check('old-document-retained');
   if(input.installed.route==='frontend'){
-    await nav(oldPage,'Content');await oldPage.getByRole('textbox',{name:'Search content records',exact:true}).waitFor({state:'visible'});
+    await contentSearch(oldPage);
     need(hash(await documentIdentity(oldPage))===hash(prepared.document),'browser-old-document-replaced');check('old-lazy-module');
     await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-original-draft-lost');
     await oldPage.getByRole('button',{name:'Refresh',exact:true}).waitFor({state:'visible',timeout:45000});
