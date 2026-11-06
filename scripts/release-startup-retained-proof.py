@@ -455,7 +455,7 @@ def consume(request, read, sources):
              and guard.get('candidateId') == app['candidateId'] and guard.get('epoch') == binding['workspaceEpoch']
              and guard.get('heldFor') == started['leaseId'] and guard.get('maintenanceHeld') is True
              and guard.get('nativeSuspended') is True and guard.get('blockers') == [], 'startup-proof-held-bootstrap-required')
-        if runner_sha == '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af':
+        if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
             first_start = summaries[0]['startedAtSeconds'] if index == 2 else started['startedAtSeconds']
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
         child_ref = child['scenarios'][index - 1]
@@ -465,7 +465,7 @@ def consume(request, read, sources):
                  'bytes': refs[scenario + '/preservation']['bytes']}, 'startup-proof-child-canonical-receipt-changed')
         summaries.append({'scenario': scenario, 'candidateId': app['candidateId'], 'preservation': item['preservation'],
                           'startedAtSeconds': started['startedAtSeconds'], 'closedAtSeconds': closed['closedAtSeconds']})
-        if runner_sha == '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af':
+        if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
             summaries[-1]['replicaConfigObservation'] = preserved['replicaConfigObservation']
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')
          and parent['restorationCompleted']['path'] == str(fixture / 'evidence/workspace-restoration-result.json')
@@ -548,6 +548,12 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
                     need(not entry.is_symlink(), 'startup-proof-worker-cgroup-redirected')
                     if entry.is_dir(follow_symlinks=False): pending.append(Path(entry.path))
     original_owner_absent()
+
+
+REPLICA_OBSERVATION_PRODUCERS = frozenset({
+    '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af',
+    '0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5',
+})
 
 
 def validate_replica_observation_receipt(proof, plan, startup_start):

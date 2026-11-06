@@ -254,5 +254,10 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   steps['dependency-plan']=step('dependency-plan',checkPlan,async c=>{readStaged(c);deadline(c);capacity(c.journal.directory,0);need(!existsSync(paths(c).plan),'original-qualified-dependency-plan-present');writeExclusive(paths(c).plan,encoded({kind:'qualified-dependency-local-plan',stage:readStaged(c),dependencyExecution:options.qualifiedDependencies.execution,plannedAtMs:clock(),readOnly:true,hostEffects:false}));return completed(c,'dependency-plan',checkPlan(c));});
   steps['dependency-execute']=step('dependency-execute',readProduced,async c=>{const v=check(c),{plan}=checkIntent(c),p=paths(c);deadline(c);need(clock()-plan.plannedAtMs<=WINDOW&&!existsSync(p.execution)&&!existsSync(p.output),'original-qualified-dependency-effect-present-or-expired');capacity(c.journal.directory,0);writeExclusive(p.execution,encoded({format:1,kind:'original-qualified-dependency-reference',operationId:c.descriptor.operation.id,parentKey:pIntent(c).key,phaseKey:c.intent.key,inputSha256:c.intent.inputSha256,reservedAtMs:c.intent.createdAtMs,intent:reference(p.intent),dependencyExecution:options.qualifiedDependencies.execution}));validateJournalDirectory(p.output,{create:true});writeExclusive(p.result,encoded({kind:'qualified-application-dependency-reference',input:v.successor,dependencies:v.qualifiedDependencies}));return completed(c,'dependency-execute',readProduced(c));});
  }
- return{validate:async c=>{await ensureQualification();check(c);},steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};
+ // The registry selects its helper roster from the same verified candidate.
+ const validate=async context=>{
+  await ensureQualification();
+  return check(context).candidates.private.manifest.schemaVersion;
+ };
+ return{validate,steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};
 }

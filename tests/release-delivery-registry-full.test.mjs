@@ -67,6 +67,8 @@ test('qualified source reaches the fixed missing-host-parent preflight before pa
   f.options.selectedBundle=f.put(f.options.selectedBundle.path,bundle);
   const native=JSON.parse(readFileSync(f.options.nativeInput.path));native.acceptedPair=f.options.selectedPair;native.acceptedBundle=f.options.selectedBundle;
   f.options.nativeInput=f.put(f.options.nativeInput.path,native);f.descriptor.target=f.put(f.descriptor.target.path,f.target);
+  // Canonical artifact receipts expose the application directory and metadata, not a manifest reference.
+  for(const artifact of Object.values(f.prior.artifacts.repositories)) delete artifact.manifest;
   assert.deepEqual(await f.registry.phasePreflight('package',f.descriptor,f.prior),['full-host-stage-parent-missing']);
   assert.deepEqual(f.effects,['host']);assert.equal(f.journal.deliveryPhase(f.descriptor.operation.id,'package/dependency-stage'),null);
   writeFileSync(join(f.artifacts.private.applicationDirectory,'dist/client/index.html'),'corrupt source');

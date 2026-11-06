@@ -222,9 +222,9 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     // substituted evidence still fails verification rather than being waived.
     const capabilities=new Set(['changed-runtime-qualification-producer-required','changed-schema-qualification-producer-required',
       'changed-startup-qualification-producer-required','changed-updater-qualification-producer-required','changed-dependency-qualification-producer-required']);
-    try { await dependency(target).validate({descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
+    let schema;
+    try { schema=await dependency(target).validate({descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
     catch(error) { if(capabilities.has(error?.message))return [error.message];throw error; }
-    const schema=JSON.parse(readEvidenceFile(prior.artifacts.repositories.private.manifest)).schemaVersion;
     const helperHashes=schema===60?FULL_APPLICATION_HELPERS:FULL_HELPERS;
     for(const side of ['private','public'])for(const [name,digest] of Object.entries(helperHashes)) {
       const artifact=prior.artifacts.repositories[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];

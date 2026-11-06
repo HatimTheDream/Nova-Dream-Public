@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {verifyCandidate} from '../scripts/candidate.mjs';
 import {dependencyFixture} from './dependency-transport-fixture.mjs';
-import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS} from '../scripts/release-delivery-startup-retained.mjs';
+import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'plan', 'intent', 'sourceCapture', 'sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceMetadata', 'seedInventory', 'seedPhysical', 'seedMetadata', 'liveContext', 'effectiveUnit']);
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
@@ -40,7 +40,7 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
     workerClosed:true,workerIdentity:{pid:123,startTicks:456,controlGroup:'/system.slice/nova-qa-qualified-'+op+'.service'},
     productionAdmission:false,freshFullRehearsalStillRequired:true,liveAcceptanceStillRequired:true,references,
     scenarios:STARTUP_SCENARIOS.map((scenario,i)=>({scenario,candidateId:i===2?prior.id:candidates.private.id,startedAtSeconds:100+i*100,closedAtSeconds:150+i*100,
-      ...(sources['qualified-startup.py']==='3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
+      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
         sourceDevice:1,replicaDevice:2,observations:[{mode:'unchanged-original-record',changedFields:[]}],
         queueExpiry:{ordinaryAcknowledgements:0,authenticatedStartSeconds:i===1?100:100+i*100,retentionDays:30}}}:{})}))};
   return{...f,sources,options,proof,candidates,prior,helperHashes,transportOptions:{...f.options,format:5,mode:'retained-startup-qualified-native-successor',startupQualification:options},

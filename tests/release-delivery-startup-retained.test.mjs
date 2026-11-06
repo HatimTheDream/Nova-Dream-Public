@@ -136,7 +136,9 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
   const transport=fresh(),executionErrors=[];
   for(const [name,step]of Object.entries(transport.steps)){const execute=step.execute;step.execute=async c=>{try{return await execute(c);}catch(e){executionErrors.push({name,message:e.message});throw e;}};}
   const producer=createDependencyPairProducer({maintained:transport});
-  await transport.validate({descriptor:f.descriptor,input:f.intent.input});
+  const canonicalInput=structuredClone(f.intent.input);
+  for(const artifact of Object.values(canonicalInput.artifacts)) delete artifact.manifest;
+  assert.equal(await transport.validate({descriptor:f.descriptor,input:canonicalInput}),schemaMigration?60:55);
   assert.equal(commands.length,0);
   const completed=await producer.execute(f.context);
   assert.equal(completed.state,'completed',JSON.stringify({completed,executionErrors}));
@@ -232,8 +234,10 @@ test('only the explicit schema55-to60 actual startup proof admits migration; unq
   assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/unexpected-startup|startup-qualified-artifact-closure/);
 });
 
-test('the current replica qualification rejects omitted device and stale queue-cutoff evidence',t=>{
-  const fixture=startupCommandFixture(t,{sources:QUALIFIED_STARTUP_SOURCES,schemaMigration:true});
+for(const [profile,sources] of Object.entries({current:QUALIFIED_STARTUP_SOURCES,
+  historical:{...QUALIFIED_STARTUP_SOURCES,'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af','contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642'}})){
+test('the '+profile+' replica qualification rejects omitted device and stale queue-cutoff evidence',t=>{
+  const fixture=startupCommandFixture(t,{sources,schemaMigration:true});
   verifyStartupRetainedProjection(fixture.proof,fixture.proof.request,fixture.sources);
   for(const change of [s=>delete s[0].replicaConfigObservation,
     s=>{s[1].replicaConfigObservation.queueExpiry.authenticatedStartSeconds=s[1].startedAtSeconds;},
@@ -243,3 +247,4 @@ test('the current replica qualification rejects omitted device and stale queue-c
     assert.throws(()=>verifyStartupRetainedProjection(copy,copy.request,fixture.sources));
   }
 });
+}

@@ -1,3 +1,7 @@
+## [2.28.24] - 2026-11-06
+
+- Use the verified application manifest to select the saved-work checks before packaging a hosted update.
+
 ## [2.28.23] - 2026-11-06
 
 - Verify the configured runtime path against the installed package when checking saved work after an update.

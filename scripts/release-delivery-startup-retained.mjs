@@ -17,10 +17,10 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af',
+  'qualified-startup.py':'0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5',
   'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
   'produce-startup-inputs.py':'8538ccf1be387997037dde375a06d564871ef5200884449ebcbd2edad33a72ec',
-  'contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642',
+  'contracts.py':'473e6f57a6a8536cb3f926e480ef60bf07fbe48df73c63c328c240dcde08ddc7',
 });
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
@@ -92,7 +92,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
     &&v.scenarios.every(x=>x.candidateId===(x.scenario==='pristine-prior-restoration'?binding.prior.candidateId:binding.targets.private.candidateId)
       &&Number.isSafeInteger(x.startedAtSeconds)&&Number.isSafeInteger(x.closedAtSeconds)&&x.closedAtSeconds>=x.startedAtSeconds
       &&x.closedAtSeconds-x.startedAtSeconds<=3600),'startup-retained-scenarios-incomplete');
-  if(sources['qualified-startup.py']==='3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'){
+  if([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])){
     const ack=z.object({ordinaryAcknowledgements:z.number().int().min(0).max(1_000_000),
       authenticatedStartSeconds:z.number().int().positive(),retentionDays:z.literal(30)}).strict();
     const original=z.object({mode:z.enum(['unchanged-original-record','same-filesystem-original-equality']),changedFields:z.tuple([])}).strict();
