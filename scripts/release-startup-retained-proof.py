@@ -553,6 +553,7 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
 REPLICA_OBSERVATION_PRODUCERS = frozenset({
     '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af',
     '0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5',
+    '9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b',
 })
 
 

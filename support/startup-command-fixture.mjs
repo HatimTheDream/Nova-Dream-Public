@@ -40,7 +40,7 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
     workerClosed:true,workerIdentity:{pid:123,startTicks:456,controlGroup:'/system.slice/nova-qa-qualified-'+op+'.service'},
     productionAdmission:false,freshFullRehearsalStillRequired:true,liveAcceptanceStillRequired:true,references,
     scenarios:STARTUP_SCENARIOS.map((scenario,i)=>({scenario,candidateId:i===2?prior.id:candidates.private.id,startedAtSeconds:100+i*100,closedAtSeconds:150+i*100,
-      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
+      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5','3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
         sourceDevice:1,replicaDevice:2,observations:[{mode:'unchanged-original-record',changedFields:[]}],
         queueExpiry:{ordinaryAcknowledgements:0,authenticatedStartSeconds:i===1?100:100+i*100,retentionDays:30}}}:{})}))};
   return{...f,sources,options,proof,candidates,prior,helperHashes,transportOptions:{...f.options,format:5,mode:'retained-startup-qualified-native-successor',startupQualification:options},

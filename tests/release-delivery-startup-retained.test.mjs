@@ -234,17 +234,27 @@ test('only the explicit schema55-to60 actual startup proof admits migration; unq
   assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/unexpected-startup|startup-qualified-artifact-closure/);
 });
 
-for(const [profile,sources] of Object.entries({current:QUALIFIED_STARTUP_SOURCES,
-  historical:{...QUALIFIED_STARTUP_SOURCES,'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af','contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642'}})){
-test('the '+profile+' replica qualification rejects omitted device and stale queue-cutoff evidence',t=>{
-  const fixture=startupCommandFixture(t,{sources,schemaMigration:true});
-  verifyStartupRetainedProjection(fixture.proof,fixture.proof.request,fixture.sources);
-  for(const change of [s=>delete s[0].replicaConfigObservation,
-    s=>{s[1].replicaConfigObservation.queueExpiry.authenticatedStartSeconds=s[1].startedAtSeconds;},
-    s=>{s[0].replicaConfigObservation.observations[0].changedFields=['uid'];},
-    s=>{s[2].replicaConfigObservation.observations[0].mode='same-filesystem-original-equality';}]){
-    const copy=structuredClone(fixture.proof);change(copy.scenarios);
-    assert.throws(()=>verifyStartupRetainedProjection(copy,copy.request,fixture.sources));
-  }
-});
+const historicalSources = {
+  'qualified-startup.py':'0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5',
+  'qualified-parent.py':'9ed15c8a2f6899376a2dbe577a4b559fc03c62e0e780332d01ba68c3d7d731b2',
+  'produce-startup-inputs.py':'8538ccf1be387997037dde375a06d564871ef5200884449ebcbd2edad33a72ec',
+  'contracts.py':'473e6f57a6a8536cb3f926e480ef60bf07fbe48df73c63c328c240dcde08ddc7',
+};
+const replicaProfiles = {
+  current:QUALIFIED_STARTUP_SOURCES,
+  previous:historicalSources,
+  historical:{...historicalSources,'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af','contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642'},
+};
+for(const [profile,sources] of Object.entries(replicaProfiles)){
+  test('the '+profile+' replica qualification rejects omitted device and stale queue-cutoff evidence',t=>{
+    const fixture=startupCommandFixture(t,{sources,schemaMigration:true});
+    verifyStartupRetainedProjection(fixture.proof,fixture.proof.request,fixture.sources);
+    for(const change of [s=>delete s[0].replicaConfigObservation,
+      s=>{s[1].replicaConfigObservation.queueExpiry.authenticatedStartSeconds=s[1].startedAtSeconds;},
+      s=>{s[0].replicaConfigObservation.observations[0].changedFields=['uid'];},
+      s=>{s[2].replicaConfigObservation.observations[0].mode='same-filesystem-original-equality';}]){
+      const copy=structuredClone(fixture.proof);change(copy.scenarios);
+      assert.throws(()=>verifyStartupRetainedProjection(copy,copy.request,fixture.sources));
+    }
+  });
 }

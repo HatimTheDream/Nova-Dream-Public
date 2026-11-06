@@ -1,3 +1,7 @@
+## [2.28.25] - 2026-11-06
+
+- Test hosted updates from the normal installed path and keep large verification inventories on the separate data volume. This preserves space for recovery during startup and rollback checks.
+
 ## [2.28.24] - 2026-11-06
 
 - Use the verified application manifest to select the saved-work checks before packaging a hosted update.
