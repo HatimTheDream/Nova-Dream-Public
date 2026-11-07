@@ -92,6 +92,70 @@ test('unbound, uncertain, unsigned or mismatched failed publications never repla
  });
 });
 
+test('accepted full successor retires only active no-start authority and initializes the next ordinary release',async t=>{
+ const f=noStartPublishedFixture(t);f.input.profile=f.put('profile-ready.json',f.profile);
+ const first=await initialize(f),descriptor=JSON.parse(readFileSync(first.descriptor.path));
+ const paths=[first.descriptor.path,descriptor.target.path,first.initialization.path,f.input.profile.path,
+  f.target.full.host.priorNoStartFailure.coordinatorExport.path,f.target.full.signing.previousFeed.path,f.publication.receipt.path];
+ const originals=paths.map(path=>[path,readFileSync(path)]),failure=structuredClone(f.target.full.host.priorNoStartFailure);
+ f.feed.sequence=f.failedFeed.sequence;
+ const c=completedDeliveryFixture(f,first),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
+ const profile=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(profile.target.path)),identity=c.phases.installation.current.output.acceptanceIdentity;
+ assert.equal(Object.hasOwn(target.full.host,'priorNoStartFailure'),false);
+ assert.equal(target.full.host.priorJobId,identity.jobId);
+ assert.deepEqual(target.full.host.acceptedInstallation,identity.installationProof.installerResult);
+ assert.deepEqual(f.target.full.host.priorNoStartFailure,failure);
+ const exported=[out.profile.path,profile.target.path].map(path=>[path,readFileSync(path)]);
+ assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),out);
+ for(const [path,raw]of exported)assert.deepEqual(readFileSync(path),raw);
+ f.input.operationId=randomUUID();f.input.profile=out.profile;f.input.sourceCommits={private:'7'.repeat(40),public:'8'.repeat(40)};
+ for(const side of ['private','public']){f.packages[side].version='3.3.0';f.packages[side].edition3.buildVersion='1.0.402';f.locks[side].version='3.3.0';f.locks[side].packages[''].version='3.3.0';}
+ const next=await initialize(f),nextDescriptor=JSON.parse(readFileSync(next.descriptor.path)),nextTarget=JSON.parse(readFileSync(nextDescriptor.target.path));
+ assert.equal(nextDescriptor.operation.priorCandidateId,c.repositories.private.candidateId);
+ assert.equal(nextTarget.full.feed.sequence,42);assert.equal(nextTarget.full.host.priorJobId,identity.jobId);
+ assert.equal(Object.hasOwn(nextTarget.full.host,'priorNoStartFailure'),false);
+ for(const [path,raw]of originals)assert.deepEqual(readFileSync(path),raw);
+ assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+});
+
+test('failed or unproven acceptance preserves the original no-start authority and evidence',async t=>{
+ for(const kind of ['installation','publication','saved-reply','identity'])await t.test(kind,async t=>{
+  const f=noStartPublishedFixture(t);f.input.profile=f.put('profile-ready.json',f.profile);
+  const prepared=await initialize(f),descriptor=JSON.parse(readFileSync(prepared.descriptor.path)),c=completedDeliveryFixture(f,prepared);
+  const original=[prepared.descriptor.path,descriptor.target.path,prepared.initialization.path,
+   f.target.full.host.priorNoStartFailure.coordinatorExport.path].map(path=>[path,readFileSync(path)]);
+  if(kind==='installation')c.phases.installation.state='failed';
+  if(kind==='publication')c.phases.publication.state='uncertain';
+  if(kind==='saved-reply')c.phases['assistant/submit'].input.parentKey=randomUUID();
+  if(kind==='identity')writeFileSync(c.phases.installation.current.output.acceptanceIdentityReceipt.path,'changed');
+  if(kind==='installation')assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),{gap:'installation-and-saved-assistant-reply-required'});
+  else await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options));
+  const directory=join(f.input.outputRoot,'request-'+f.input.operationId);
+  assert.equal(existsSync(join(directory,'successor-target.json')),false);assert.equal(existsSync(join(directory,'successor-profile.json')),false);
+  for(const [path,raw]of original)assert.deepEqual(readFileSync(path),raw);
+  assert.deepEqual(JSON.parse(readFileSync(descriptor.target.path)).full.host.priorNoStartFailure,f.target.full.host.priorNoStartFailure);
+ });
+});
+
+test('frontend-only acceptance keeps the unchanged service no-start authority',async t=>{
+ const f=noStartPublishedFixture(t);enableFrontendFixture(f);
+ const prepared=await initialize(f),c=completedDeliveryFixture(f,prepared,{route:'frontend'});
+ const out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options),profile=JSON.parse(readFileSync(out.profile.path));
+ const target=JSON.parse(readFileSync(profile.target.path));
+ assert.deepEqual(target.full.host.priorNoStartFailure,f.target.full.host.priorNoStartFailure);
+ assert.equal(target.full.host.priorJobId,f.identity.jobId);
+});
+
+test('an existing conflicting successor target is preserved instead of rewritten',async t=>{
+ const f=noStartPublishedFixture(t);f.input.profile=f.put('profile-ready.json',f.profile);
+ const prepared=await initialize(f),c=completedDeliveryFixture(f,prepared),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
+ const profile=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(profile.target.path));
+ target.full.host.priorNoStartFailure=structuredClone(f.target.full.host.priorNoStartFailure);
+ writeFileSync(profile.target.path,JSON.stringify(target)+'\n');const existing=readFileSync(profile.target.path),profileBytes=readFileSync(out.profile.path);
+ await assert.rejects(exportSuccessorProfile(c.journal,f.input.operationId,f.options));
+ assert.deepEqual(readFileSync(profile.target.path),existing);assert.deepEqual(readFileSync(out.profile.path),profileBytes);
+});
+
 // Inert retained browser evidence: exercises export verification, never launches a browser.
 function completedBrowser(f,c){
  const digest=value=>sha256(canonicalBrowser(value)),installed=c.phases.assistant.input;

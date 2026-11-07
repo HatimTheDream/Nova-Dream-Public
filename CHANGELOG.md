@@ -1,3 +1,7 @@
+## [2.28.30] - 2026-11-07
+
+- Clear an earlier failed attempt from active update authority after a successful release, preserving its original history and allowing the next update to initialize normally.
+
 ## [2.28.29] - 2026-11-07
 
 - Exercise original-operation concurrency and lost-response protection through validated release requests.

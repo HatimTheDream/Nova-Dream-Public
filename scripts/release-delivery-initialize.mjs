@@ -313,7 +313,12 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
   const oldSuccessor=join(directory,'successor-profile.json');
   if(!existsSync(oldSuccessor)||json(reference(oldSuccessor)).accepted.feedDependencies)profile.accepted.feedDependencies=feedDependencies;
   target.full.signing.previousFeed=normalizedRef(sign.signedFeed);
-  if(target.full.host)Object.assign(target.full.host,{acceptedInstallation:identity.installationProof.installerResult,priorVersion:identity.request.operation.version,priorBuildVersion:identity.request.operation.buildVersion,priorJobId:identity.jobId});
+  if(target.full.host){
+   Object.assign(target.full.host,{acceptedInstallation:identity.installationProof.installerResult,priorVersion:identity.request.operation.version,priorBuildVersion:identity.request.operation.buildVersion,priorJobId:identity.jobId});
+   // The accepted job is now the active prior. Its original failed predecessor
+   // remains in the immutable input/descriptor, not the successor's authority.
+   delete target.full.host.priorNoStartFailure;
+  }
   if(target.full.dependencyTransport)Object.assign(target.full.dependencyTransport,{selectedPair:pair,selectedInstaller:profile.accepted.result,selectedBundle:profile.accepted.bundle});
   if(target.frontendHost)target.frontendHost.baseVersion=identity.request.operation.version;
  }else{
