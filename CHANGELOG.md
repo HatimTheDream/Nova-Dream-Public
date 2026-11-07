@@ -1,3 +1,8 @@
+## [2.28.29] - 2026-11-07
+
+- Exercise original-operation concurrency and lost-response protection through validated release requests.
+- Bind qualification preparation to the current candidate's verified dependency package and helper sources.
+
 ## [2.28.28] - 2026-11-07
 
 - Correct the release clock regression fixture to use the complete validated host configuration, retaining strict update admission and timeout checks.

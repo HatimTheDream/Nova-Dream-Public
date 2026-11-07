@@ -3,13 +3,34 @@ from unittest.mock import patch
 HERE=pathlib.Path(__file__).resolve().parents[1]/'scripts'
 spec=importlib.util.spec_from_file_location('full_prestage',HERE/'release-delivery-full-prestage.py');M=importlib.util.module_from_spec(spec);spec.loader.exec_module(M)
 
+def original_prepare_request(directory):
+ """Use the real local validator; only the remote boundary is mocked."""
+ key='e70e77aa-6494-49ce-b2a7-7359cd1e73f7'
+ def put(name,raw):
+  path=directory/name;path.write_bytes(raw)
+  return {'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
+ config=put('ssh-config',b'Host test\n')
+ files={name:put(name,raw) for name,raw in (('bundle.json',b'{}\n'),('app-dependencies.tgz',b'synthetic dependency archive'))}
+ fields=('BUNDLE','BUNDLE_BYTES','TARGET','PRIOR','PRIOR_VERSION','EPOCH','JOB','LEASE','PROOF','INCOMING','NONCE','SPECS','CURRENT_FACTS','CAPACITY','EXCLUDED','acceptedInstallation','hostConfiguration','STAGE_PLAN','STAGE_INTENT','STAGE_PLAN_RAW_BASE64')
+ binding=dict.fromkeys(fields)
+ binding.update(BUNDLE=files['bundle.json']['sha256'],BUNDLE_BYTES=3,TARGET='b'*64,PRIOR='c'*64,
+  PRIOR_VERSION='1.0.0',EPOCH=key,JOB=key,LEASE=key,PROOF='d'*64,NONCE=key,
+  INCOMING='/var/tmp/nova-full-delivery-private-assets-'+key,
+  SPECS={name:[pathlib.Path(ref['path']).stat().st_size,ref['sha256']] for name,ref in files.items()},
+  CURRENT_FACTS={},CAPACITY={},EXCLUDED=[],acceptedInstallation=files['bundle.json'],
+  hostConfiguration=files['bundle.json'],STAGE_PLAN={},STAGE_INTENT={},STAGE_PLAN_RAW_BASE64='e30K')
+ return {'format':1,'operationId':key,'key':key,'inputSha256':'a'*64,
+  'transport':{'format':1,'hostAlias':'test','sshConfig':config},'binding':binding,
+  'files':files,'outputDirectory':str(directory/('full-prestage-'+key)),
+  'helperHashes':{n:hashlib.sha256((HERE/n).read_bytes()).hexdigest() for n in M.NAMES}}
+
 class OriginalChildTests(unittest.TestCase):
  def test_concurrent_original_prepare_has_one_remote_winner(self):
   with tempfile.TemporaryDirectory() as tmp:
-   root=pathlib.Path(tmp);request={'operationId':'op','key':'key','inputSha256':'a'*64};entered=threading.Event();release=threading.Event()
+   request=original_prepare_request(pathlib.Path(tmp));root=M.inspect(request);root.mkdir();entered=threading.Event();release=threading.Event()
    def first_remote(*_args):
     entered.set();self.assertTrue(release.wait(2));raise TimeoutError('original remote response remains unknown')
-   with patch.object(M,'inspect',return_value=root),patch.object(M,'remote',side_effect=first_remote) as remote,concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+   with patch.object(M,'remote',side_effect=first_remote) as remote,concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
     first=pool.submit(M.produce,'prepare-input',request)
     try:
      self.assertTrue(entered.wait(2));second=pool.submit(M.produce,'prepare-input',request)
@@ -20,13 +41,13 @@ class OriginalChildTests(unittest.TestCase):
    self.assertTrue((root/'prepare-input-dispatch.json').is_file())
  def test_lost_prepare_response_cannot_repeat_effect(self):
   with tempfile.TemporaryDirectory() as tmp:
-   root=pathlib.Path(tmp);r={'operationId':'op','key':'key','inputSha256':'a'*64}
-   with patch.object(M,'inspect',return_value=root),patch.object(M,'remote',side_effect=TimeoutError('lost')) as remote:
+   r=original_prepare_request(pathlib.Path(tmp));root=M.inspect(r)
+   with patch.object(M,'remote',side_effect=TimeoutError('lost')) as remote:
     with self.assertRaises(TimeoutError):M.produce('prepare-input',r)
     self.assertTrue((root/'prepare-input-dispatch.json').is_file())
     with self.assertRaises(FileExistsError):M.produce('prepare-input',r)
     self.assertEqual(remote.call_count,1)
-   with patch.object(M,'inspect',return_value=root),patch.object(M,'remote',return_value={'actual':'original'}) as remote:
+   with patch.object(M,'remote',return_value={'actual':'original'}) as remote:
     result=M.produce('transfer-observe',r);self.assertEqual(remote.call_args.args[1],'transfer-observe');self.assertEqual(result['state'],'completed')
  def test_exact_source_closure_and_transport_are_checked_before_program(self):
   with tempfile.TemporaryDirectory() as tmp:
