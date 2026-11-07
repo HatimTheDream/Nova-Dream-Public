@@ -5,6 +5,7 @@ import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {sha256} from '../scripts/release-plan.mjs';
 import {awaitFullPrestageFactsTime,advanceFullPrestage} from '../scripts/release-delivery-full-prestage.mjs';
+import {fullHostFixture} from '../support/full-host-fixture.mjs';
 
 function time({wall=1000,mono=0,advance}={}){
  const waits=[],clock=()=>wall,monotonic=()=>mono;
@@ -44,7 +45,7 @@ test('actual prestage preserves exact original facts and clock diagnosis before 
  const transport=put('transport.json',{sshConfig:put('ssh.config',Buffer.from('synthetic'))}),tools={python:put('python',Buffer.from('synthetic'))};
  const facts={observedAtMilliseconds:6001},raw=Buffer.from(JSON.stringify(facts)+'\n'),wrapped={remoteResult:facts,stdoutRawBase64:raw.toString('base64'),stdoutSha256:sha256(raw)};
  const calls=[],c={descriptor:{operation:{id:'original-op'}},intent:{key:'original-key',inputSha256:'a'.repeat(64)},journal:{directory:root},beforeNewEffect:async()=>{throw Error('Must not start an effect');}};
- const result=await advanceFullPrestage(c,{assets:[],transport,options:{},tools,clock:()=>1000,command:async(_binary,args)=>{calls.push(args[2]);return JSON.stringify({state:'completed',externalId:'original-op',output:wrapped});},storeReceipt:(_j,key,name,bytes)=>put('delivery-evidence/'+key+'-'+name,bytes)});
+ const result=await advanceFullPrestage(c,{assets:[],transport,options:fullHostFixture().options,tools,clock:()=>1000,command:async(_binary,args)=>{calls.push(args[2]);return JSON.stringify({state:'completed',externalId:'original-op',output:wrapped});},storeReceipt:(_j,key,name,bytes)=>put('delivery-evidence/'+key+'-'+name,bytes)});
  assert.equal(result.state,'failed');assert.equal(result.reason,'full-prestage-facts-clock-offset-exceeds-5s');assert.deepEqual(calls,['facts']);
  const diagnostic=JSON.parse(readFileSync(result.output.diagnostic.path));assert.equal(diagnostic.operationId,'original-op');assert.equal(diagnostic.key,'original-key');
  assert.equal(diagnostic.planStarted,false);assert.equal(diagnostic.hostEffectStarted,false);assert.equal(diagnostic.automaticReplayPermitted,false);

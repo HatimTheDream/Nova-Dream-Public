@@ -1,3 +1,7 @@
+## [2.28.28] - 2026-11-07
+
+- Correct the release clock regression fixture to use the complete validated host configuration, retaining strict update admission and timeout checks.
+
 ## [2.28.27] - 2026-11-07
 
 - Accept complete runtime qualification records during hosted update preparation while continuing to verify every runtime identity and the saved verification evidence.
