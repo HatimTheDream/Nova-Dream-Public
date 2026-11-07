@@ -29,7 +29,7 @@ import uuid
 sys.dont_write_bytecode = True
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, independent_copy_bytes, inode_ids, prepare_independent,
                       require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json,
-                      verification_scratch)
+                      begin_capture_retention, verification_scratch)
 from recovery import hosted_application_transition, validate_application_qualification, APPLICATION_TRANSITION_HELPERS
 import app_dependencies
 from workspace_key import read_workspace_key
@@ -1061,6 +1061,27 @@ class Driver:
             require(inventory(self.application_dependency_target)[0] == self.target_dependency_identity,
                     'The immutable staged application dependencies changed.')
 
+    def capture_before_start(self, candidate, attempt):
+        """Observe the exact stopped physical copy. Direct native comparisons retain strict equality."""
+        self.capture_retirement_start = None
+        recovery = getattr(self, 'recovery', None)
+        if (getattr(self, 'from_engine', None) != '2026.9.8' or self.active_engine != '2026.9.8'
+                or recovery is None or not (recovery / 'workspace').is_dir()):
+            return
+        schemas = (self.from_schema, self.to_schema) if candidate == self.target_id else (self.from_schema,)
+        state = begin_capture_retention(recovery / 'workspace', self.data, self.before['epoch'],
+            self.prior_agent, (self.job_id, candidate, attempt), getattr(self, 'capture_retirement_previous', None), schemas)
+        if state is None:
+            return
+        self.capture_retirement_start = state
+        path = self.output / ('startup-' + str(attempt) + '-capture-before.json')
+        write_json(path,
+                   {'format': 1, 'jobId': self.job_id, 'candidateId': candidate, 'attempt': attempt,
+                    'epoch': self.before['epoch'], 'physicalRoots': state['physical'], 'observedAtNs': state['observedAtNs'],
+                    'roles': {str(k): v for k, v in state['roles'].items()}})
+        state['receipt'] = (path, digest(path))
+
+
     def service(self, action):
         require(action in {'start', 'stop'}, 'Unsupported service action.')
         if action == 'start':
@@ -1074,6 +1095,10 @@ class Driver:
             require(self.before is not None and isinstance(self.before.get('epoch'), str), 'Startup requires the accepted workspace epoch.')
             self.startup_attempt = getattr(self, 'startup_attempt', 0) + 1
             self.closed_startup = None
+            if (getattr(self, 'from_engine', None) == self.active_engine == '2026.9.8'
+                    and getattr(self, 'recovery', None) is not None and (self.recovery / 'workspace').is_dir()):
+                self.require_stopped()
+                self.capture_before_start(self.target_id if selected == self.target else self.prior_id, self.startup_attempt)
             self.launched = {'candidateId': self.target_id if selected == self.target else self.prior_id,
                              'agentVersion': self.active_engine, 'epoch': self.before['epoch'], 'attempt': self.startup_attempt,
                              'service': self.settings['serviceName'],
@@ -1437,6 +1462,18 @@ class Driver:
         window = self.log_retention_window()
         configuration_authority = (self.hosted_configuration_authority(manifest, selected, window)
             if target and getattr(self, 'application_transition', None) is not None else None)
+        capture = getattr(self, 'capture_retirement_start', None)
+        closure = None
+        if capture is not None:
+            require(window is not None and self.launched['epoch'] == self.before['epoch'],
+                    'Capture retirement requires this genuinely closed and epoch-bound startup.')
+            owner = (self.job_id, self.launched['candidateId'], self.launched['attempt'])
+            path = self.output / ('startup-' + str(owner[2]) + '-capture-before.json')
+            protected(path)
+            require(capture['receipt'] == (path, digest(path)) and owner == capture['owner']
+                    and owner[1] == (self.target_id if target else self.prior_id),
+                    'Capture retirement belongs to another startup.')
+            closure = {'start': capture, 'owner': owner, 'window': window}
         with self.application_comparison(snapshot, self.data, restored=not target):
             native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
                                self.from_engine, self.active_engine, (self.target_agent_node if self.runtime is not None else
@@ -1446,7 +1483,8 @@ class Driver:
                                log_retention_window=window, log_retention_reports=log_reports,
                                session_binding_key=self.session_binding_key,
                                session_binding_node=self.node if self.session_binding_key is not None else None,
-                               hosted_configuration_authority=configuration_authority)
+                               hosted_configuration_authority=configuration_authority,
+                               **({'capture_retirement': closure} if closure is not None else {}))
         for path in snapshot.rglob('*.jsonl'):
             if 'openclaw-runtime' not in path.parts:
                 continue
@@ -1464,6 +1502,19 @@ class Driver:
             write_json(self.output / ('startup-' + str(self.launched['attempt']) + '-log-retention.json'),
                        {'format': 1, 'jobId': self.job_id, 'candidateId': self.launched['candidateId'],
                         'epoch': self.launched['epoch'], 'reports': log_reports})
+
+        if closure is not None:
+            retired = closure.get('retired', {})
+            self.capture_retirement_previous = {'roots': capture['roots'], 'physical': capture['physical'],
+                'epoch': self.before['epoch'], 'runtime': capture['runtime'], 'candidate': owner[1],
+                'attempt': owner[2], 'retired': retired}
+            closed_path = self.output / ('startup-' + str(owner[2]) + '-capture-closed.json')
+            write_json(closed_path,
+                       {'format': 1, 'jobId': owner[0], 'candidateId': owner[1], 'attempt': owner[2],
+                        'epoch': self.before['epoch'], 'closedWindow': window, 'physicalRoots': capture['physical'],
+                        'beforeSha256': digest(self.output / ('startup-' + str(owner[2]) + '-capture-before.json')),
+                        'retired': {str(k): v for k,v in retired.items()}})
+            self.capture_retirement_previous['receipt'] = (closed_path, digest(closed_path))
 
     def hosted_configuration_authority(self, manifest, selected, window):
         """Reuse the actual installer owner chain; no receipt-only close override."""

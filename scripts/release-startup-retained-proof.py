@@ -383,6 +383,15 @@ def consume(request, read, sources):
     need(plan.get('scenarios') == list(SCENARIOS) and len(parent.get('scenarios', [])) == 3
          and [i.get('scenario') for i in parent['scenarios']] == list(SCENARIOS)
          and len(child.get('scenarios', [])) == 3, 'startup-proof-complete-scenarios-required')
+    capture_manifest = None
+    if runner_sha in CAPTURE_REAPING_PRODUCERS:
+        need(binding['helpers'].get('recovery.py') == '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
+             and binding['helpers'].get('install.py') == '1875b052126dded937ade4b5c0e0515749c6b0a16eefd87c980975740d4126b8',
+             'startup-proof-capture-lifecycle-helper-source-required')
+        original_manifest = review['baseline']['manifest']
+        need(plan['inputHashes'].get(original_manifest['path']) == original_manifest['sha256'],
+             'startup-proof-original-capture-manifest-input-binding')
+        capture_manifest = document('baselineManifest', original_manifest)
     summaries = []
     for index, item in enumerate(parent['scenarios'], 1):
         scenario = item['scenario']; folder = fixture / 'evidence' / ('attempt-' + str(index))
@@ -458,6 +467,12 @@ def consume(request, read, sources):
         if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
             first_start = summaries[0]['startedAtSeconds'] if index == 2 else started['startedAtSeconds']
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
+        if runner_sha in CAPTURE_PRODUCERS:
+            need(review['baseline'].get('kind') == parent.get('baselineLineage') == CAPTURE_BASELINE,
+                 'startup-proof-required-incident-source-lineage')
+            capture = capture_retirement_summary(preserved.get('captureRetirement'), plan, started['leaseId'],
+                app['candidateId'], binding['workspaceEpoch'], index, [started['startedAtSeconds'], closed['closedAtSeconds']],
+                summaries[0]['captureRetirement']['roles'] if summaries else None, runner_sha in CAPTURE_REAPING_PRODUCERS, capture_manifest)
         child_ref = child['scenarios'][index - 1]
         need(type(child_ref) is dict and type(child_ref.get('bytes')) is int and child_ref['bytes'] > 0
              and child_ref == {'path': '/qualification/evidence/attempt-' + str(index) + '/preservation.json',
@@ -467,6 +482,8 @@ def consume(request, read, sources):
                           'startedAtSeconds': started['startedAtSeconds'], 'closedAtSeconds': closed['closedAtSeconds']})
         if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
             summaries[-1]['replicaConfigObservation'] = preserved['replicaConfigObservation']
+        if runner_sha in CAPTURE_PRODUCERS:
+            summaries[-1]['captureRetirement'] = capture
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')
          and parent['restorationCompleted']['path'] == str(fixture / 'evidence/workspace-restoration-result.json')
          and restoration_intent.get('kind') == 'restore-independent-pristine-private-state'
@@ -515,6 +532,7 @@ def consume(request, read, sources):
     return {'format': 1, 'kind': 'actual-retained-startup-qualification-observation', 'readOnly': True, 'hostEffects': False,
             'request': request, 'requestSha256': sha(encoded(request)), 'sourceHashes': sources, 'qualificationOperationId': op,
             'scope': SCOPE, 'qualificationBinding': binding, 'scenarios': summaries, 'references': refs, 'workerIdentity': worker,
+            **({'baselineLineage': CAPTURE_BASELINE} if runner_sha in CAPTURE_PRODUCERS else {}),
             'actualSettledQualification': True, 'independentOriginalRestored': True,
             'completeMaintainedSavedAndNativeState': True, 'heldBootstrapVerified': True,
             'productionAdmission': False, 'freshFullRehearsalStillRequired': True, 'liveAcceptanceStillRequired': True}
@@ -550,7 +568,173 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
     original_owner_absent()
 
 
+CAPTURE_BASELINE = 'verified-pre-swap-aborted-operator-snapshot'
+CAPTURE_TOKEN = 'f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
+CAPTURE_EMPTY = hashlib.sha256(b'').hexdigest()
+
+
+def capture_receipt_sha(value):
+    # The hosted writer serializes protected receipts with these options and no final newline.
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def capture_manifest_families(manifest, prefix):
+    need(type(manifest) is dict, 'startup-proof-original-capture-manifest-required')
+    result = {}
+    for path, row in manifest.items():
+        if (path.startswith(prefix) and re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/owner[.]sqlite', path[len(prefix):])
+                and row.get('kind') == 'file' and row.get('size') == 0 and row.get('sha256') == CAPTURE_EMPTY
+                and path + '-journal' in manifest):
+            result[path] = {'owner':row,'journal':manifest[path+'-journal'],
+                            'parent':manifest.get(str(PurePosixPath(path).parent)),
+                            'captures':manifest.get(str(PurePosixPath(path).parent/'captures'))}
+    return result
+
+
+def capture_manifest_family(source, family):
+    fail = 'startup-proof-original-capture-manifest-required'
+    for name, size in (('owner',0),('journal',512)):
+        row, observed = family[name], source[name]
+        need(type(row) is dict and row.get('kind') == 'file' and row.get('size') == size
+             and row.get('mode') == 0o600 and not row.get('xattrs')
+             and type(row.get('sha256')) is str and HASH.fullmatch(row['sha256'])
+             and observed[2:5] == [stat.S_IFREG | row['mode'],row['uid'],row['gid']]
+             and observed[5:8] == [1,size,row['mtime_ns']], fail)
+    parent = family['parent']
+    need(type(parent) is dict and parent.get('kind') == 'directory'
+         and source['coverage'][0] == {key:parent[key] for key in ('uid','gid','mode','xattrs')}
+         and source['coverage'][1] == family['owner']['xattrs']
+         and source['captures'] == family['captures'], fail)
+
+
+
+def capture_lifecycle_restart(row, done, source, prior, window, physical_device):
+    fail = 'startup-proof-authentic-closed-capture-lifecycle-required'
+    carry, live, after = row['carry'], row['liveBefore'], done['after']
+    need(type(carry) is dict and capture_receipt_sha(carry) == prior['proofSha256']
+         and carry['source'] == source and carry['after'] == live
+         and done['firstWindow'] == carry['firstWindow'] == prior['firstWindow'], fail)
+    predecessor = prior['proofSha256']
+    if set(done) == {'source', 'after', 'firstWindow'}:
+        need(done == carry and after == live and after is not None
+             and [str(value) for value in after['owner'][:2]] == prior['physicalOwner'], fail)
+        return {'physicalOwner':prior['physicalOwner'], 'state':'retired', 'reaped':False,
+                'remainingNamespaces':None, 'remainingCount':None, 'remainingSha256':None,
+                'sourceAdmissionsSha256':None, 'predecessorProofSha256':predecessor, 'lastWindow':window}
+    need(set(done) == {'source','after','firstWindow','lastWindow','remaining','sourceAdmissionsSha256'}
+         and done['lastWindow'] == window and done['firstWindow'][1] <= window[0]
+         and type(done['sourceAdmissionsSha256']) is str and HASH.fullmatch(done['sourceAdmissionsSha256']), fail)
+    remaining = done['remaining']
+    need(type(remaining) is list and len(remaining) <= 16
+         and all(type(name) is str and re.fullmatch(r'admission-[A-Za-z0-9]{6}', name) for name in remaining)
+         and remaining == sorted(set(remaining)) and (after is None) == (not remaining), fail)
+    old_remaining = prior.get('remainingNamespaces')
+    if old_remaining is not None:
+        need(set(remaining) <= set(old_remaining) and done['sourceAdmissionsSha256'] == prior['sourceAdmissionsSha256'], fail)
+    if live is None:
+        need(prior['physicalOwner'] is None and old_remaining == [] and after is None, fail)
+    else:
+        need([str(value) for value in live['owner'][:2]] == prior['physicalOwner']
+             and live['journal'] is None and live['hashes'] == [CAPTURE_TOKEN,None]
+             and live['owner'][5:7] == [1,4096], fail)
+    physical = None
+    if after is not None:
+        need(after['owner'][0] == physical_device and after['owner'][:6] == live['owner'][:6]
+             and after['parent'][:5] == live['parent'][:5] and after['journal'] is None
+             and after['hashes'] == [CAPTURE_TOKEN,None] and after['owner'][5:7] == [1,4096]
+             and after['coverage'][:2] == source['coverage'][:2]
+             and (after['captures'] is None or after['captures'] == source['captures']), fail)
+        physical = [str(value) for value in after['owner'][:2]]
+    return {'physicalOwner':physical, 'state':'reaped' if after is None else 'partially-reaped',
+            'reaped':after is None, 'remainingNamespaces':remaining, 'remainingCount':len(remaining),
+            'remainingSha256':capture_receipt_sha(remaining), 'sourceAdmissionsSha256':done['sourceAdmissionsSha256'],
+            'predecessorProofSha256':predecessor, 'lastWindow':window}
+
+
+
+def capture_retirement_summary(evidence, plan, lease, candidate, epoch, attempt, window, first, reaping=False, source_manifest=None):
+    fail = 'startup-proof-authentic-closed-capture-retirement-required'
+    need(type(evidence) is dict and set(evidence) == {'before', 'closed', 'beforeSha256', 'closedSha256'}, fail)
+    pre, closed = evidence['before'], evidence['closed']
+    need(capture_receipt_sha(pre) == evidence['beforeSha256'] == closed['beforeSha256']
+         and capture_receipt_sha(closed) == evidence['closedSha256'] and closed['closedWindow'] == window
+         and pre['physicalRoots'] == closed['physicalRoots'] and len(pre['physicalRoots']) == 2
+         and pre['physicalRoots'][0][:2] != pre['physicalRoots'][1][:2]
+         and all([d['format'], d['jobId'], d['candidateId'], d['attempt'], d['epoch']] ==
+                 [1, lease, candidate, attempt, epoch] for d in (pre, closed))
+         and type(pre['observedAtNs']) is int and window[0]-60 <= pre['observedAtNs']//10**9 <= window[0], fail)
+    prefix = str(PurePosixPath(plan['selectedRelative']) / 'openclaw-runtime/state/tmp/plugin-captures') + '/'
+    families = {key: value for key, value in plan['baselineFamilies'].items() if key.startswith(prefix)
+                and re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/owner\.sqlite', key[len(prefix):])
+                and set(value) == {'', '-journal'} and value[''][0][6] == 0 and value[''][1] == CAPTURE_EMPTY
+                and value['-journal'][0][6] == 512}
+    if reaping:
+        need(pre['physicalRoots'][0] == plan['baselineRootIdentity'][:5], 'startup-proof-original-capture-root-binding')
+        families = capture_manifest_families(source_manifest, prefix)
+    need(families and set(pre['roles']) == set(closed['retired']) == set(families), fail)
+    result = []
+    prior_roles = {row['roleSha256']: row for row in first} if first else {}
+    for path, family in sorted(families.items()):
+        row = pre['roles'][path]
+        done = closed['retired'][path]
+        source, live, after = row['source'], row['liveBefore'], done['after']
+        role = hashlib.sha256(path.encode()).hexdigest()
+        if reaping:
+            capture_manifest_family(source, family)
+            header = family['journal']['sha256']
+        else:
+            header = family['-journal'][1]
+            need(source['owner'][2:5] == family[''][0][2:5] and source['journal'][2:5] == family['-journal'][0][2:5], fail)
+        need(done['source'] == source and source['hashes'] == [CAPTURE_EMPTY, header]
+             and source['owner'][5:7] == [1, 0] and source['journal'][5:7] == [1, 512]
+             and source['owner'][0] == pre['physicalRoots'][0][0]
+             and len(source['coverage']) == 3 and HASH.fullmatch(source['coverage'][2]), fail)
+        if reaping and attempt == 2:
+            need(role in prior_roles, fail)
+            extra = capture_lifecycle_restart(row, done, source, prior_roles[role], window, pre['physicalRoots'][1][0])
+            result.append({'roleSha256':role,'headerSha256':source['hashes'][1],'contextSha256':source['coverage'][2],
+                           'proofSha256':capture_receipt_sha(done),'firstWindow':done['firstWindow'],**extra})
+            continue
+        if reaping:
+            need(set(done) == {'source','after','firstWindow'}, fail)
+        need(after['owner'][0] == pre['physicalRoots'][1][0]
+             and after['journal'] is None and after['hashes'] == [CAPTURE_TOKEN, None] and after['owner'][5:7] == [1, 4096]
+             and after['coverage'] == source['coverage'] and len(source['coverage']) == 3 and HASH.fullmatch(source['coverage'][2])
+             and (after['captures'] is None or after['captures'] == source['captures']), fail)
+        proof_hash = capture_receipt_sha(done)
+        physical = [str(value) for value in after['owner'][:2]]
+        if attempt == 2:
+            need(role in prior_roles and row['carry'] == done and live == after
+                 and proof_hash == prior_roles[role]['proofSha256'] and physical == prior_roles[role]['physicalOwner']
+                 and done['firstWindow'] == prior_roles[role]['firstWindow'], fail)
+        else:
+            need(row['carry'] is None and done['firstWindow'] == window and live['hashes'] == source['hashes']
+                 and live['coverage'] == source['coverage'] and live['captures'] == source['captures']
+                 and live['owner'][:6] == after['owner'][:6] and live['parent'][:5] == after['parent'][:5]
+                 and all(window[0]*10**9 <= stamp <= window[1]*10**9 for stamp in after['owner'][7:]), fail)
+            if attempt == 3:
+                need(role in prior_roles and prior_roles[role]['physicalOwner'] != physical, fail)
+        result.append({'roleSha256': role, 'headerSha256': source['hashes'][1], 'contextSha256': source['coverage'][2],
+                       'physicalOwner': physical, 'proofSha256': proof_hash, 'firstWindow': done['firstWindow'],
+                       **({'state':'retired','reaped':False,'remainingNamespaces':None,'remainingCount':None,
+                           'remainingSha256':None,'sourceAdmissionsSha256':None,'predecessorProofSha256':None,
+                           'lastWindow':window} if reaping else {})})
+    if first:
+        need(set(prior_roles) == {row['roleSha256'] for row in result}, fail)
+        for row in result:
+            original = prior_roles[row['roleSha256']]
+            need(original['headerSha256'] == row['headerSha256'] and original['contextSha256'] == row['contextSha256'], fail)
+    return {'kind': 'closed-9.8-capture-lifecycle' if reaping else 'closed-9.8-capture-retirement', 'beforeSha256': evidence['beforeSha256'],
+            'closedSha256': evidence['closedSha256'], 'roles': result}
+
+
+CAPTURE_PRODUCER = 'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58'
+CAPTURE_REAPING_PRODUCER = '7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb'
+CAPTURE_REAPING_PRODUCERS = frozenset({CAPTURE_REAPING_PRODUCER, '63c9f46a3a3b9f79c6d4fd8ce720ab5aa2fe5922bcf337f3432e0f62d1bd88bb'})
+CAPTURE_PRODUCERS = frozenset({CAPTURE_PRODUCER, *CAPTURE_REAPING_PRODUCERS})
+
 REPLICA_OBSERVATION_PRODUCERS = frozenset({
+    *CAPTURE_PRODUCERS,
     '3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af',
     '0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5',
     '9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b',

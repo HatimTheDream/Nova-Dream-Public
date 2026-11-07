@@ -8,6 +8,7 @@ import os
 import pathlib
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 import time
@@ -618,6 +619,296 @@ class ProcessLeaseTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): recovery.native_capture_owner_paths(root, self.SELECTED, '2026.9.8')
 
 
+    def staging_family(self, payload=None):
+        root, owner = self.fixture(b'')
+        journal = owner.with_name(owner.name + '-journal')
+        if payload is None:
+            # The writer's uncommitted zero-page header includes a random nonce.
+            payload = bytes(12) + bytes.fromhex('c1d2e3f4') + bytes.fromhex('000000000000020000001000') + bytes(484)
+        journal.write_bytes(payload)
+        journal.chmod(0o600)
+        return root, owner, journal
+
+    @unittest.skipUnless(os.name == 'posix', 'Native staging families require POSIX ownership/modes')
+    def test_header_only_staging_family_remains_fully_static(self):
+        before, old, old_journal = self.staging_family()
+        after, new, new_journal = self.staging_family()
+        application_db = self.LEASE.parent / 'captures' / 'written-work.sqlite'
+        for root in (before, after):
+            sibling = root / application_db
+            sibling.parent.mkdir()
+            sibling.write_bytes(b'other saved data')
+        self.assertEqual(recovery.native_capture_owner_paths(after, self.SELECTED, '2026.9.8'), set())
+        old_map = self.static(before, '2026.9.8')
+        self.assertEqual(old_map, self.static(after, '2026.9.8'))
+        self.assertEqual(set(old_map), {self.LEASE, old_journal.relative_to(before), application_db})
+        for path in (old, old_journal):
+            role = old_map[path.relative_to(before)]
+            self.assertIn(hashlib.sha256(path.read_bytes()).hexdigest(), role)
+        (after / application_db).write_bytes(b'changed saved data')
+        self.assertNotEqual(old_map, self.static(after, '2026.9.8'))
+
+    @unittest.skipUnless(os.name == 'posix', 'Native staging families require POSIX ownership/modes')
+    def test_family_addition_loss_rename_and_changed_nonce_cannot_pass(self):
+        for change in ('gained', 'lost', 'lost-journal', 'renamed', 'changed-nonce'):
+            before, old, old_journal = self.staging_family()
+            after, new, new_journal = self.staging_family()
+            if change in ('gained', 'lost'):
+                owner, journal = (old, old_journal) if change == 'gained' else (new, new_journal)
+                journal.unlink()
+                owner.unlink()
+            elif change == 'lost-journal':
+                new_journal.unlink()
+            elif change == 'renamed':
+                new.parent.rename(new.parent.with_name('22222222-2222-4222-8222-222222222222'))
+            else:
+                payload = bytearray(new_journal.read_bytes())
+                payload[12] ^= 1
+                new_journal.write_bytes(payload)
+            with self.subTest(change=change):
+                self.assertNotEqual(self.static(before, '2026.9.8'), self.static(after, '2026.9.8'))
+
+    @unittest.skipUnless(os.name == 'posix', 'Native staging families require POSIX ownership/modes')
+    def test_only_exact_zero_page_header_supported(self):
+        for field, offset in [('magic', 0), ('record-count', 11), ('initial-pages', 19),
+                              ('sector-size', 23), ('page-size', 27), ('padding', 511)]:
+            root, owner, journal = self.staging_family()
+            payload = bytearray(journal.read_bytes())
+            payload[offset] ^= 1
+            journal.write_bytes(payload)
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'Unreviewed native capture staging journal'):
+                self.static(root, '2026.9.8')
+        for kind in ('hot-magic', 'short', 'extra-page', 'unknown-main', 'retired-main', 'legacy-version', 'orphan'):
+            root, owner, journal = self.staging_family()
+            payload = journal.read_bytes()
+            if kind == 'hot-magic': journal.write_bytes(bytes.fromhex('d9d505f920a163d7') + payload[8:])
+            elif kind == 'short': journal.write_bytes(payload[:-1])
+            elif kind == 'extra-page': journal.write_bytes(payload + bytes(4096))
+            elif kind == 'unknown-main': owner.write_bytes(b'unknown')
+            elif kind == 'retired-main': owner.write_bytes(self.TOKEN)
+            elif kind == 'orphan': owner.unlink()
+            reason = ('sidecar has no owner' if kind == 'orphan' else 'unexpected sidecar'
+                      if kind in ('unknown-main', 'retired-main', 'legacy-version') else 'Unreviewed native capture staging journal')
+            with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, reason):
+                self.static(root, '2026.9.6' if kind == 'legacy-version' else '2026.9.8')
+        for suffix in ('-wal', '-shm', '-unrecognized'):
+            root, owner, journal = self.staging_family()
+            owner.with_name(owner.name + suffix).write_bytes(b'')
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(RuntimeError, 'capture (journal companion|lease has an unexpected sidecar)'):
+                self.static(root, '2026.9.8')
+
+    @unittest.skipUnless(os.name == 'posix', 'Native staging families require POSIX ownership/modes')
+    def test_staging_family_requires_private_unchanged_roles(self):
+        for kind in ('journal-readable', 'journal-writable', 'main-readable', 'parent', 'capture-root', 'hardlink'):
+            root, owner, journal = self.staging_family()
+            if kind == 'journal-readable': journal.chmod(0o644)
+            elif kind == 'journal-writable': journal.chmod(0o660)
+            elif kind == 'main-readable': owner.chmod(0o644)
+            elif kind == 'parent': owner.parent.chmod(0o755)
+            elif kind == 'capture-root': owner.parent.parent.chmod(0o755)
+            else: os.link(journal, root / 'unexpected-alias')
+            with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                self.static(root, '2026.9.8')
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        root, owner, journal = self.staging_family()
+        for role, field in ((owner, 'st_uid'), (journal, 'st_gid'), (journal, 'st_dev')):
+            original = pathlib.Path.lstat
+            def changed_role(path, *args, **kwargs):
+                info = original(path, *args, **kwargs)
+                if path != role:
+                    return info
+                values = {name: getattr(info, name) for name in fields}
+                values[field] += 1
+                return SimpleNamespace(**values)
+            with self.subTest(role=role.name, field=field), patch.object(pathlib.Path, 'lstat', changed_role):
+                with self.assertRaises(RuntimeError):
+                    self.static(root, '2026.9.8')
+        real_fstat = recovery.os.fstat
+        calls = 0
+        def changed_after_read(fd):
+            nonlocal calls
+            info = real_fstat(fd)
+            calls += 1
+            if calls != 2:
+                return info
+            values = {name: getattr(info, name) for name in fields}
+            values['st_ctime_ns'] += 1
+            return SimpleNamespace(**values)
+        with patch.object(recovery.os, 'fstat', changed_after_read), self.assertRaisesRegex(RuntimeError, 'staging journal changed'):
+            self.static(root, '2026.9.8')
+        self.assertEqual(calls, 2)
+
+
+
+    @unittest.skipUnless(os.name == 'posix', 'Native staging families require POSIX symlink semantics')
+    def test_staging_journal_link_is_rejected_before_open(self):
+        root, owner, journal = self.staging_family()
+        target = root / 'other-file'
+        journal.rename(target)
+        journal.symlink_to(target)
+        with patch.object(recovery.os, 'open', side_effect=AssertionError('untrusted link was opened')):
+            with self.assertRaisesRegex(RuntimeError, 'Unreviewed native capture staging journal'):
+                self.static(root, '2026.9.8')
+
+
+    def closed_capture_fixture(self):
+        base, old, oj = self.staging_family()
+        live, cur, cj = self.staging_family()
+        for workspace in (base / self.SELECTED, live / self.SELECTED):
+            with contextlib.closing(sqlite3.connect(workspace/'workspace.sqlite')) as connection:
+                connection.executescript("pragma user_version=55; create table meta(key text primary key, value text);"
+                    "insert into meta values('epoch','22222222-2222-4222-8222-222222222222');")
+        for folder in (old.parent, cur.parent):
+            capture = folder / 'captures'
+            capture.mkdir(mode=0o700)
+            admission = folder / 'native' / 'admission-Ab93xY'
+            admission.mkdir(parents=True, mode=0o700)
+            data = admission / 'preserved-payload'
+            data.write_bytes(b'unchanged synthetic package payload')
+            for p in (data, admission, admission.parent, capture):
+                os.utime(p, ns=(1_700_000_000_000_000_000,) * 2)
+        return base, old, oj, live, cur, cj
+
+    def capture_test_start(self, base, live, *, attempt=1, previous=None):
+        epoch = '22222222-2222-4222-8222-222222222222'
+        with patch.object(recovery, 'selected_workspace', side_effect=lambda root,*_,**kw: (root/self.SELECTED, epoch)), \
+                patch.object(recovery, 'attest_native_writer_sources'):
+            return recovery.begin_capture_retention(base, live, epoch, self.root/'vendor',
+                ('isolated-synthetic-test', 'a' * 64, attempt), previous)
+
+    def capture_test_close(self, state, first, second, window=None, closure=True, engine='2026.9.8'):
+        window = window or (state['observedAtNs'] // 10**9, (time.time_ns() + 999999999) // 10**9)
+        evidence = {'start': state, 'owner': state['owner'], 'window': window}
+        base, live = state['roots']
+        with patch.object(recovery, 'attest_native_writer_sources'):
+            recovery.qualify_capture_map(base, live, self.SELECTED, state['epoch'], self.root/'vendor',
+                (engine, engine), window, first, second, evidence if closure else None)
+        return evidence
+
+    @unittest.skipUnless(os.name == 'posix', 'Closed capture retirement requires POSIX filesystem evidence')
+    def test_closed_capture_retires_only_the_proved_owner_and_carries_through_one_restart(self):
+        base, old, oj, live, cur, cj = self.closed_capture_fixture()
+        initial = self.static(base, '2026.9.8')
+        state = self.capture_test_start(base, live)
+        cur.write_bytes(self.TOKEN)
+        cj.unlink()
+        (cur.parent/'captures').rmdir()
+        after = self.static(live, '2026.9.8')
+        self.assertNotEqual(initial, after)
+        first = self.capture_test_close(state, initial, after)
+        self.assertEqual(set(first['retired']), {self.LEASE})
+        self.assertEqual(first['retired'][self.LEASE]['after']['owner'][1], state['roles'][self.LEASE]['liveBefore']['owner'][1])
+        receipt = self.root / 'accepted-first-fixture.json'
+        receipt.write_bytes(b'completed through full compare in production caller')
+        previous = {'roots': (base, live), 'physical': state['physical'], 'epoch': state['epoch'],
+                    'candidate': 'a' * 64, 'attempt': 1, 'runtime': state['runtime'], 'retired': first['retired'],
+                    'receipt': (receipt, recovery.digest(receipt))}
+        carried = self.capture_test_start(base, live, attempt=2, previous=previous)
+        again = self.capture_test_close(carried, initial, after)
+        self.assertEqual(again['retired'], first['retired'])
+        with self.assertRaisesRegex(RuntimeError, 'first-start proof'):
+            self.capture_test_start(base, live, attempt=2)
+        receipt.write_bytes(b'wrong first receipt')
+        with self.assertRaisesRegex(RuntimeError, 'proof changed'):
+            self.capture_test_start(base, live, attempt=2, previous=previous)
+        receipt.write_bytes(b'completed through full compare in production caller')
+        cur.write_bytes(b'')
+        cj.write_bytes(oj.read_bytes())
+        cj.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, 'changed between startups'):
+            self.capture_test_start(base, live, attempt=2, previous=previous)
+
+    @unittest.skipUnless(os.name == 'posix', 'Closed capture retirement requires POSIX filesystem evidence')
+    def test_capture_retirement_prestart_selection_allows_only_bound_schemas_and_epoch(self):
+        base, _, _, live, _, _ = self.closed_capture_fixture()
+        db = live / self.SELECTED / 'workspace.sqlite'
+        epoch = '22222222-2222-4222-8222-222222222222'
+        with contextlib.closing(sqlite3.connect(db)) as connection:
+            connection.execute('pragma user_version=60')
+        recovery.capture_live_selection(base, live, self.SELECTED, epoch, (55, 60))
+        with self.assertRaisesRegex(RuntimeError, 'schema or epoch'):
+            recovery.capture_live_selection(base, live, self.SELECTED, epoch, (55,))
+        with self.assertRaisesRegex(RuntimeError, 'schema or epoch'):
+            recovery.capture_live_selection(base, live, self.SELECTED, 'changed', (55, 60))
+        (live / 'workspace-selection.json').write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'selector was added'):
+            recovery.capture_live_selection(base, live, self.SELECTED, epoch, (55,60))
+
+
+    @unittest.skipUnless(os.name == 'posix', 'Closed capture retirement requires POSIX filesystem evidence')
+    def test_closed_capture_denies_missing_proof_wrong_clock_version_or_identity(self):
+        for fault in ('no-close', 'other-version', 'past-window', 'late-start', 'rewritten-owner',
+                      'wrong-main', 'journal-remains', 'neighbor', 'added-static', 'missing-lease', 'renamed'):
+            base, old, oj, live, cur, cj = self.closed_capture_fixture()
+            state = self.capture_test_start(base, live)
+            initial = self.static(base, '2026.9.8')
+            if fault == 'rewritten-owner':
+                cur.rename(live / 'old-token-kept-to-prevent-inode-reuse')
+            cur.write_bytes(self.TOKEN if fault != 'wrong-main' else b'')
+            cj.unlink()
+            if fault == 'neighbor':
+                (cur.parent/'native/admission-Ab93xY/preserved-payload').write_bytes(b'changed neighboring data')
+            if fault == 'added-static':
+                (live/'other.sqlite').write_bytes(b'added database')
+            if fault == 'missing-lease':
+                cur.unlink()
+            if fault == 'renamed':
+                cur.parent.rename(cur.parent.with_name('33333333-3333-4333-8333-333333333333'))
+            if fault == 'journal-remains':
+                cj.write_bytes(oj.read_bytes())
+                cj.chmod(0o600)
+            with self.subTest(fault=fault), self.assertRaises((RuntimeError, FileNotFoundError)):
+                after = self.static(live, '2026.9.8')
+                clock = state['observedAtNs'] // 10**9
+                window = ((clock-20,clock-10) if fault=='past-window' else (clock+180,clock+190)
+                          if fault=='late-start' else None)
+                self.capture_test_close(state, initial, after, window, closure=fault!='no-close',
+                                        engine='2026.9.6' if fault=='other-version' else '2026.9.8')
+
+    @unittest.skipUnless(os.name == 'posix', 'Closed capture retirement requires POSIX filesystem evidence')
+    def test_nonempty_capture_or_unknown_neighbor_keeps_only_static_equality(self):
+        for kind in ('nonempty-captures','unknown-root'):
+            base, old, oj, live, cur, cj = self.closed_capture_fixture()
+            for parent in (old.parent, cur.parent):
+                path = parent/'captures'/'saved' if kind=='nonempty-captures' else parent/'unrecognized'
+                path.write_bytes(b'preserved data')
+            with self.subTest(kind=kind):
+                self.assertIsNone(self.capture_test_start(base, live))
+                self.assertEqual(self.static(base,'2026.9.8'), self.static(live,'2026.9.8'))
+
+
+
+    @unittest.skipUnless(os.name == 'posix', 'Hosted driver records require genuine POSIX exclusive receipt I/O')
+    def test_hosted_capture_before_start_writes_one_bound_witness(self):
+        import install
+        base, old, oj, live, cur, cj = self.closed_capture_fixture()
+        recovery_root = self.root / 'private-recovery-root'
+        recovery_root.mkdir(mode=0o700)
+        base.rename(recovery_root / 'workspace')
+        driver = install.Driver.__new__(install.Driver)
+        driver.recovery, driver.data = recovery_root, live
+        driver.prior_agent = self.root / 'vendor'
+        driver.from_engine = driver.active_engine = '2026.9.8'
+        driver.from_schema, driver.to_schema = 55, 60
+        driver.target_id, driver.job_id = 'b' * 64, 'unit-test-lease'
+        driver.output = self.root / 'hosted-receipts'
+        driver.output.mkdir(mode=0o700)
+        epoch = '22222222-2222-4222-8222-222222222222'
+        driver.before = {'epoch': epoch}
+        with patch.object(recovery, 'selected_workspace', side_effect=lambda root,*_,**kw: (root/self.SELECTED, epoch)), \
+                patch.object(recovery, 'attest_native_writer_sources'):
+            driver.capture_before_start(driver.target_id, 1)
+            with self.assertRaises(FileExistsError):
+                driver.capture_before_start(driver.target_id, 1)
+        receipt = driver.output / 'startup-1-capture-before.json'
+        proof = json.loads(receipt.read_bytes())
+        self.assertEqual((proof['jobId'], proof['candidateId'], proof['attempt'], proof['epoch']),
+                         (driver.job_id, driver.target_id, 1, epoch))
+        self.assertEqual(set(proof['roles']), {str(self.LEASE)})
+        self.assertEqual(proof['roles'][str(self.LEASE)]['liveBefore']['owner'][1], cur.lstat().st_ino)
+
+
+
 class NeutralChannelPolicyTests(unittest.TestCase):
     SQL = 'CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at_ms INTEGER NOT NULL) STRICT;'
     NEUTRAL = '{"roles":null,"identityScopes":null}'
@@ -1202,5 +1493,180 @@ class PackageBuildProjectionTests(unittest.TestCase):
         alias = self.root / 'runtime-alias'; alias.symlink_to(self.runtime, target_is_directory=True)
         with self.assertRaises(RuntimeError): self.compare(runtime=alias)
 
+
+class CaptureReapingTests(unittest.TestCase):
+    def setUp(self):
+        self.snapshot, self.live = pathlib.Path('/synthetic/snapshot'), pathlib.Path('/synthetic/live')
+        self.role = pathlib.Path('selected/openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111111/owner.sqlite')
+        self.runtime = pathlib.Path('/synthetic/runtime/openclaw')
+        self.root = (self.live / self.role).parent
+        self.names = ('admission-Alpha1', 'admission-Beta12')
+        self.rows = {'native': self.directory()}
+        self.admissions = {}
+        for name in self.names:
+            prefix = 'native/' + name
+            self.rows.update({prefix:self.directory(),prefix+'/content':self.directory(),
+                prefix+'/node_modules':self.directory(),
+                prefix+'/node_modules/openclaw':{'kind':'symlink','mode':0o777,'uid':999,'gid':986,
+                    'xattrs':{},'mtime_ns':100*10**9,'target':str(self.runtime)},
+                prefix+'/content/tool':{'kind':'file','mode':0o600,'uid':999,'gid':986,
+                    'xattrs':{},'mtime_ns':100*10**9,'sha256':'a'*64,'size':20}})
+            namespace = str(self.root/'native'/name)
+            members = {'':{'capturedIdentity':f'1:10:{stat.S_IFDIR|0o700}:4096:{100*10**9}:1'},
+                'tool':{'capturedIdentity':f'1:11:{stat.S_IFREG|0o600}:20:{100*10**9}:1',
+                    'sizeBytes':20,'contentHash':'a'*64}}
+            self.admissions[namespace] = {'original':{'managed':True,'capturedRoot':namespace,'members':members},
+                'current':str(self.root.parent/'22222222-2222-4222-8222-222222222222/native'/name)}
+        self.old = {'coverage':({'uid':999,'gid':986,'mode':0o700,'xattrs':{}},{},'b'*64)}
+        self.observed_coverage = copy.deepcopy(self.old['coverage'])
+        self.prior = {'journal':None,'owner':(2,40,stat.S_IFREG|0o600,999,986,1,4096,110*10**9,110*10**9),
+            'parent':(2,30,stat.S_IFDIR|0o700,999,986,3,4096,110*10**9,110*10**9),
+            'hashes':(recovery.CAPTURE_OWNER_RETIRED_SHA256,None),'coverage':self.old['coverage'],'captures':None}
+        self.carry = {'source':self.old,'after':self.prior,'firstWindow':(100,110)}
+        self.row = {'source':self.old,'liveBefore':self.prior,'carry':self.carry}
+        self.namespaces = {pathlib.Path(k).name:v for k,v in self.admissions.items()}
+        self.source_hash = 'd'*64
+
+    @staticmethod
+    def directory():
+        return {'kind':'directory','mode':0o700,'uid':999,'gid':986,'xattrs':{},'mtime_ns':100*10**9}
+
+    def source(self):
+        with patch.object(recovery,'capture_context',return_value=(self.observed_coverage,None,self.rows)):
+            return recovery.capture_admission_rows(self.snapshot,self.live,self.role,self.runtime,self.admissions,self.old['coverage'])
+
+    def transition(self, remaining, row=None, window=(200,210), corrupt=None):
+        current = None
+        current_rows = {}
+        if remaining is not None:
+            current = copy.deepcopy((row or self.row)['liveBefore'] or self.prior)
+            current['coverage'] = self.old['coverage'][:2] + ('c'*64,)
+            current_rows = {k:copy.deepcopy(v) for k,v in self.rows.items()
+                            if k=='native' or k.split('/')[1] in remaining}
+            current_rows['native']['mtime_ns'] = window[0]*10**9+1
+        if corrupt:
+            corrupt(current,current_rows)
+        with patch.object(recovery,'attest_native_writer_sources'), \
+                patch.object(recovery,'capture_admission_rows',return_value=(self.rows,self.namespaces,self.source_hash)), \
+                patch.object(recovery.os.path,'lexists',return_value=remaining is not None), \
+                patch.object(recovery,'observe_capture_family',return_value=current), \
+                patch.object(recovery,'capture_context',return_value=(self.old['coverage'],None,current_rows)):
+            return recovery.qualify_capture_reaping(self.snapshot,self.live,self.role,self.runtime,row or self.row,window,self.admissions)
+
+    def test_complete_source_namespace_is_required(self):
+        rows, namespaces, proof = self.source()
+        self.assertEqual(rows,self.rows)
+        self.assertEqual(set(namespaces),set(self.names))
+        self.assertEqual(len(proof),64)
+
+    def test_source_member_and_neighbor_denials(self):
+        original = copy.deepcopy((self.rows,self.admissions))
+        for fault in ('extra','missing','hash','size','mode','mtime','owner','attrs','link','namespace','unmanaged','coverage'):
+            self.rows,self.admissions = copy.deepcopy(original)
+            self.observed_coverage = copy.deepcopy(self.old['coverage'])
+            member = self.rows['native/'+self.names[0]+'/content/tool']
+            if fault=='extra':self.rows['saved-user-file']=self.directory()
+            elif fault=='missing':del self.rows['native/'+self.names[0]+'/content/tool']
+            elif fault=='hash':member['sha256']='e'*64
+            elif fault=='size':member['size']=21
+            elif fault=='mode':member['mode']=0o644
+            elif fault=='mtime':member['mtime_ns']+=1
+            elif fault=='owner':member['uid']=998
+            elif fault=='attrs':member['xattrs']={'user.saved':'eA=='}
+            elif fault=='link':self.rows['native/'+self.names[0]+'/node_modules/openclaw']['target']='/other'
+            elif fault=='namespace':self.admissions={}
+            elif fault=='unmanaged':next(iter(self.admissions.values()))['original']['managed']=False
+            elif fault=='coverage':self.observed_coverage=self.observed_coverage[:2]+('e'*64,)
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):self.source()
+
+    def test_whole_absence_then_idempotent_absence(self):
+        result=self.transition(None)
+        self.assertEqual(result['remaining'],[])
+        self.assertIsNone(result['after'])
+        row={'source':self.old,'liveBefore':None,'carry':result}
+        second=self.transition(None,row,window=(300,310))
+        self.assertEqual(second['firstWindow'],(100,110))
+        self.assertEqual(second['remaining'],[])
+
+    def test_partial_then_whole_absence(self):
+        result=self.transition({self.names[0]})
+        self.assertEqual(result['remaining'],[self.names[0]])
+        row={'source':self.old,'liveBefore':result['after'],'carry':result}
+        second=self.transition(None,row,window=(300,310))
+        self.assertEqual(second['remaining'],[])
+        self.assertEqual(second['sourceAdmissionsSha256'],self.source_hash)
+
+    def test_partial_and_absent_resurrection_refused(self):
+        for remaining in ([self.names[0]],[]):
+            result=self.transition(set(remaining) if remaining else None)
+            row={'source':self.old,'liveBefore':result['after'],'carry':result}
+            with self.subTest(remaining=remaining), self.assertRaises(RuntimeError):
+                self.transition(set(self.names),row,window=(300,310))
+
+    def test_carried_partial_can_stay_exact(self):
+        result=self.transition({self.names[0]})
+        row={'source':self.old,'liveBefore':result['after'],'carry':result}
+        def retain_metadata(current,rows):
+            rows['native']['mtime_ns']=200*10**9+1
+        again=self.transition({self.names[0]},row,window=(300,310),corrupt=retain_metadata)
+        self.assertEqual(again['remaining'],[self.names[0]])
+        self.assertEqual(again['after'],result['after'])
+
+    def test_history_and_source_authority_denials(self):
+        for fault in ('missing','wrong-source','wrong-before','future-first','noninteger-clock','wrong-members',
+                      'duplicates','forged-hash','hot-owner','inconsistent-absence'):
+            row=copy.deepcopy(self.row)
+            if fault=='missing':row['carry']=None
+            elif fault=='wrong-source':row['carry']['source']={'wrong':True}
+            elif fault=='wrong-before':row['carry']['after']={}
+            elif fault=='future-first':row['carry']['firstWindow']=(300,310)
+            elif fault=='noninteger-clock':row['carry']['firstWindow']=(100.0,110)
+            elif fault=='wrong-members':row['carry']['remaining']=['admission-Wrong1']
+            elif fault=='duplicates':row['carry']['remaining']=[self.names[0],self.names[0]]
+            elif fault=='forged-hash':
+                row['carry']['remaining']=list(self.names);row['carry']['sourceAdmissionsSha256']='f'*64
+            elif fault=='hot-owner':
+                row['liveBefore']['journal']=(1,2);row['carry']['after']=row['liveBefore']
+            elif fault=='inconsistent-absence':
+                row['carry']['remaining']=[];row['carry']['sourceAdmissionsSha256']=self.source_hash
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):self.transition(None,row)
+
+    def test_surviving_member_and_metadata_denials(self):
+        for fault in ('bytes','mode','neighbor','partial-file','owner','idle-time','container','still-referenced'):
+            self.namespaces = {pathlib.Path(k).name:copy.deepcopy(v) for k,v in self.admissions.items()}
+            if fault=='still-referenced':
+                self.namespaces[self.names[1]]['current']=str(self.root/'native'/self.names[1])
+            def corrupt(current,rows):
+                member=rows['native/'+self.names[0]+'/content/tool']
+                if fault=='bytes':member['sha256']='e'*64
+                elif fault=='mode':member['mode']=0o644
+                elif fault=='neighbor':rows['native/'+self.names[0]+'/unknown']=self.directory()
+                elif fault=='partial-file':del rows['native/'+self.names[0]+'/content/tool']
+                elif fault=='owner':current['owner']=(2,999,*current['owner'][2:])
+                elif fault=='idle-time':rows['native']['mtime_ns']=150*10**9
+                elif fault=='container':rows['native']['mode']=0o755
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                self.transition({self.names[0]},corrupt=corrupt)
+
+class ExistingAdmissionGateTests(unittest.TestCase):
+    def test_normal_catalog_emits_only_complete_qualified_mapping(self):
+        case=CopiedCodexAdmissionsTests()
+        case.setUp()
+        try:
+            proofs={}
+            recovery.retained_catalog_files([copy.deepcopy(case.old),copy.deepcopy(case.new)],
+                workspace_roots=case.roots,engine_version='2026.9.8',startup_window=case.window,capture_proofs=proofs)
+            self.assertEqual(set(proofs),{str(case.live/case.old_capture)})
+            self.assertEqual(next(iter(proofs.values()))['current'],str(case.live/case.new_capture))
+            invalid=copy.deepcopy(case.new)
+            receipt=next(iter(invalid['plugins'][0]['sourceAdmissions'].values()))
+            next(iter(receipt['nativeNamespaces'].values()))['members']['bin/tool']['contentHash']='f'*64
+            denied={}
+            with self.assertRaises(RuntimeError):
+                recovery.retained_catalog_files([copy.deepcopy(case.old),invalid],workspace_roots=case.roots,
+                    engine_version='2026.9.8',startup_window=case.window,capture_proofs=denied)
+            self.assertEqual(denied,{})
+        finally:
+            case.tearDown()
 
 if __name__ == '__main__': unittest.main()

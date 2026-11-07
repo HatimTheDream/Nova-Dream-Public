@@ -1070,12 +1070,47 @@ def capture_owner_format(path, engine_version):
                 'Native capture ownership contains application schema.')
 
 
-def native_capture_owner_paths(root, selected, engine_version):
+def capture_lease_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def has_header_only_capture_journal(path, owner_info, engine_version):
+    """Recognize the 9.8 staging header. Such a family stays byte-exact in the static map."""
+    flags = tuple(suffix for suffix in ('-wal', '-shm', '-journal') if os.path.lexists(str(path) + suffix))
+    if not flags:
+        return False
+    require(engine_version == '2026.9.8' and owner_info.st_size == 0 and flags == ('-journal',),
+            'Native capture lease has an unexpected sidecar.')
+    journal = path.with_name(path.name + '-journal')
+    require(all(entry == journal or not entry.name.startswith(path.name + '-')
+                for entry in path.parent.iterdir()), 'Unreviewed native capture journal companion.')
+    info = journal.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
+            and (info.st_dev, info.st_uid, info.st_gid) == (owner_info.st_dev, owner_info.st_uid, owner_info.st_gid)
+            and info.st_size == 512, 'Unreviewed native capture staging journal.')
+    # The SQLite header has a zero magic, zero page-record count and zero original length.
+    # Only its four-byte random nonce varies. Equality of the full bytes, including
+    # that nonce, is still required across the two independent workspace roots.
+    before = capture_lease_identity(info)
+    descriptor = os.open(journal, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        require(capture_lease_identity(os.fstat(stream.fileno())) == before, 'Native capture staging journal changed.')
+        payload = stream.read(513)
+        require(capture_lease_identity(os.fstat(stream.fileno())) == before, 'Native capture staging journal changed.')
+    require(capture_lease_identity(journal.lstat()) == before, 'Native capture staging journal changed.')
+    require(len(payload) == 512 and payload[:12] == bytes(12)
+            and payload[16:28] == struct.pack('>III', 0, 512, 4096) and not any(payload[28:]),
+            'Unreviewed native capture staging journal.')
+    return True
+
+
+def native_capture_owner_paths(root, selected, engine_version, *, staged=None):
     """Classify direct selected-runtime process leases on the qualified host.
 
     The capture closure remains in every inventory/copy/restore. Only validated
-    empty owner.sqlite files leave the exact durable SQLite comparison; nested
-    fixtures, other workspaces and every sibling database retain their bytes.
+    sidecar-free legacy markers and qualified retired tokens leave exact SQLite
+    comparison. All other files in supported staging families retain their bytes.
     """
     local = _LOCAL_WINDOWS.get()
     if local is not None:
@@ -1086,8 +1121,7 @@ def native_capture_owner_paths(root, selected, engine_version):
     capture_root = native / 'state' / 'tmp' / 'plugin-captures'
     if not capture_root.exists() and not capture_root.is_symlink():
         return set()
-    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
-                             info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    identity = capture_lease_identity
     owner = (native.lstat().st_uid, native.lstat().st_gid)
     ancestors = {}
     for directory in (native, native / 'state', native / 'state' / 'tmp', capture_root):
@@ -1108,7 +1142,9 @@ def native_capture_owner_paths(root, selected, engine_version):
         if not canonical:
             continue  # Unqualified names remain in the exact static map.
         path = directory / 'owner.sqlite'
-        if not path.exists() and not path.is_symlink():
+        if not os.path.lexists(path):
+            require(engine_version != '2026.9.8' or not any(os.path.lexists(str(path) + suffix)
+                    for suffix in ('-wal', '-shm', '-journal')), 'Native capture sidecar has no owner.')
             continue
         directory_info, info = directory.lstat(), path.lstat()
         require(directory.resolve(strict=True) == directory and stat.S_ISDIR(directory_info.st_mode)
@@ -1124,15 +1160,348 @@ def native_capture_owner_paths(root, selected, engine_version):
                 or (stat.S_IMODE(info.st_mode) == 0o644 and engine_version == '2026.9.8'
                     and info.st_size == 4096 and digest(path) == CAPTURE_OWNER_RETIRED_SHA256),
                 'Native capture lease file is not an ordinary private owner.')
-        require(not any(os.path.lexists(str(path) + suffix) for suffix in ('-wal', '-shm', '-journal')),
-                'Native capture lease has an unexpected sidecar.')
+        preserve_family = has_header_only_capture_journal(path, info, engine_version)
         capture_owner_format(path, engine_version)
         require(identity(path.lstat()) == identity(info) and identity(directory.lstat()) == identity(directory_info),
                 'Native capture lease changed during verification.')
-        found.add(path.relative_to(root))
+        if not preserve_family:
+            found.add(path.relative_to(root))
+        elif staged is not None:
+            staged.add(path.relative_to(root))
     require(all(identity(directory.lstat()) == before for directory, before in ancestors.items()),
             'Native capture lease ancestry changed during verification.')
     return found
+
+
+_CAPTURE_RETIREMENT_SOURCES = {
+    'sqlite-staging-token-CcxeaYVw.mjs': '640abcf7ec6e84134f752e94c9c49b8d4d1eea55d0416b4f0102e722ff89702f',
+    'plugin-source-capture-path-L0n-8p-6.mjs': '2b5c87c781d8299882aa5ca90d66f8f20eda194a84cd3b73224f2fdd8163d7cf',
+    'plugin-source-capture-directory-CsjPVlzr.mjs': 'bb59fd7c7b721a67fce0201e8f6bd250a66c84bc055d06d0ce645ecf18b25f79',
+    'plugin-generation-artifact-Bm1J86Hz.mjs': 'cf407e9631824208f504fd5271253647b5423d53020694228a732938bf149686',
+}
+
+
+def capture_context(directory, *, include_rows=False):
+    """Hash every native payload path and metadata. Only an empty captures/ may be removed."""
+    # This exceptional path is bounded independently of the ordinary complete static inventory.
+    seen = 0
+    total = 0
+    directories = [directory]
+    while directories:
+        parent = directories.pop()
+        for child in parent.iterdir():
+            info = child.lstat()
+            seen += 1
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+            elif stat.S_ISDIR(info.st_mode):
+                directories.append(child)
+            require(seen <= 4096 and total <= 1024**3, 'Capture payload exceeds the reviewed bound.')
+    rows, _ = inventory(directory)
+    names = {name.split('/')[0] for name in rows}
+    require(names <= {'.', 'owner.sqlite', 'owner.sqlite-journal', 'native', 'captures'} and 'native' in names,
+            'Unreviewed neighboring capture data.')
+    require(rows['native']['kind'] == 'directory'
+            and any(name.startswith('native/') for name in rows)
+            and all(re.fullmatch(r'admission-[a-zA-Z0-9]{6}', name.split('/')[1])
+                    for name in rows if name.startswith('native/'))
+            and all(row['kind'] == 'directory' for name, row in rows.items()
+                    if name.startswith('native/') and name.count('/') == 1),
+            'Unreviewed capture native admission path.')
+    captures = rows.pop('captures', None)
+    require(not any(name.startswith('captures/') for name in rows)
+            and (captures is None or captures['kind'] == 'directory'), 'Capture retirement has neighboring saved data.')
+    root = rows.pop('.')
+    owner = rows.pop('owner.sqlite')
+    journal = rows.pop('owner.sqlite-journal', None)
+    require(root['mode'] == 0o700 and root['uid'] == owner['uid'] and root['gid'] == owner['gid']
+            and owner['mode'] == 0o600 and (journal is None or
+                (journal['uid'], journal['gid'], journal['mode'], journal['xattrs']) == (owner['uid'], owner['gid'], 0o600, {})),
+            'Capture ownership or protection changed.')
+    if captures is not None:
+        require((captures['uid'], captures['gid']) == (owner['uid'], owner['gid'])
+                and not captures['mode'] & 0o022 and not captures['xattrs'], 'Capture contents directory is unprotected.')
+    protected = {k: root[k] for k in ('uid', 'gid', 'mode', 'xattrs')}
+    digest_rows = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    context = (protected, owner['xattrs'], digest_rows)
+    return (context, captures, rows) if include_rows else (context, captures)
+
+
+def capture_object(path):
+    info = path.lstat()
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def capture_physical_root(path):
+    info = path.lstat()
+    require(path.resolve(strict=True) == path and stat.S_ISDIR(info.st_mode), 'Capture workspace root changed.')
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
+
+
+def observe_capture_family(root, role):
+    owner = root / role
+    directory = owner.parent
+    parent = capture_object(directory)
+    identity = capture_object(owner)
+    journal = owner.with_name('owner.sqlite-journal')
+    journal_identity = capture_object(journal) if os.path.lexists(journal) else None
+    coverage, captures = capture_context(directory)
+    values = (digest(owner), digest(journal) if journal_identity else None)
+    require(identity == capture_object(owner) and parent == capture_object(directory)
+            and journal_identity == (capture_object(journal) if os.path.lexists(journal) else None),
+            'Capture family changed while its proof was measured.')
+    return {'parent': parent, 'owner': identity, 'journal': journal_identity, 'hashes': values,
+            'coverage': coverage, 'captures': captures}
+
+
+def capture_live_selection(snapshot, live, selected, epoch, schemas):
+    # Before its first launch the target still has the prior schema. At a later restart it has
+    # the target schema. Only the authenticated pair is eligible, and the actual closed verifier
+    # independently enforces the exact post-start schema, selection and same epoch.
+    for role in (pathlib.Path('workspace-selection.json'), selected / 'recovery-complete.json', selected / 'edition3.identity'):
+        old, new = snapshot / role, live / role
+        if not os.path.lexists(old):
+            require(not os.path.lexists(new), 'Capture workspace selector was added.')
+        else:
+            require(old.resolve(strict=True) == old and new.resolve(strict=True) == new
+                    and old.is_file() and new.is_file() and old.stat().st_size <= 65536
+                    and new.stat().st_size == old.stat().st_size and digest(old) == digest(new),
+                    'Capture workspace selector differs from the independently verified source.')
+    require((live / selected).resolve(strict=True) == live / selected, 'Capture workspace was redirected.')
+    with contextlib.closing(database(live / selected / 'workspace.sqlite', True)) as connection:
+        version = connection.execute('pragma user_version').fetchone()[0]
+        row = connection.execute("select value from meta where key='epoch'").fetchone()
+    require(version in schemas and row == (epoch,), 'Capture scope lacks an authorized stopped workspace schema or epoch.')
+
+
+def begin_capture_retention(snapshot, live, epoch, runtime_root, owner, previous=None, schemas=(55,)):
+    """Measure this stopped physical live copy before its actual startup, including same-inode evidence."""
+    selected, confirmed = selected_workspace(snapshot, epoch, closed=True)
+    selected = selected.relative_to(snapshot)
+    staged = set()
+    native_capture_owner_paths(snapshot, selected, '2026.9.8', staged=staged)
+    if not staged:
+        return None
+    require(confirmed == epoch and set(schemas) in ({55}, {55, 60}), 'Unknown capture application binding.')
+    capture_live_selection(snapshot, live, selected, epoch, schemas)
+    attest_native_writer_sources(runtime_root, _CAPTURE_RETIREMENT_SOURCES)
+    native_capture_owner_paths(live, selected, '2026.9.8')
+    state = {'roots': (snapshot, live), 'physical': (capture_physical_root(snapshot), capture_physical_root(live)),
+             'selected': selected, 'epoch': epoch, 'runtime': runtime_root, 'owner': owner, 'roles': {}}
+    for role in staged:
+        # Families outside the demonstrated writer layout get ordinary static equality only.
+        directory = (snapshot / role).parent
+        children = {child.name for child in directory.iterdir()}
+        if (not {'native', 'owner.sqlite', 'owner.sqlite-journal'} <= children
+                or children - {'native', 'captures', 'owner.sqlite', 'owner.sqlite-journal'}):
+            continue
+        captures = directory / 'captures'
+        if os.path.lexists(captures) and (captures.is_symlink() or not captures.is_dir() or any(captures.iterdir())):
+            continue
+        old = observe_capture_family(snapshot, role)
+        current = observe_capture_family(live, role) if os.path.lexists((live / role).parent) else None
+        unchanged = current is not None and (old['hashes'] == current['hashes'] and old['coverage'] == current['coverage']
+                     and old['captures'] == current['captures'])
+        carried = None
+        # A restart under the same physical root/candidate cannot silently resurrect a staging lease.
+        continues = (previous is not None and previous['physical'] == state['physical']
+                     and previous['roots'] == state['roots'] and previous['epoch'] == epoch
+                     and previous['candidate'] == owner[1] and previous['runtime'] == runtime_root
+                     and role in previous['retired'])
+        require(unchanged or continues, 'A previously retired capture lacks its actual first-start proof.')
+        if continues:
+            require(previous['attempt'] + 1 == owner[2], 'Capture proof must belong to the immediately preceding start.')
+            receipt_path, receipt_hash = previous['receipt']
+            require(receipt_path.resolve(strict=True) == receipt_path and receipt_path.is_file()
+                    and digest(receipt_path) == receipt_hash, 'Previous complete capture proof changed.')
+            carry = previous['retired'][role]
+            require(carry['source'] == old and carry['after'] == current,
+                    'A previously retired capture changed between startups.')
+            carried = carry
+        require(current is not None or (carried is not None and carried.get('remaining') == []
+                and carried['after'] is None), 'An absent capture lacks its actual completed reaping proof.')
+        state['roles'][role] = {'source': old, 'liveBefore': current, 'carry': carried}
+    if not state['roles']:
+        return None
+    state['observedAtNs'] = time.time_ns()
+    return state
+
+
+def qualify_capture_map(snapshot, live, selected, epoch, runtime_root, versions, window,
+                        before, after, closure, admissions=None):
+    """Require complete static equality except source roles actually retired by this bound startup."""
+    failure = 'An inactive database, archived store or nonactive cache changed.'
+    require(closure is not None and versions == ('2026.9.8', '2026.9.8') and window is not None, failure)
+    proof = closure['start']
+    require(proof['roots'] == (snapshot, live) and proof['selected'] == selected and proof['epoch'] == epoch
+            and proof['runtime'] == runtime_root and proof['owner'] == closure['owner']
+            and proof['physical'] == (capture_physical_root(snapshot), capture_physical_root(live))
+            and tuple(window) == closure['window'] and len(window) == 2
+            and all(type(n) == int for n in window) and 0 <= window[1] - window[0] <= MAX_STARTUP_WINDOW_SECONDS
+            and window[0] - 60 <= proof['observedAtNs'] // 10**9 <= window[0],
+            'Capture retirement lacks its authentic startup and physical root binding.')
+    require(all(key in before and value == before[key] for key, value in after.items()), failure)
+    attest_native_writer_sources(runtime_root, _CAPTURE_RETIREMENT_SOURCES)
+    removed = set(before) - set(after)
+    permitted = set()
+    retired = {}
+    for role, row in proof['roles'].items():
+        if role not in removed:
+            continue
+        journal = role.with_name('owner.sqlite-journal')
+        old, prior = row['source'], row['liveBefore']
+        require(journal in removed and old == observe_capture_family(snapshot, role)
+                and old['journal'] is not None and old['owner'][6] == 0 and old['journal'][6] == 512
+                and before[role] == ('file', 0, old['hashes'][0])
+                and before[journal] == ('file', 512, old['hashes'][1]), failure)
+        changed_carry = row['carry'] is not None and (
+            not os.path.lexists((live / role).parent) or 'remaining' in row['carry'])
+        now = observe_capture_family(live, role) if os.path.lexists((live / role).parent) else None
+        if row['carry'] is not None and now is not None and now != prior:
+            changed_carry = True
+        if changed_carry:
+            require(admissions is not None, 'Capture reaping lacks full native catalog verification.')
+            retired[role] = qualify_capture_reaping(snapshot, live, role, runtime_root, row, window, admissions)
+            permitted.update((role, journal))
+            continue
+        require(now is not None and now['journal'] is None and now['owner'][6] == 4096
+                and now['hashes'] == (CAPTURE_OWNER_RETIRED_SHA256, None)
+                and now['coverage'] == old['coverage']
+                and (now['captures'] is None or now['captures'] == old['captures']),
+                'Retiring the capture changed neighboring data or the official token.')
+        if row['carry'] is not None:
+            require(prior == now and now == row['carry']['after'], 'A carried retirement changed during restart.')
+            retired[role] = row['carry']
+        else:
+            # A snapshot copy has different physical IDs. Compare live to its own stopped pre-start witness.
+            require(prior['journal'] is not None and prior['hashes'] == old['hashes']
+                    and prior['owner'][:6] == now['owner'][:6] and prior['parent'][:5] == now['parent'][:5]
+                    and all(window[0] * 10**9 <= stamp <= window[1] * 10**9
+                            for stamp in now['owner'][7:]), 'Unproved physical staging owner retirement.')
+            retired[role] = {'source': old, 'after': now, 'firstWindow': tuple(window)}
+        permitted.update((role, journal))
+    require(permitted == removed and permitted, failure)
+    closure['retired'] = retired
+
+
+_CAPTURE_REAPING_SOURCES = {
+    'startup-config-preflight-n5_82TxL.mjs': '5c6b4c413548ab08e5168d429be1de37b439ab1a3c40b104e1e7a8b5958ca243',
+    'plugin-source-capture-report-BdUXHa10.mjs': '4aa98618a9fbac29e1bf83af25e486d20eeed416ce2cdcc5e95a231bbba71ac9',
+    'plugin-source-capture-report-UvN1qTM0.mjs': '0f8775cc9fa4787877e379b69c1412bcfbf6fd74ee54eb634e2c8a3d3abc391b',
+    'doctor-sqlite-maintenance-lock-BMIeQhbQ.mjs': 'c4d81de690f07f2b3e283df0f388bb50b7153a27ad3c55e239554fb47a25cf9d',
+    'doctor-sqlite-maintenance-lock-TnMKHoAr.mjs': 'a08726a748f566409f2fef2481824a2209717be02cd10c3fe3d42768bca4c657',
+    'installed-plugin-index-store-CUXGXwqh.mjs': '8f44c30d7555a3efdbe0c02254c2d050b019ae24b416d83a9cb61c8da8356232',
+}
+
+
+def capture_admission_rows(snapshot, live, role, runtime_root, admissions, expected_coverage):
+    """Use only the complete native namespaces already proved by the normal catalog verifier."""
+    directory = (snapshot / role).parent
+    coverage, captures, rows = capture_context(directory, include_rows=True)
+    require(coverage == expected_coverage, 'Original capture coverage changed during native admission verification.')
+    logical_root = (live / role).parent
+    namespaces = {pathlib.Path(name).name: value for name, value in admissions.items()
+                  if pathlib.Path(name).parent == logical_root / 'native'}
+    require(namespaces and len(namespaces) <= 16, 'Capture reaping lacks proved native admissions.')
+    expected = {'native'}
+    uid, gid = coverage[0]['uid'], coverage[0]['gid']
+    for name, proof in namespaces.items():
+        require(re.fullmatch(r'admission-[a-zA-Z0-9]{6}', name), 'Unknown reaped native admission name.')
+        namespace = proof['original']
+        require(namespace['managed'] is True and namespace['capturedRoot'] == str(logical_root / 'native' / name),
+                'Reaped native admission authority differs.')
+        prefix = 'native/' + name
+        expected.update((prefix, prefix + '/node_modules', prefix + '/node_modules/openclaw'))
+        for relative, member in namespace['members'].items():
+            child = prefix + '/content' + ('/' + relative if relative else '')
+            expected.add(child)
+            row = rows.get(child)
+            identity = tuple(map(int, member['capturedIdentity'].split(':')))
+            require(row is not None and row['mode'] == stat.S_IMODE(identity[2])
+                    and row['mtime_ns'] == identity[4], 'Reaped native member metadata differs from its proved admission.')
+            if stat.S_ISREG(identity[2]):
+                require(row['kind'] == 'file' and row['size'] == member['sizeBytes']
+                        and row['sha256'] == member['contentHash'], 'Reaped native member content differs.')
+            else:
+                require(stat.S_ISDIR(identity[2]) and row['kind'] == 'directory', 'Unknown reaped native member kind.')
+        link = rows.get(prefix + '/node_modules/openclaw')
+        require(link is not None and link['kind'] == 'symlink' and link['mode'] == 0o777
+                and link['target'] == str(runtime_root), 'Reaped native host peer was redirected.')
+    require(set(rows) == expected, 'Reaped capture has an unrecognized neighboring member.')
+    require(all(row['uid'] == uid and row['gid'] == gid and not row['xattrs'] for row in rows.values())
+            and all(row['mode'] == 0o700 for row in rows.values() if row['kind'] == 'directory'),
+            'Reaped native ownership or protection differs.')
+    source_proof = {name: value['original'] for name, value in sorted(namespaces.items())}
+    source_hash = hashlib.sha256(json.dumps(source_proof, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return rows, namespaces, source_hash
+
+
+def qualify_capture_reaping(snapshot, live, role, runtime_root, row, window, admissions):
+    """Qualify monotonic removal of whole proved native admissions after an observed retirement."""
+    attest_native_writer_sources(runtime_root, _CAPTURE_REAPING_SOURCES)
+    old, prior, carry = row['source'], row['liveBefore'], row['carry']
+    require(carry is not None and carry['source'] == old and carry['after'] == prior,
+            'Reaping lacks the complete preceding retirement.')
+    first = tuple(carry['firstWindow'])
+    last = tuple(carry.get('lastWindow', first))
+    require(len(first) == len(last) == 2 and all(type(value) is int for value in first + last)
+            and 0 <= first[0] <= first[1] <= last[1] <= window[0] and last[0] <= last[1]
+            and (last == first or first[1] <= last[0]),
+            'Capture reaping history is outside its authentic startup intervals.')
+    source_rows, namespaces, source_hash = capture_admission_rows(snapshot, live, role, runtime_root, admissions, old['coverage'])
+    full = set(namespaces)
+    previous_names = carry.get('remaining', sorted(full))
+    require(isinstance(previous_names, (list, tuple)) and all(isinstance(name, str) for name in previous_names)
+            and len(previous_names) == len(set(previous_names))
+            and set(previous_names) <= full, 'Carried capture membership is unknown.')
+    require((prior is None) == (not previous_names), 'Carried capture presence and membership disagree.')
+    if prior is not None:
+        require(prior['journal'] is None and prior['owner'][6] == 4096
+                and prior['hashes'] == (CAPTURE_OWNER_RETIRED_SHA256, None),
+                'Reaping before-state is not the proved retired owner.')
+    if 'remaining' in carry:
+        require(carry.get('sourceAdmissionsSha256') == source_hash, 'Carried capture source authority changed.')
+    directory = (live / role).parent
+    if not os.path.lexists(directory):
+        require(prior is not None or not previous_names, 'A missing capture has no prior disposal proof.')
+        current = None
+        remaining = set()
+    else:
+        require(prior is not None and previous_names, 'A removed capture reappeared.')
+        current = observe_capture_family(live, role)
+        require(current['journal'] is None and current['owner'][6] == 4096
+                and current['hashes'] == (CAPTURE_OWNER_RETIRED_SHA256, None)
+                and current['owner'][:6] == prior['owner'][:6] and current['parent'][:5] == prior['parent'][:5]
+                and current['coverage'][:2] == old['coverage'][:2]
+                and (current['captures'] is None or current['captures'] == old['captures']),
+                'Surviving capture owner or protection changed.')
+        _, _, current_rows = capture_context(directory, include_rows=True)
+        remaining = {name.split('/')[1] for name in current_rows if name.startswith('native/')}
+        require(remaining and remaining <= set(previous_names), 'Native admission membership grew or became unknown.')
+        expected = {name: value for name, value in source_rows.items()
+                    if name == 'native' or name.split('/')[1] in remaining}
+        require(set(current_rows) == set(expected), 'Capture reaping removed only part of a native admission.')
+        for name, value in current_rows.items():
+            wanted = expected[name]
+            if name == 'native':
+                require({key: item for key, item in value.items() if key != 'mtime_ns'}
+                        == {key: item for key, item in wanted.items() if key != 'mtime_ns'},
+                        'Native capture container metadata changed.')
+            else:
+                require(value == wanted, 'Surviving native admission changed.')
+        if remaining != set(previous_names):
+            require(window[0] * 10**9 <= current_rows['native']['mtime_ns'] <= window[1] * 10**9,
+                    'Native admission removal was outside the closed startup.')
+        else:
+            require(current == prior, 'An unchanged native capture changed during startup.')
+        require(current == observe_capture_family(live, role), 'Reaped capture changed during its proof.')
+    for name in set(previous_names) - remaining:
+        replacement = pathlib.Path(namespaces[name]['current'])
+        require(not replacement.is_relative_to(directory), 'A reaped admission remains referenced in the current capture.')
+    return {'source': old, 'after': current, 'firstWindow': first, 'lastWindow': tuple(window),
+            'remaining': sorted(remaining), 'sourceAdmissionsSha256': source_hash}
+
 
 
 def static_sqlite_files(root, selected, active):
@@ -2132,7 +2501,7 @@ def catalog_file(path, expected_hash, signature=None, *, current=False):
     return content
 
 
-def retained_codex_admissions(old, new, workspace_roots, package_root, startup_window):
+def retained_codex_admissions(old, new, workspace_roots, package_root, startup_window, capture_proofs=None):
     """Prove the exact 9.8 managed native receipt through physical copy roles.
 
     Official registry comparison excludes these process receipts. We qualify
@@ -2341,6 +2710,10 @@ def retained_codex_admissions(old, new, workspace_roots, package_root, startup_w
     require(projected == receipts[0], 'Copied Codex admission changed beyond physically proven cache fields.')
     require(all(observed_identity(path.lstat()) == value and path.resolve(strict=True) == path for path, value in observed.items()),
             'Copied Codex admission closure changed during verification.')
+    if capture_proofs is not None:
+        for source, (name, value) in by_source[0].items():
+            require(name not in capture_proofs, 'Repeated native capture admission authority.')
+            capture_proofs[name] = {'original': json.loads(json.dumps(value)), 'current': by_source[1][source][0]}
     new['sourceAdmissions'] = {key: projected}
     return True
 
@@ -2469,7 +2842,7 @@ def retained_package_build(old, new, catalog_runtime_root, workspace_roots):
 
 
 def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, engine_version=None, startup_window=None,
-                           catalog_runtime_root=None):
+                           catalog_runtime_root=None, capture_proofs=None):
     """Normalize only file-proved generated catalog differences, in memory.
 
     Nova plugin paths/JSON formatting follow the two verified candidate
@@ -2544,7 +2917,7 @@ def retained_catalog_files(indexes, app_releases=None, workspace_roots=None, *, 
             physical = [root / package_root.relative_to(logical) for root in (snapshot, live)]
             admissions_proven = engine_version == '2026.9.8' and 'sourceAdmissions' in old
             if admissions_proven:
-                retained_codex_admissions(old, new, workspace_roots, package_root, startup_window)
+                retained_codex_admissions(old, new, workspace_roots, package_root, startup_window, capture_proofs)
             files = [('openclaw.plugin.json', 'manifestHash', 'manifestFile'),
                      ('dist/doctor-contract-api.js', 'doctorContractHash', 'doctorContractFile')]
             for relative_file, hash_name, signature_name in files:
@@ -2631,7 +3004,7 @@ def retained_neutral_channel_policy(row, after_path, workspace_roots, configurat
 
 def retained_plugin_index(before, after, node, after_path, from_version='2026.9.2', to_version='2026.9.6',
                           *, app_releases=None, workspace_roots=None, configuration=None, startup_window=None,
-                          catalog_runtime_root=None):
+                          catalog_runtime_root=None, capture_proofs=None):
     """Qualify pinned migration or same-engine catalog effective content."""
     require((from_version, to_version) in NATIVE_MIGRATION_PAIRS | {('2026.9.6', '2026.9.6'), ('2026.9.8', '2026.9.8')},
             'Native machine-state regeneration is outside the reviewed engines.')
@@ -2715,7 +3088,7 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
                     'The exact application catalog derivation did not return its complete pair.')
             old_index, new_index = indexes
         retained_catalog_files(indexes, app_releases, workspace_roots, engine_version=to_version, startup_window=startup_window,
-                               catalog_runtime_root=catalog_runtime_root)
+                               catalog_runtime_root=catalog_runtime_root, capture_proofs=capture_proofs)
         effective = lambda index: {name: value for name, value in index.items() if name not in {'generatedAtMs', 'refreshReason'}}
         require(effective(old_index) == effective(new_index), 'Retained native plugin policy or effective catalog changed.')
         return
@@ -3430,7 +3803,8 @@ def retained_native_event_history(before, after, relative, selected, runtime_roo
 
 def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9.2', to_version=None, node=None, app_releases=None,
                        log_retention_window=None, log_retention_reports=None, *, session_binding_key=None, session_binding_node=None,
-                        logical_workspace_root=None, catalog_runtime_root=None, hosted_configuration_authority=None):
+                        logical_workspace_root=None, catalog_runtime_root=None, hosted_configuration_authority=None,
+                       capture_retirement=None):
     to_version = to_version or from_version
     local_authority = _LOCAL_WINDOWS.get().source_root if _LOCAL_WINDOWS.get() is not None else live
     migrating = from_version != to_version
@@ -3464,9 +3838,9 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                                           logical_workspace_root=logical_workspace_root)
     before_owners = native_capture_owner_paths(snapshot, selected, from_version)
     owners = native_capture_owner_paths(live, selected, to_version)
-    require(static_sqlite_files(snapshot, selected, paths | embedded | quarantine | before_owners)
-            == static_sqlite_files(live, selected, paths | embedded | quarantine | owners),
-            'An inactive database, archived store or nonactive cache changed.')
+    before_static = static_sqlite_files(snapshot, selected, paths | embedded | quarantine | before_owners)
+    after_static = static_sqlite_files(live, selected, paths | embedded | quarantine | owners)
+    capture_proofs = {}
     for relative in sorted(before_paths):
         with contextlib.closing(database(snapshot / relative, True)) as before, contextlib.closing(database(live / relative, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Native saved database integrity failed.')
@@ -3503,7 +3877,8 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                                               app_releases=app_releases,
                                               workspace_roots=(snapshot, live, logical_workspace_root or local_authority, selected),
                                               configuration=configuration, startup_window=log_retention_window,
-                                              catalog_runtime_root=catalog_runtime_root)
+                                              catalog_runtime_root=catalog_runtime_root,
+                                              capture_proofs=capture_proofs if relative == selected / 'openclaw-runtime/state/state/openclaw.sqlite' else None)
                     else:
                         require(rows(before, table) == rows(after, table), 'Retained native machine configuration changed.')
                 elif from_version == to_version == '2026.9.8' and table == 'delivery_queue_entries':
@@ -3525,3 +3900,6 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                             'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
                     require(native_projected_rows(before, table) <= native_projected_rows(after, table, boot_replacements), 'Retained native identity, account content or permissions changed.')
+    if before_static != after_static:
+        qualify_capture_map(snapshot, live, selected, epoch, catalog_runtime_root, (from_version, to_version),
+                            log_retention_window, before_static, after_static, capture_retirement, capture_proofs)

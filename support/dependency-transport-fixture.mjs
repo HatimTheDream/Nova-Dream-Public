@@ -14,7 +14,7 @@ const reference=path=>({path,sha256:sha256(readFileSync(path))});
 const schema=readFileSync(new URL('../scripts/release-coordinate.mjs',import.meta.url),'utf8').match(/this\.db\.exec\(`(PRAGMA journal_mode=WAL;[\s\S]+?PRAGMA user_version=1; COMMIT;)`\);/)[1].replace('${APPLICATION_ID}',String(0x4e56524c));
 const startup=['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(x=>'dist/service/apps/service/'+x);
 const helpers=['install.py','recovery.py','codex_log_retention.py','app_dependencies.py','workspace_key.py','verify-session-bindings.mjs'];
-export function dependencyFixture(t,{format=1,change,runHook,includeHost=false,targetSchema,priorSchema=55,migrationHelpers=[],targetDependencyVersion='1.0.0'}={}){
+export function dependencyFixture(t,{format=1,change,runHook,includeHost=false,targetSchema,priorSchema=55,migrationHelpers=[],targetDependencyVersion='1.0.0',targetHelpers={}}={}){
  const root=mkdtempSync(join(tmpdir(),'nova-dependency-portable-')),journal=Object.create(ReleaseJournal.prototype);journal.directory=root;journal.readOnly=false;journal.db=new DatabaseSync(join(root,'journal.sqlite'));journal.db.exec(schema);
  t.after(()=>{journal.close();if(dirname(root)!==resolve(tmpdir()))throw Error('fixture-cleanup-scope');rmSync(root,{recursive:true,force:true});});
  const put=(path,bytes)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,Buffer.isBuffer(bytes)?bytes:raw(bytes));return reference(path);};
@@ -45,7 +45,7 @@ export function dependencyFixture(t,{format=1,change,runHook,includeHost=false,t
   const manifest=put(join(directory,'dist/candidate.json'),{version:pkg.version,...pkg.edition3,artifacts:Object.entries(files).map(([path,b])=>({path,sha256:put(join(directory,path),b).sha256})),frontendCompatibility:{format:2,eligibility:'client-behavior',sourceRevision:commit,serviceInputsSha256:(base?'c':'d').repeat(64)}});
   const verified=verifyCandidate(directory),archive=put(join(root,side+(base?'-base':'')+'.tgz'),Buffer.from('synthetic application archive '+side+(base?' base':''))),repository='fixture/'+side;
   const metadata={candidateId:verified.id,archiveSha256:archive.sha256},frozenSourceDirectory=join(directory,'frozen-source'),sourceHashes={};
-  for(const [n,b]of Object.entries(helperBytes))sourceHashes['deploy/update-runner/'+n]=put(join(frozenSourceDirectory,'deploy/update-runner',n),b);
+  for(const [n,b]of Object.entries(base?helperBytes:{...helperBytes,...targetHelpers}))sourceHashes['deploy/update-runner/'+n]=put(join(frozenSourceDirectory,'deploy/update-runner',n),b);
   if(!base)for(const name of migrationHelpers)sourceHashes['deploy/update-runner/'+name]=put(join(frozenSourceDirectory,'deploy/update-runner',name),Buffer.from('synthetic migration helper '+name));
   if(includeHost){const host=Buffer.from('// synthetic host.mjs');sourceHashes['scripts/host.mjs']=put(join(frozenSourceDirectory,'scripts/host.mjs'),host);put(join(directory,'scripts/host.mjs'),host);}
   if(!base&&[2,4].includes(format))sourceHashes['scripts/release-deliver.mjs']=put(join(frozenSourceDirectory,'scripts/release-deliver.mjs'),readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));

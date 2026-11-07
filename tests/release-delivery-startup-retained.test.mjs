@@ -242,6 +242,10 @@ const historicalSources = {
 };
 const replicaProfiles = {
   current:QUALIFIED_STARTUP_SOURCES,
+  source25:{'qualified-startup.py':'9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b',
+    'qualified-parent.py':'11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722',
+    'produce-startup-inputs.py':'1aedbc3c70393663c2929d3a7a908f443c43d1d6775e166a6b8b61f9d59b2b81',
+    'contracts.py':'ce05132d19826e2dde754dce5e69a9f48a1d64e3f2dbe32ab97e5b31d99bcb31'},
   previous:historicalSources,
   historical:{...historicalSources,'qualified-startup.py':'3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af','contracts.py':'68b6f47f8a5a321f3415a043b152bc99114c56dcea515eae0c54e58be1d35642'},
 };
@@ -258,3 +262,69 @@ for(const [profile,sources] of Object.entries(replicaProfiles)){
     }
   });
 }
+
+test('the incident capture source requires original staged bytes and authenticated restart and restore evidence',t=>{
+  const fixture=startupCommandFixture(t,{schemaMigration:true,sources:QUALIFIED_STARTUP_SOURCES});
+  const verify=p=>verifyStartupRetainedProjection(p,fixture.proof.request,fixture.sources);
+  verify(fixture.proof);
+  for(const change of [
+    p=>delete p.baselineLineage,
+    p=>delete p.scenarios[0].captureRetirement,
+    p=>p.scenarios[1].captureRetirement.roles=[],
+    p=>p.scenarios[1].captureRetirement.roles[0].proofSha256='f'.repeat(64),
+    p=>p.scenarios[1].captureRetirement.roles[0].firstWindow=[200,250],
+    p=>p.scenarios[2].captureRetirement.roles[0].headerSha256='e'.repeat(64),
+    p=>p.scenarios[2].captureRetirement.roles[0].physicalOwner=p.scenarios[0].captureRetirement.roles[0].physicalOwner,
+  ]){
+    const proof=structuredClone(fixture.proof);change(proof);assert.throws(()=>verify(proof));
+  }
+});
+
+test('new lifecycle profile accepts only bound role reaping and preserves old retirement profile',t=>{
+  const fixture=startupCommandFixture(t,{schemaMigration:true,sources:QUALIFIED_STARTUP_SOURCES});
+  const verify=p=>verifyStartupRetainedProjection(p,p.request,fixture.sources);
+  const reaped=structuredClone(fixture.proof);
+  const role=reaped.scenarios[1].captureRetirement.roles[0];
+  Object.assign(role,{proofSha256:sha256('actual second role'),physicalOwner:null,state:'reaped',reaped:true,
+    remainingNamespaces:[],remainingCount:0,remainingSha256:sha256('[]'),sourceAdmissionsSha256:'d'.repeat(64)});
+  verify(reaped);
+  // The previous reviewed producer keeps the same strict lifecycle evidence contract.
+  const previous=structuredClone(reaped),previousSources={...fixture.sources,
+    'qualified-startup.py':'7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb'};
+  previous.sourceHashes=previousSources;
+  previous.request.producer.sha256=previousSources['qualified-startup.py'];
+  const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)
+    ?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
+  previous.requestSha256=sha256(Buffer.from(canonical(previous.request)+'\n'));
+  previous.references.producer.sha256=previousSources['qualified-startup.py'];
+  previous.references['source/qualified-startup.py'].sha256=previousSources['qualified-startup.py'];
+  verifyStartupRetainedProjection(previous,previous.request,previousSources);
+  delete previous.references.baselineManifest;
+  assert.throws(()=>verifyStartupRetainedProjection(previous,previous.request,previousSources));
+  for(const alter of [p=>delete p.references.baselineManifest,
+    p=>p.qualificationBinding.helpers['recovery.py']='f'.repeat(64),
+    p=>p.qualificationBinding.helpers['install.py']='e'.repeat(64)]){
+    const value=structuredClone(reaped);alter(value);assert.throws(()=>verify(value));
+  }
+  const partial=structuredClone(reaped),member='admission-Alpha1';
+  Object.assign(partial.scenarios[1].captureRetirement.roles[0],{physicalOwner:['2','10'],state:'partially-reaped',reaped:false,
+    remainingNamespaces:[member],remainingCount:1,remainingSha256:sha256(JSON.stringify([member]))});
+  verify(partial);
+  for(const change of [
+    r=>r.predecessorProofSha256='f'.repeat(64),r=>r.lastWindow=[100,150],r=>r.firstWindow=[200,250],
+    r=>r.physicalOwner=['2','10'],r=>r.reaped=false,r=>r.state='retired',
+    r=>r.remainingCount=1,r=>r.remainingSha256='f'.repeat(64),r=>r.sourceAdmissionsSha256=null,
+    r=>r.remainingNamespaces=['admission-Alpha1'],r=>r.unknown=true,
+  ]){
+    const value=structuredClone(reaped);change(value.scenarios[1].captureRetirement.roles[0]);
+    assert.throws(()=>verify(value));
+  }
+  const legacySources={...QUALIFIED_STARTUP_SOURCES,
+    'qualified-startup.py':'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58',
+    'contracts.py':'00459249aff53c0b02381b47ded4b232515b773f3402f503c7e8ea143f158305'};
+  const legacy=startupCommandFixture(t,{schemaMigration:true,sources:legacySources});
+  verifyStartupRetainedProjection(legacy.proof,legacy.proof.request,legacy.sources);
+  delete legacy.proof.scenarios[1].captureRetirement;
+  assert.throws(()=>verifyStartupRetainedProjection(legacy.proof,legacy.proof.request,legacy.sources));
+});
+

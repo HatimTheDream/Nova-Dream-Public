@@ -9,8 +9,10 @@ export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'pl
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
 export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchema60=false,newDependencyGraph=false}={}){
-  const f=dependencyFixture(t,{format:4,change:'startup',includeHost:true,...(newDependencyGraph?{targetDependencyVersion:'2.0.0'}:{}),...(schemaMigration?{targetSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:sameSchema60?{targetSchema:60,priorSchema:60}:{})});
   sources??=Object.fromEntries(['qualified-startup.py','qualified-parent.py','produce-startup-inputs.py','contracts.py'].map(n=>[n,sha256(n)]));
+  const targetHelpers=sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']
+    ?Object.fromEntries(['recovery.py','install.py'].map(name=>[name,readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))])):{};
+  const f=dependencyFixture(t,{format:4,change:'startup',includeHost:true,targetHelpers,...(newDependencyGraph?{targetDependencyVersion:'2.0.0'}:{}),...(schemaMigration?{targetSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:sameSchema60?{targetSchema:60,priorSchema:60}:{})});
   const producer={path:'/fixture/sources/qualified-startup.py',sha256:sources['qualified-startup.py']};
   const parent={path:'/fixture/evidence/parent-verified.json',sha256:'1'.repeat(64)};
   const options={format:1,parent,producer},request=startupRetainedRequest(options,sources);
@@ -36,13 +38,30 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
   const op=f.descriptor.operation.id;
   const proof={format:1,kind:'actual-retained-startup-qualification-observation',readOnly:true,hostEffects:false,request,requestSha256:digest(request),
     sourceHashes:sources,scope:'retained-same-runtime-startup-restart-restoration',qualificationOperationId:op,qualificationBinding:binding,
+    ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58'].includes(sources['qualified-startup.py'])?
+      {baselineLineage:'verified-pre-swap-aborted-operator-snapshot'}:{}),
     actualSettledQualification:true,independentOriginalRestored:true,completeMaintainedSavedAndNativeState:true,heldBootstrapVerified:true,
     workerClosed:true,workerIdentity:{pid:123,startTicks:456,controlGroup:'/system.slice/nova-qa-qualified-'+op+'.service'},
     productionAdmission:false,freshFullRehearsalStillRequired:true,liveAcceptanceStillRequired:true,references,
     scenarios:STARTUP_SCENARIOS.map((scenario,i)=>({scenario,candidateId:i===2?prior.id:candidates.private.id,startedAtSeconds:100+i*100,closedAtSeconds:150+i*100,
-      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5','3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
+      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58'].includes(sources['qualified-startup.py'])?{
+        captureRetirement:{kind:'closed-9.8-capture-retirement',beforeSha256:sha256('before'+i),closedSha256:sha256('closed'+i),
+          roles:[{roleSha256:sha256('sample capture path'),headerSha256:sha256('synthetic header'),contextSha256:sha256('synthetic neighbors'),
+            physicalOwner:['2',i===2?'20':'10'],proofSha256:sha256(i===2?'new prior proof':'original target proof'),
+            firstWindow:i===2?[300,350]:[100,150]}]}}:{}),
+      ...([QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58','9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b','0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5','3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])?{replicaConfigObservation:{kind:'closed-selected-replica-config-observation',
         sourceDevice:1,replicaDevice:2,observations:[{mode:'unchanged-original-record',changedFields:[]}],
         queueExpiry:{ordinaryAcknowledgements:0,authenticatedStartSeconds:i===1?100:100+i*100,retentionDays:30}}}:{})}))};
+  if(sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']){
+    proof.references.baselineManifest={path:'/fixture/evidence/snapshot-manifest.json',sha256:sha256('original complete manifest'),bytes:1};
+    for(const [i,scenario] of proof.scenarios.entries()){
+      scenario.captureRetirement.kind='closed-9.8-capture-lifecycle';
+      for(const role of scenario.captureRetirement.roles)Object.assign(role,{state:'retired',reaped:false,
+        remainingNamespaces:null,remainingCount:null,remainingSha256:null,sourceAdmissionsSha256:null,
+        predecessorProofSha256:i===1?proof.scenarios[0].captureRetirement.roles[0].proofSha256:null,
+        lastWindow:[scenario.startedAtSeconds,scenario.closedAtSeconds]});
+    }
+  }
   return{...f,sources,options,proof,candidates,prior,helperHashes,transportOptions:{...f.options,format:5,mode:'retained-startup-qualified-native-successor',startupQualification:options},
     assertion:{operation:f.descriptor.operation,prior,candidates,artifacts:f.artifacts,helpers:helperHashes,dependencyGraphSha256:binding.dependencyGraphSha256}};
 }

@@ -19,6 +19,58 @@ fixture = load('startup_fixture', ROOT / 'support/startup-retained-fixture.py').
 
 
 class Checks(unittest.TestCase):
+    def test_capture_proof_binds_physical_owner_first_clock_and_independent_restoration(self):
+        import copy
+        path='selected/openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111111/owner.sqlite'
+        empty=subject.CAPTURE_EMPTY
+        header='b'*64
+        def identity(dev, ino, size, stamp):
+            return [dev,ino,0o100600,999,986,1,size,stamp,stamp]
+        def row(dev, ino, jino, size, stamp, journal):
+            return {'parent':[dev,ino+100,0o40700,999,986,2,4096,stamp,stamp],
+                    'owner':identity(dev,ino,size,stamp),
+                    'journal':identity(dev,jino,512,stamp) if journal else None,
+                    'hashes':[empty,header] if journal else [subject.CAPTURE_TOKEN,None],
+                    'coverage':[{'uid':999,'gid':986,'mode':448,'xattrs':{}},{},'c'*64],'captures':None}
+        snapshot=row(1,100,101,0,1,True)
+        plan={'selectedRelative':'selected','baselineFamilies':{path:{'':[snapshot['owner'],empty],'-journal':[snapshot['journal'],header]}}}
+        def evidence(attempt, carried=None):
+            start=100*attempt; window=[start,start+10]; ino=20 if attempt==3 else 10
+            prev=row(2,ino,ino+1,0,start*10**9,True)
+            after=row(2,ino,0,4096,(start+2)*10**9,False)
+            done={'source':snapshot,'after':after,'firstWindow':window}
+            if carried is not None:
+                done=carried
+                prev=done['after']
+            root={'format':1,'jobId':'lease'+str(attempt),'candidateId':'prior' if attempt==3 else 'target',
+                  'attempt':attempt,'epoch':'test epoch','physicalRoots':[[1,3,16832,0,0],[2,4,16832,999,986]]}
+            before={**root,'observedAtNs':start*10**9,'roles':{path:{'source':snapshot,'liveBefore':prev,'carry':carried}}}
+            closed={**root,'beforeSha256':subject.capture_receipt_sha(before),'retired':{path:done},'closedWindow':window}
+            return {'before':before,'closed':closed,'beforeSha256':subject.capture_receipt_sha(before),
+                    'closedSha256':subject.capture_receipt_sha(closed)}
+        def check(item,i,first=None):
+            return subject.capture_retirement_summary(item,plan,'lease'+str(i),'prior' if i==3 else 'target',
+                'test epoch',i,[100*i,100*i+10], first['roles'] if first else None)
+        first=evidence(1); initial=check(first,1)
+        second=evidence(2,first['closed']['retired'][path]); self.assertEqual(check(second,2,initial)['roles'],initial['roles'])
+        third=evidence(3); self.assertNotEqual(check(third,3,initial)['roles'][0]['physicalOwner'],initial['roles'][0]['physicalOwner'])
+        def reseal(x):
+            x['beforeSha256']=subject.capture_receipt_sha(x['before'])
+            x['closed']['beforeSha256']=x['beforeSha256']
+            x['closedSha256']=subject.capture_receipt_sha(x['closed'])
+        for kind in ('missing-role','changed-clock','changed-after','different-inode','wrong-source','changed-carry'):
+            val=copy.deepcopy(second if kind=='changed-carry' else first)
+            if kind=='missing-role': val['closed']['retired'].clear()
+            elif kind=='changed-clock': val['closed']['closedWindow'][1]+=1
+            elif kind=='changed-after': val['closed']['retired'][path]['after']['hashes'][0]='0'*64
+            elif kind=='different-inode': val['before']['roles'][path]['liveBefore']['owner'][1]+=1
+            elif kind=='wrong-source': val['closed']['retired'][path]['source']['hashes'][1]='0'*64
+            else: val['before']['roles'][path]['carry']=None
+            reseal(val)
+            with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, 'authentic-closed-capture'):
+                check(val,2,initial) if kind=='changed-carry' else check(val,1)
+
+
     def consume(self, f): return subject.consume(f['request'], f['read'], f['sources'])
 
     def test_explicit_schema_migration_retains_pristine55_and_qualifies_two_actual60_starts(self):
@@ -283,6 +335,113 @@ class Checks(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'read-changed'): subject.ProtectedReader()(str(file))
             reader = subject.ProtectedReader(); reader(str(file)); file.write_bytes(b'changed after read')
             with self.assertRaisesRegex(RuntimeError, 'closure-changed'): reader.unchanged()
+
+
+class CaptureLifecycleChecks(unittest.TestCase):
+    def fixture(self):
+        import copy
+        path='selected/openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111111/owner.sqlite'
+        def row(dev,ino,size,stamp,staged=False):
+            identity=[dev,ino,0o100600,999,986,1,size,stamp,stamp]
+            journal=[dev,ino+1,0o100600,999,986,1,512,stamp,stamp] if staged else None
+            return {'parent':[dev,ino+100,0o40700,999,986,3,4096,stamp,stamp],'owner':identity,'journal':journal,
+                    'hashes':[subject.CAPTURE_EMPTY,'b'*64] if staged else [subject.CAPTURE_TOKEN,None],
+                    'coverage':[{'uid':999,'gid':986,'mode':448,'xattrs':{}},{},'c'*64],'captures':None}
+        source=row(1,100,0,1,True)
+        plan={'selectedRelative':'selected','baselineRootIdentity':[1,3,16832,0,0],'baselineFamilies':{path:{'':[source['owner'],subject.CAPTURE_EMPTY],
+                '-journal':[source['journal'],'b'*64]}}}
+        manifest={path:{'kind':'file','mode':384,'uid':999,'gid':986,'size':0,'mtime_ns':1,'xattrs':{},'sha256':subject.CAPTURE_EMPTY},
+                  path+'-journal':{'kind':'file','mode':384,'uid':999,'gid':986,'size':512,'mtime_ns':1,'xattrs':{},'sha256':'b'*64},
+                  str(subject.PurePosixPath(path).parent):{'kind':'directory',**source['coverage'][0],'mtime_ns':1}}
+        self.source_manifest,self.source_plan=manifest,plan
+        def seal(before,closed):
+            closed['beforeSha256']=subject.capture_receipt_sha(before)
+            return {'before':before,'closed':closed,'beforeSha256':closed['beforeSha256'],
+                    'closedSha256':subject.capture_receipt_sha(closed)}
+        def make(attempt,carry=None,remaining=None):
+            window=[100*attempt,100*attempt+10]
+            common={'format':1,'jobId':'lease'+str(attempt),'candidateId':'prior' if attempt==3 else 'target',
+                    'attempt':attempt,'epoch':'fixture epoch','physicalRoots':[[1,3,16832,0,0],[2,4,16832,999,986]]}
+            after=row(2,20 if attempt==3 else 10,4096,(window[0]+2)*10**9)
+            live=row(2,20 if attempt==3 else 10,0,window[0]*10**9,True)
+            done={'source':source,'after':after,'firstWindow':window}
+            if carry is not None:
+                live=copy.deepcopy(carry['after'])
+                done={'source':source,'after':copy.deepcopy(live) if remaining else None,'firstWindow':carry['firstWindow'],
+                      'lastWindow':window,'remaining':remaining,'sourceAdmissionsSha256':'d'*64}
+                if remaining:done['after']['coverage'][2]='e'*64
+            pre={**common,'observedAtNs':window[0]*10**9,'roles':{path:{'source':source,'liveBefore':live,'carry':carry}}}
+            return seal(pre,{**common,'closedWindow':window,'retired':{path:done}})
+        def verify(item,i,first=None,reaping=True):
+            return subject.capture_retirement_summary(item,plan,'lease'+str(i),'prior' if i==3 else 'target',
+                'fixture epoch',i,[i*100,i*100+10],first['roles'] if first else None,reaping,manifest)
+        first=make(1);summary=verify(first,1)
+        return path,first,summary,make,verify,seal
+
+    def test_reaped_and_partial_restart_bind_the_true_first_proof(self):
+        path,first,summary,make,verify,_=self.fixture()
+        for remaining in ([],['admission-Alpha1']):
+            second=make(2,first['closed']['retired'][path],remaining)
+            role=verify(second,2,summary)['roles'][0]
+            self.assertEqual(role['predecessorProofSha256'],summary['roles'][0]['proofSha256'])
+            self.assertEqual(role['remainingCount'],len(remaining))
+            self.assertEqual(role['physicalOwner'],None if not remaining else ['2','10'])
+            self.assertEqual(role['reaped'],not remaining)
+            self.assertEqual(role['lastWindow'],[200,210])
+        third=verify(make(3),3,summary)['roles'][0]
+        self.assertEqual(third['state'],'retired')
+        self.assertNotEqual(third['physicalOwner'],summary['roles'][0]['physicalOwner'])
+
+    def test_rehashed_invalid_lifecycle_histories_are_refused(self):
+        import copy
+        path,first,summary,make,verify,seal=self.fixture()
+        base=make(2,first['closed']['retired'][path],[])
+        for fault in ('missing-carry','changed-carry','changed-before','window','first-window','unknown-field',
+                      'duplicate-members','unordered-members','bad-member','nonempty-absent','owner-present',
+                      'missing-source-hash','wrong-source','wrong-root'):
+            item=copy.deepcopy(base);row=item['before']['roles'][path];done=item['closed']['retired'][path]
+            if fault=='missing-carry':row['carry']=None
+            elif fault=='changed-carry':row['carry']['firstWindow']=[100,109]
+            elif fault=='changed-before':row['liveBefore']['owner'][1]=999
+            elif fault=='window':done['lastWindow']=[100,110]
+            elif fault=='first-window':done['firstWindow']=[101,110]
+            elif fault=='unknown-field':done['waiver']=True
+            elif fault=='duplicate-members':done['remaining']=['admission-Alpha1']*2
+            elif fault=='unordered-members':done['remaining']=['admission-Zebra1','admission-Alpha1']
+            elif fault=='bad-member':done['remaining']=['../saved']
+            elif fault=='nonempty-absent':done['remaining']=['admission-Alpha1']
+            elif fault=='owner-present':done['after']=copy.deepcopy(row['liveBefore'])
+            elif fault=='missing-source-hash':done['sourceAdmissionsSha256']=None
+            elif fault=='wrong-source':done['source']['hashes'][1]='f'*64
+            elif fault=='wrong-root':
+                item['closed']['physicalRoots']=copy.deepcopy(item['closed']['physicalRoots'])
+                item['closed']['physicalRoots'][1][1]=55
+            item=seal(item['before'],item['closed'])
+            with self.subTest(fault=fault),self.assertRaises(RuntimeError):verify(item,2,summary)
+
+    def test_legacy_profile_rejects_reaping_shape(self):
+        path,first,summary,make,verify,_=self.fixture()
+        item=make(2,first['closed']['retired'][path],[])
+        with self.assertRaises((RuntimeError,TypeError)):verify(item,2,summary,False)
+
+    def test_original_manifest_member_and_root_denials(self):
+        import copy
+        path,first,summary,make,verify,_=self.fixture()
+        for fault in ('missing-manifest','missing-journal','mode','owner','bytes','hash','mtime','xattrs','parent','root'):
+            manifest=copy.deepcopy(self.source_manifest);plan=copy.deepcopy(self.source_plan)
+            if fault=='missing-manifest':manifest=None
+            elif fault=='missing-journal':del manifest[path+'-journal']
+            elif fault=='mode':manifest[path]['mode']=420
+            elif fault=='owner':manifest[path]['uid']=998
+            elif fault=='bytes':manifest[path+'-journal']['size']=513
+            elif fault=='hash':manifest[path+'-journal']['sha256']='e'*64
+            elif fault=='mtime':manifest[path]['mtime_ns']=2
+            elif fault=='xattrs':manifest[path]['xattrs']={'user.saved':'eA=='}
+            elif fault=='parent':manifest[str(subject.PurePosixPath(path).parent)]['mode']=493
+            elif fault=='root':plan['baselineRootIdentity'][1]+=1
+            with self.subTest(fault=fault),self.assertRaises(RuntimeError):
+                subject.capture_retirement_summary(first,plan,'lease1','target','fixture epoch',1,[100,110],None,True,manifest)
+
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)

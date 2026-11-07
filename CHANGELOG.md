@@ -1,3 +1,8 @@
+## [2.28.26] - 2026-11-06
+
+- Recognize verified temporary runtime cache cleanup during startup and restart while keeping saved work, permissions, and recovery checks strict.
+- Preserve the original startup evidence through retained-workspace qualification and verify the independent return to the prior version.
+
 ## [2.28.25] - 2026-11-06
 
 - Test hosted updates from the normal installed path and keep large verification inventories on the separate data volume. This preserves space for recovery during startup and rollback checks.
