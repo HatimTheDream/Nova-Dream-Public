@@ -192,7 +192,7 @@ test('slow startup keeps one owned launch pending until readiness, exit or stop'
     const directory = mkdtempSync(join(tmpdir(), 'edition3-runtime-slow-')), previous = process.env.E3_OPENCLAW_ENTRY;
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'openclaw', version: '2026.9.2' }));
     const entry = join(directory, 'openclaw.mjs');
-    writeFileSync(entry, `import {appendFileSync,existsSync} from 'node:fs';import {createServer} from 'node:http';appendFileSync('starts.txt','one\\n');const s=createServer((q,r)=>{if(existsSync('exit.txt'))process.exit(1);r.statusCode=existsSync('ready.txt')?200:503;r.end('readiness');});s.listen(Number(process.env.OPENCLAW_GATEWAY_PORT),'127.0.0.1');process.on('SIGTERM',()=>s.close(()=>process.exit(0)));`);
+    writeFileSync(entry, `import {appendFileSync,existsSync} from 'node:fs';import {createServer} from 'node:http';appendFileSync('starts.txt','');const s=createServer((q,r)=>{if(existsSync('exit.txt'))process.exit(1);r.statusCode=existsSync('ready.txt')?200:503;r.end('readiness');});const writing=setInterval(()=>{if(!existsSync('allow-start-write.txt'))return;clearInterval(writing);appendFileSync('starts.txt','one\\n');s.listen(Number(process.env.OPENCLAW_GATEWAY_PORT),'127.0.0.1');},10);process.on('SIGTERM',()=>{clearInterval(writing);if(s.listening)s.close(()=>process.exit(0));else process.exit(0);});`);
     process.env.E3_OPENCLAW_ENTRY = entry;
     const store = new Store(join(directory, 'workspace')); let configurations = 0;
     let connection: AssistantConnection = { state: 'disconnected', message: '', methods: [], grantedScopes: [], modelAuthReady: false };
@@ -202,6 +202,11 @@ test('slow startup keeps one owned launch pending until readiness, exit or stop'
       const starting = runtime.start(), root = join(store.directory, 'openclaw-runtime');
       const until = Date.now() + 10000;
       while ((!existsSync(join(root, 'starts.txt')) || !runtime.status().message.includes('longer')) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+      // Creation is observable before the child finishes its write. Hold that window
+      // explicitly, then wait for the complete marker within the original deadline.
+      assert.equal(readFileSync(join(root, 'starts.txt'), 'utf8'), '');
+      writeFileSync(join(root, 'allow-start-write.txt'), 'yes');
+      while (readFileSync(join(root, 'starts.txt'), 'utf8') !== 'one\n' && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
       assert.equal(runtime.status().state, 'starting'); assert.equal(runtime.status().phase, 'process'); assert.equal(runtime.status().readyAt, undefined); assert.match(runtime.status().message, /longer/);
       assert.equal(runtime.start(), starting); assert.equal(configurations, 0); assert.equal(readFileSync(join(root, 'starts.txt'), 'utf8'), 'one\n');
       if (outcome === 'changed-host') { store.internalWrite('gateway:configuration', { url: 'wss://chosen-host.invalid', token: 'fixture-only' }); connection = { ...connection, url: 'wss://chosen-host.invalid', state: 'ready' }; }

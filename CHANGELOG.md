@@ -1,3 +1,7 @@
+## [2.28.31] - 2026-11-07
+
+- Make slow-start lifecycle verification wait for the child's completed launch marker, avoiding a race when a newly created file is still empty.
+
 ## [2.28.30] - 2026-11-07
 
 - Clear an earlier failed attempt from active update authority after a successful release, preserving its original history and allowing the next update to initialize normally.
