@@ -24,10 +24,25 @@ const hostRef=z.object({path:hostPath,sha256:hash}).strict();
 const version=z.string().regex(/^\d+\.\d+\.\d+$/);
 export const fullHostOptionsSchema=z.object({format:z.literal(1),hostConfiguration:hostRef,
   helperDirectory:hostPath,acceptedInstallation:hostRef,priorVersion:version,priorBuildVersion:version,priorJobId:z.uuid(),
+  priorNoStartFailure:z.object({operation:hostRef,intent:hostRef,preflight:hostRef,
+    coordinatorExport:z.object({path:z.string().min(1),sha256:hash}).strict()}).strict().optional(),
   stageParent:hostPath.refine(p=>p.startsWith('/opt/nova-release-tools/')&&p.length>'/opt/nova-release-tools/'.length),
   excludedIdentities:z.object({candidateIds:z.array(hash).max(64),bundleSha256s:z.array(hash).max(64),rehearsalLeaseIds:z.array(z.uuid()).max(64)}).strict()
     .refine(v=>Object.values(v).every(a=>new Set(a).size===a.length)),
   startupGuardFile:hostPath.nullable()}).strict();
+export function priorNoStartFailureAuthority(options,op){
+ fullHostOptionsSchema.parse(options);if(!options.priorNoStartFailure)return null;
+ const failure=options.priorNoStartFailure,exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum:131072}));
+ const intent=exported.intent,phase=exported.installationPhase,old=phase?.input?.coordinatorDescriptor?.input?.operation,observed=intent?.lastObservation;
+ need(exported.format===1&&exported.kind==='read-only-original-coordinator-terminal-export'&&exported.readOnly===true&&exported.originalControllerResponseClaimed===false
+  &&old?.id===exported.operationId&&old.id!==op.id&&old.candidateId!==op.candidateId&&old.priorCandidateId===op.priorCandidateId&&old.workspaceEpoch===op.workspaceEpoch
+  &&intent?.state==='failed'&&observed?.state==='failed'&&observed.reasonCode==='controller-job-terminal-not-installed'
+  &&phase.phase==='installation'&&phase.state==='failed'&&phase.current?.state==='failed'&&phase.externalId===intent.externalJobId&&phase.current.externalId===intent.externalJobId
+  &&observed.externalJobId===intent.externalJobId&&observed.idempotencyKey===intent.idempotencyKey
+  &&['candidateId','priorCandidateId','workspaceEpoch'].every(k=>observed[k]===old[k]),'full-prestage-original-terminal-export-required');
+ const authority=z.object({operationId:z.uuid(),idempotencyKey:z.uuid(),jobId:z.uuid(),candidateId:hash,priorCandidateId:hash,workspaceEpoch:z.uuid(),bundleSha256:hash}).strict().parse({operationId:old.id,idempotencyKey:intent.idempotencyKey,jobId:intent.externalJobId,candidateId:old.candidateId,priorCandidateId:old.priorCandidateId,workspaceEpoch:old.workspaceEpoch,bundleSha256:old.bundleSha256});
+ return {...failure,authority};
+}
 export const FULL_HELPERS=Object.freeze({
   'app_dependencies.py':'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290',
   'codex_log_retention.py':'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4',
@@ -39,7 +54,7 @@ export const FULL_HELPERS=Object.freeze({
 });
 
 // Reviewed application-transition helper bytes; actual startup qualification is still mandatory.
-export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"1875b052126dded937ade4b5c0e0515749c6b0a16eefd87c980975740d4126b8","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 function reviewedHelpers(value){need(isDeepStrictEqual(value,FULL_HELPERS)||isDeepStrictEqual(value,FULL_APPLICATION_HELPERS),'full-helper-qualification-capability-required');return value;}
 export const reviewedFullHelperHashes=reviewedHelpers;
 function transitionHelpers(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return transition?FULL_APPLICATION_HELPERS:FULL_HELPERS;}

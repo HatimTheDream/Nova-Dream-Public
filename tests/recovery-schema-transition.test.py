@@ -238,7 +238,8 @@ class QualificationBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'dependencies differ'):
             self.validate(pair, proof, helpers)
 
-    def test_real_driver_reads_only_fixed_proof_and_hash_bound_complete_helpers(self):
+    @contextlib.contextmanager
+    def driver_fixture(self):
         pair, proof, _ = self.fixture()
         with tempfile.TemporaryDirectory(prefix='nova-schema-driver-', dir=os.getenv('NOVA_TEST_TEMP')) as temporary:
             root = Path(temporary)
@@ -250,14 +251,13 @@ class QualificationBindingTests(unittest.TestCase):
             node.write_bytes(b'synthetic platform executable')
             runtime = {'agent': str(root / 'agent'), 'agentNode': str(node),
                 'agentNodeSha256': r.digest(node), 'agentVersion': '2026.9.8',
-                'node': str(node), 'nodeSha256': r.digest(node), 'root': str(root)}
+                'node': str(node), 'nodeSha256': r.digest(node), 'root': str(root),
+                'inventory': {'path': '/synthetic-fixture/inventories/runtime-inventory.json',
+                              'sha256': hashlib.sha256(b'{}').hexdigest()}}
             pair['startupQualification']['binding']['helpers'] = helpers
             proof['qualificationBinding']['helpers'] = helpers
             pair['startupQualification']['binding']['runtime'] = runtime
-            proof['qualificationBinding']['runtime'] = runtime
-            raw = json.dumps(proof).encode()
-            (root / 'startup-qualification.json').write_bytes(raw)
-            pair['startupQualification']['projection']['sha256'] = hashlib.sha256(raw).hexdigest()
+            proof['qualificationBinding']['runtime'] = copy.deepcopy(runtime)
             driver = install.Driver(root / 'request.json')
             driver.bundle, driver.pair = root, pair
             driver.node = driver.prior_agent_node = node
@@ -266,23 +266,92 @@ class QualificationBindingTests(unittest.TestCase):
             driver.from_engine = driver.to_engine = '2026.9.8'
             driver.prior_id, driver.target_id = 'a' * 64, 'b' * 64
             driver.expected_prior = {'candidateId': driver.prior_id, 'workspaceEpoch': EPOCH}
+            self.write_driver_proof(driver, proof)
             # Native root ownership is qualified only by the real Linux route.
             with patch.object(install, 'protected', lambda path, **kwargs: path):
+                yield driver, proof, node
+
+    def write_driver_proof(self, driver, proof):
+        raw = json.dumps(proof).encode()
+        (driver.bundle / 'startup-qualification.json').write_bytes(raw)
+        driver.pair['startupQualification']['projection']['sha256'] = hashlib.sha256(raw).hexdigest()
+
+    def test_real_driver_reads_only_fixed_proof_and_hash_bound_complete_helpers(self):
+        with self.driver_fixture() as (driver, proof, node):
+            driver.verify_application_qualification()
+            self.assertEqual(driver.application_transition, SPEC)
+            self.assertEqual((driver.schema_for(driver.prior_id), driver.schema_for(driver.target_id)), (55, 60))
+            with self.assertRaises(RuntimeError):
+                driver.schema_for('f' * 64)
+            node.write_bytes(b'another platform executable')
+            with self.assertRaisesRegex(RuntimeError, 'runtime or platform binary'):
                 driver.verify_application_qualification()
-                self.assertEqual(driver.application_transition, SPEC)
-                self.assertEqual((driver.schema_for(driver.prior_id), driver.schema_for(driver.target_id)), (55, 60))
-                with self.assertRaises(RuntimeError):
-                    driver.schema_for('f' * 64)
-                node.write_bytes(b'another platform executable')
-                with self.assertRaisesRegex(RuntimeError, 'runtime or platform binary'):
+            self.assertIsNone(driver.application_transition)
+            node.write_bytes(b'synthetic platform executable')
+            (driver.bundle / 'recovery.py').write_bytes(b'changed helper')
+            with self.assertRaisesRegex(RuntimeError, 'helper changed'):
+                driver.verify_application_qualification()
+            self.assertIsNone(driver.application_transition)
+            self.assertFalse((driver.bundle / 'driver-attempt.json').exists())
+
+    def test_runtime_requires_all_eight_fields_and_each_actual_identity(self):
+        with self.driver_fixture() as (driver, proof, _):
+            qualification = driver.pair['startupQualification']
+            original = copy.deepcopy(qualification['binding']['runtime'])
+            for key in original:
+                changed = copy.deepcopy(original)
+                del changed[key]
+                qualification['binding']['runtime'] = changed
+                with self.subTest(missing=key), self.assertRaisesRegex(RuntimeError, 'complete identity'):
                     driver.verify_application_qualification()
                 self.assertIsNone(driver.application_transition)
-                node.write_bytes(b'synthetic platform executable')
-                (root / 'recovery.py').write_bytes(b'changed helper')
-                with self.assertRaisesRegex(RuntimeError, 'helper changed'):
+            for changed in (None, [], {**original, 'unreviewed': True}):
+                qualification['binding']['runtime'] = changed
+                with self.subTest(shape=changed), self.assertRaisesRegex(RuntimeError, 'complete identity'):
+                    driver.verify_application_qualification()
+            for key in set(original) - {'inventory'}:
+                for value in ('different-runtime-identity', None):
+                    qualification['binding']['runtime'] = {**original, key: value}
+                    with self.subTest(field=key, value=value), self.assertRaisesRegex(RuntimeError, 'runtime or platform binary'):
+                        driver.verify_application_qualification()
+                    self.assertIsNone(driver.application_transition)
+
+    def test_inventory_shape_and_original_reference_cannot_be_omitted_or_changed(self):
+        with self.driver_fixture() as (driver, proof, _):
+            runtime = driver.pair['startupQualification']['binding']['runtime']
+            original = copy.deepcopy(runtime['inventory'])
+            invalid = [None, [], {}, {'path': original['path']}, {'sha256': original['sha256']},
+                       {**original, 'bytes': 2}, {**original, 'sha256': 'not-a-digest'},
+                       {**original, 'sha256': None}, {**original, 'sha256': 'A' * 64}]
+            invalid.extend({**original, 'path': value} for value in (None, 'relative/runtime-inventory.json',
+                '//host/runtime-inventory.json', '/root/../runtime-inventory.json', '/root/./runtime-inventory.json',
+                '/root//runtime-inventory.json', '/root\\runtime-inventory.json', '/root/\0/runtime-inventory.json',
+                '/root/another-file.json', '/' + 'a' * 4096 + '/runtime-inventory.json'))
+            for changed in invalid:
+                runtime['inventory'] = changed
+                with self.subTest(inventory=changed), self.assertRaisesRegex(RuntimeError, 'inventory reference is invalid'):
                     driver.verify_application_qualification()
                 self.assertIsNone(driver.application_transition)
-                self.assertFalse((root / 'driver-attempt.json').exists())
+            for changed in ({**original, 'sha256': '0' * 64},
+                            {**original, 'path': '/another-qualified-root/runtime-inventory.json'}):
+                runtime['inventory'] = changed
+                with self.subTest(tampered=changed), self.assertRaisesRegex(RuntimeError, 'complete settled'):
+                    driver.verify_application_qualification()
+                self.assertIsNone(driver.application_transition)
+
+    def test_runtime_admission_still_authenticates_complete_projection_and_closure(self):
+        with self.driver_fixture() as (driver, proof, _):
+            path = driver.bundle / 'startup-qualification.json'
+            path.write_bytes(path.read_bytes() + b' ')
+            with self.assertRaisesRegex(RuntimeError, 'qualification bytes changed'):
+                driver.verify_application_qualification()
+            for key in ('actualSettledQualification', 'independentOriginalRestored', 'workerClosed'):
+                changed = copy.deepcopy(proof)
+                changed[key] = False
+                self.write_driver_proof(driver, changed)
+                with self.subTest(closure=key), self.assertRaisesRegex(RuntimeError, 'complete settled'):
+                    driver.verify_application_qualification()
+                self.assertIsNone(driver.application_transition)
 
 
 class HostedConfigurationInputsTests(unittest.TestCase):

@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,readReleaseInputFile,sha256} from './release-plan.mjs';
 import {frontendRegular} from './frontend-contract.mjs';
-import {reviewedFullHelperHashes,verifyFullCompletion,fullHostOptionsSchema} from './release-delivery-full-host.mjs';
+import {reviewedFullHelperHashes,verifyFullCompletion,fullHostOptionsSchema,priorNoStartFailureAuthority} from './release-delivery-full-host.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
 import {awaitObservationTime} from './release-observation-clock.mjs';
 
@@ -44,15 +44,30 @@ export async function awaitFullPrestageFactsTime(observedAtMilliseconds,options=
  try{return{...await awaitObservationTime(observedAtMilliseconds,{...options,maximumWaitMilliseconds:5000,maximumAgeMilliseconds:300000,maximumSamples:128}),kind:'full-prestage-facts-clock-observation'};}
  catch(error){error.message=reasons[error.message]??error.message;if(error.clockObservation)error.clockObservation.kind='full-prestage-facts-clock-observation';throw error;}
 }
+export function fullPrestageFactsInput(c,options){
+ const op=c.descriptor.operation,failure=priorNoStartFailureAuthority(options,op);if(!failure)return null;
+ const facts=c.prior.capacity.facts;
+ need(facts.health?.candidateId===op.priorCandidateId&&facts.health.version===options.priorVersion&&facts.health.buildVersion===options.priorBuildVersion
+  &&Number.isSafeInteger(facts.health.schemaVersion)&&typeof facts.appRoot==='string'&&facts.appRoot.startsWith('/'),'full-prestage-no-start-current-prior-required');
+ return {kind:'explicit-no-start-prior-facts',hostConfiguration:options.hostConfiguration,acceptedInstallation:options.acceptedInstallation,priorJobId:options.priorJobId,
+  prior:{candidateId:op.priorCandidateId,version:options.priorVersion,buildVersion:options.priorBuildVersion,agentVersion:op.priorAgentVersion,schemaVersion:facts.health.schemaVersion,workspaceEpoch:op.workspaceEpoch,appRoot:facts.appRoot},failure};
+}
 export function fullPrestageBinding(c,options,facts,assets){
  fullHostOptionsSchema.parse(options);const op=c.descriptor.operation,s=c.prior.sign,r=c.prior.recovery;
  verifyFullCompletion(r.completion,r.values);
+ const noStart=fullPrestageFactsInput(c,options),job=facts.currentJob;
+ const currentAccepted=job?.id===options.priorJobId&&job.state==='completed'&&job.hold===false&&job.candidateId===op.priorCandidateId&&!facts.noStartFailure;
+ const a=noStart?.failure.authority;
+ const currentFailed=noStart&&same(facts.noStartFailure?.input,noStart)&&facts.noStartFailure.installerArtifactsAbsent===true
+  &&same(facts.noStartFailure.attemptMembers,[noStart.failure.preflight.path.split('/').at(-1)])
+  &&job?.id===a.jobId&&job.state==='failed'&&job.prepared===true&&job.started===false&&job.hold===false
+  &&job.candidateId===a.candidateId&&job.fromCandidateId===a.priorCandidateId&&job.releaseId===a.bundleSha256&&job.epoch===a.workspaceEpoch&&job.idempotencyKey===a.idempotencyKey
+  &&facts.noStartFailure.priorIdentity?.health?.candidateId===op.priorCandidateId&&facts.noStartFailure.priorIdentity.workspaceEpoch===op.workspaceEpoch;
  need(facts?.format===1&&facts.kind==='current-install-prestage-facts'&&facts.readOnly===true&&facts.hostWrites===false
   &&facts.hostConfiguration.path===options.hostConfiguration.path&&facts.hostConfiguration.sha256===options.hostConfiguration.sha256
   &&facts.result.path===options.acceptedInstallation.path&&facts.result.sha256===options.acceptedInstallation.sha256
-  &&facts.currentJob.id===options.priorJobId&&facts.currentJob.state==='completed'&&facts.currentJob.hold===false
-  &&facts.currentJob.candidateId===op.priorCandidateId&&facts.controller.holdFor===null
-  &&facts.controller.job?.id===options.priorJobId&&facts.controller.job.state==='completed','full-prestage-current-installation-changed');
+  &&(noStart?currentFailed:currentAccepted)&&facts.controller.holdFor===null
+  &&facts.controller.job?.id===job.id&&facts.controller.job.state===job.state,'full-prestage-current-installation-changed');
  need(facts.resultValue.candidateId===op.priorCandidateId&&facts.resultValue.jobId===options.priorJobId&&facts.resultValue.outcome==='completed'
   &&['savedWorkVerified','accountsVerified','healthVerified','recoveryVerified'].every(k=>facts.resultValue[k]===true),'full-prestage-prior-result-incomplete');
  need(r.values.candidateId===op.priorCandidateId&&r.values.workspaceEpoch===op.workspaceEpoch,'full-prestage-rehearsal-base-changed');
@@ -147,7 +162,8 @@ export async function advanceFullPrestage(c,{assets,transport,options,tools,comm
  };
  let input=original?.value;
  if(!input){
-  const factsResult=await call('facts',null,{});if(factsResult.state!=='completed')return factsResult;const facts=unwrapFullPrestage(factsResult.output);
+  const factsInput=fullPrestageFactsInput(c,options);
+  const factsResult=await call('facts',factsInput?{FACTS_INPUT:factsInput}:null,{});if(factsResult.state!=='completed')return factsResult;const facts=unwrapFullPrestage(factsResult.output);
   try{await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});}
   catch(error){
    const actualFacts=save(c,storeReceipt,'full-prestage-clock-facts-'+factsResult.output.stdoutSha256+'.json',factsResult.output);

@@ -138,7 +138,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
   if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])){
     need(v.baselineLineage==='verified-pre-swap-aborted-operator-snapshot','incident-capture-baseline-required');
     need(binding.helpers['recovery.py']==='23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
-      &&binding.helpers['install.py']==='1875b052126dded937ade4b5c0e0515749c6b0a16eefd87c980975740d4126b8',
+      &&binding.helpers['install.py']==='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59',
       'capture-lifecycle-helper-source-required');
     const id=z.string().regex(/^(0|[1-9][0-9]*)$/);
     const names=z.array(z.string().regex(/^admission-[A-Za-z0-9]{6}$/)).max(16);

@@ -1,3 +1,9 @@
+## [2.28.27] - 2026-11-07
+
+- Accept complete runtime qualification records during hosted update preparation while continuing to verify every runtime identity and the saved verification evidence.
+- Reject incomplete or changed qualification records before installation begins.
+- Prepare a new update after an earlier attempt stops before installation, preserving the failed attempt and the verified working version.
+
 ## [2.28.26] - 2026-11-06
 
 - Recognize verified temporary runtime cache cleanup during startup and restart while keeping saved work, permissions, and recovery checks strict.

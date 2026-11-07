@@ -18,7 +18,9 @@ def inspect(request):
  target=request['transport'];need(set(target)=={'format','hostAlias','sshConfig'} and target['format']==1 and re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}',target['hostAlias']),'prestage-fixed-transport-required');reference(target['sshConfig'],65536)
  root=P(request['outputDirectory']);need(root.is_absolute() and root.parent.resolve(strict=True)==root.parent and root.name=='full-prestage-'+request['key'],'prestage-output-scope');need(not root.is_symlink(),'prestage-output-redirected')
  binding=request['binding']
- if binding is not None:
+ if binding is not None and set(binding)=={'FACTS_INPUT'}:
+  need(set(request['files'])==set() and binding['FACTS_INPUT']['kind']=='explicit-no-start-prior-facts','prestage-facts-input-scope')
+ elif binding is not None:
   runtime=binding.get('RUNTIME')
   fields={'BUNDLE','BUNDLE_BYTES','TARGET','PRIOR','PRIOR_VERSION','EPOCH','JOB','LEASE','PROOF','INCOMING','NONCE','SPECS','CURRENT_FACTS','CAPACITY','EXCLUDED','acceptedInstallation','hostConfiguration','STAGE_PLAN','STAGE_INTENT','STAGE_PLAN_RAW_BASE64'}
   need(set(binding)==fields|({'RUNTIME','PRIOR_AGENT_VERSION'} if runtime else set()),'prestage-exact-host-binding')
@@ -37,7 +39,9 @@ def program(request,mode):
  name='install-facts.py' if mode=='facts' else 'asset-stage.py';source=F.raw(HERE/'full-host-primitives'/name,2*1024**2)
  need(sha(source)==request['helperHashes']['full-host-primitives/'+name],'prestage-program-changed')
  b64=base64.b64encode(source).decode();binding={**(request['binding'] or {}),'MODE':mode};data=base64.b64encode(json.dumps(binding).encode()).decode()
- return ("import base64,hashlib,json,signal\nsignal.alarm(300)\ns=base64.b64decode('"+b64+"',validate=True)\nassert hashlib.sha256(s).hexdigest()=='"+sha(source)+"'\nBINDING=json.loads(base64.b64decode('"+data+"',validate=True))\nexec(compile(s,'fixed-original-full-prestage','exec'),{'__name__':'__main__','BINDING':BINDING})\n").encode()
+ shared=F.raw(HERE/'full-host-primitives/install-facts.py',2*1024**2)
+ need(sha(shared)==request['helperHashes']['full-host-primitives/install-facts.py'],'prestage-facts-source-changed')
+ return ("import base64,hashlib,json,signal\nsignal.alarm(300)\ns=base64.b64decode('"+b64+"',validate=True)\nassert hashlib.sha256(s).hexdigest()=='"+sha(source)+"'\nBINDING=json.loads(base64.b64decode('"+data+"',validate=True))\nf=base64.b64decode('"+base64.b64encode(shared).decode()+"',validate=True)\nassert hashlib.sha256(f).hexdigest()=='"+sha(shared)+"'\nINSTALL_FACTS={'__name__':'prestage_install_facts'}\nexec(compile(f,'fixed-prestage-install-facts','exec'),INSTALL_FACTS)\nexec(compile(s,'fixed-original-full-prestage','exec'),{'__name__':'__main__','BINDING':BINDING,'INSTALL_FACTS':INSTALL_FACTS})\n").encode()
 def remote(request,mode):
  p=program(request,mode);r=subprocess.run(argv(request)+['sudo -n /usr/bin/python3 -B -'],input=p,capture_output=True,timeout=360)
  need(r.returncode==0 and len(r.stdout)<=131072 and len(r.stderr)<=4096,'prestage-original-remote-outcome-uncertain')
@@ -45,6 +49,8 @@ def remote(request,mode):
 def produce(mode,request):
  root=inspect(request);effect=mode in ('prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage')
  need(mode in ('facts','plan','prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage','observe','transfer-observe'),'prestage-fixed-mode')
+ facts_input=request['binding'] is not None and set(request['binding'])=={'FACTS_INPUT'}
+ need((mode=='facts' and (request['binding'] is None or facts_input)) or (mode!='facts' and request['binding'] is not None and not facts_input),'prestage-facts-binding-mode')
  if not root.exists():root.mkdir(mode=0o700)
  need(root.resolve(strict=True)==root and root.is_dir(),'prestage-output-redirected')
  intent={'format':1,'operationId':request['operationId'],'key':request['key'],'inputSha256':request['inputSha256'],'requestSha256':sha(F.enc(request)),'phase':mode,'automaticReplayPermitted':False}

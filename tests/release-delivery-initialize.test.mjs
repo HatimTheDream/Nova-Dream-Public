@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {randomUUID,sign} from 'node:crypto';
 import {initializeFixture,enableFrontendFixture,completedDeliveryFixture} from '../support/delivery-initialize-fixture.mjs';
 import {deriveDeliveryConfiguration,initializeDeliveryInput,exportSuccessorProfile,validateAcceptedProfile} from '../scripts/release-delivery-initialize.mjs';
-import {deliveryAdapterIdentity} from '../scripts/release-delivery-adapters.mjs';
+import {deliveryAdapterIdentity,deliveryTargetIdentity} from '../scripts/release-delivery-adapters.mjs';
 import {verifyInstalledIdentity} from '../scripts/release-delivery-installed-identity.mjs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {runtimeCommandFixture} from '../support/runtime-command-fixture.mjs';
@@ -13,6 +13,84 @@ import {FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
 import {canonicalBrowser,browserOptionsSchema} from '../scripts/release-delivery-browser.mjs';
 
 const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f.input).path,{protect:f.protect,clock:()=>f.now,derive:(input,profile)=>deriveDeliveryConfiguration(input,profile,f.options),...extra});
+
+// Inert original failed publication; real signature and retained authority
+// validation run, while the existing fixture forbids host/signing-key effects.
+function noStartPublishedFixture(t){
+ const f=initializeFixture(t,{buildVersion:'1.0.401'}),old={id:randomUUID(),candidateId:'d'.repeat(64),
+  priorCandidateId:f.identity.candidateId,workspaceEpoch:f.request.operation.workspaceEpoch,bundleSha256:'e'.repeat(64),
+  version:'3.1.1',buildVersion:'1.0.400',agentVersion:'2026.9.8',priorAgentVersion:'2026.9.8',
+  trustedPublicKeySha256:f.target.full.signing.publicKey.sha256,sourceCommits:{private:'3'.repeat(40),public:'4'.repeat(40)}};
+ const job=randomUUID(),key=randomUUID(),feed=structuredClone(f.feed);feed.sequence=40;
+ Object.assign(feed.releases[0],{candidateId:old.candidateId,fromCandidateId:old.priorCandidateId,novaVersion:old.version});
+ feed.releases[0].bundle.sha256=old.bundleSha256;
+ Object.assign(feed.releases[0].compatibility,{fromNovaVersion:'3.1.0',pluginVersion:old.version});
+ const exported={format:1,kind:'read-only-original-coordinator-terminal-export',readOnly:true,
+  originalControllerResponseClaimed:false,operationId:old.id,
+  intent:{state:'failed',idempotencyKey:key,externalJobId:job,lastObservation:{state:'failed',
+   reasonCode:'controller-job-terminal-not-installed',idempotencyKey:key,externalJobId:job,
+   candidateId:old.candidateId,priorCandidateId:old.priorCandidateId,workspaceEpoch:old.workspaceEpoch}},
+  installationPhase:{phase:'installation',state:'failed',externalId:job,current:{state:'failed',externalId:job},
+   input:{coordinatorDescriptor:{input:{operation:old,evidence:{}}}}}};
+ const publish=()=>{
+  const raw=Buffer.from(JSON.stringify(feed)+'\n'),signedFeed=f.put('failed-feed.json',{
+   payload:raw.toString('base64'),signature:sign(null,raw,f.keys.privateKey).toString('base64')});
+  const published={format:1,applicationInstalled:false,publicFeedReadVerified:true,
+   publicFeedSha256:signedFeed.sha256,sequence:feed.sequence,repositories:['private','public'].map((side,i)=>({
+    repository:'Nova-Dream'+(i?'-Public':''),sourceCommit:old.sourceCommits[side],feedParentCommit:old.sourceCommits[side],
+    feedCommit:(i?'6':'5').repeat(40),changedOnly:(i?'':'edition3/')+'updates/stable.json',pushed:true,
+    unrelatedIndexPreserved:true,feedSha256:signedFeed.sha256,sequence:feed.sequence}))};
+  const publication={feed:signedFeed,publicKey:f.target.full.signing.publicKey,receipt:f.put('failed-publication.json',published)};
+  exported.installationPhase.input.coordinatorDescriptor.input.evidence.publication=publication;
+  f.target.full.signing.previousFeed=signedFeed;return{publication,published};
+ };
+ const original=publish();
+ f.target.full.host={format:1,hostConfiguration:f.target.assistantHost.hostConfig,
+  helperDirectory:'/opt/nova-release-tools/synthetic/helpers',acceptedInstallation:f.identity.installationProof.installerResult,
+  priorVersion:'3.1.0',priorBuildVersion:'1.0.399',priorJobId:f.identity.jobId,
+  stageParent:'/opt/nova-release-tools/synthetic',startupGuardFile:null,
+  excludedIdentities:{candidateIds:[],bundleSha256s:[],rehearsalLeaseIds:[]},priorNoStartFailure:{
+   operation:{path:'/var/lib/nova-update/release-coordinator/inputs/'+old.id+'.json',sha256:'1'.repeat(64)},
+   intent:{path:'/var/lib/nova-update/release-coordinator/'+old.id+'/intent.json',sha256:'2'.repeat(64)},
+   preflight:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/attempts/'+job+'/preflight-'+key+'.json',sha256:'3'.repeat(64)},
+   coordinatorExport:f.put('failed-export.json',exported)}};
+ const refresh=()=>{
+  if(f.target.full.host.priorNoStartFailure)f.target.full.host.priorNoStartFailure.coordinatorExport=f.put('failed-export.json',exported);
+  f.profile.target=f.put('configured-target.json',f.target);f.profile.targetIdentity=deliveryTargetIdentity({target:f.profile.target});
+ };
+ refresh();return{...f,old,failedFeed:feed,exported,publish,refresh,...original};
+}
+
+test('explicit never-started publication advances latest signed sequence without replacing accepted prior',async t=>{
+ const f=noStartPublishedFixture(t),accepted=structuredClone(f.profile.accepted),v=await deriveDeliveryConfiguration(f.input,f.profile,f.options);
+ assert.equal(v.target.full.feed.sequence,41);assert.equal(v.operation.priorCandidateId,f.identity.candidateId);
+ assert.equal(v.target.full.host.priorJobId,f.identity.jobId);
+ assert.deepEqual(v.target.full.host.acceptedInstallation,f.identity.installationProof.installerResult);
+ assert.deepEqual(v.target.bases,f.target.bases);assert.deepEqual(f.profile.accepted,accepted);
+ assert.equal(existsSync(f.input.outputRoot),false);assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+});
+
+test('unbound, uncertain, unsigned or mismatched failed publications never replace the feed predecessor',async t=>{
+ const changes={
+  missing:f=>{delete f.target.full.host.priorNoStartFailure;},
+  uncertain:f=>{f.exported.intent.state='uncertain';},
+  replay:f=>{f.input.operationId=f.old.id;},
+  olderAccepted:f=>{f.target.full.signing.previousFeed=f.signedFeed;},
+  candidate:f=>{f.failedFeed.releases[0].candidateId='f'.repeat(64);f.publish();},
+  bundle:f=>{f.failedFeed.releases[0].bundle.sha256='f'.repeat(64);f.publish();},
+  prior:f=>{f.failedFeed.releases[0].fromCandidateId='f'.repeat(64);f.publish();},
+  unknownExtra:f=>{f.failedFeed.releases.push(structuredClone(f.failedFeed.releases[0]));f.publish();},
+  notNewer:f=>{for(const side of ['private','public'])f.packages[side].edition3.buildVersion=f.old.buildVersion;},
+  unsigned:f=>{const value=JSON.parse(readFileSync(f.target.full.signing.previousFeed.path));value.signature=Buffer.alloc(64).toString('base64');f.target.full.signing.previousFeed=f.put('unsigned-feed.json',value);},
+  unverifiedPublication:f=>{f.published.publicFeedReadVerified=false;f.publication.receipt=f.put('failed-publication.json',f.published);},
+  corruptedExport:f=>{f.refresh();writeFileSync(f.target.full.host.priorNoStartFailure.coordinatorExport.path,'changed');}
+ };
+ for(const [name,change] of Object.entries(changes))await t.test(name,async t=>{
+  const f=noStartPublishedFixture(t);change(f);if(name!=='corruptedExport')f.refresh();
+  await assert.rejects(deriveDeliveryConfiguration(f.input,f.profile,f.options));
+  assert.equal(existsSync(f.input.outputRoot),false);assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+ });
+});
 
 // Inert retained browser evidence: exercises export verification, never launches a browser.
 function completedBrowser(f,c){

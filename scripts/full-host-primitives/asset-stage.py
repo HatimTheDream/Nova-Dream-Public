@@ -71,12 +71,18 @@ def preflight():
  require(hashlib.sha256(raw(P('/etc/nova-update/config.json'))).hexdigest()==CURRENT_FACTS['hostConfiguration']['sha256'],'Exact host configuration changed.')
  journal=json.loads(journal_bytes);jobs=[j for j in journal['jobs'] if j['id']==journal['currentId']];require(len(jobs)==1,'Current job ambiguous.');job=jobs[0]
  require(job==CURRENT_FACTS['currentJob'],'Actual completed prior job changed.')
+ failure=CURRENT_FACTS.get('noStartFailure')
+ if failure is not None:
+  refreshed=INSTALL_FACTS['collect'](failure['input'])
+  require(all(refreshed[k]==CURRENT_FACTS[k] for k in ('hostConfiguration','journal','currentJob','result','resultValue','noStartFailure')),'Original preflight-only failure or accepted prior changed.')
  result_ref=CURRENT_FACTS['result'];result_bytes=raw(P(result_ref['path']));require(hashlib.sha256(result_bytes).hexdigest()==result_ref['sha256'] and json.loads(result_bytes)==CURRENT_FACTS['resultValue'],'Actual completed install proof changed.')
  client=Control('localhost',timeout=5)
  try:
   client.request('POST','/v1/status',b'{}',{'Content-Type':'application/json'});response=client.getresponse();data=response.read(65537);require(response.status==200 and len(data)<=65536,'Controller observation failed.');view=json.loads(data)
  finally:client.close()
- require(view.get('holdFor') is None and view.get('job',{}).get('id')==JOB and view['job']['state']=='completed','Controller restored job/hold changed.')
+ current_job=CURRENT_FACTS['currentJob']
+ require(view.get('holdFor') is None and view.get('job',{}).get('id')==current_job['id'] and view['job']['state']==current_job['state']
+  and ((failure is None and current_job['id']==JOB and current_job['state']=='completed') or (failure is not None and current_job['state']=='failed' and current_job.get('prepared') is True and current_job.get('started') is False and current_job.get('hold') is False)),'Controller restored job/hold changed.')
  lease=json.loads(raw(STATE/'operator-maintenance/current.json'))
  require(lease['id']==LEASE and lease['phase']=='released' and lease['releaseKind']=='rehearsed' and lease['candidateId']==PRIOR and lease['workspaceEpoch']==EPOCH and lease['proofSha256']==PROOF,'Actual released automatic rehearsal changed.')
  proof=raw(STATE/'operator-maintenance'/LEASE/'acceptance.json');require(hashlib.sha256(proof).hexdigest()==PROOF,'Automatic proof changed.')

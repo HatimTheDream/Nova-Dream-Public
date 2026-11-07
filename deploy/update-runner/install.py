@@ -416,7 +416,25 @@ class Driver:
         runtime = {'agent': str(self.prior_agent), 'agentNode': str(self.prior_agent_node),
                    'agentNodeSha256': digest(self.prior_agent_node), 'agentVersion': '2026.9.8',
                    'node': str(self.node), 'nodeSha256': digest(self.node), 'root': str(self.runtime_root)}
-        require(qualification.get('binding', {}).get('runtime') == runtime,
+        qualified_runtime = qualification.get('binding', {}).get('runtime')
+        require(type(qualified_runtime) is dict and set(qualified_runtime) == set(runtime) | {'inventory'},
+                'The qualified runtime must retain its complete identity and original inventory reference.')
+        inventory_ref = qualified_runtime['inventory']
+        require(type(inventory_ref) is dict and set(inventory_ref) == {'path', 'sha256'}
+                and type(inventory_ref['path']) is str and len(inventory_ref['path']) <= 4096
+                and '\\' not in inventory_ref['path'] and '\0' not in inventory_ref['path']
+                and not inventory_ref['path'].startswith('//')
+                and pathlib.PurePosixPath(inventory_ref['path']).is_absolute()
+                and str(pathlib.PurePosixPath(inventory_ref['path'])) == inventory_ref['path']
+                and '..' not in pathlib.PurePosixPath(inventory_ref['path']).parts
+                and inventory_ref['path'].endswith('/runtime-inventory.json')
+                and type(inventory_ref['sha256']) is str and re.fullmatch('[a-f0-9]{64}', inventory_ref['sha256']),
+                'The qualified runtime inventory reference is invalid.')
+        # The producer retains the inventory proof beside the observed identity.
+        # Its exact reference remains authenticated by the bundled projection and
+        # complete binding comparison below; it is not an observed runtime field.
+        require(all(type(qualified_runtime[name]) is str and qualified_runtime[name] == value
+                    for name, value in runtime.items()),
                 'The qualified application transition used another native runtime or platform binary.')
         helpers = qualification.get('binding', {}).get('helpers', {})
         names = APPLICATION_TRANSITION_HELPERS

@@ -20,7 +20,8 @@ import {validateInstalledIdentityRequest} from './release-delivery-assistant-ful
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
-import {FULL_HELPERS} from './release-delivery-full-host.mjs';
+import {FULL_HELPERS,priorNoStartFailureAuthority} from './release-delivery-full-host.mjs';
+import {pairedFullPublicationReceipt} from './release-delivery-full-publication.mjs';
 import {predecessorRecoverySchema,verifyRecoveryPredecessor} from './release-delivery-capability-disposition.mjs';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/);
@@ -149,7 +150,25 @@ export async function deriveDeliveryConfiguration(input,profile,{command=fixedCo
    await prepareFeedDependencies({base:target.bases.private,pair:profile.accepted.pair,dependencies,python:target.sourceTools.python,command});
   }
  const contract=await feedContract(target.bases.private,{operation:{priorCandidateId:accepted.operation.candidateId}}),previous=contract.updateManifestSchema.parse(JSON.parse(raw));
-  need(previous.channel===target.full.feed.channel&&previous.releases.some(r=>r.candidateId===accepted.operation.candidateId&&r.bundle.sha256===profile.accepted.bundle.sha256),'accepted-feed-predecessor-changed');
+  if(target.full.host?.priorNoStartFailure){
+   // A published release that never started is the sequence predecessor, while
+   // the independently accepted profile remains the installed/recovery prior.
+   const failure=priorNoStartFailureAuthority(target.full.host,{id:input.operationId,candidateId:null,
+    priorCandidateId:accepted.operation.candidateId,workspaceEpoch:accepted.operation.workspaceEpoch});
+   const oldInput=json(failure.coordinatorExport).installationPhase.input.coordinatorDescriptor.input;
+   const old=oldInput.operation,publication=oldInput.evidence?.publication;
+   need(same(publication?.feed,target.full.signing.previousFeed)&&same(publication?.publicKey,keyRef)
+    &&old.trustedPublicKeySha256===keyRef.sha256,'no-start-published-feed-reference-changed');
+   const published=json(publication.receipt);
+   need(same(published,pairedFullPublicationReceipt({signed:{signedFeed:publication.feed,sequence:previous.sequence},
+    sourceCommits:old.sourceCommits},published.repositories,published)),'no-start-published-feed-proof-changed');
+   const release=previous.releases[0],authority=failure.authority;
+   need(previous.channel===target.full.feed.channel&&previous.releases.length===1
+    &&release.candidateId===authority.candidateId&&release.bundle.sha256===authority.bundleSha256
+    &&release.fromCandidateId===authority.priorCandidateId&&release.novaVersion===old.version
+    &&release.agentVersion===old.agentVersion&&release.compatibility.fromAgentVersion===old.priorAgentVersion
+    &&newerVersion(version,old.version)&&newerVersion(buildVersion,old.buildVersion),'no-start-published-feed-predecessor-changed');
+  }else need(previous.channel===target.full.feed.channel&&previous.releases.some(r=>r.candidateId===accepted.operation.candidateId&&r.bundle.sha256===profile.accepted.bundle.sha256),'accepted-feed-predecessor-changed');
   target.full.feed={channel:previous.channel,sequence:nextSequence(previous.sequence),createdAt,expiresAt};
   target.full.bundleUrl=`https://github.com/${fullRepository}/releases/download/nova-v${version}/nova-${version}-operator-bundle.json`;
   target.full.dependenciesUrl=`https://github.com/${fullRepository}/releases/download/nova-v${version}/nova-${version}-app-dependencies.tgz`;

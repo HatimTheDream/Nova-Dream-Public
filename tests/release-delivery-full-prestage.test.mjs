@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sha256} from '../scripts/release-plan.mjs';
-import {bindFullPrestagePlan,unwrapFullPrestage,verifyFullPrestageResult,fullPrestageHelpers,advanceFullPrestage,verifyFullProtectedAssets} from '../scripts/release-delivery-full-prestage.mjs';
+import {bindFullPrestagePlan,unwrapFullPrestage,verifyFullPrestageResult,fullPrestageHelpers,advanceFullPrestage,verifyFullProtectedAssets,fullPrestageFactsInput,fullPrestageBinding} from '../scripts/release-delivery-full-prestage.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,existsSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -38,7 +38,7 @@ test('copy observation must retain exact original preparation, identities, files
 test('fixed prestage closure includes root authority and read-only install facts',()=>{
  const helpers=fullPrestageHelpers();assert.equal(Object.keys(helpers).length,4);for(const h of Object.values(helpers))assert.match(h,/^[a-f0-9]{64}$/);
 });
-for(const variant of ['legacy','runtime','qualified-dependencies'])test('lost original '+(variant==='runtime'?'runtime upload and ':variant==='qualified-dependencies'?'qualified dependencies ':'')+'copy response resumes by observation without duplicate effects',async t=>{
+for(const variant of ['legacy','runtime','qualified-dependencies','no-start'])test('lost original '+(variant==='runtime'?'runtime upload and ':variant==='qualified-dependencies'?'qualified dependencies ':variant==='no-start'?'explicit no-start prior ':'')+'copy response resumes by observation without duplicate effects',async t=>{
  const runtimeEnabled=variant==='runtime';
  const f=fullHostFixture(),root=mkdtempSync(join(tmpdir(),'nova-full-prestage-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
  const put=(n,b)=>{const path=join(root,n);writeFileSync(path,b);return{path,sha256:sha256(Buffer.from(b))};};
@@ -60,6 +60,29 @@ for(const variant of ['legacy','runtime','qualified-dependencies'])test('lost or
  const facts={format:1,kind:'current-install-prestage-facts',readOnly:true,hostWrites:false,observedAtMilliseconds:1000,
   hostConfiguration:f.options.hostConfiguration,result:f.options.acceptedInstallation,currentJob:{id:f.options.priorJobId,state:'completed',hold:false,candidateId:f.descriptor.operation.priorCandidateId},
   controller:{holdFor:null,job:{id:f.options.priorJobId,state:'completed'}},resultValue:{candidateId:f.descriptor.operation.priorCandidateId,jobId:f.options.priorJobId,outcome:'completed',savedWorkVerified:true,accountsVerified:true,recoveryVerified:true,healthVerified:true}};
+ if(variant==='no-start'){
+  const oldId='20000000-0000-4000-8000-000000000001',failedJob='20000000-0000-4000-8000-000000000002',failedKey='20000000-0000-4000-8000-000000000003';
+  const old={id:oldId,candidateId:h('4'),priorCandidateId:f.descriptor.operation.priorCandidateId,workspaceEpoch:f.descriptor.operation.workspaceEpoch,bundleSha256:h('5')};
+  const exported={format:1,kind:'read-only-original-coordinator-terminal-export',readOnly:true,originalControllerResponseClaimed:false,operationId:oldId,
+   intent:{state:'failed',idempotencyKey:failedKey,externalJobId:failedJob,lastObservation:{state:'failed',reasonCode:'controller-job-terminal-not-installed',idempotencyKey:failedKey,externalJobId:failedJob,candidateId:old.candidateId,priorCandidateId:old.priorCandidateId,workspaceEpoch:old.workspaceEpoch}},
+   installationPhase:{phase:'installation',state:'failed',externalId:failedJob,current:{state:'failed',externalId:failedJob},input:{coordinatorDescriptor:{input:{operation:old}}}}};
+  const coordinatorExport=put('terminal-export.json',JSON.stringify(exported));
+  f.options.priorNoStartFailure={operation:{path:'/var/lib/nova-update/release-coordinator/inputs/'+oldId+'.json',sha256:h('6')},intent:{path:'/var/lib/nova-update/release-coordinator/'+oldId+'/intent.json',sha256:h('7')},preflight:{path:'/var/lib/nova-update/staging/'+h('5')+'/attempts/'+failedJob+'/preflight-'+failedKey+'.json',sha256:h('8')},coordinatorExport};
+  c.prior.capacity.facts.health={candidateId:old.priorCandidateId,version:f.options.priorVersion,buildVersion:f.options.priorBuildVersion,schemaVersion:55};c.prior.capacity.facts.appRoot='/opt/nova/releases/prior/app';
+  const input=fullPrestageFactsInput(c,f.options);
+  facts.currentJob={id:failedJob,state:'failed',prepared:true,started:false,hold:false,candidateId:old.candidateId,fromCandidateId:old.priorCandidateId,epoch:old.workspaceEpoch,releaseId:old.bundleSha256,idempotencyKey:failedKey};
+  facts.controller={holdFor:null,job:{id:failedJob,state:'failed'}};
+  facts.noStartFailure={input,installerArtifactsAbsent:true,attemptMembers:[input.failure.preflight.path.split('/').at(-1)],priorIdentity:{health:c.prior.capacity.facts.health,workspaceEpoch:old.workspaceEpoch}};
+  assert.equal(fullPrestageBinding(c,f.options,facts,assets).binding.JOB,f.options.priorJobId);
+  for(const change of [v=>v.currentJob.started=true,v=>v.currentJob.hold=true,v=>v.currentJob.state='restored',v=>v.noStartFailure.installerArtifactsAbsent=false,v=>v.noStartFailure.attemptMembers.push('result.json'),v=>v.resultValue.outcome='failed']){
+   const changed=structuredClone(facts);change(changed);assert.throws(()=>fullPrestageBinding(c,f.options,changed,assets));
+  }
+  const unconfigured={...f.options};delete unconfigured.priorNoStartFailure;
+  assert.throws(()=>fullPrestageBinding(c,unconfigured,facts,assets));
+  writeFileSync(coordinatorExport.path,JSON.stringify({...exported,intent:{...exported.intent,state:'uncertain'}}));
+  const altered={...f.options,priorNoStartFailure:{...f.options.priorNoStartFailure,coordinatorExport:{...coordinatorExport,sha256:sha256(readFileSync(coordinatorExport.path))}}};
+  assert.throws(()=>fullPrestageFactsInput(c,altered),/terminal-export/);writeFileSync(coordinatorExport.path,JSON.stringify(exported));
+ }
  const storeReceipt=(_j,k,n,raw)=>{const path=join(root,'delivery-evidence',k+'-'+n);mkdirSync(join(root,'delivery-evidence'),{recursive:true});if(existsSync(path))assert.deepEqual(readFileSync(path),raw);else writeFileSync(path,raw);return{path,sha256:sha256(raw)};};
  let prepared,staged,runtimeUploaded=false;const calls=[];const command=async(_binary,args)=>{
   const mode=args[2],request=JSON.parse(readFileSync(args[4]));calls.push(mode);const b=request.binding;let out;

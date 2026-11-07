@@ -16,7 +16,7 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 source=ROOT/'deploy/update-runner/install.py'
 raw=source.read_bytes()
-assert hashlib.sha256(raw).hexdigest()=='1875b052126dded937ade4b5c0e0515749c6b0a16eefd87c980975740d4126b8'
+assert hashlib.sha256(raw).hexdigest()=='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'
 tree=ast.parse(raw)
 names={'MANAGED_COMPANION_98','RUNTIME_MAXIMUM','RUNTIME_EXPANDED_MAXIMUM','RUNTIME_PROFILES'}
 nodes=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in names for t in n.targets)]
