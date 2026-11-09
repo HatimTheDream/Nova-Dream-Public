@@ -17,14 +17,14 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
+  'qualified-startup.py':'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9',
   'qualified-parent.py':'11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722',
   'produce-startup-inputs.py':'f3924c9350636eb7ecb0bcebaef62dcb21b38acf7c3653399ae01be2a8442d89',
   'contracts.py':'99b4ec258324ce3d87e52a01ddd17dcddd76324c204fc6ce6ad991ee3fdbb32d',
 });
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
-const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,QUALIFIED_STARTUP_SOURCES['qualified-startup.py']]);
+const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',QUALIFIED_STARTUP_SOURCES['qualified-startup.py']]);
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
 const HELPERS=['install.py','recovery.py','operator_rehearsal.py','app_dependencies.py','codex_log_retention.py','workspace_key.py','verify-session-bindings.mjs'];
@@ -138,7 +138,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
   if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])){
     need(v.baselineLineage==='verified-pre-swap-aborted-operator-snapshot','incident-capture-baseline-required');
     need(binding.helpers['recovery.py']==='23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
-      &&binding.helpers['install.py']==='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59',
+      &&['941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59','f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a'].includes(binding.helpers['install.py']),
       'capture-lifecycle-helper-source-required');
     const id=z.string().regex(/^(0|[1-9][0-9]*)$/);
     const names=z.array(z.string().regex(/^admission-[A-Za-z0-9]{6}$/)).max(16);

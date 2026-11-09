@@ -342,15 +342,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise RuntimeError('Unexpected redirect from local acceptance.')
 
 
-def staging_capacity(source, source_inodes, baseline, baseline_inodes, free, candidate_bytes):
-    """Validate live topology while budgeting only allocations before stop."""
-    require(inode_ids(source_inodes).isdisjoint(inode_ids(baseline_inodes)), 'Live files already share recovery inodes.')
-    for relative, entry in source.items():
-        old = baseline.get(relative)
-        if entry['kind'] == 'file' and old and old.get('kind') == 'file':
-            comparable = lambda value: {key: item for key, item in value.items() if key != 'hardlink_group'}
-            require(comparable(entry) != comparable(old) or entry.get('hardlink_group') == old.get('hardlink_group'),
-                    'Changed hardlink topology requires a separately reviewed copy.')
+def candidate_staging_capacity(free, candidate_bytes):
+    """Budget immutable staging; snapshot_closed validates stopped recovery topology."""
     required = candidate_bytes + RESERVE + 2 * ALLOWANCE
     if free < required:
         raise InsufficientStorage('Candidate staging and operating reserve do not fit.')
@@ -1367,8 +1360,6 @@ class Driver:
     def stage_app(self):
         selected, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine)
         members = self.archive_members()
-        source, source_inodes = inventory(self.data)
-        baseline, baseline_inodes = inventory(self.baseline / 'workspace')
         required = sum(member.size for member in members) + len(members) * 4096
         required += self.application_dependency_storage_required()
         self.migration_storage_required = 0
@@ -1389,7 +1380,7 @@ class Driver:
             self.migration_storage_required = 2 * native_bytes
             required += self.migration_storage_required
             require(self.runtime_root.stat().st_dev == self.recovery_root.stat().st_dev, 'Runtime and recovery capacity require the same reviewed filesystem.')
-        plan = staging_capacity(source, source_inodes, baseline, baseline_inodes, shutil.disk_usage(self.recovery_root).free, required + companion_bytes)
+        plan = candidate_staging_capacity(shutil.disk_usage(self.recovery_root).free, required + companion_bytes)
         plan.update(self.managed_companion_capacity)
         plan['candidateBytes'] -= companion_bytes
         require(self.releases.stat().st_dev == self.recovery_root.stat().st_dev, 'Candidate and recovery capacity need a separately reviewed filesystem plan.')

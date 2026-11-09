@@ -16,7 +16,7 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 source=ROOT/'deploy/update-runner/install.py'
 raw=source.read_bytes()
-assert hashlib.sha256(raw).hexdigest()=='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'
+assert hashlib.sha256(raw).hexdigest()=='f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a'
 tree=ast.parse(raw)
 names={'MANAGED_COMPANION_98','RUNTIME_MAXIMUM','RUNTIME_EXPANDED_MAXIMUM','RUNTIME_PROFILES'}
 nodes=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in names for t in n.targets)]
@@ -66,7 +66,7 @@ class CapacityTests(unittest.TestCase):
    archive_members=lambda:[],application_dependency_storage_required=lambda:0,runtime_target=self.runtime_root/'not-yet-staged')
   driver.runtime_storage_required=lambda:maintained['runtime_storage_required'](driver)
   bindings={'native_preflight':lambda *a:(pathlib.Path('.'),'fixture',paths),'inventory':lambda p:({},{}),
-   'staging_capacity':lambda a,b,c,d,free,candidate:{'freeBytes':free,'candidateBytes':candidate},'write_json':save}
+   'candidate_staging_capacity':lambda free,candidate:{'freeBytes':free,'candidateBytes':candidate},'write_json':save}
   with patch.dict(maintained,bindings),patch.dict(sys.modules,{'pwd':self.pwd}):
    with self.assertRaises(Captured):maintained['stage_app'](driver)
   return driver.migration_storage_required,observed

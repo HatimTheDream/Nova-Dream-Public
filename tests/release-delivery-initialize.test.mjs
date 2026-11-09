@@ -16,7 +16,7 @@ const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f
 
 // Inert original failed publication; real signature and retained authority
 // validation run, while the existing fixture forbids host/signing-key effects.
-function noStartPublishedFixture(t){
+function noStartPublishedFixture(t,{unchanged=false}={}){
  const f=initializeFixture(t,{buildVersion:'1.0.401'}),old={id:randomUUID(),candidateId:'d'.repeat(64),
   priorCandidateId:f.identity.candidateId,workspaceEpoch:f.request.operation.workspaceEpoch,bundleSha256:'e'.repeat(64),
   version:'3.1.1',buildVersion:'1.0.400',agentVersion:'2026.9.8',priorAgentVersion:'2026.9.8',
@@ -54,12 +54,33 @@ function noStartPublishedFixture(t){
    intent:{path:'/var/lib/nova-update/release-coordinator/'+old.id+'/intent.json',sha256:'2'.repeat(64)},
    preflight:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/attempts/'+job+'/preflight-'+key+'.json',sha256:'3'.repeat(64)},
    coordinatorExport:f.put('failed-export.json',exported)}};
+ if(unchanged){
+  const oldFailure=f.target.full.host.priorNoStartFailure,attempt='/var/lib/nova-update/staging/'+old.bundleSha256+'/attempts/'+job;
+  const ref=name=>({path:attempt+'/'+name,sha256:'1'.repeat(64)});
+  f.target.full.host.priorUnchangedFailure={operation:oldFailure.operation,intent:oldFailure.intent,coordinatorExport:oldFailure.coordinatorExport,
+   request:ref('request.json'),result:ref('result.json'),failure:ref('failure.json'),driverAttempt:ref('driver-attempt.json'),runnerLog:ref('runner.log'),
+   preflights:[oldFailure.preflight,ref('preflight-'+randomUUID()+'.json')],runnerConfiguration:{path:'/etc/nova-update/runner.json',sha256:'2'.repeat(64)},
+   installer:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/install.py',sha256:'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'},
+   bundle:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/bundle.json',sha256:old.bundleSha256}};
+  delete f.target.full.host.priorNoStartFailure;
+  exported.signingPhase={phase:'sign',state:'completed',current:{state:'completed',output:{release:feed.releases[0],signedFeed:original.publication.feed,bundle:{sha256:old.bundleSha256}}}};
+  exported.publicationPhase={phase:'publication',state:'completed',current:{state:'completed',output:{coordinatorDescriptor:{input:exported.installationPhase.input.coordinatorDescriptor.input},evidence:original.publication}}};
+ }
  const refresh=()=>{
   if(f.target.full.host.priorNoStartFailure)f.target.full.host.priorNoStartFailure.coordinatorExport=f.put('failed-export.json',exported);
+  if(f.target.full.host.priorUnchangedFailure)f.target.full.host.priorUnchangedFailure.coordinatorExport=f.put('failed-export.json',exported);
   f.profile.target=f.put('configured-target.json',f.target);f.profile.targetIdentity=deliveryTargetIdentity({target:f.profile.target});
  };
  refresh();return{...f,old,failedFeed:feed,exported,publish,refresh,...original};
 }
+
+test('started unchanged predecessor requires its signed completed publication and distinct authority',async t=>{
+ const changes={signIncomplete:f=>{f.exported.signingPhase.state='failed';},publicationIncomplete:f=>{f.exported.publicationPhase.current.state='running';},
+  wrongInstaller:f=>{f.target.full.host.priorUnchangedFailure.installer.sha256='0'.repeat(64);},
+  signedReleaseChanged:f=>{f.exported.signingPhase.current.output.release={...f.failedFeed.releases[0],novaVersion:'99.0.0'};},
+  bothTypes:f=>{f.target.full.host.priorNoStartFailure={operation:f.target.full.host.priorUnchangedFailure.operation,intent:f.target.full.host.priorUnchangedFailure.intent,preflight:f.target.full.host.priorUnchangedFailure.preflights[0],coordinatorExport:f.target.full.host.priorUnchangedFailure.coordinatorExport};}};
+ for(const [name,change]of Object.entries(changes))await t.test(name,async t=>{const f=noStartPublishedFixture(t,{unchanged:true});change(f);if(name==='bothTypes')assert.throws(()=>f.refresh());else{f.refresh();await assert.rejects(deriveDeliveryConfiguration(f.input,f.profile,f.options));}assert.equal(existsSync(f.input.outputRoot),false);});
+});
 
 test('explicit never-started publication advances latest signed sequence without replacing accepted prior',async t=>{
  const f=noStartPublishedFixture(t),accepted=structuredClone(f.profile.accepted),v=await deriveDeliveryConfiguration(f.input,f.profile,f.options);
@@ -92,19 +113,20 @@ test('unbound, uncertain, unsigned or mismatched failed publications never repla
  });
 });
 
-test('accepted full successor retires only active no-start authority and initializes the next ordinary release',async t=>{
- const f=noStartPublishedFixture(t);f.input.profile=f.put('profile-ready.json',f.profile);
+for(const unchanged of [false,true])test('accepted full successor retires active '+(unchanged?'unchanged':'no-start')+' authority and initializes the next ordinary release',async t=>{
+ const f=noStartPublishedFixture(t,{unchanged}),field=unchanged?'priorUnchangedFailure':'priorNoStartFailure';f.input.profile=f.put('profile-ready.json',f.profile);
  const first=await initialize(f),descriptor=JSON.parse(readFileSync(first.descriptor.path));
  const paths=[first.descriptor.path,descriptor.target.path,first.initialization.path,f.input.profile.path,
-  f.target.full.host.priorNoStartFailure.coordinatorExport.path,f.target.full.signing.previousFeed.path,f.publication.receipt.path];
- const originals=paths.map(path=>[path,readFileSync(path)]),failure=structuredClone(f.target.full.host.priorNoStartFailure);
+  f.target.full.host[field].coordinatorExport.path,f.target.full.signing.previousFeed.path,f.publication.receipt.path];
+ const originals=paths.map(path=>[path,readFileSync(path)]),failure=structuredClone(f.target.full.host[field]);
  f.feed.sequence=f.failedFeed.sequence;
  const c=completedDeliveryFixture(f,first),out=await exportSuccessorProfile(c.journal,f.input.operationId,f.options);
  const profile=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(profile.target.path)),identity=c.phases.installation.current.output.acceptanceIdentity;
  assert.equal(Object.hasOwn(target.full.host,'priorNoStartFailure'),false);
+ assert.equal(Object.hasOwn(target.full.host,'priorUnchangedFailure'),false);
  assert.equal(target.full.host.priorJobId,identity.jobId);
  assert.deepEqual(target.full.host.acceptedInstallation,identity.installationProof.installerResult);
- assert.deepEqual(f.target.full.host.priorNoStartFailure,failure);
+ assert.deepEqual(f.target.full.host[field],failure);
  const exported=[out.profile.path,profile.target.path].map(path=>[path,readFileSync(path)]);
  assert.deepEqual(await exportSuccessorProfile(c.journal,f.input.operationId,f.options),out);
  for(const [path,raw]of exported)assert.deepEqual(readFileSync(path),raw);

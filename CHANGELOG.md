@@ -1,3 +1,8 @@
+## [2.28.34] - 2026-11-09
+
+- Check candidate staging space without fingerprinting a running workspace; preserve the complete stopped snapshot and rollback checks.
+- Preserve a verified unchanged failed installation as explicit predecessor evidence for a corrected release, without replaying its job.
+
 ## [2.28.33] - 2026-11-08
 
 - Use the existing bounded clock wait for delivery continuation observations, preserving original timestamps and freshness checks.

@@ -20,7 +20,7 @@ import {validateInstalledIdentityRequest} from './release-delivery-assistant-ful
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
-import {FULL_HELPERS,priorNoStartFailureAuthority} from './release-delivery-full-host.mjs';
+import {FULL_HELPERS,priorFailedInstallationAuthority} from './release-delivery-full-host.mjs';
 import {pairedFullPublicationReceipt} from './release-delivery-full-publication.mjs';
 import {predecessorRecoverySchema,verifyRecoveryPredecessor} from './release-delivery-capability-disposition.mjs';
 
@@ -152,10 +152,10 @@ export async function deriveDeliveryConfiguration(input,profile,{command=fixedCo
    await prepareFeedDependencies({base:target.bases.private,pair:profile.accepted.pair,dependencies,python:target.sourceTools.python,command});
   }
  const contract=await feedContract(target.bases.private,{operation:{priorCandidateId:accepted.operation.candidateId}}),previous=contract.updateManifestSchema.parse(JSON.parse(raw));
-  if(target.full.host?.priorNoStartFailure){
-   // A published release that never started is the sequence predecessor, while
-   // the independently accepted profile remains the installed/recovery prior.
-   const failure=priorNoStartFailureAuthority(target.full.host,{id:input.operationId,candidateId:null,
+  if(target.full.host?.priorNoStartFailure||target.full.host?.priorUnchangedFailure){
+   // A published release with verified no-start or pre-stop unchanged failure
+   // is the sequence predecessor; the accepted profile remains the live prior.
+   const failure=priorFailedInstallationAuthority(target.full.host,{id:input.operationId,candidateId:null,
     priorCandidateId:accepted.operation.candidateId,workspaceEpoch:accepted.operation.workspaceEpoch});
    const oldInput=json(failure.coordinatorExport).installationPhase.input.coordinatorDescriptor.input;
    const old=oldInput.operation,publication=oldInput.evidence?.publication;
@@ -320,6 +320,7 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
    // The accepted job is now the active prior. Its original failed predecessor
    // remains in the immutable input/descriptor, not the successor's authority.
    delete target.full.host.priorNoStartFailure;
+   delete target.full.host.priorUnchangedFailure;
   }
   if(target.full.dependencyTransport)Object.assign(target.full.dependencyTransport,{selectedPair:pair,selectedInstaller:profile.accepted.result,selectedBundle:profile.accepted.bundle});
   if(target.frontendHost)target.frontendHost.baseVersion=identity.request.operation.version;

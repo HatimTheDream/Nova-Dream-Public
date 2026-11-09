@@ -386,7 +386,7 @@ def consume(request, read, sources):
     capture_manifest = None
     if runner_sha in CAPTURE_REAPING_PRODUCERS:
         need(binding['helpers'].get('recovery.py') == '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
-             and binding['helpers'].get('install.py') == '941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59',
+             and binding['helpers'].get('install.py') in {'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59', 'f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a'},
              'startup-proof-capture-lifecycle-helper-source-required')
         original_manifest = review['baseline']['manifest']
         need(plan['inputHashes'].get(original_manifest['path']) == original_manifest['sha256'],
@@ -730,7 +730,7 @@ def capture_retirement_summary(evidence, plan, lease, candidate, epoch, attempt,
 
 CAPTURE_PRODUCER = 'bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58'
 CAPTURE_REAPING_PRODUCER = '7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb'
-CAPTURE_REAPING_PRODUCERS = frozenset({CAPTURE_REAPING_PRODUCER, '4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3'})
+CAPTURE_REAPING_PRODUCERS = frozenset({CAPTURE_REAPING_PRODUCER, '4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3', '352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9'})
 CAPTURE_PRODUCERS = frozenset({CAPTURE_PRODUCER, *CAPTURE_REAPING_PRODUCERS})
 
 REPLICA_OBSERVATION_PRODUCERS = frozenset({

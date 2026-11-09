@@ -1,5 +1,5 @@
 """Read-only protected current controller/job/result; no installation calls."""
-import hashlib,http.client,json,os,pathlib,re,socket,stat,time,urllib.request,uuid
+import base64,hashlib,http.client,json,os,pathlib,re,socket,stat,time,urllib.request,uuid
 P=pathlib.Path
 def need(v,r):
  if not v:raise RuntimeError(r)
@@ -49,7 +49,7 @@ def validate_no_start(authority,job,operation,intent,preflight,config_sha):
  need(type(preflight) is dict and set(preflight)=={'format','jobId','release','hostConfiguration','preflightIdentity'} and preflight['format']==1 and preflight['jobId']==authority['jobId'] and preflight['hostConfiguration']=='/etc/nova-update/config.json' and preflight['preflightIdentity']=={'candidateId':authority['priorCandidateId'],'workspaceEpoch':authority['workspaceEpoch']},'no-start-preflight-binding-changed')
  release=preflight['release'];need(release==job.get('release') and release.get('candidateId')==authority['candidateId'] and release.get('fromCandidateId')==authority['priorCandidateId'] and release.get('bundle',{}).get('sha256')==authority['bundleSha256'],'no-start-signed-release-changed')
 
-def prior_identity(config,prior):
+def prior_identity(config,prior,normal_access=False):
  class NoRedirect(urllib.request.HTTPRedirectHandler):
   def redirect_request(self,*args,**kwargs):raise RuntimeError('prior-identity-redirect')
  opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
@@ -74,7 +74,69 @@ def prior_identity(config,prior):
  health=get('health');context=get('access/context')
  expected={'status':'ready','candidateId':prior['candidateId'],'version':prior['version'],'buildVersion':prior['buildVersion'],'schemaVersion':prior['schemaVersion'],'apiVersion':1}
  need(all(health.get(k)==v for k,v in expected.items()) and context.get('workspaceEpoch')==prior['workspaceEpoch'] and get('health')==health and selectors()==selected,'prior-live-identity-changed')
+ if normal_access:need(context.get('recovery') is False and context.get('recoveryLocal') is False,'prior-normal-access-required')
  return {'health':{k:health[k] for k in expected},'workspaceEpoch':context['workspaceEpoch'],'selectors':selected}
+
+UNCHANGED_INSTALLER='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'
+def absent_role(path):
+ need(path.is_absolute() and path.parent.resolve(strict=True)==path.parent,'unchanged-recovery-parent-redirected')
+ for part in (path.parent,*path.parent.parents):
+  s=part.lstat();need(stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022,'unchanged-recovery-parent-unprotected')
+ try:path.lstat()
+ except FileNotFoundError:return
+ raise RuntimeError('unchanged-recovery-role-present')
+
+def collect_unchanged(spec,config,cb,job,state):
+ need(set(spec)=={'kind','hostConfiguration','acceptedInstallation','priorJobId','prior','failure'} and spec['kind']=='explicit-unchanged-prior-facts' and state==P('/var/lib/nova-update'),'exact-unchanged-facts-input-required')
+ need(reference(spec['hostConfiguration'])==cb and spec['hostConfiguration']['path']=='/etc/nova-update/config.json','unchanged-config-changed')
+ f=spec['failure'];keys={'operation','intent','request','result','failure','driverAttempt','runnerLog','preflights','installer','bundle','runnerConfiguration','coordinatorExport','authority','release'}
+ need(type(f) is dict and set(f)==keys and type(f['preflights']) is list and len(f['preflights'])==2,'exact-unchanged-failure-input-required')
+ a=f['authority'];need(type(a) is dict and set(a)=={'operationId','idempotencyKey','jobId','candidateId','priorCandidateId','workspaceEpoch','bundleSha256'},'exact-unchanged-authority-required')
+ for k in ('operationId','idempotencyKey','jobId','workspaceEpoch'):need(type(a[k]) is str and str(uuid.UUID(a[k]))==a[k],'unchanged-uuid-invalid')
+ for k in ('candidateId','priorCandidateId','bundleSha256'):need(type(a[k]) is str and re.fullmatch('[a-f0-9]{64}',a[k]),'unchanged-hash-invalid')
+ need(job.get('id')==a['jobId'] and job.get('state')=='failed' and job.get('prepared') is True and job.get('started') is True and job.get('hold') is False and job.get('when')=='now','exact-started-unchanged-failure-required')
+ staging=state/'staging'/a['bundleSha256'];attempt=staging/'attempts'/a['jobId']
+ refs={k:f[k] for k in ('operation','intent','request','result','failure','driverAttempt','runnerLog','installer','bundle','runnerConfiguration')}
+ refs.update({'preflight'+str(i):r for i,r in enumerate(f['preflights'])})
+ limits={k:65536 for k in refs};limits.update(bundle=128*1024**2,installer=1024**2,runnerLog=4096)
+ raw={k:reference(r,limits[k]) for k,r in refs.items()};v={k:json.loads(b) for k,b in raw.items() if k not in ('installer','runnerLog')}
+ need(f['operation']['path']==str(state/'release-coordinator/inputs'/(a['operationId']+'.json')) and f['intent']['path']==str(state/'release-coordinator'/a['operationId']/'intent.json') and f['runnerConfiguration']['path']=='/etc/nova-update/runner.json','unchanged-authority-path-changed')
+ op=v['operation'];intent=v['intent'];release=f['release'];need(op.get('format')==1 and op.get('operationId')==a['operationId'],'unchanged-operation-changed')
+ for jk,k in (('idempotencyKey','idempotencyKey'),('candidateId','candidateId'),('fromCandidateId','priorCandidateId'),('epoch','workspaceEpoch'),('releaseId','bundleSha256')):
+  need(job.get(jk)==a[k] and op.get(k)==a[k],'unchanged-original-identity-changed')
+ req={'epoch':a['workspaceEpoch'],'candidateId':a['candidateId'],'releaseId':a['bundleSha256'],'currentCandidateId':a['priorCandidateId'],'idempotencyKey':a['idempotencyKey'],'when':'now'}
+ need(intent.get('format')==1 and intent.get('kind')=='nova-normal-install-intent' and intent.get('operationId')==a['operationId'] and intent.get('operationSha256')==f['operation']['sha256'] and intent.get('controllerConfigSha256')==hashlib.sha256(cb).hexdigest() and intent.get('request')==req and intent.get('requestSha256')==hashlib.sha256(json.dumps(req,sort_keys=True,separators=(',',':')).encode()).hexdigest() and intent.get('automaticResubmissionPermitted') is False,'unchanged-intent-changed')
+ need(release==job.get('release') and release.get('candidateId')==a['candidateId'] and release.get('fromCandidateId')==a['priorCandidateId'] and release.get('bundle',{}).get('sha256')==a['bundleSha256'] and release['bundle'].get('runnerSha256')==UNCHANGED_INSTALLER and release.get('novaVersion')==op['version'] and release.get('agentVersion')==op['agentVersion'],'unchanged-signed-release-changed')
+ identity={'candidateId':a['priorCandidateId'],'workspaceEpoch':a['workspaceEpoch']}
+ expected={'format':1,'jobId':a['jobId'],'release':release,'hostConfiguration':'/etc/nova-update/config.json'}
+ need(v['request']==dict(expected,expectedPrior=identity),'unchanged-request-changed')
+ names=['request.json','driver-attempt.json','result.json','failure.json','runner.log','driver.lock']
+ for i,ref in enumerate(f['preflights']):
+  p=P(ref['path']);need(p.parent==attempt and re.fullmatch(r'preflight-[0-9a-f-]{36}\.json',p.name) and str(uuid.UUID(p.name[10:-5]))==p.name[10:-5] and v['preflight'+str(i)]==dict(expected,preflightIdentity=identity),'unchanged-preflight-changed');names.append(p.name)
+ need(len(set(names))==8 and members(attempt)==sorted(names),'unchanged-attempt-members-changed')
+ for k,n in (('request','request.json'),('driverAttempt','driver-attempt.json'),('result','result.json'),('failure','failure.json'),('runnerLog','runner.log')):need(f[k]['path']==str(attempt/n),'unchanged-attempt-path-changed')
+ need(read(attempt/'driver.lock',0)==b'' and v['driverAttempt']=={'jobId':a['jobId'],'candidateId':a['candidateId'],'priorCandidateId':a['priorCandidateId']},'unchanged-driver-marker-changed')
+ need(raw['runnerLog']==b'{"stage": "preparing"}\n' or raw['runnerLog']==b'{"stage":"preparing"}\n','unchanged-runner-stage-changed')
+ need(v['result']=={'format':1,'jobId':a['jobId'],'candidateId':a['candidateId'],'priorCandidateId':a['priorCandidateId'],'outcome':'unchanged','unchangedVerified':True,'healthVerified':True,'reasonCode':'preflight_failed','reason':'The update could not be prepared. The installed version is unchanged.'} and type(v['result']['unchangedVerified']) is bool and type(v['result']['healthVerified']) is bool,'unchanged-result-incomplete')
+ need(v['failure']=={'errorType':'RuntimeError','reason':'Source changed while its recovery identity was being captured.'},'unchanged-failure-class-changed')
+ need(f['bundle']['path']==str(staging/'bundle.json') and f['bundle']['sha256']==a['bundleSha256'] and f['installer']['path']==str(staging/'install.py') and f['installer']['sha256']==UNCHANGED_INSTALLER,'unchanged-original-installer-required')
+ bundle=v['bundle'];need(set(bundle)=={'format','files'} and bundle['format']==1 and type(bundle['files']) is list and 1<=len(bundle['files'])<=64,'unchanged-bundle-invalid')
+ files=bundle['files'];need(len({x['name'] for x in files})==len(files),'unchanged-bundle-duplicate')
+ def entry(name):
+  rows=[x for x in files if x['name']==name];need(len(rows)==1 and set(rows[0])=={'name','data','sha256'},'unchanged-bundle-entry-missing');row=rows[0];b=base64.b64decode(row['data'],validate=True);need(base64.b64encode(b).decode()==row['data'] and hashlib.sha256(b).hexdigest()==row['sha256'],'unchanged-bundle-entry-changed');return b
+ need(entry('install.py')==raw['installer'],'unchanged-installer-not-in-bundle')
+ pair_raw=entry('reviewed-pair.json');pair=json.loads(pair_raw)
+ need(hashlib.sha256(pair_raw).hexdigest()==op['applicationQualification']['reviewedPairSha256'] and pair.get('candidateId')==a['candidateId'] and pair.get('priorCandidateId')==a['priorCandidateId'] and pair.get('helpers',{}).get('install.py')==UNCHANGED_INSTALLER,'unchanged-original-pair-changed')
+ settings=v['runnerConfiguration'];need(settings.get('format')==1,'unchanged-runner-configuration-invalid')
+ recovery=P(settings['recoveryDirectory'])/('update-'+a['jobId']);restore=P(config['workspaceDirectory']).parent/('workspace.restore-'+a['jobId'])
+ for path in (recovery,restore):absent_role(path)
+ prior=spec['prior'];need(prior['candidateId']==a['priorCandidateId'] and prior['workspaceEpoch']==a['workspaceEpoch'] and prior['version']==op['priorVersion'] and prior['buildVersion']==op['priorBuildVersion'] and prior['agentVersion']==op['priorAgentVersion'] and prior['schemaVersion']==op['applicationQualification']['priorSchemaVersion'],'unchanged-prior-identity-changed')
+ rpath=P(spec['acceptedInstallation']['path']);need(re.fullmatch(re.escape(str(state))+r'/staging/[a-f0-9]{64}/attempts/'+re.escape(spec['priorJobId'])+'/result.json',str(rpath)) and spec['priorJobId']!=job['id'],'separate-accepted-prior-required');rb=reference(spec['acceptedInstallation']);accepted=json.loads(rb)
+ need(accepted.get('format')==1 and accepted.get('jobId')==spec['priorJobId'] and accepted.get('candidateId')==prior['candidateId'] and accepted.get('outcome')=='completed' and all(accepted.get(k) is True for k in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')),'accepted-prior-result-incomplete')
+ live=prior_identity(config,prior,normal_access=True)
+ need(all(reference(ref,limits[k])==raw[k] for k,ref in refs.items()) and read(attempt/'driver.lock',0)==b'' and members(attempt)==sorted(names),'unchanged-original-evidence-raced')
+ for path in (recovery,restore):absent_role(path)
+ return rpath,rb,{'unchangedFailure':{'input':spec,'priorIdentity':live,'attemptMembers':sorted(names),'preStopUnchangedVerified':True,'recoveryRolesAbsent':[str(recovery),str(restore)]}}
 
 def collect(spec=None):
  need(os.geteuid()==0,'root-readonly-required')
@@ -83,6 +145,8 @@ def collect(spec=None):
  controller=controller_view();controller_matches(controller,job);extra={}
  if spec is None:
   rpath=state/'staging'/job['releaseId']/'attempts'/job['id']/'result.json';rb=read(rpath,65536)
+ elif spec.get('kind')=='explicit-unchanged-prior-facts':
+  rpath,rb,extra=collect_unchanged(spec,config,cb,job,state)
  else:
   need(set(spec)=={'kind','hostConfiguration','acceptedInstallation','priorJobId','prior','failure'} and spec['kind']=='explicit-no-start-prior-facts' and state==P('/var/lib/nova-update'),'exact-no-start-facts-input-required')
   need(reference(spec['hostConfiguration'])==cb and spec['hostConfiguration']['path']==str(cpath),'no-start-host-config-changed')

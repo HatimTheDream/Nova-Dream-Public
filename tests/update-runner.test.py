@@ -144,15 +144,82 @@ class RunnerTests(unittest.TestCase):
         old_inodes = {'saved': {'device': 1, 'inode': 3, 'allocated': 4 * gb}}
         with self.assertRaises(recovery.InsufficientStorage):
             recovery.capacity(source, inodes, old, old_inodes, 3 * gb, 32 * 1024 ** 2)
-        plan = driver.staging_capacity(source, inodes, old, old_inodes, 3 * gb, 32 * 1024 ** 2)
+        plan = driver.candidate_staging_capacity(3 * gb, 32 * 1024 ** 2)
         self.assertEqual(plan['requiredFreeBytes'], 32 * 1024 ** 2 + driver.RESERVE + 2 * driver.ALLOWANCE)
         with self.assertRaises(recovery.InsufficientStorage):
-            driver.staging_capacity(source, inodes, old, old_inodes, plan['requiredFreeBytes'] - 1, 32 * 1024 ** 2)
+            driver.candidate_staging_capacity(plan['requiredFreeBytes'] - 1, 32 * 1024 ** 2)
         with self.assertRaises(RuntimeError):
-            driver.staging_capacity(source, inodes, old, inodes, 3 * gb, 0)
+            recovery.capacity(source, inodes, old, inodes, 10 * gb, 0)
         with self.assertRaises(RuntimeError):
-            driver.staging_capacity({'saved': {'kind': 'file', 'hardlink_group': ['saved', 'other']}},
-                                    inodes, old, old_inodes, 3 * gb, 0)
+            recovery.capacity({'saved': {'kind': 'file', 'hardlink_group': 'other'}},
+                              inodes, old, old_inodes, 10 * gb, 0)
+
+    def test_candidate_staging_reaches_capacity_without_fingerprinting_running_work(self):
+        instance = self.instance()
+        instance.data = self.root / 'live'; instance.data.mkdir()
+        live_file = instance.data / 'changing-native-log'; live_file.write_bytes(b'first')
+        instance.before = {'epoch': 'saved-epoch'}
+        instance.releases = self.root
+        instance.application_dependency_storage_required = lambda: 8192
+        members = [types.SimpleNamespace(size=1024), types.SimpleNamespace(size=2048)]
+        def archive_members():
+            live_file.write_bytes(b'new work written while staging is being admitted')
+            return members
+        instance.archive_members = archive_members
+        instance.stage_runtime = lambda: self.fail('Receipt capture must precede immutable staging.')
+        expected = 1024 + 2048 + 2 * 4096 + 8192
+        minimum = expected + driver.RESERVE + 2 * driver.ALLOWANCE
+        class Captured(Exception): pass
+        receipts = []
+        def capture(path, plan):
+            receipts.append((path, plan)); raise Captured()
+        with patch.object(driver, 'inventory', side_effect=AssertionError('Online content inventory is unsafe')), \
+             patch.object(driver, 'native_preflight', return_value=(pathlib.Path('.'), 'saved-epoch', set())) as native, \
+             patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=minimum)), \
+             patch.object(driver, 'write_json', side_effect=capture):
+            with self.assertRaises(Captured): instance.stage_app()
+            native.assert_called_once_with(instance.data, 'saved-epoch', instance.from_engine, instance.to_engine)
+        self.assertEqual(receipts[0][0], instance.output / 'capacity.json')
+        self.assertEqual(receipts[0][1]['candidateBytes'], expected)
+        self.assertEqual(receipts[0][1]['requiredFreeBytes'], minimum)
+        self.assertEqual(live_file.read_bytes(), b'new work written while staging is being admitted')
+        self.assertFalse(instance.stop_attempted or instance.switch_attempted or instance.workspace_mutated)
+        receipts.clear()
+        with patch.object(driver, 'inventory', side_effect=AssertionError('Online content inventory is unsafe')), \
+             patch.object(driver, 'native_preflight', return_value=(pathlib.Path('.'), 'saved-epoch', set())), \
+             patch.object(driver.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=minimum - 1)), \
+             patch.object(driver, 'write_json', side_effect=capture):
+            with self.assertRaises(recovery.InsufficientStorage): instance.stage_app()
+        self.assertEqual(receipts, [])
+
+    def test_stopped_topology_refusal_still_precedes_snapshot_creation(self):
+        data, baseline, destination = self.root / 'live', self.root / 'old', self.root / 'new' / 'workspace'
+        data.mkdir(); baseline.mkdir()
+        device = self.root.stat().st_dev
+        for failure in ('shared-inode', 'hardlink-topology', 'insufficient-storage'):
+            with self.subTest(failure=failure):
+                events = []
+                entry = {'kind': 'file', 'size': 1, 'sha256': 'a'}
+                source = {'saved': dict(entry)}
+                old = {'saved': dict(entry)}
+                if failure == 'hardlink-topology': source['saved']['hardlink_group'] = 'other'
+                def inventory(path, *, allocation=None):
+                    self.assertIn('stopped', events); events.append(('inventory', path))
+                    if allocation is not None:
+                        allocation.update(device=device, unitBytes=4096, directoryCopyBytes=0, symlinkCopyBytes=0,
+                                          directoryObservedBytes=0, symlinkObservedBytes=0)
+                    inode = 1 if path == data or failure == 'shared-inode' else 2
+                    return (source if path == data else old), {'saved': {'device': device, 'inode': inode, 'allocated': 4096}}
+                free = 0 if failure == 'insufficient-storage' else 10 ** 12
+                with patch.object(recovery, 'inventory', side_effect=inventory), \
+                     patch.object(recovery, 'allocation_unit', return_value=4096), \
+                     patch.object(recovery.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=free)), \
+                     patch.object(recovery, 'run_copy', side_effect=AssertionError('Rejected topology must not copy')):
+                    expected_error = recovery.InsufficientStorage if failure == 'insufficient-storage' else RuntimeError
+                    with self.assertRaises(expected_error):
+                        recovery.snapshot_closed(data, destination, baseline, lambda: events.append('stopped'),
+                            begin_copy=lambda plan: self.fail('Rejected admission must not create recovery'), capacity_volume=self.root)
+                self.assertFalse(destination.parent.exists())
 
     def test_closed_capacity_precedes_snapshot_and_failure_restarts_unchanged_prior(self):
         gb = 1024 ** 3
@@ -184,7 +251,7 @@ class RunnerTests(unittest.TestCase):
                         inodes['capture'] = {'device': 1, 'inode': 2, 'allocated': 3 * gb}
                     return fixture_inventory(entries, inodes, allocation)
                 def stage_app():
-                    driver.staging_capacity(*inventory(instance.data), *inventory(instance.baseline / 'workspace'), free[0], 32 * 1024 ** 2)
+                    driver.candidate_staging_capacity(free[0], 32 * 1024 ** 2)
                     free[0] -= 32 * 1024 ** 2;actions.append('staged')
                 instance.stage_app = stage_app
                 def service(action):

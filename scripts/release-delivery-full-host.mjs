@@ -26,10 +26,13 @@ export const fullHostOptionsSchema=z.object({format:z.literal(1),hostConfigurati
   helperDirectory:hostPath,acceptedInstallation:hostRef,priorVersion:version,priorBuildVersion:version,priorJobId:z.uuid(),
   priorNoStartFailure:z.object({operation:hostRef,intent:hostRef,preflight:hostRef,
     coordinatorExport:z.object({path:z.string().min(1),sha256:hash}).strict()}).strict().optional(),
+  priorUnchangedFailure:z.object({operation:hostRef,intent:hostRef,request:hostRef,result:hostRef,failure:hostRef,
+    driverAttempt:hostRef,runnerLog:hostRef,preflights:z.array(hostRef).length(2),installer:hostRef,bundle:hostRef,runnerConfiguration:hostRef,
+    coordinatorExport:z.object({path:z.string().min(1),sha256:hash}).strict()}).strict().optional(),
   stageParent:hostPath.refine(p=>p.startsWith('/opt/nova-release-tools/')&&p.length>'/opt/nova-release-tools/'.length),
   excludedIdentities:z.object({candidateIds:z.array(hash).max(64),bundleSha256s:z.array(hash).max(64),rehearsalLeaseIds:z.array(z.uuid()).max(64)}).strict()
     .refine(v=>Object.values(v).every(a=>new Set(a).size===a.length)),
-  startupGuardFile:hostPath.nullable()}).strict();
+  startupGuardFile:hostPath.nullable()}).strict().refine(v=>!(v.priorNoStartFailure&&v.priorUnchangedFailure),'Distinct failed prior authorities are mutually exclusive.');
 export function priorNoStartFailureAuthority(options,op){
  fullHostOptionsSchema.parse(options);if(!options.priorNoStartFailure)return null;
  const failure=options.priorNoStartFailure,exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum:131072}));
@@ -43,6 +46,41 @@ export function priorNoStartFailureAuthority(options,op){
  const authority=z.object({operationId:z.uuid(),idempotencyKey:z.uuid(),jobId:z.uuid(),candidateId:hash,priorCandidateId:hash,workspaceEpoch:z.uuid(),bundleSha256:hash}).strict().parse({operationId:old.id,idempotencyKey:intent.idempotencyKey,jobId:intent.externalJobId,candidateId:old.candidateId,priorCandidateId:old.priorCandidateId,workspaceEpoch:old.workspaceEpoch,bundleSha256:old.bundleSha256});
  return {...failure,authority};
 }
+/** A started runner with the pinned pre-stop unchanged outcome is a separate
+ * predecessor class. It never turns a failed job into an accepted installation. */
+export function priorUnchangedFailureAuthority(options,op){
+ fullHostOptionsSchema.parse(options);if(!options.priorUnchangedFailure)return null;
+ const failure=options.priorUnchangedFailure;
+ // Reuse the terminal coordinator identity predicate, without changing its
+ // original never-started host predicate or the caller's input.
+ const prior=priorNoStartFailureAuthority({...options,priorUnchangedFailure:undefined,
+  priorNoStartFailure:{operation:failure.operation,intent:failure.intent,preflight:failure.preflights[0],coordinatorExport:failure.coordinatorExport}},op);
+ const exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum:131072}));
+ const input=exported.installationPhase.input.coordinatorDescriptor.input,old=input.operation,publication=input.evidence?.publication;
+ const sign=exported.signingPhase,publish=exported.publicationPhase;
+ need(sign?.phase==='sign'&&sign.state==='completed'&&sign.current?.state==='completed'
+  &&publish?.phase==='publication'&&publish.state==='completed'&&publish.current?.state==='completed','unchanged-original-publication-incomplete');
+ const envelope=JSON.parse(readEvidenceFile(publication.feed,{maximum:131072})),payload=Buffer.from(envelope.payload,'base64'),signature=Buffer.from(envelope.signature,'base64');
+ need(payload.toString('base64')===envelope.payload&&signature.toString('base64')===envelope.signature
+  &&publication.publicKey.sha256===old.trustedPublicKeySha256
+  &&verify(null,payload,createPublicKey(readEvidenceFile(publication.publicKey,{maximum:16384})),signature),'unchanged-original-signature-invalid');
+ const feed=JSON.parse(payload),release=feed.releases?.[0],signed=sign.current.output,published=JSON.parse(readEvidenceFile(publication.receipt));
+ need(feed.releases.length===1&&isDeepStrictEqual(signed?.release,release)&&isDeepStrictEqual(signed?.signedFeed,publication.feed)
+  &&signed.bundle?.sha256===old.bundleSha256&&isDeepStrictEqual(publish.current.output?.coordinatorDescriptor?.input?.operation,old)
+  &&isDeepStrictEqual(publish.current.output?.coordinatorDescriptor?.input?.evidence?.publication,publication)
+  &&isDeepStrictEqual(publish.current.output?.evidence,publication)
+  &&published.publicFeedReadVerified===true&&published.publicFeedSha256===publication.feed.sha256&&published.sequence===feed.sequence
+  &&published.applicationInstalled===false&&published.repositories?.length===2
+  &&['private','public'].every((side,i)=>published.repositories[i].sourceCommit===old.sourceCommits[side]&&published.repositories[i].pushed===true&&published.repositories[i].feedSha256===publication.feed.sha256)
+  &&release.candidateId===old.candidateId&&release.fromCandidateId===old.priorCandidateId&&release.novaVersion===old.version
+  &&release.agentVersion===old.agentVersion&&release.bundle.sha256===old.bundleSha256&&failure.bundle.sha256===old.bundleSha256
+  &&failure.installer.sha256==='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59','unchanged-original-signed-release-changed');
+ need(Number.isSafeInteger(feed.sequence)&&feed.sequence>0&&Number.isFinite(Date.parse(feed.expiresAt)),'unchanged-original-feed-invalid');
+ return {...failure,authority:prior.authority,release:{...release,manifestSequence:feed.sequence,manifestExpiresAt:Date.parse(feed.expiresAt)}};
+}
+export function priorFailedInstallationAuthority(options,op){
+ return options.priorUnchangedFailure?priorUnchangedFailureAuthority(options,op):priorNoStartFailureAuthority(options,op);
+}
 export const FULL_HELPERS=Object.freeze({
   'app_dependencies.py':'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290',
   'codex_log_retention.py':'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4',
@@ -54,7 +92,7 @@ export const FULL_HELPERS=Object.freeze({
 });
 
 // Reviewed application-transition helper bytes; actual startup qualification is still mandatory.
-export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 function reviewedHelpers(value){need(isDeepStrictEqual(value,FULL_HELPERS)||isDeepStrictEqual(value,FULL_APPLICATION_HELPERS),'full-helper-qualification-capability-required');return value;}
 export const reviewedFullHelperHashes=reviewedHelpers;
 function transitionHelpers(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return transition?FULL_APPLICATION_HELPERS:FULL_HELPERS;}

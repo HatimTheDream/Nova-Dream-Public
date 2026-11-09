@@ -19,7 +19,7 @@ def inspect(request):
  root=P(request['outputDirectory']);need(root.is_absolute() and root.parent.resolve(strict=True)==root.parent and root.name=='full-prestage-'+request['key'],'prestage-output-scope');need(not root.is_symlink(),'prestage-output-redirected')
  binding=request['binding']
  if binding is not None and set(binding)=={'FACTS_INPUT'}:
-  need(set(request['files'])==set() and binding['FACTS_INPUT']['kind']=='explicit-no-start-prior-facts','prestage-facts-input-scope')
+  need(set(request['files'])==set() and binding['FACTS_INPUT']['kind'] in ('explicit-no-start-prior-facts','explicit-unchanged-prior-facts'),'prestage-facts-input-scope')
  elif binding is not None:
   runtime=binding.get('RUNTIME')
   fields={'BUNDLE','BUNDLE_BYTES','TARGET','PRIOR','PRIOR_VERSION','EPOCH','JOB','LEASE','PROOF','INCOMING','NONCE','SPECS','CURRENT_FACTS','CAPACITY','EXCLUDED','acceptedInstallation','hostConfiguration','STAGE_PLAN','STAGE_INTENT','STAGE_PLAN_RAW_BASE64'}
