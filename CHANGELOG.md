@@ -1,3 +1,7 @@
+## [2.28.35] - 2026-11-09
+
+- Accept the supported application-owned workspace parent when verifying an unchanged failed update, while keeping recovery directories strictly protected.
+
 ## [2.28.34] - 2026-11-09
 
 - Check candidate staging space without fingerprinting a running workspace; preserve the complete stopped snapshot and rollback checks.

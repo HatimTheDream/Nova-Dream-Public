@@ -78,13 +78,31 @@ def prior_identity(config,prior,normal_access=False):
  return {'health':{k:health[k] for k in expected},'workspaceEpoch':context['workspaceEpoch'],'selectors':selected}
 
 UNCHANGED_INSTALLER='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'
-def absent_role(path):
+def absent_role(path,workspace=None,recovery_root=None):
  need(path.is_absolute() and path.parent.resolve(strict=True)==path.parent,'unchanged-recovery-parent-redirected')
- for part in (path.parent,*path.parent.parents):
-  s=part.lstat();need(stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022,'unchanged-recovery-parent-unprotected')
- try:path.lstat()
- except FileNotFoundError:return
- raise RuntimeError('unchanged-recovery-role-present')
+ identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid)
+ if workspace is None:
+  for part in (path.parent,*path.parent.parents):
+   s=part.lstat();need(stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022,'unchanged-recovery-parent-unprotected')
+  roles=[path.parent]
+ else:
+  need(path.parent==workspace.parent and recovery_root is not None,'unchanged-workspace-role-invalid')
+  roles=[workspace,workspace.parent,recovery_root]
+  for part in roles:
+   need(part.is_absolute() and part.resolve(strict=True)==part,'unchanged-workspace-role-redirected')
+   s=part.lstat();need(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode),'unchanged-workspace-role-invalid')
+  need(len({part.lstat().st_dev for part in roles})==1,'unchanged-workspace-filesystem-changed')
+ before=[identity(part.lstat()) for part in roles];parent=identity(path.parent.lstat())
+ fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ try:
+  need(identity(os.fstat(fd))==parent,'unchanged-role-parent-raced')
+  try:os.stat(path.name,dir_fd=fd,follow_symlinks=False)
+  except FileNotFoundError:pass
+  else:raise RuntimeError('unchanged-recovery-role-present')
+  need(identity(os.fstat(fd))==parent,'unchanged-role-parent-raced')
+ finally:os.close(fd)
+ need([identity(part.lstat()) for part in roles]==before and identity(path.parent.lstat())==parent,'unchanged-role-parent-raced')
+ return before
 
 def collect_unchanged(spec,config,cb,job,state):
  need(set(spec)=={'kind','hostConfiguration','acceptedInstallation','priorJobId','prior','failure'} and spec['kind']=='explicit-unchanged-prior-facts' and state==P('/var/lib/nova-update'),'exact-unchanged-facts-input-required')
@@ -129,13 +147,13 @@ def collect_unchanged(spec,config,cb,job,state):
  need(hashlib.sha256(pair_raw).hexdigest()==op['applicationQualification']['reviewedPairSha256'] and pair.get('candidateId')==a['candidateId'] and pair.get('priorCandidateId')==a['priorCandidateId'] and pair.get('helpers',{}).get('install.py')==UNCHANGED_INSTALLER,'unchanged-original-pair-changed')
  settings=v['runnerConfiguration'];need(settings.get('format')==1,'unchanged-runner-configuration-invalid')
  recovery=P(settings['recoveryDirectory'])/('update-'+a['jobId']);restore=P(config['workspaceDirectory']).parent/('workspace.restore-'+a['jobId'])
- for path in (recovery,restore):absent_role(path)
+ role_identity=[absent_role(recovery),absent_role(restore,P(config['workspaceDirectory']),recovery.parent)]
  prior=spec['prior'];need(prior['candidateId']==a['priorCandidateId'] and prior['workspaceEpoch']==a['workspaceEpoch'] and prior['version']==op['priorVersion'] and prior['buildVersion']==op['priorBuildVersion'] and prior['agentVersion']==op['priorAgentVersion'] and prior['schemaVersion']==op['applicationQualification']['priorSchemaVersion'],'unchanged-prior-identity-changed')
  rpath=P(spec['acceptedInstallation']['path']);need(re.fullmatch(re.escape(str(state))+r'/staging/[a-f0-9]{64}/attempts/'+re.escape(spec['priorJobId'])+'/result.json',str(rpath)) and spec['priorJobId']!=job['id'],'separate-accepted-prior-required');rb=reference(spec['acceptedInstallation']);accepted=json.loads(rb)
  need(accepted.get('format')==1 and accepted.get('jobId')==spec['priorJobId'] and accepted.get('candidateId')==prior['candidateId'] and accepted.get('outcome')=='completed' and all(accepted.get(k) is True for k in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')),'accepted-prior-result-incomplete')
  live=prior_identity(config,prior,normal_access=True)
  need(all(reference(ref,limits[k])==raw[k] for k,ref in refs.items()) and read(attempt/'driver.lock',0)==b'' and members(attempt)==sorted(names),'unchanged-original-evidence-raced')
- for path in (recovery,restore):absent_role(path)
+ need([absent_role(recovery),absent_role(restore,P(config['workspaceDirectory']),recovery.parent)]==role_identity,'unchanged-role-parent-raced')
  return rpath,rb,{'unchangedFailure':{'input':spec,'priorIdentity':live,'attemptMembers':sorted(names),'preStopUnchangedVerified':True,'recoveryRolesAbsent':[str(recovery),str(restore)]}}
 
 def collect(spec=None):

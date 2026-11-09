@@ -205,7 +205,7 @@ class UnchangedFacts(unittest.TestCase):
             raw=records[str(path)];self.assertLessEqual(len(raw),bound);return raw
         def prior(_c,_p,normal_access=False):
             self.assertTrue(normal_access);return copy.deepcopy(identity)
-        with patch.dict(G,P=P,read=reader or read,controller_view=lambda:copy.deepcopy(view),members=lambda _p:list(expected if names is None else names),prior_identity=prior,absent_role=absent or (lambda _p:None),UNCHANGED_INSTALLER=pin),patch.object(G['os'],'geteuid',return_value=0,create=True):
+        with patch.dict(G,P=P,read=reader or read,controller_view=lambda:copy.deepcopy(view),members=lambda _p:list(expected if names is None else names),prior_identity=prior,absent_role=absent or (lambda _p,*_roles:None),UNCHANGED_INSTALLER=pin),patch.object(G['os'],'geteuid',return_value=0,create=True):
             return F['collect'](spec)
 
     def test_started_unchanged_retains_failed_target_and_separate_accepted_prior(self):
@@ -241,7 +241,7 @@ class UnchangedFacts(unittest.TestCase):
 
     def test_started_unchanged_recovery_role_presence_and_second_read_race_refuse(self):
         f=self.unchanged_fixture();seen=[]
-        def absent(p):
+        def absent(p,*_roles):
             seen.append(str(p));raise RuntimeError('present')
         with self.assertRaises(RuntimeError):self.observe_unchanged(f,absent=absent)
         self.assertEqual(seen,['/var/lib/nova-update-recovery/update-'+JOB])
@@ -254,6 +254,53 @@ class UnchangedFacts(unittest.TestCase):
                 if reads>1:return raw+b' '
             return raw
         with self.assertRaises(RuntimeError):self.observe_unchanged(f,reader=read)
+
+
+
+
+class UnchangedRoleBoundary(unittest.TestCase):
+    def invoke(self,*,root_role=False,owner=999,redirect=False,symlink=False,device=7,present=False,race=False):
+        base='/var/lib/nova';workspace=base+'/workspace';recovery='/var/lib/nova-update-recovery'
+        selected=recovery if root_role else base
+        count=0
+        def info(name):
+            nonlocal count
+            user=owner if name in (base,workspace) else 0
+            mode=(stat.S_IFLNK if symlink and name==base else stat.S_IFDIR)|0o700
+            inode=100+len(name)
+            if race and name==base:
+                count+=1
+                if count>6:inode+=1
+            return SimpleNamespace(st_dev=device if name==workspace else 7,st_ino=inode,st_mode=mode,st_uid=user,st_gid=986 if user else 0)
+        class RolePath(P):
+            def resolve(self,strict=False):return RolePath('/elsewhere') if redirect and str(self)==base else self
+            def lstat(self):return info(str(self))
+        def child_stat(name,*,dir_fd,follow_symlinks):
+            self.assertEqual(dir_fd,41);self.assertFalse(follow_symlinks)
+            if present:return info(name)
+            raise FileNotFoundError(name)
+        def opened(path,flags):
+            self.assertEqual(str(path),selected)
+            self.assertTrue(flags&G['os'].O_NOFOLLOW);self.assertTrue(flags&G['os'].O_DIRECTORY)
+            return 41
+        with patch.object(G['os'],'O_DIRECTORY',0x10000,create=True),patch.object(G['os'],'O_NOFOLLOW',0x20000,create=True),patch.object(G['os'],'open',side_effect=opened),patch.object(G['os'],'fstat',side_effect=lambda _fd:info(selected)),patch.object(G['os'],'stat',side_effect=child_stat),patch.object(G['os'],'close'):
+            return F['absent_role'](RolePath(selected)/('update-'+JOB if root_role else 'workspace.restore-'+JOB),
+                None if root_role else RolePath(workspace),None if root_role else RolePath(recovery))
+
+    def test_app_owned_workspace_parent_is_valid_but_recovery_stays_root_owned(self):
+        identity=self.invoke();self.assertEqual(identity[1][3],999)
+        self.assertEqual(self.invoke(root_role=True)[0][3],0)
+
+    def test_workspace_redirect_symlink_device_presence_and_race_refuse(self):
+        for kwargs in ({'redirect':True},{'symlink':True},{'device':8},{'present':True},{'race':True}):
+            with self.subTest(kwargs=kwargs),self.assertRaises(RuntimeError):self.invoke(**kwargs)
+
+    def test_recovery_parent_cannot_be_app_owned(self):
+        class UntrustedRoot(P):
+            def resolve(self,strict=False):return self
+            def lstat(self):return SimpleNamespace(st_dev=7,st_ino=1,st_mode=stat.S_IFDIR|0o700,st_uid=999,st_gid=986)
+        with self.assertRaisesRegex(RuntimeError,'unchanged-recovery-parent-unprotected'):
+            F['absent_role'](UntrustedRoot('/var/lib/nova-update-recovery')/('update-'+JOB))
 
 
 if __name__=='__main__':unittest.main()
