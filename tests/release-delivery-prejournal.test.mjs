@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,rmdirSync,symlinkSync,unlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,rmdirSync,symlinkSync,unlinkSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname,basename,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +11,7 @@ import {verifyStorageSession} from '../scripts/release-storage-default.mjs';
 import {ensureDeliverySchema} from '../scripts/release-delivery-journal.mjs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {deliveryAdapterIdentity,deliveryAdapterSourceFiles} from '../scripts/release-delivery-adapters.mjs';
-import {preJournalOriginal,preJournalRequestSchema,verifyPreJournalProof,verifyContinuationGrant,
+import {preJournalOriginal,preJournalRequestSchema,verifyPreJournalProof,verifyReservedPreJournalFailure,verifyContinuationGrant,
  verifyContinuationStorageAuthority,verifyPreJournalStorageAuthority,operatorObservationDeadline,assertDeliveryOperator} from '../scripts/release-delivery-continuation.mjs';
 import {stepDelivery} from '../scripts/release-deliver.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
@@ -57,6 +57,81 @@ function fixture(t){
  const journal=Object.create(ReleaseJournal.prototype);journal.db=new DatabaseSync(':memory:');journal.readOnly=false;journal.directory=j;journal.db.exec(baseSchema);t.after(()=>journal.close());
  return{dir,save,id,now,at,d,r,proof,journal,j,owner,capacity,storage,node};
 }
+
+
+function reservedFixture(t){
+ const f=fixture(t),oldProof=f.save('authority/prejournal-authority.json',f.proof),root=join(f.dir,f.owner),
+  previousApp=join(f.r.operatorSources.private.root,'edition3'),entry=join(previousApp,'scripts/release-deliver.mjs');
+ const graph={format:1,adapterIdentity:f.proof.operator.adapterIdentity,sourceFiles:f.proof.operator.sourceFiles.map(s=>{
+  const path=resolve(previousApp,'scripts',s.name);
+  if(!existsSync(path)){mkdirSync(dirname(path),{recursive:true});writeFileSync(path,readFileSync(new URL('../scripts/'+s.name,import.meta.url)));}
+  return {path,sha256:s.sha256};
+ })};
+ const runner=f.save('reserved-runtime/runner.py',Buffer.from('# inert reviewed ordering fixture')),bootstrap=f.save('reserved-runtime/continuation_authority.mjs',Buffer.from('// inert')),
+  retry=f.save('reserved-runtime/authority_retry.mjs',Buffer.from('// inert'));
+ const files=Object.fromEntries([...graph.sourceFiles,runner,bootstrap,retry].map(r=>[r.path,r.sha256]));
+ const sourceReview=f.save('reserved-review.json',{kind:'nova-storage-default-source-review',status:'passed',independentReview:true,files}),
+  storageReview=f.save('reserved-storage-review.json',{kind:'independent-storage-source-review',status:'passed',independentReview:true,files:{}});
+ const config=f.save('reserved-config.json',{kind:'nova-storage-default',runner,sourceReview,storageReview,
+  applicationRoots:[previousApp,f.r.operatorSources.public.root],operatorContinuation:{operationId:f.id,journalDirectory:f.j,originalRequest:f.r.original.request,preJournalProof:oldProof}});
+ const originalLauncher=JSON.parse(readFileSync(f.r.original.launcher.path));
+ const launcher=f.save(f.owner+'/reserved-waiting.json',{...originalLauncher,mode:'resume',config,runner,entry:{path:entry,sha256:sha256(readFileSync(entry))}});
+ const argv=[f.node.path,entry,'start',f.j,f.r.original.descriptor.path],grantHash=sha256(canonical(f.proof));
+ const admission=f.save(f.owner+'/continuations/'+grantHash+'/admission-0001/release-dispatch.json',{
+  request:f.r.original.request,originalDispatch:f.r.original.dispatch,grantSha256:grantHash,automaticNewOperationPermitted:false,startedAtMilliseconds:f.at+1});
+ const observationIntent=f.save(f.owner+'/observations/observation-0002/intent.json',{request:f.r.original.request,argv,sameReleaseOperation:true}),
+  sourceGraph=f.save(f.owner+'/source-graph-observation-0002.json',graph),prefix=f.owner+'/authority-observations/check-fixture/';
+ const authorityIntent=f.save(prefix+'intent.json',{argv:[f.node.path,bootstrap.path,entry,files[join(previousApp,'scripts/release-delivery-continuation.mjs')],
+  files[join(previousApp,'scripts/release-coordinate.mjs')],f.j,f.id,oldProof.path,oldProof.sha256],bootstrap,retryHelper:retry,config,
+  originalRequest:f.r.original.request,totalTimeoutSeconds:60,readOnly:true});
+ const stdout=f.save(prefix+'stdout.log',Buffer.alloc(0)),stderr=f.save(prefix+'stderr.log',Buffer.from(
+  "Error: spawnSync C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe EPERM\nat protectDirectory (fixed)\nat validateJournalDirectory (fixed)\nat verifyPreJournalStorageAuthority (fixed)\nerrno: -4048, code: 'EPERM', pid: 0, status: null\n"));
+ const output=r=>({reference:r,totalBytes:readFileSync(r.path).length,complete:true,wholeSha256:r.sha256});
+ const result=f.save(prefix+'result.json',{returnCode:1,failure:null,elapsedSeconds:0.4,outputs:{stdout:output(stdout),stderr:output(stderr)},readOnly:true,releaseEffectRetry:false});
+ const disposition={format:1,kind:'nova-prejournal-no-child-disposition',operationId:f.id,previousProof:oldProof,admission,observationIntent,sourceGraph,launcher,
+  authority:{intent:authorityIntent,result,stdout,stderr},review:{status:'passed',independentReview:true,reviewedAt:new Date(f.at+120000).toISOString(),
+   sourceOrdering:'session-and-logs-before-native-spawn',originalWrapperClosed:true,nativeChildDispatched:false,noJournalCreated:true,automaticReplayPermitted:false}};
+ const request={...f.r,reason:'reserved-attempt-confirmed-before-native-dispatch',reservedFailure:f.save('no-child-disposition.json',disposition),
+  outputDirectory:join(f.dir,'successor-authority')};
+ return {...f,root,request,disposition};
+}
+
+test('explicit no-child disposition permits a distinct successor while expired proof and history stay unchanged',t=>{
+ const f=reservedFixture(t),original=readFileSync(f.disposition.previousProof.path),late=f.proof.expiresAtMs+120000;
+ assert.throws(()=>verifyPreJournalProof(f.proof,{now:late,requireEmpty:true}),/window-expired/);
+ assert.deepEqual(verifyReservedPreJournalFailure(f.request,{assertAbsent:()=>{}}),f.disposition);
+ preJournalOriginal(f.request,{exclusiveHistory:true,assertAbsent:()=>{}});
+ const successor={...f.proof,request:f.save('successor-request.json',f.request),issuedAtMs:late,expiresAtMs:late+60000};
+ verifyPreJournalProof(successor,{now:late+1,requireEmpty:true,assertAbsent:()=>{}});
+ f.journal.initializeReconciledDelivery(f.d,successor,late+1);
+ assert.equal(f.journal.loadDelivery(f.id).created_at,late+1);
+ assert.deepEqual(readFileSync(f.disposition.previousProof.path),original);
+ assert.deepEqual(f.journal.loadDelivery(f.id).descriptor.timeline,f.d.timeline);
+});
+
+test('reserved recovery refuses session, child logs, unknown attempts, nonempty journal and live owner',t=>{
+ const f=reservedFixture(t),check=()=>preJournalOriginal(f.request,{exclusiveHistory:true,assertAbsent:()=>{}});
+ for(const path of [join(f.root,'session-observation-0002.json'),...['stdout.json','stderr.log','exit.json','default-child-result.json'].map(n=>join(f.root,'observations/observation-0002',n))]){
+  writeFileSync(path,'x');assert.throws(check,/child-dispatch-uncertain/);unlinkSync(path);
+ }
+ writeFileSync(join(f.j,'release.sqlite'),'x');assert.throws(check,/empty-uninitialized/);unlinkSync(join(f.j,'release.sqlite'));
+ mkdirSync(join(f.root,'observations/observation-0003'));assert.throws(check,/unclassified/);rmdirSync(join(f.root,'observations/observation-0003'));
+ assert.throws(()=>verifyReservedPreJournalFailure(f.request,{assertAbsent:()=>{throw Error('live owner');}}),/live owner/);
+});
+
+test('reserved recovery refuses changed failure evidence, mismatched grant and recursive renewals',t=>{
+ const f=reservedFixture(t);
+ for(const change of [d=>d.operationId=randomUUID(),d=>d.review.nativeChildDispatched=true,d=>d.review.independentReview=false,
+  d=>d.admission=d.observationIntent,d=>d.authority.stderr=d.authority.stdout]){
+  const d=structuredClone(f.disposition);change(d);
+  const r={...f.request,reservedFailure:f.save('bad-disposition.json',d)};
+  assert.throws(()=>verifyReservedPreJournalFailure(r,{assertAbsent:()=>{}}));
+ }
+ const recursive={...f.proof,request:f.save('recursive-request.json',f.request)};
+ const d={...f.disposition,previousProof:f.save('recursive-proof.json',recursive)};
+ assert.throws(()=>verifyReservedPreJournalFailure({...f.request,reservedFailure:f.save('recursive-disposition.json',d)},{assertAbsent:()=>{}}),/predecessor/);
+ assert.throws(()=>preJournalRequestSchema.parse({...f.request,reservedFailure:undefined}),/explicit-reserved/);
+});
 
 test('closed pre-journal failure initializes once, then ordinary effects use the unchanged native three-hour horizon',async t=>{
  const f=fixture(t),first=f.at+1000;
