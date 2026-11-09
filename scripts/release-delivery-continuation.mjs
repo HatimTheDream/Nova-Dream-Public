@@ -33,14 +33,21 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
  hostFacts:ref,issuedAtMs:z.number().int().nonnegative(),expiresAtMs:z.number().int().positive(),
  automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required');
 
-const preJournalSource=source.extend({branch:z.literal('operator/prejournal-c494-r1')});
+const preJournalSource=source.extend({branch:z.enum(['operator/prejournal-c494-r1','operator/prejournal-c494-r2'])});
+const noChildDispositionSchema=z.object({format:z.literal(1),kind:z.literal('nova-prejournal-no-child-disposition'),operationId:z.uuid(),
+ previousProof:ref,admission:ref,observationIntent:ref,sourceGraph:ref,launcher:ref,
+ authority:z.object({intent:ref,result:ref,stdout:ref,stderr:ref}).strict(),
+ review:z.object({status:z.literal('passed'),independentReview:z.literal(true),reviewedAt:z.string().datetime({offset:true}),
+  sourceOrdering:z.literal('session-and-logs-before-native-spawn'),originalWrapperClosed:z.literal(true),nativeChildDispatched:z.literal(false),
+  noJournalCreated:z.literal(true),automaticReplayPermitted:z.literal(false)}).strict()}).strict();
 export const preJournalRequestSchema=z.object({format:z.literal(1),kind:z.literal('nova-pre-journal-dispatch-request'),operationId:z.uuid(),
  historical:z.object({root:path,manifest:ref}).strict(),
  original:z.object({request:ref,initialization:ref,descriptor:ref,dispatch:ref,session:ref,directoryPreparation:ref,
   launcher:ref,observation:z.object({intent:ref,exit:ref,childResult:ref,stdout:ref,stderr:ref}).strict()}).strict(),
  operatorSources:pair(preJournalSource),ciRuns:pair(z.number().int().positive()),outputDirectory:path,
  durationMs:z.number().int().min(60000).max(1800000),
- reason:z.literal('closed-storage-start-rejected-before-journal'),automaticRenewal:z.literal(false)}).strict();
+ reason:z.enum(['closed-storage-start-rejected-before-journal','reserved-attempt-confirmed-before-native-dispatch']),reservedFailure:ref.optional(),
+ automaticRenewal:z.literal(false)}).strict().refine(r=>Boolean(r.reservedFailure)===(r.reason==='reserved-attempt-confirmed-before-native-dispatch'),'explicit-reserved-failure-disposition-required');
 export const preJournalGrantSchema=z.object({format:z.literal(1),kind:z.literal('nova-pre-journal-dispatch-reconciliation'),operationId:z.uuid(),
  descriptorSha256:hash,targetIdentity:hash,originalAdapterIdentity:hash,originalTimelineSha256:hash,originalBudgetMs:z.number().int().positive(),
  originalDispatch:ref,originalDirectoryPreparation:ref,originalStorageDeadline:z.string(),originalStartAtMs:z.number().int().nonnegative(),
@@ -72,7 +79,7 @@ export function preJournalOriginal(raw,{requireEmpty=true,exclusiveHistory=false
   &&same(original.node,json(d.target).artifactTools.node),'prejournal-original-entry-or-node-changed');
  for(const [role,name]of Object.entries({intent:'intent.json',exit:'exit.json',childResult:'default-child-result.json',stdout:'stdout.json',stderr:'stderr.log'})){
   need(o.observation[role].path===join(dir,name),'prejournal-original-observation-path-changed');readEvidenceFile(o.observation[role]);}
- if(exclusiveHistory)need(same(readdirSync(join(root,'observations')).filter(n=>/^observation-[0-9]{4,}$/.test(n)),['observation-0001']),'prejournal-unclassified-original-observation');
+ if(exclusiveHistory)need(same(readdirSync(join(root,'observations')).filter(n=>/^observation-[0-9]{4,}$/.test(n)).sort(),request.reservedFailure?['observation-0001','observation-0002']:['observation-0001']),'prejournal-unclassified-original-observation');
  need(closed.originalChildClosed===true&&closed.returnCode===1&&closed.logBoundExceeded===false&&closed.automaticNewOperationPermitted===false
   &&exit.returnCode===1&&Number.isSafeInteger(exit.finishedAtMilliseconds)
   &&same(result,{kind:'nova-release-delivery-error',reason:'storage-start-already-dispatched-use-resume',automaticReplayPermitted:false}),'prejournal-original-start-not-definitively-closed');
@@ -94,10 +101,75 @@ export function preJournalOriginal(raw,{requireEmpty=true,exclusiveHistory=false
   &&maintenance.protectedRolesVerified===true&&same(completion,retainedMaintenance)&&maintenance.releaseAdmission===false,'prejournal-completed-maintenance-required');
  const info=lstatSync(j);need(info.isDirectory()&&!info.isSymbolicLink()&&resolve(realpathSync(j))===j,'prejournal-canonical-directory-required');
  if(requireEmpty)need(readdirSync(j).length===0,'prejournal-empty-uninitialized-directory-required');
+ if(request.reservedFailure)verifyReservedPreJournalFailure(request,{assertAbsent});
  return {request,original,initialization:init,descriptor:d,journalDirectory:j,dispatch,storage,
   binding:{descriptorSha256:sha256(canonical(d)),targetIdentity:d.targetIdentity,originalAdapterIdentity:d.adapterIdentity,
    originalTimelineSha256:sha256(canonical(d.timeline)),originalBudgetMs:d.observationBudgetMs,originalDispatch:o.dispatch,
    originalDirectoryPreparation:o.directoryPreparation,originalStorageDeadline:storage.originalDeadline,originalStartAtMs:d.timeline.startedAtMs}};
+}
+
+/** Reconcile a reviewed pre-execution refusal; missing output alone is never authority. */
+export function verifyReservedPreJournalFailure(raw,{assertAbsent=absentOwner}={}){
+ const request=preJournalRequestSchema.parse(raw),r=noChildDispositionSchema.parse(json(request.reservedFailure));
+ const previous=preJournalGrantSchema.parse(json(r.previousProof)),priorRequest=preJournalRequestSchema.parse(json(previous.request));
+ need(!priorRequest.reservedFailure&&request.operationId===r.operationId&&r.operationId===previous.operationId
+  &&same(request.original,priorRequest.original)&&same(request.historical,priorRequest.historical),'prejournal-reserved-predecessor-changed');
+ verifyPreJournalProof(previous,{requireEmpty:false,assertAbsent});
+ const root=resolve(request.original.request.path,'..'),attempt=join(root,'observations','observation-0002'),
+  init=json(request.original.initialization),original=json(request.original.request),launcher=json(r.launcher),config=json(launcher.config),
+  review=json(config.sourceReview),storageReview=json(config.storageReview),grantHash=sha256(canonical(previous)),admission=json(r.admission),
+  intent=json(r.observationIntent),graph=json(r.sourceGraph),authorityIntent=json(r.authority.intent),result=json(r.authority.result),
+  previousApp=join(previous.operator.sources.private.root,'edition3'),entry=join(previousApp,'scripts','release-deliver.mjs');
+ need(r.previousProof.path===join(priorRequest.outputDirectory,'prejournal-authority.json')
+  &&r.admission.path===join(root,'continuations',grantHash,'admission-0001','release-dispatch.json')
+  &&r.observationIntent.path===join(attempt,'intent.json')&&r.sourceGraph.path===join(root,'source-graph-observation-0002.json'),
+  'prejournal-reserved-evidence-path-changed');
+ const info=lstatSync(attempt);need(info.isDirectory()&&!info.isSymbolicLink()&&resolve(realpathSync(attempt))===attempt
+  &&same(readdirSync(attempt).sort(),['intent.json'])&&!existsSync(join(root,'session-observation-0002.json')),
+  'prejournal-reserved-child-dispatch-uncertain');
+ need(launcher.kind==='verified-waiting-release-launcher'&&launcher.mode==='resume'&&launcher.dispatchAuthority===false
+  &&launcher.operationId===request.operationId&&same(launcher.start,original.releaseInput)&&same(launcher.budget,original.storageBudget)
+  &&same(launcher.node,original.node)&&same(launcher.entry,reference(entry))&&launcher.worker.parentPid===launcher.owner.pid,
+  'prejournal-reserved-owner-context-changed');
+ for(const owner of [launcher.owner,launcher.worker])assertAbsent(owner);
+ need(config.kind==='nova-storage-default'&&same(config.runner,launcher.runner)
+  &&same(config.operatorContinuation.preJournalProof,r.previousProof)&&same(config.operatorContinuation.originalRequest,request.original.request)
+  &&config.operatorContinuation.operationId===request.operationId&&config.operatorContinuation.journalDirectory===init.journalDirectory
+  &&same(config.applicationRoots,[previousApp,previous.operator.sources.public.root])
+  &&review.kind==='nova-storage-default-source-review'&&review.status==='passed'&&review.independentReview===true
+  &&storageReview.kind==='independent-storage-source-review'&&storageReview.status==='passed'&&storageReview.independentReview===true,
+  'prejournal-reserved-reviewed-runtime-required');
+ for(const pinned of [launcher.runner,launcher.entry,authorityIntent.bootstrap,authorityIntent.retryHelper]){
+  need(review.files[pinned.path]===pinned.sha256,'prejournal-reserved-unreviewed-source');readEvidenceFile(pinned,{maximum:8*1024**2});
+ }
+ need(same(intent,{request:request.original.request,argv:[original.node.path,entry,'start',init.journalDirectory,request.original.descriptor.path],sameReleaseOperation:true})
+  &&admission.grantSha256===grantHash&&same(admission.request,request.original.request)&&same(admission.originalDispatch,request.original.dispatch)
+  &&admission.automaticNewOperationPermitted===false&&admission.startedAtMilliseconds>=previous.issuedAtMs
+  &&admission.startedAtMilliseconds<previous.expiresAtMs,'prejournal-reserved-admission-changed');
+ const expectedGraph=previous.operator.sourceFiles.map(s=>({path:resolve(previousApp,'scripts',s.name),sha256:s.sha256}));
+ need(graph.format===1&&graph.adapterIdentity===previous.operator.adapterIdentity&&same(graph.sourceFiles,expectedGraph),'prejournal-reserved-source-graph-changed');
+ for(const pinned of expectedGraph)readEvidenceFile(pinned,{maximum:8*1024**2});
+ const authorityDir=resolve(r.authority.intent.path,'..');
+ need(resolve(authorityDir,'..')===join(root,'authority-observations')
+  &&same(authorityIntent.config,launcher.config)&&same(authorityIntent.originalRequest,request.original.request)
+  &&authorityIntent.readOnly===true&&authorityIntent.totalTimeoutSeconds===60
+  &&same(authorityIntent.argv,[original.node.path,authorityIntent.bootstrap.path,entry,
+   review.files[join(previousApp,'scripts','release-delivery-continuation.mjs')],review.files[join(previousApp,'scripts','release-coordinate.mjs')],
+   init.journalDirectory,request.operationId,r.previousProof.path,r.previousProof.sha256]),'prejournal-reserved-authority-context-changed');
+ need(r.authority.result.path===join(authorityDir,'result.json')&&result.readOnly===true&&result.releaseEffectRetry===false
+  &&result.failure===null&&result.returnCode===1&&result.elapsedSeconds>=0&&result.elapsedSeconds<60,
+  'prejournal-reserved-authority-failure-required');
+ for(const name of ['stdout','stderr']){
+  const pinned=r.authority[name],bytes=readEvidenceFile(pinned,{maximum:65536}),observed=result.outputs[name];
+  need(pinned.path===join(authorityDir,name+'.log')&&same(observed.reference,pinned)&&observed.complete===true
+   &&observed.totalBytes===bytes.length&&observed.wholeSha256===pinned.sha256,'prejournal-reserved-failure-output-changed');
+ }
+ const error=readEvidenceFile(r.authority.stderr).toString();
+ need(result.outputs.stdout.totalBytes===0&&error.includes('Error: spawnSync ')&&error.includes('powershell.exe EPERM')
+  &&error.includes('at protectDirectory (')&&error.includes('at validateJournalDirectory (')&&error.includes('at verifyPreJournalStorageAuthority (')
+  &&/errno: -4048/.test(error)&&/code: 'EPERM'/.test(error)&&/pid: 0/.test(error)&&/status: null/.test(error),
+  'prejournal-reserved-exact-readonly-launch-refusal-required');
+ return r;
 }
 
 export async function preparePreJournalReconciliation(requestRef,{clock=Date.now,assertAbsent,command}={}){
