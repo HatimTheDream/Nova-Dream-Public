@@ -2,7 +2,7 @@
  * Candidate identity and original execution history are never rewritten. */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual as same } from 'node:util';
@@ -32,6 +32,118 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
  operator:z.object({adapterIdentity:hash,sources:pair(source),sourceFiles:graphSchema,ci:pair(ref)}).strict(),
  hostFacts:ref,issuedAtMs:z.number().int().nonnegative(),expiresAtMs:z.number().int().positive(),
  automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required');
+
+const preJournalSource=source.extend({branch:z.literal('operator/prejournal-c494-r1')});
+export const preJournalRequestSchema=z.object({format:z.literal(1),kind:z.literal('nova-pre-journal-dispatch-request'),operationId:z.uuid(),
+ historical:z.object({root:path,manifest:ref}).strict(),
+ original:z.object({request:ref,initialization:ref,descriptor:ref,dispatch:ref,session:ref,directoryPreparation:ref,
+  launcher:ref,observation:z.object({intent:ref,exit:ref,childResult:ref,stdout:ref,stderr:ref}).strict()}).strict(),
+ operatorSources:pair(preJournalSource),ciRuns:pair(z.number().int().positive()),outputDirectory:path,
+ durationMs:z.number().int().min(60000).max(1800000),
+ reason:z.literal('closed-storage-start-rejected-before-journal'),automaticRenewal:z.literal(false)}).strict();
+export const preJournalGrantSchema=z.object({format:z.literal(1),kind:z.literal('nova-pre-journal-dispatch-reconciliation'),operationId:z.uuid(),
+ descriptorSha256:hash,targetIdentity:hash,originalAdapterIdentity:hash,originalTimelineSha256:hash,originalBudgetMs:z.number().int().positive(),
+ originalDispatch:ref,originalDirectoryPreparation:ref,originalStorageDeadline:z.string(),originalStartAtMs:z.number().int().nonnegative(),
+ request:ref,operator:z.object({adapterIdentity:hash,sources:pair(preJournalSource),sourceFiles:graphSchema,ci:pair(ref)}).strict(),
+ issuedAtMs:z.number().int().nonnegative(),expiresAtMs:z.number().int().positive(),
+ automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=1800000,'finite-prejournal-window-required');
+export const operatorGrantSchema=z.union([continuationGrantSchema,preJournalGrantSchema]);
+
+/** A closed first child is different from a lost response or a started journal. */
+export function preJournalOriginal(raw,{requireEmpty=true,exclusiveHistory=false,assertAbsent=absentOwner}={}){
+ const request=preJournalRequestSchema.parse(raw),o=request.original,original=json(o.request),init=json(o.initialization),d=json(o.descriptor),start=json(original.releaseInput);
+ const root=resolve(o.request.path,'..'),j=resolve(init.journalDirectory),dir=join(root,'observations','observation-0001');
+ need(original.operationId===request.operationId&&start.operationId===request.operationId&&d.operation.id===request.operationId
+  &&init.kind==='nova-delivery-initialization'&&same(init.input,start)&&same(init.descriptor.reference,o.descriptor)&&same(init.descriptor.value,d)
+  &&same(init.profile,start.profile)&&same(d.timeline,start.timeline)&&d.observationBudgetMs===start.observationBudgetMs
+  &&same(d.operation.sourceCommits,start.sourceCommits),'prejournal-original-initialization-changed');
+ need(o.initialization.path===join(resolve(start.outputRoot),'request-'+request.operationId,'initialization.json')
+  &&o.descriptor.path===join(resolve(start.outputRoot),'request-'+request.operationId,'descriptor.json')
+  &&j===join(resolve(start.outputRoot),'journal-'+request.operationId),'prejournal-original-paths-changed');
+ verifyOriginalContinuationGraph(request,d);
+ const dispatch=json(o.dispatch),session=json(o.session),intent=json(o.observation.intent),closed=json(o.observation.childResult),exit=json(o.observation.exit),result=json(o.observation.stdout),preparation=json(o.directoryPreparation),launcher=json(o.launcher);
+ need(o.dispatch.path===join(root,'release-dispatch.json')&&o.session.path===join(root,'session-observation-0001.json')
+  &&same(dispatch.request,o.request)&&dispatch.automaticNewOperationPermitted===false
+  &&same(session.request,o.request)&&same(session.dispatch,o.dispatch)&&same(session.initialization,o.initialization)&&same(session.descriptor,o.descriptor)
+  &&session.kind==='nova-storage-default-session'&&session.mode==='start'&&session.operationId===request.operationId,'prejournal-original-dispatch-changed');
+ const expected=[original.node.path,original.deliveryEntry.path,'start',j,o.descriptor.path];
+ need(same(intent.argv,expected)&&same(session.argv,expected)&&same(intent.request,o.request)&&intent.sameReleaseOperation===true,'prejournal-original-start-command-changed');
+ need(original.deliveryEntry.path===join(request.historical.root,'scripts','release-deliver.mjs')
+  &&same(original.node,json(d.target).artifactTools.node),'prejournal-original-entry-or-node-changed');
+ for(const [role,name]of Object.entries({intent:'intent.json',exit:'exit.json',childResult:'default-child-result.json',stdout:'stdout.json',stderr:'stderr.log'})){
+  need(o.observation[role].path===join(dir,name),'prejournal-original-observation-path-changed');readEvidenceFile(o.observation[role]);}
+ if(exclusiveHistory)need(same(readdirSync(join(root,'observations')).filter(n=>/^observation-[0-9]{4,}$/.test(n)),['observation-0001']),'prejournal-unclassified-original-observation');
+ need(closed.originalChildClosed===true&&closed.returnCode===1&&closed.logBoundExceeded===false&&closed.automaticNewOperationPermitted===false
+  &&exit.returnCode===1&&Number.isSafeInteger(exit.finishedAtMilliseconds)
+  &&same(result,{kind:'nova-release-delivery-error',reason:'storage-start-already-dispatched-use-resume',automaticReplayPermitted:false}),'prejournal-original-start-not-definitively-closed');
+ need(preparation.kind==='original-empty-journal-directory-preparation'&&same(preparation.originalInitialization,o.initialization)
+  &&preparation.journalDirectory===j&&preparation.absentBefore===true&&preparation.protected===true&&preparation.emptyAfter===true
+  &&preparation.databaseCreated===false&&preparation.newOperationCreated===false&&preparation.hostEffects===false,'prejournal-empty-directory-provenance-required');
+ readEvidenceFile(preparation.source);
+ need(preparation.source.path===join(request.historical.root,'scripts','release-coordinate.mjs'),'prejournal-directory-validator-changed');
+ need(launcher.kind==='verified-waiting-release-launcher'&&launcher.dispatchAuthority===false&&launcher.operationId===request.operationId
+  &&same(launcher.start,original.releaseInput)&&same(launcher.budget,original.storageBudget)&&same(launcher.entry,original.deliveryEntry)
+  &&same(launcher.node,original.node)&&launcher.worker.parentPid===launcher.owner.pid,'prejournal-original-owner-changed');
+ for(const owner of [launcher.owner,launcher.worker])assertAbsent(owner);
+ for(const r of [launcher.config,launcher.runner,launcher.entry,launcher.node])readEvidenceFile(r,{maximum:128*1024**2});
+ const originalConfig=json(launcher.config);
+ need(same(session.config,launcher.config)&&same(session.sourceReview,originalConfig.sourceReview)&&same(session.storageReview,originalConfig.storageReview)
+  &&same(session.sourceGraph,request.historical.manifest)&&session.adapterIdentity===d.adapterIdentity,'prejournal-original-session-source-changed');
+ const storage=json(dispatch.storageInput),maintenance=dispatch.storageMaintenanceResult,completion=json(maintenance.result),{result:completionRef,...retainedMaintenance}=maintenance;
+ need(same(storage.profile,start.profile)&&same(storage.budget,original.storageBudget)&&maintenance.state==='ready'&&maintenance.cleanupPerformed===true
+  &&maintenance.protectedRolesVerified===true&&same(completion,retainedMaintenance)&&maintenance.releaseAdmission===false,'prejournal-completed-maintenance-required');
+ const info=lstatSync(j);need(info.isDirectory()&&!info.isSymbolicLink()&&resolve(realpathSync(j))===j,'prejournal-canonical-directory-required');
+ if(requireEmpty)need(readdirSync(j).length===0,'prejournal-empty-uninitialized-directory-required');
+ return {request,original,initialization:init,descriptor:d,journalDirectory:j,dispatch,storage,
+  binding:{descriptorSha256:sha256(canonical(d)),targetIdentity:d.targetIdentity,originalAdapterIdentity:d.adapterIdentity,
+   originalTimelineSha256:sha256(canonical(d.timeline)),originalBudgetMs:d.observationBudgetMs,originalDispatch:o.dispatch,
+   originalDirectoryPreparation:o.directoryPreparation,originalStorageDeadline:storage.originalDeadline,originalStartAtMs:d.timeline.startedAtMs}};
+}
+
+export async function preparePreJournalReconciliation(requestRef,{clock=Date.now,assertAbsent,command}={}){
+ const request=preJournalRequestSchema.parse(json(requestRef)),before=preJournalOriginal(request,{assertAbsent,exclusiveHistory:true});
+ const {validateJournalDirectory}=await import('./release-coordinate.mjs');
+ validateJournalDirectory(before.journalDirectory,{create:false});
+ const out=validateJournalDirectory(request.outputDirectory,{create:true}),proofPath=join(out,'prejournal-authority.json');
+ need(!existsSync(proofPath),'prejournal-authority-already-prepared-no-renewal');
+ const operator=await qualifyOperatorSources(request,before.descriptor,{command});operator.ci={};
+ const A=await import('./release-delivery-adapters.mjs');command??=A.fixedCommand;
+ const target=json(before.descriptor.target),container={directory:out};
+ for(const side of ['private','public']){
+  const s=operator.sources[side],runId=request.ciRuns[side],input=save(container,'operator-ci-request-'+side,{format:1,source:s,runId,tools:target.sourceTools});
+  const value=JSON.parse(await command(target.sourceTools.python.path,[fileURLToPath(new URL('release-operator-ci.py',import.meta.url)),'--request',input.path,'--request-sha256',input.sha256],{maximum:8*1024**2,timeoutMs:180000}));
+  need(value.run.id===runId,'prejournal-operator-ci-id-changed');operator.ci[side]=save(container,'operator-ci-'+side,verifyOperatorCi(value,s));
+ }
+ const after=preJournalOriginal(request,{assertAbsent,exclusiveHistory:true});need(same(after.binding,before.binding),'prejournal-original-context-raced');
+ const at=clock(),proof=preJournalGrantSchema.parse({format:1,kind:'nova-pre-journal-dispatch-reconciliation',operationId:request.operationId,
+  ...after.binding,request:requestRef,operator,issuedAtMs:at,expiresAtMs:at+request.durationMs,automaticRenewal:false,originalHistoryPreserved:true});
+ const fd=openSync(proofPath,'wx',0o600);try{writeFileSync(fd,canonical(proof)+'\n');fsyncSync(fd);}finally{closeSync(fd);}
+ return reference(proofPath);
+}
+
+export function verifyPreJournalProof(raw,{now=Date.now(),requireEmpty=false,assertAbsent}={}){
+ const proof=preJournalGrantSchema.parse(raw),request=preJournalRequestSchema.parse(json(proof.request));
+ const original=preJournalOriginal(request,{requireEmpty,assertAbsent});
+ need(proof.operationId===request.operationId&&Object.entries(original.binding).every(([k,v])=>same(v,proof[k]))
+  &&same(proof.operator.sources,request.operatorSources)&&proof.expiresAtMs-proof.issuedAtMs===request.durationMs,'prejournal-proof-original-context-changed');
+ for(const side of ['private','public'])need(verifyOperatorCi(json(proof.operator.ci[side]),proof.operator.sources[side]).run.id===request.ciRuns[side],'prejournal-proof-ci-changed');
+ if(requireEmpty)need(now>=proof.issuedAtMs&&now<proof.expiresAtMs,'prejournal-first-dispatch-window-expired');
+ return {proof,original};
+}
+
+export async function verifyPreJournalStorageAuthority({proofReference,entry=null,operationId=null,journalDirectory=null,now=Date.now(),requireEmpty=true}){
+ const checked=verifyPreJournalProof(json(proofReference),{now,requireEmpty}),p=checked.proof,A=await import('./release-delivery-adapters.mjs');
+ need((operationId===null||operationId===p.operationId)&&(journalDirectory===null||resolve(journalDirectory)===checked.original.journalDirectory),'prejournal-requested-operation-changed');
+ need(resolve(proofReference.path)===join(checked.original.request.outputDirectory,'prejournal-authority.json'),'prejournal-proof-location-changed');
+ const current=A.deliveryAdapterSourceFiles().map(name=>({name,sha256:sha256(readFileSync(new URL(name,import.meta.url)))}));
+ need(A.deliveryAdapterIdentity()===p.operator.adapterIdentity&&same(current,p.operator.sourceFiles),'prejournal-current-operator-graph-changed');
+ const roots=[join(p.operator.sources.private.root,'edition3'),p.operator.sources.public.root],actual=join(roots[0],'scripts/release-deliver.mjs');
+ need(entry===null||resolve(entry)===resolve(actual),'prejournal-current-operator-entry-changed');
+ const {validateJournalDirectory}=await import('./release-coordinate.mjs');validateJournalDirectory(checked.original.journalDirectory,{create:false});
+ return {grantSha256:sha256(canonical(p)),operatorAdapterIdentity:p.operator.adapterIdentity,operatorEntry:reference(actual),operatorRoots:roots,
+  operatorSources:p.operator.sources,expiresAtMs:p.expiresAtMs,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,
+  newEffectsAllowed:now>=p.issuedAtMs&&now<p.expiresAtMs,continuationStarted:false};
+}
 
 function absentOwner(owner){
  need(Number.isSafeInteger(owner.pid)&&owner.pid>0&&/^\/Date\([0-9]+\)\/$/.test(owner.created??'')&&typeof owner.executable==='string'&&hash.safeParse(owner.commandLineSha256).success,'continuation-original-process-identity-invalid');
@@ -172,7 +284,16 @@ export function verifyContinuationTimeline(journal,id,baseline,now){
  }
 }
 export function verifyContinuationGrant(journal,id,{now=Date.now(),effect=false}={}){
- const saved=journal.deliveryOperatorContinuation(id);need(saved,'continuation-grant-required');const p=continuationGrantSchema.parse(saved.proof),d=journal.loadDelivery(id);
+ const saved=journal.deliveryOperatorContinuation(id);need(saved,'continuation-grant-required');
+ if(saved.proof.kind==='nova-pre-journal-dispatch-reconciliation'){
+  const {proof:p}=verifyPreJournalProof(saved.proof,{now}),d=journal.loadDelivery(id);
+  need(p.operationId===id&&p.descriptorSha256===d.descriptor_hash&&p.originalAdapterIdentity===d.descriptor.adapterIdentity
+   &&p.targetIdentity===d.descriptor.targetIdentity&&p.originalBudgetMs===d.descriptor.observationBudgetMs
+   &&p.originalTimelineSha256===sha256(canonical(d.descriptor.timeline))&&saved.recordedAtMs===d.created_at,'prejournal-native-initialization-changed');
+  need(!effect||(now>=d.created_at&&now<d.created_at+d.descriptor.observationBudgetMs),'continuation-window-expired');
+  if(effect)verifyContinuationTimeline(journal,id,saved.recordedAtMs,now);return saved;
+ }
+ const p=continuationGrantSchema.parse(saved.proof),d=journal.loadDelivery(id);
  need(p.descriptorSha256===d.descriptor_hash&&p.originalAdapterIdentity===d.descriptor.adapterIdentity&&p.targetIdentity===d.descriptor.targetIdentity
   &&p.originalCreatedAtMs===d.created_at&&p.originalBudgetMs===d.descriptor.observationBudgetMs
   &&p.originalTimelineSha256===sha256(canonical(d.descriptor.timeline))&&same(history(journal,id,p.eventHighWaterMark),{eventHighWaterMark:p.eventHighWaterMark,historySha256:p.historySha256}),'continuation-original-descriptor-changed');
@@ -194,14 +315,20 @@ export async function verifyContinuationStorageAuthority({journal,operationId,en
  const roots=[join(p.operator.sources.private.root,'edition3'),p.operator.sources.public.root],actual=join(roots[0],'scripts/release-deliver.mjs');
  need(entry===null||resolve(entry)===resolve(actual),'continuation-current-operator-entry-changed');
  need([join(roots[0],'scripts/release-deliver.mjs'),join(roots[1],'scripts/release-deliver.mjs')].map(p=>resolve(p)).includes(fileURLToPath(new URL('release-deliver.mjs',import.meta.url))),'continuation-current-module-root-changed');
+ const initialized=p.kind==='nova-pre-journal-dispatch-reconciliation',d=initialized?journal.loadDelivery(operationId):null;
+ const expires=initialized?d.created_at+d.descriptor.observationBudgetMs:p.expiresAtMs,issued=initialized?d.created_at:p.issuedAtMs;
  return {grantSha256:saved.sha256,operatorAdapterIdentity:p.operator.adapterIdentity,operatorEntry:reference(actual),operatorRoots:roots,operatorSources:p.operator.sources,
-  expiresAtMs:p.expiresAtMs,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,
-  newEffectsAllowed:now>=p.issuedAtMs&&now<p.expiresAtMs,continuationStarted:Boolean(journal.deliveryPhase(operationId,'package'))};
+  expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,
+  newEffectsAllowed:now>=issued&&now<expires,continuationStarted:initialized||Boolean(journal.deliveryPhase(operationId,'package'))};
 }
 export async function assertDeliveryOperator(journal,id,registry,{clock=Date.now,effect=false}={}){
  const d=journal.loadDelivery(id).descriptor,current=await registry.identity(d);
  if(!journal.deliveryOperatorContinuation(id)){need(current===d.adapterIdentity,'delivery-adapter-changed');return null;}
  const authority=await verifyContinuationStorageAuthority({journal,operationId:id,now:clock(),effect});need(current===authority.operatorAdapterIdentity,'delivery-continuation-adapter-changed');return authority;
+}
+export function operatorObservationDeadline(journal,id){
+ const grant=journal.deliveryOperatorContinuation(id),d=journal.loadDelivery(id);
+ return grant&&grant.proof.kind!=='nova-pre-journal-dispatch-reconciliation'?grant.proof.expiresAtMs:d.created_at+d.descriptor.observationBudgetMs;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  const [mode,directory,id,entry]=process.argv.slice(2);need(mode==='storage-authority'&&entry,'continuation-exact-readonly-command-required');
