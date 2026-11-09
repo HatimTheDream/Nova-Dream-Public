@@ -1,3 +1,8 @@
+## [2.28.33] - 2026-11-08
+
+- Use the existing bounded clock wait for delivery continuation observations, preserving original timestamps and freshness checks.
+- Retain the original host response and clock diagnostics when continuation admission is refused.
+
 ## [2.28.32] - 2026-11-08
 
 - Add explicit continuation for an expired delivery that stopped before packaging, retaining its original candidate, completed checks, and history.

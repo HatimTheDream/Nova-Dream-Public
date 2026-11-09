@@ -31,6 +31,7 @@ import { runtimeAdmissionCapability } from './release-delivery-runtime-qualifica
 import {createRuntimeRetainedCollector} from './release-delivery-runtime-retained.mjs';
 import {createStartupRetainedCollector} from './release-delivery-startup-retained.mjs';
 import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
+import {awaitObservationTime} from './release-observation-clock.mjs';
 import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter} from './release-delivery-browser.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
@@ -190,7 +191,7 @@ export function withBrowserPreparation(adapter, prepare) {
   };
   return {...adapter,execute:context=>advance(context,false),observe:context=>advance(context,true)};
 }
-export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now } = {}) {
+export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now, monotonic, wait } = {}) {
   // Keep the old document alive before publication. This is an owned browser
   // effect, never an input/admission callback or a manually asserted receipt.
   const publicationBrowser = (adapter, target) => {
@@ -247,15 +248,27 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     return Object.fromEntries(['prepare','validate','apply'].map(method=>[method,async context=>{protectedAssets(context);return admission[method](context);} ]));
   };
   return { identity: async () => deliveryAdapterIdentity(), targetIdentity: async descriptor => deliveryTargetIdentity(descriptor),
-    continuationFacts: async descriptor => {
+    continuationFacts: async (descriptor,{journal}={}) => {
+      need(journal,'continuation-observation-journal-required');
       const {target,transport}=targetInput(descriptor);
       need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
       const proof=await createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})();
       const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition);
       const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
-      need(response.exitCode===0&&!response.uncertain&&response.stderr===''&&Buffer.byteLength(response.stdout)<=131072,'continuation-current-host-unavailable');
-      const facts=JSON.parse(response.stdout);verifyFullFacts(facts,spec,clock(),true);
-      return {spec,facts,stdoutRawBase64:Buffer.from(response.stdout).toString('base64'),stdoutSha256:sha256(Buffer.from(response.stdout)),hostWrites:false};
+      const stdout=Buffer.from(response.stdout??''),stderr=Buffer.from(response.stderr??'');
+      const retain=(kind,value)=>{const bytes=Buffer.from(canonical(value)+'\n');return receiptStore(journal,descriptor.operation.id,kind+'-'+sha256(bytes)+'.json',bytes);};
+      // Preserve the genuine response before any transport, parsing or clock refusal.
+      const responseReceipt=retain('continuation-host-response',{format:1,kind:'operator-continuation-host-response',operationId:descriptor.operation.id,spec,
+        receivedAtMilliseconds:clock(),exitCode:response.exitCode??null,uncertain:response.uncertain===true,
+        stdoutRawBase64:stdout.subarray(0,131072).toString('base64'),stdoutBytes:stdout.length,stdoutTruncated:stdout.length>131072,
+        stderrRawBase64:stderr.subarray(0,4096).toString('base64'),stderrBytes:stderr.length,stderrTruncated:stderr.length>4096,hostWrites:false});
+      need(response.exitCode===0&&!response.uncertain&&stderr.length===0&&stdout.length<=131072,'continuation-current-host-unavailable');
+      const facts=JSON.parse(response.stdout);let timing;
+      try{timing=await awaitObservationTime(facts.observedAtMilliseconds,{clock,monotonic,wait,maximumWaitMilliseconds:5000,maximumAgeMilliseconds:900000,maximumSamples:128});}
+      catch(error){retain('continuation-host-clock',{format:1,kind:'operator-continuation-host-clock-refused',response:responseReceipt,reason:error.message,clockObservation:error.clockObservation});throw error;}
+      const clockReceipt=retain('continuation-host-clock',{format:1,kind:'operator-continuation-host-clock-accepted',response:responseReceipt,clockObservation:timing});
+      verifyFullFacts(facts,spec,clock(),true);
+      return {spec,facts,stdoutRawBase64:stdout.toString('base64'),stdoutSha256:sha256(stdout),responseReceipt,clockReceipt,hostWrites:false};
     },
     preflight: async descriptor => { const { target } = targetInput(descriptor); return [...(target.sourceTools ? [] : ['source-toolchain-not-configured']), ...(target.artifactTools ? [] : ['artifact-toolchain-not-configured']),
       ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...await runtimeGaps(descriptor,target)]; },

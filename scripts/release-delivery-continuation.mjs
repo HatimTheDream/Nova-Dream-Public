@@ -150,7 +150,7 @@ export async function reconcileExpiredPrepackage(journal,id,requestRef,{clock=Da
  const prior=Object.fromEntries(PREWRITE_PREREQUISITES.map(p=>[p,journal.deliveryPhase(id,p).current.output]));
  await withVerificationPass({},async scope=>{for(const phase of PREWRITE_PREREQUISITES){const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior),context={...scope,journal,descriptor:d,prior,intent,input:intent.input};need(adapter,'continuation-current-verifier-missing');await adapter.validate(context);await adapter.verify(intent.current,context);}},{readOnly:true});
  need((await registry.phasePreflight('package',d,prior)).length===0,'continuation-package-prerequisite-unavailable');
- const facts=await registry.continuationFacts(d);const hostFacts=save(journal,'current-idle-host',facts);
+ const facts=await registry.continuationFacts(d,{journal});const hostFacts=save(journal,'current-idle-host',facts);
  const at=clock(),after=continuationSnapshot(journal,id,at,{request,assertAbsent});need(same(before,after),'continuation-original-history-changed');
  const proof=continuationGrantSchema.parse({format:1,kind:'nova-expired-prepackage-continuation',operationId:id,...after,request:requestRef,operator,hostFacts,
   issuedAtMs:at,expiresAtMs:at+request.durationMs,automaticRenewal:false,originalHistoryPreserved:true});
