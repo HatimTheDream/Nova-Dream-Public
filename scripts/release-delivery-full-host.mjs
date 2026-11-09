@@ -21,6 +21,7 @@ const need=(v,r)=>{if(!v)throw Error(r);};
 const hash=z.string().regex(/^[a-f0-9]{64}$/);
 const hostPath=z.string().regex(/^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/).refine(p=>!p.split('/').some(x=>x==='.'||x==='..'));
 const hostRef=z.object({path:hostPath,sha256:hash}).strict();
+const retainedRole=z.object({path:hostPath,device:z.number().int().nonnegative(),inode:z.number().int().positive(),uid:z.number().int().nonnegative(),gid:z.number().int().nonnegative(),mode:z.number().int().min(0).max(4095),nlink:z.number().int().positive()}).strict();
 const version=z.string().regex(/^\d+\.\d+\.\d+$/);
 export const fullHostOptionsSchema=z.object({format:z.literal(1),hostConfiguration:hostRef,
   helperDirectory:hostPath,acceptedInstallation:hostRef,priorVersion:version,priorBuildVersion:version,priorJobId:z.uuid(),
@@ -29,13 +30,21 @@ export const fullHostOptionsSchema=z.object({format:z.literal(1),hostConfigurati
   priorUnchangedFailure:z.object({operation:hostRef,intent:hostRef,request:hostRef,result:hostRef,failure:hostRef,
     driverAttempt:hostRef,runnerLog:hostRef,preflights:z.array(hostRef).length(2),installer:hostRef,bundle:hostRef,runnerConfiguration:hostRef,
     coordinatorExport:z.object({path:z.string().min(1),sha256:hash}).strict()}).strict().optional(),
+  priorRestoredFailure:z.object({operation:hostRef,intent:hostRef,request:hostRef,result:hostRef,failure:hostRef,
+    driverAttempt:hostRef,runnerLog:hostRef,preflights:z.array(hostRef).length(2),installer:hostRef,bundle:hostRef,runnerConfiguration:hostRef,
+    snapshotManifest:hostRef,snapshotVerified:hostRef,restoredAcceptance:hostRef,attemptFiles:z.array(hostRef).length(16),
+    retainedRoles:z.object({recovery:retainedRole,workspace:retainedRole,failedWorkspace:retainedRole}).strict(),
+    coordinatorExport:z.object({path:z.string().min(1),sha256:hash}).strict()}).strict().optional(),
   stageParent:hostPath.refine(p=>p.startsWith('/opt/nova-release-tools/')&&p.length>'/opt/nova-release-tools/'.length),
   excludedIdentities:z.object({candidateIds:z.array(hash).max(64),bundleSha256s:z.array(hash).max(64),rehearsalLeaseIds:z.array(z.uuid()).max(64)}).strict()
     .refine(v=>Object.values(v).every(a=>new Set(a).size===a.length)),
-  startupGuardFile:hostPath.nullable()}).strict().refine(v=>!(v.priorNoStartFailure&&v.priorUnchangedFailure),'Distinct failed prior authorities are mutually exclusive.');
+  startupGuardFile:hostPath.nullable()}).strict().refine(v=>[v.priorNoStartFailure,v.priorUnchangedFailure,v.priorRestoredFailure].filter(Boolean).length<=1,'Distinct failed prior authorities are mutually exclusive.');
 export function priorNoStartFailureAuthority(options,op){
  fullHostOptionsSchema.parse(options);if(!options.priorNoStartFailure)return null;
- const failure=options.priorNoStartFailure,exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum:131072}));
+ return terminalFailureAuthority(options.priorNoStartFailure,op,131072);
+}
+function terminalFailureAuthority(failure,op,maximum){
+ const exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum}));
  const intent=exported.intent,phase=exported.installationPhase,old=phase?.input?.coordinatorDescriptor?.input?.operation,observed=intent?.lastObservation;
  need(exported.format===1&&exported.kind==='read-only-original-coordinator-terminal-export'&&exported.readOnly===true&&exported.originalControllerResponseClaimed===false
   &&old?.id===exported.operationId&&old.id!==op.id&&old.candidateId!==op.candidateId&&old.priorCandidateId===op.priorCandidateId&&old.workspaceEpoch===op.workspaceEpoch
@@ -50,12 +59,22 @@ export function priorNoStartFailureAuthority(options,op){
  * predecessor class. It never turns a failed job into an accepted installation. */
 export function priorUnchangedFailureAuthority(options,op){
  fullHostOptionsSchema.parse(options);if(!options.priorUnchangedFailure)return null;
- const failure=options.priorUnchangedFailure;
+ return startedFailureAuthority(options,op,options.priorUnchangedFailure,'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59');
+}
+/** A verified paired restoration retains both the failed target and accepted prior.
+ * It is never interpreted as an unchanged or never-started installation. */
+export function priorRestoredFailureAuthority(options,op){
+ fullHostOptionsSchema.parse(options);if(!options.priorRestoredFailure)return null;
+ const value=startedFailureAuthority(options,op,options.priorRestoredFailure,'f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a');
+ need(value.release.bundle.runnerSha256===value.installer.sha256,'restored-original-installer-not-signed');
+ return value;
+}
+function startedFailureAuthority(options,op,failure,installerSha256){
  // Reuse the terminal coordinator identity predicate, without changing its
  // original never-started host predicate or the caller's input.
- const prior=priorNoStartFailureAuthority({...options,priorUnchangedFailure:undefined,
-  priorNoStartFailure:{operation:failure.operation,intent:failure.intent,preflight:failure.preflights[0],coordinatorExport:failure.coordinatorExport}},op);
- const exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum:131072}));
+ const maximum=options.priorRestoredFailure?512*1024:131072;
+ const prior=terminalFailureAuthority(failure,op,maximum);
+ const exported=JSON.parse(readEvidenceFile(failure.coordinatorExport,{maximum}));
  const input=exported.installationPhase.input.coordinatorDescriptor.input,old=input.operation,publication=input.evidence?.publication;
  const sign=exported.signingPhase,publish=exported.publicationPhase;
  need(sign?.phase==='sign'&&sign.state==='completed'&&sign.current?.state==='completed'
@@ -74,12 +93,12 @@ export function priorUnchangedFailureAuthority(options,op){
   &&['private','public'].every((side,i)=>published.repositories[i].sourceCommit===old.sourceCommits[side]&&published.repositories[i].pushed===true&&published.repositories[i].feedSha256===publication.feed.sha256)
   &&release.candidateId===old.candidateId&&release.fromCandidateId===old.priorCandidateId&&release.novaVersion===old.version
   &&release.agentVersion===old.agentVersion&&release.bundle.sha256===old.bundleSha256&&failure.bundle.sha256===old.bundleSha256
-  &&failure.installer.sha256==='941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59','unchanged-original-signed-release-changed');
+  &&failure.installer.sha256===installerSha256,'unchanged-original-signed-release-changed');
  need(Number.isSafeInteger(feed.sequence)&&feed.sequence>0&&Number.isFinite(Date.parse(feed.expiresAt)),'unchanged-original-feed-invalid');
  return {...failure,authority:prior.authority,release:{...release,manifestSequence:feed.sequence,manifestExpiresAt:Date.parse(feed.expiresAt)}};
 }
 export function priorFailedInstallationAuthority(options,op){
- return options.priorUnchangedFailure?priorUnchangedFailureAuthority(options,op):priorNoStartFailureAuthority(options,op);
+ return options.priorRestoredFailure?priorRestoredFailureAuthority(options,op):options.priorUnchangedFailure?priorUnchangedFailureAuthority(options,op):priorNoStartFailureAuthority(options,op);
 }
 export const FULL_HELPERS=Object.freeze({
   'app_dependencies.py':'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290',
@@ -92,7 +111,7 @@ export const FULL_HELPERS=Object.freeze({
 });
 
 // Reviewed application-transition helper bytes; actual startup qualification is still mandatory.
-export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 function reviewedHelpers(value){need(isDeepStrictEqual(value,FULL_HELPERS)||isDeepStrictEqual(value,FULL_APPLICATION_HELPERS),'full-helper-qualification-capability-required');return value;}
 export const reviewedFullHelperHashes=reviewedHelpers;
 function transitionHelpers(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return transition?FULL_APPLICATION_HELPERS:FULL_HELPERS;}

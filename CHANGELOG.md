@@ -1,3 +1,9 @@
+## [2.28.36] - 2026-11-09
+
+- Verify packaged dependency files from the application's selected node_modules directory while preserving complete dependency and saved-work checks.
+- Preserve a verified restored installation as explicit predecessor evidence for a corrected release, without replaying the failed job.
+- Retain the reviewed recovery path for interrupted delivery controllers and their original operation history.
+
 ## [2.28.35] - 2026-11-09
 
 - Accept the supported application-owned workspace parent when verifying an unchanged failed update, while keeping recovery directories strictly protected.

@@ -1534,10 +1534,17 @@ class Driver:
                 'Configuration derivation requires this installer\'s genuinely closed target.')
         ready, _ = self.ready_startup_record()
         prefix = 'startup-' + str(ready['attempt'])
-        dependency_root = getattr(self, 'application_dependency_target', self.dependencies)
-        inventory_record = getattr(self, 'target_dependency_identity', self.dependency_identity)
-        files = {name: {key: entry[key] for key in ('size', 'sha256')}
-                 for name, entry in inventory_record.items() if name.startswith('zod/') and entry.get('kind') == 'file'}
+        if self.application_dependencies is not None:
+            # Signed archives are attested from their package root, while the
+            # selected app and builder resolve packages from node_modules.
+            dependency_root = self.application_dependency_target / 'node_modules'
+            inventory_record = self.target_dependency_identity
+            dependency_prefix = 'node_modules/'
+        else:
+            dependency_root, inventory_record, dependency_prefix = self.dependencies, self.dependency_identity, ''
+        files = {name[len(dependency_prefix):]: {key: entry[key] for key in ('size', 'sha256')}
+                 for name, entry in inventory_record.items()
+                 if name.startswith(dependency_prefix + 'zod/') and entry.get('kind') == 'file'}
         require(files, 'The previously attested complete Zod dependency closure is required.')
         return {'format': 1, 'kind': 'hosted-closed-configuration-authority', 'candidateId': self.target_id,
             'workspaceEpoch': self.before['epoch'],

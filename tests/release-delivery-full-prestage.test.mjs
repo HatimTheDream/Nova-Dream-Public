@@ -39,7 +39,7 @@ test('copy observation must retain exact original preparation, identities, files
 test('fixed prestage closure includes root authority and read-only install facts',()=>{
  const helpers=fullPrestageHelpers();assert.equal(Object.keys(helpers).length,4);for(const h of Object.values(helpers))assert.match(h,/^[a-f0-9]{64}$/);
 });
-for(const variant of ['legacy','runtime','qualified-dependencies','no-start','unchanged'])test('lost original '+(variant==='runtime'?'runtime upload and ':variant==='qualified-dependencies'?'qualified dependencies ':variant==='no-start'?'explicit no-start prior ':variant==='unchanged'?'started unchanged prior ':'')+'copy response resumes by observation without duplicate effects',async t=>{
+for(const variant of ['legacy','runtime','qualified-dependencies','no-start','unchanged','restored'])test('lost original '+(variant==='runtime'?'runtime upload and ':variant==='qualified-dependencies'?'qualified dependencies ':variant==='no-start'?'explicit no-start prior ':variant==='unchanged'?'started unchanged prior ':variant==='restored'?'verified restored prior ':'')+'copy response resumes by observation without duplicate effects',async t=>{
  const runtimeEnabled=variant==='runtime';
  const f=fullHostFixture(),root=mkdtempSync(join(tmpdir(),'nova-full-prestage-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
  const put=(n,b)=>{const path=join(root,n);writeFileSync(path,b);return{path,sha256:sha256(Buffer.from(b))};};
@@ -61,7 +61,7 @@ for(const variant of ['legacy','runtime','qualified-dependencies','no-start','un
  const facts={format:1,kind:'current-install-prestage-facts',readOnly:true,hostWrites:false,observedAtMilliseconds:1000,
   hostConfiguration:f.options.hostConfiguration,result:f.options.acceptedInstallation,currentJob:{id:f.options.priorJobId,state:'completed',hold:false,candidateId:f.descriptor.operation.priorCandidateId},
   controller:{holdFor:null,job:{id:f.options.priorJobId,state:'completed'}},resultValue:{candidateId:f.descriptor.operation.priorCandidateId,jobId:f.options.priorJobId,outcome:'completed',savedWorkVerified:true,accountsVerified:true,recoveryVerified:true,healthVerified:true}};
- if(variant==='no-start'||variant==='unchanged'){
+ if(['no-start','unchanged','restored'].includes(variant)){
   const oldId='20000000-0000-4000-8000-000000000001',failedJob='20000000-0000-4000-8000-000000000002',failedKey='20000000-0000-4000-8000-000000000003';
   const old={id:oldId,candidateId:h('4'),priorCandidateId:f.descriptor.operation.priorCandidateId,workspaceEpoch:f.descriptor.operation.workspaceEpoch,bundleSha256:h('5')};
   const exported={format:1,kind:'read-only-original-coordinator-terminal-export',readOnly:true,originalControllerResponseClaimed:false,operationId:oldId,
@@ -69,10 +69,11 @@ for(const variant of ['legacy','runtime','qualified-dependencies','no-start','un
    installationPhase:{phase:'installation',state:'failed',externalId:failedJob,current:{state:'failed',externalId:failedJob},input:{coordinatorDescriptor:{input:{operation:old}}}}};
   const coordinatorExport=put('terminal-export.json',JSON.stringify(exported));
   f.options.priorNoStartFailure={operation:{path:'/var/lib/nova-update/release-coordinator/inputs/'+oldId+'.json',sha256:h('6')},intent:{path:'/var/lib/nova-update/release-coordinator/'+oldId+'/intent.json',sha256:h('7')},preflight:{path:'/var/lib/nova-update/staging/'+h('5')+'/attempts/'+failedJob+'/preflight-'+failedKey+'.json',sha256:h('8')},coordinatorExport};
-  if(variant==='unchanged'){
+  if(variant==='unchanged'||variant==='restored'){
    const keys=generateKeyPairSync('ed25519'),publicKey=put('prior-key.pem',keys.publicKey.export({format:'pem',type:'spki'}));
    Object.assign(old,{version:'1.2.3',agentVersion:'2026.9.8',trustedPublicKeySha256:publicKey.sha256,sourceCommits:{private:'1'.repeat(40),public:'2'.repeat(40)}});
    const release={candidateId:old.candidateId,fromCandidateId:old.priorCandidateId,novaVersion:old.version,agentVersion:old.agentVersion,bundle:{sha256:old.bundleSha256}};
+   if(variant==='restored')release.bundle.runnerSha256='f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a';
    const feed={sequence:7,expiresAt:'2030-01-01T00:00:00.000Z',releases:[release]},raw=Buffer.from(JSON.stringify(feed));
    const signedFeed=put('prior-feed.json',JSON.stringify({payload:raw.toString('base64'),signature:sign(null,raw,keys.privateKey).toString('base64')}));
    const published={publicFeedReadVerified:true,publicFeedSha256:signedFeed.sha256,sequence:7,applicationInstalled:false,repositories:['private','public'].map(side=>({sourceCommit:old.sourceCommits[side],pushed:true,feedSha256:signedFeed.sha256}))};
@@ -86,15 +87,24 @@ for(const variant of ['legacy','runtime','qualified-dependencies','no-start','un
     request:ref('request.json'),result:ref('result.json'),failure:ref('failure.json'),driverAttempt:ref('driver-attempt.json'),runnerLog:ref('runner.log'),preflights:[original.preflight,ref('preflight-'+oldId+'.json')],
     runnerConfiguration:{path:'/etc/nova-update/runner.json',sha256:h('7')},installer:{path:'/var/lib/nova-update/staging/'+h('5')+'/install.py',sha256:'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'},bundle:{path:'/var/lib/nova-update/staging/'+h('5')+'/bundle.json',sha256:h('5')}};
    delete f.options.priorNoStartFailure;
+   if(variant==='restored'){
+    const failure=f.options.priorUnchangedFailure,recovery='/var/lib/nova-update-recovery/update-'+failedJob;
+    failure.installer.sha256=release.bundle.runnerSha256;
+    Object.assign(failure,{snapshotManifest:{path:recovery+'/snapshot-manifest.json',sha256:h('1')},snapshotVerified:{path:recovery+'/snapshot-verified.json',sha256:h('2')},restoredAcceptance:{path:recovery+'/acceptance.json',sha256:h('3')},
+     retainedRoles:Object.fromEntries([['recovery',''],['workspace','/workspace'],['failedWorkspace','/failed-workspace']].map(([key,suffix],i)=>[key,{path:recovery+suffix,device:1,inode:i+1,uid:i===0?0:999,gid:999,mode:448,nlink:2}])),
+     attemptFiles:['capacity.json','closed-capacity.json',...[1,2,3].flatMap(i=>(i<3?['started','process','fork-observed','ready','closed']:['started','process','fork-observed','ready']).map(n=>'startup-'+i+'-'+n+'.json'))].map(ref)});
+    f.options.priorRestoredFailure=failure;delete f.options.priorUnchangedFailure;
+   }
   }
   c.prior.capacity.facts.health={candidateId:old.priorCandidateId,version:f.options.priorVersion,buildVersion:f.options.priorBuildVersion,schemaVersion:55};c.prior.capacity.facts.appRoot='/opt/nova/releases/prior/app';
   const input=fullPrestageFactsInput(c,f.options);
   facts.currentJob={id:failedJob,state:'failed',prepared:true,started:false,hold:false,candidateId:old.candidateId,fromCandidateId:old.priorCandidateId,epoch:old.workspaceEpoch,releaseId:old.bundleSha256,idempotencyKey:failedKey};
   facts.controller={holdFor:null,job:{id:failedJob,state:'failed'}};
-  const unchanged=variant==='unchanged',field=unchanged?'unchangedFailure':'noStartFailure',option=unchanged?'priorUnchangedFailure':'priorNoStartFailure';facts.currentJob.started=unchanged;
-  facts[field]={input,...(unchanged?{preStopUnchangedVerified:true,attemptMembers:['request.json','driver-attempt.json','result.json','failure.json','runner.log','driver.lock',...input.failure.preflights.map(r=>r.path.split('/').at(-1))].sort()}:{installerArtifactsAbsent:true,attemptMembers:[input.failure.preflight.path.split('/').at(-1)]}),priorIdentity:{health:c.prior.capacity.facts.health,workspaceEpoch:old.workspaceEpoch}};
+  const unchanged=variant==='unchanged',restored=variant==='restored',field=restored?'restoredFailure':unchanged?'unchangedFailure':'noStartFailure',option=restored?'priorRestoredFailure':unchanged?'priorUnchangedFailure':'priorNoStartFailure';facts.currentJob.started=unchanged||restored;
+  if(restored)facts.currentJob.state=facts.controller.job.state='restored';
+  facts[field]={input,...(unchanged||restored?{[restored?'pairedRestorationVerified':'preStopUnchangedVerified']:true,attemptMembers:['request.json','driver-attempt.json','result.json','failure.json','runner.log','driver.lock',...input.failure.preflights.map(r=>r.path.split('/').at(-1)),...(restored?input.failure.attemptFiles.map(r=>r.path.split('/').at(-1)):[])].sort(),...(restored?{retainedRecoveryRoles:['','/workspace','/failed-workspace'].map(n=>'/var/lib/nova-update-recovery/update-'+failedJob+n)}:{})}:{installerArtifactsAbsent:true,attemptMembers:[input.failure.preflight.path.split('/').at(-1)]}),priorIdentity:{health:c.prior.capacity.facts.health,workspaceEpoch:old.workspaceEpoch}};
   assert.equal(fullPrestageBinding(c,f.options,facts,assets).binding.JOB,f.options.priorJobId);
-  for(const change of [v=>v.currentJob.started=!unchanged,v=>v.currentJob.hold=true,v=>v.currentJob.state='restored',v=>v[field][unchanged?'preStopUnchangedVerified':'installerArtifactsAbsent']=false,v=>v[field].attemptMembers.push('extra.json'),v=>v.resultValue.outcome='failed']){
+  for(const change of [v=>v.currentJob.started=!(unchanged||restored),v=>v.currentJob.hold=true,v=>v.currentJob.state=restored?'failed':'restored',v=>v[field][restored?'pairedRestorationVerified':unchanged?'preStopUnchangedVerified':'installerArtifactsAbsent']=false,v=>v[field].attemptMembers.push('extra.json'),v=>v.resultValue.outcome='failed',...(restored?[v=>v[field].retainedRecoveryRoles.pop(),v=>v.unchangedFailure=v.restoredFailure]:[])]){
    const changed=structuredClone(facts);change(changed);assert.throws(()=>fullPrestageBinding(c,f.options,changed,assets));
   }
   const unconfigured={...f.options};delete unconfigured[option];

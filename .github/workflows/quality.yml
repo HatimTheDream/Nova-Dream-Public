@@ -23,10 +23,12 @@ jobs:
         run: |
           python3 -B tests/release-install-request.test.py -v
           python3 -B tests/release-prestage-no-start.test.py -v
+          python3 -B tests/release-prestage-restored.test.py -v
           python3 -B tests/update-runner.test.py -v
           python3 -B tests/update-runtime-profile.test.py -v
           python3 -B tests/recovery-native98.test.py -v
           python3 -B tests/recovery-schema-transition.test.py -v
+          python3 -B tests/update-hosted-configuration-authority.test.py -v
           python3 -B tests/update-qualification-preflight.test.py -v
           python3 -B tests/hosted-retained-catalog.test.py -v
           python3 -B tests/recovery-event-retention.test.py -v

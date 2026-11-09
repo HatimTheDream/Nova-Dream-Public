@@ -16,7 +16,7 @@ const initialize=async(f,extra={})=>initializeDeliveryInput(f.put('input.json',f
 
 // Inert original failed publication; real signature and retained authority
 // validation run, while the existing fixture forbids host/signing-key effects.
-function noStartPublishedFixture(t,{unchanged=false}={}){
+function noStartPublishedFixture(t,{unchanged=false,restored=false}={}){
  const f=initializeFixture(t,{buildVersion:'1.0.401'}),old={id:randomUUID(),candidateId:'d'.repeat(64),
   priorCandidateId:f.identity.candidateId,workspaceEpoch:f.request.operation.workspaceEpoch,bundleSha256:'e'.repeat(64),
   version:'3.1.1',buildVersion:'1.0.400',agentVersion:'2026.9.8',priorAgentVersion:'2026.9.8',
@@ -24,6 +24,7 @@ function noStartPublishedFixture(t,{unchanged=false}={}){
  const job=randomUUID(),key=randomUUID(),feed=structuredClone(f.feed);feed.sequence=40;
  Object.assign(feed.releases[0],{candidateId:old.candidateId,fromCandidateId:old.priorCandidateId,novaVersion:old.version});
  feed.releases[0].bundle.sha256=old.bundleSha256;
+ if(restored)feed.releases[0].bundle.runnerSha256='f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a';
  Object.assign(feed.releases[0].compatibility,{fromNovaVersion:'3.1.0',pluginVersion:old.version});
  const exported={format:1,kind:'read-only-original-coordinator-terminal-export',readOnly:true,
   originalControllerResponseClaimed:false,operationId:old.id,
@@ -54,7 +55,7 @@ function noStartPublishedFixture(t,{unchanged=false}={}){
    intent:{path:'/var/lib/nova-update/release-coordinator/'+old.id+'/intent.json',sha256:'2'.repeat(64)},
    preflight:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/attempts/'+job+'/preflight-'+key+'.json',sha256:'3'.repeat(64)},
    coordinatorExport:f.put('failed-export.json',exported)}};
- if(unchanged){
+ if(unchanged||restored){
   const oldFailure=f.target.full.host.priorNoStartFailure,attempt='/var/lib/nova-update/staging/'+old.bundleSha256+'/attempts/'+job;
   const ref=name=>({path:attempt+'/'+name,sha256:'1'.repeat(64)});
   f.target.full.host.priorUnchangedFailure={operation:oldFailure.operation,intent:oldFailure.intent,coordinatorExport:oldFailure.coordinatorExport,
@@ -63,12 +64,22 @@ function noStartPublishedFixture(t,{unchanged=false}={}){
    installer:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/install.py',sha256:'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59'},
    bundle:{path:'/var/lib/nova-update/staging/'+old.bundleSha256+'/bundle.json',sha256:old.bundleSha256}};
   delete f.target.full.host.priorNoStartFailure;
+  if(restored){
+   const failure=f.target.full.host.priorUnchangedFailure,recovery='/var/lib/nova-update-recovery/update-'+job;
+   failure.installer.sha256=feed.releases[0].bundle.runnerSha256;
+   Object.assign(failure,{snapshotManifest:{path:recovery+'/snapshot-manifest.json',sha256:'1'.repeat(64)},
+    snapshotVerified:{path:recovery+'/snapshot-verified.json',sha256:'2'.repeat(64)},restoredAcceptance:{path:recovery+'/acceptance.json',sha256:'3'.repeat(64)},
+    retainedRoles:Object.fromEntries([['recovery',''],['workspace','/workspace'],['failedWorkspace','/failed-workspace']].map(([key,suffix],i)=>[key,{path:recovery+suffix,device:1,inode:i+1,uid:i===0?0:999,gid:999,mode:448,nlink:2}])),
+    attemptFiles:['capacity.json','closed-capacity.json',...[1,2,3].flatMap(i=>(i<3?['started','process','fork-observed','ready','closed']:['started','process','fork-observed','ready']).map(n=>'startup-'+i+'-'+n+'.json'))].map(ref)});
+   f.target.full.host.priorRestoredFailure=failure;delete f.target.full.host.priorUnchangedFailure;
+  }
   exported.signingPhase={phase:'sign',state:'completed',current:{state:'completed',output:{release:feed.releases[0],signedFeed:original.publication.feed,bundle:{sha256:old.bundleSha256}}}};
   exported.publicationPhase={phase:'publication',state:'completed',current:{state:'completed',output:{coordinatorDescriptor:{input:exported.installationPhase.input.coordinatorDescriptor.input},evidence:original.publication}}};
  }
  const refresh=()=>{
   if(f.target.full.host.priorNoStartFailure)f.target.full.host.priorNoStartFailure.coordinatorExport=f.put('failed-export.json',exported);
   if(f.target.full.host.priorUnchangedFailure)f.target.full.host.priorUnchangedFailure.coordinatorExport=f.put('failed-export.json',exported);
+  if(f.target.full.host.priorRestoredFailure)f.target.full.host.priorRestoredFailure.coordinatorExport=f.put('failed-export.json',exported);
   f.profile.target=f.put('configured-target.json',f.target);f.profile.targetIdentity=deliveryTargetIdentity({target:f.profile.target});
  };
  refresh();return{...f,old,failedFeed:feed,exported,publish,refresh,...original};
@@ -89,6 +100,33 @@ test('explicit never-started publication advances latest signed sequence without
  assert.deepEqual(v.target.full.host.acceptedInstallation,f.identity.installationProof.installerResult);
  assert.deepEqual(v.target.bases,f.target.bases);assert.deepEqual(f.profile.accepted,accepted);
  assert.equal(existsSync(f.input.outputRoot),false);assert.equal(existsSync(f.target.full.signing.privateKeyPath),false);
+});
+
+test('verified restored predecessor keeps the accepted prior and requires the signed original failed installer',async t=>{
+ const f=noStartPublishedFixture(t,{restored:true}),accepted=structuredClone(f.profile.accepted);
+ const value=await deriveDeliveryConfiguration(f.input,f.profile,f.options);
+ assert.equal(value.target.full.feed.sequence,41);assert.equal(value.operation.priorCandidateId,f.identity.candidateId);
+ assert.deepEqual(f.profile.accepted,accepted);assert.equal(existsSync(f.input.outputRoot),false);
+ const changes={wrongInstaller:x=>x.target.full.host.priorRestoredFailure.installer.sha256='0'.repeat(64),
+  uncertain:x=>x.exported.intent.state='uncertain',heldIdentity:x=>x.exported.intent.lastObservation.externalJobId=randomUUID(),
+  incompletePublication:x=>x.exported.publicationPhase.state='failed',
+  missingRecovery:x=>{delete x.target.full.host.priorRestoredFailure.snapshotVerified;},
+  ambiguous:x=>x.target.full.host.priorUnchangedFailure={...x.target.full.host.priorRestoredFailure}};
+ for(const [name,change]of Object.entries(changes))await t.test(name,async t=>{
+  const other=noStartPublishedFixture(t,{restored:true});change(other);
+  if(['missingRecovery','ambiguous'].includes(name))assert.throws(()=>other.refresh());
+  else{other.refresh();await assert.rejects(deriveDeliveryConfiguration(other.input,other.profile,other.options));}
+  assert.equal(existsSync(other.input.outputRoot),false);
+ });
+});
+
+test('restored terminal export has a bounded larger receipt without widening legacy predecessor reads',async t=>{
+ const restored=noStartPublishedFixture(t,{restored:true});restored.exported.originalDiagnostics='x'.repeat(150*1024);restored.refresh();
+ assert.equal((await deriveDeliveryConfiguration(restored.input,restored.profile,restored.options)).target.full.feed.sequence,41);
+ const legacy=noStartPublishedFixture(t,{unchanged:true});legacy.exported.originalDiagnostics='x'.repeat(150*1024);legacy.refresh();
+ await assert.rejects(deriveDeliveryConfiguration(legacy.input,legacy.profile,legacy.options),/unsafe-or-oversized-evidence/);
+ restored.exported.originalDiagnostics='x'.repeat(512*1024);restored.refresh();
+ await assert.rejects(deriveDeliveryConfiguration(restored.input,restored.profile,restored.options),/unsafe-or-oversized-evidence/);
 });
 
 test('unbound, uncertain, unsigned or mismatched failed publications never replace the feed predecessor',async t=>{
@@ -113,8 +151,8 @@ test('unbound, uncertain, unsigned or mismatched failed publications never repla
  });
 });
 
-for(const unchanged of [false,true])test('accepted full successor retires active '+(unchanged?'unchanged':'no-start')+' authority and initializes the next ordinary release',async t=>{
- const f=noStartPublishedFixture(t,{unchanged}),field=unchanged?'priorUnchangedFailure':'priorNoStartFailure';f.input.profile=f.put('profile-ready.json',f.profile);
+for(const kind of ['no-start','unchanged','restored'])test('accepted full successor retires active '+kind+' authority and initializes the next ordinary release',async t=>{
+ const f=noStartPublishedFixture(t,{unchanged:kind==='unchanged',restored:kind==='restored'}),field=kind==='restored'?'priorRestoredFailure':kind==='unchanged'?'priorUnchangedFailure':'priorNoStartFailure';f.input.profile=f.put('profile-ready.json',f.profile);
  const first=await initialize(f),descriptor=JSON.parse(readFileSync(first.descriptor.path));
  const paths=[first.descriptor.path,descriptor.target.path,first.initialization.path,f.input.profile.path,
   f.target.full.host[field].coordinatorExport.path,f.target.full.signing.previousFeed.path,f.publication.receipt.path];
@@ -124,6 +162,7 @@ for(const unchanged of [false,true])test('accepted full successor retires active
  const profile=JSON.parse(readFileSync(out.profile.path)),target=JSON.parse(readFileSync(profile.target.path)),identity=c.phases.installation.current.output.acceptanceIdentity;
  assert.equal(Object.hasOwn(target.full.host,'priorNoStartFailure'),false);
  assert.equal(Object.hasOwn(target.full.host,'priorUnchangedFailure'),false);
+ assert.equal(Object.hasOwn(target.full.host,'priorRestoredFailure'),false);
  assert.equal(target.full.host.priorJobId,identity.jobId);
  assert.deepEqual(target.full.host.acceptedInstallation,identity.installationProof.installerResult);
  assert.deepEqual(f.target.full.host[field],failure);

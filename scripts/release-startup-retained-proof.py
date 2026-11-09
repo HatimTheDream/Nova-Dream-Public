@@ -386,7 +386,7 @@ def consume(request, read, sources):
     capture_manifest = None
     if runner_sha in CAPTURE_REAPING_PRODUCERS:
         need(binding['helpers'].get('recovery.py') == '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
-             and binding['helpers'].get('install.py') in {'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59', 'f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a'},
+             and binding['helpers'].get('install.py') in {'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59', 'f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a', '522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24'},
              'startup-proof-capture-lifecycle-helper-source-required')
         original_manifest = review['baseline']['manifest']
         need(plan['inputHashes'].get(original_manifest['path']) == original_manifest['sha256'],
