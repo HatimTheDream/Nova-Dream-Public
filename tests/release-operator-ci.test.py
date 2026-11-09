@@ -29,4 +29,17 @@ class OperatorCiTests(unittest.TestCase):
   with patch.object(M.D,'credential') as credential:
    with self.assertRaises(RuntimeError):M.collect(request)
    credential.assert_not_called()
+ def test_exact_new_operator_branch_uses_same_authenticated_run_contract(self):
+  request,run,jobs=self.fixture();request['source']['branch']='operator/prejournal-c494-r1';run['head_branch']=request['source']['branch']
+  with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',side_effect=[(200,run),(200,jobs)]):
+   self.assertEqual(M.collect(request),{'run':run,'jobs':jobs,'requestedAttempt':1})
+  run['head_branch']='codex/operator-continuation-31'
+  with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',return_value=(200,run)):
+   with self.assertRaisesRegex(RuntimeError,'exact-success'):M.collect(request)
+ def test_unlisted_branch_refused_before_credential(self):
+  for branch in ('main','operator/prejournal-other','operator/prejournal-c494-r1-extra'):
+   request,_,_=self.fixture();request['source']['branch']=branch
+   with patch.object(M.D,'credential') as credential:
+    with self.assertRaisesRegex(RuntimeError,'source-invalid'):M.collect(request)
+    credential.assert_not_called()
 if __name__=='__main__':unittest.main()

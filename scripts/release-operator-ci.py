@@ -6,7 +6,7 @@ D=importlib.util.module_from_spec(spec);spec.loader.exec_module(D)
 def collect(request):
  D.need(set(request)=={'format','source','runId','tools'} and request['format']==1,'operator-ci-request-invalid')
  source=request['source'];run_id=request['runId']
- D.need(source['repository'] in ('HatimTheDream/Nova-Dream','HatimTheDream/Nova-Dream-Public') and source['branch']=='codex/operator-continuation-31'
+ D.need(source['repository'] in ('HatimTheDream/Nova-Dream','HatimTheDream/Nova-Dream-Public') and source['branch'] in ('codex/operator-continuation-31','operator/prejournal-c494-r1')
   and re.fullmatch('[a-f0-9]{40}',source['commit']) and type(run_id) is int and run_id>0,'operator-ci-source-invalid')
  token=D.credential(request['tools']);prefix='/repos/'+source['repository']
  status,run=D.C.api(prefix+'/actions/runs/'+str(run_id),token);D.need(status==200,'operator-ci-run-unavailable')

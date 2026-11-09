@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
-import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), commit = z.string().regex(/^[a-f0-9]{40}$/);
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
@@ -85,7 +85,7 @@ export const deliveryJournalMethods = {
     z.uuid().parse(id);
     if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_operator_continuations'").get())return null;
     const row=this.db.prepare('SELECT * FROM delivery_operator_continuations WHERE operation_id=?').get(id);if(!row)return null;
-    const proof=continuationGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id,'continuation-stored-operation-changed');
+    const proof=operatorGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id,'continuation-stored-operation-changed');
     return {proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
   },
   recordOperatorContinuation(id,raw,now=Date.now(),{assertAbsent}={}) {
@@ -116,6 +116,29 @@ export const deliveryJournalMethods = {
       event(this, d.operation.id, 'initialized', { descriptorSha256: v.hash, originalDeadline: d.timeline.original }, now);
       event(this, d.operation.id, 'timeline', this.deliveryTimeline(d.operation.id, now), now);
       return this.deliveryStatus(d.operation.id, now);
+    });
+  },
+  initializeReconciledDelivery(raw, rawProof, now=Date.now()) {
+    const d=deliveryDescriptorSchema.parse(raw),v=encoded(d),proof=preJournalGrantSchema.parse(rawProof);
+    verifyPreJournalProof(proof,{now});readEvidenceFile(d.target,{maximum:256*1024});ensureDeliverySchema(this);
+    need(proof.operationId===d.operation.id&&proof.descriptorSha256===v.hash&&proof.originalAdapterIdentity===d.adapterIdentity
+      &&proof.targetIdentity===d.targetIdentity&&proof.originalBudgetMs===d.observationBudgetMs,'prejournal-native-descriptor-changed');
+    return this.transaction(()=>{
+      const old=this.db.prepare('SELECT descriptor_hash FROM deliveries WHERE id=?').get(d.operation.id);
+      if(old){need(old.descriptor_hash===v.hash&&canonical(this.deliveryOperatorContinuation(d.operation.id)?.proof)===canonical(proof),'prejournal-existing-initialization-differs');return this.deliveryStatus(d.operation.id,now);}
+      need(now>=proof.issuedAtMs&&now<proof.expiresAtMs,'prejournal-first-dispatch-window-expired');
+      for(const table of ['deliveries','delivery_phases','operations','intents'])need(this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n===0,'prejournal-native-journal-not-empty');
+      this.db.exec(`CREATE TABLE IF NOT EXISTS delivery_operator_continuations(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id),at_ms INTEGER NOT NULL,proof_json TEXT NOT NULL,proof_hash TEXT NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS continuation_no_update BEFORE UPDATE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;
+        CREATE TRIGGER IF NOT EXISTS continuation_no_delete BEFORE DELETE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;`);
+      this.db.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?)').run(d.operation.id,v.text,v.hash,d.targetIdentity,time(now),'active');
+      const p=encoded(proof);this.db.prepare('INSERT INTO delivery_operator_continuations VALUES(?,?,?,?)').run(d.operation.id,now,p.text,p.hash);
+      event(this,d.operation.id,'initialized',{descriptorSha256:v.hash,originalDeadline:d.timeline.original},now);
+      event(this,d.operation.id,'timeline',this.deliveryTimeline(d.operation.id,now),now);
+      event(this,d.operation.id,'pre-journal-dispatch-reconciled',{grantSha256:p.hash,originalDispatch:proof.originalDispatch,
+        originalStorageDeadline:proof.originalStorageDeadline,originalStartAtMs:proof.originalStartAtMs,originalHistoryPreserved:true,
+        nativeObservationBudgetMs:d.observationBudgetMs,nativeObservationDeadlineAtMs:now+d.observationBudgetMs},now);
+      verifyContinuationGrant(this,d.operation.id,{now});return this.deliveryStatus(d.operation.id,now);
     });
   },
   loadDelivery(id) {

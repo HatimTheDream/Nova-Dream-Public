@@ -133,17 +133,22 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   const request = document(session.request), dispatch = document(session.dispatch), intent = document(session.observationIntent);
   const initialization = document(session.initialization), descriptor = document(session.descriptor), graph = document(session.sourceGraph);
   const start = document(request.releaseInput), profile = document(start.profile), target = document(profile.target);
-  let continuation=null,originalConfig=config;
+  let continuation=null,originalConfig=config,preJournalProof=null;
   if(config.operatorContinuation){
     const c=config.operatorContinuation;
-    need(session.mode==='resume'&&c.operationId===session.operationId&&same(c.originalRequest,session.request)
+    need((session.mode==='resume'||session.mode==='start'&&c.preJournalProof)&&c.operationId===session.operationId&&same(c.originalRequest,session.request)
       &&absolute(c.journalDirectory)===absolute(initialization.journalDirectory),'storage-continuation-original-context-changed');
     originalConfig=document(c.originalConfig);
     const {ReleaseJournal}=await import('./release-coordinate.mjs');
-    const {verifyContinuationStorageAuthority}=await import('./release-delivery-continuation.mjs');
-    const journal=new ReleaseJournal(c.journalDirectory,{create:false,readOnly:true});
-    try{continuation=await verifyContinuationStorageAuthority({journal,operationId:session.operationId,entry,now});}finally{journal.close();}
-    need(same(session.operatorContinuation,continuation),'storage-continuation-authority-changed');
+    const {verifyContinuationStorageAuthority,verifyPreJournalStorageAuthority}=await import('./release-delivery-continuation.mjs');
+    if(session.mode==='start'&&c.preJournalProof){
+      preJournalProof=reference(c.preJournalProof);
+      continuation=await verifyPreJournalStorageAuthority({proofReference:preJournalProof,entry,operationId:session.operationId,journalDirectory:initialization.journalDirectory,now});
+    }else{
+      const journal=new ReleaseJournal(c.journalDirectory,{create:false,readOnly:true});
+      try{continuation=await verifyContinuationStorageAuthority({journal,operationId:session.operationId,entry,now});}finally{journal.close();}
+    }
+    need(same(session.operatorContinuation,continuation)&&continuation.descriptorSha256===sha256(encoded(descriptor).subarray(0,-1)),'storage-continuation-authority-changed');
   }else need(session.operatorContinuation===undefined&&session.continuationDispatch===undefined,'storage-unconfigured-continuation');
   need(request.format === 1 && request.operationId === session.operationId && start.operationId === session.operationId
     && same(request.independentSourceReview, originalConfig.storageReview), 'storage-original-request-changed');
@@ -168,7 +173,7 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
     verifyCapacityProof(c.storageResult,currentInput,budget);continuedDispatch=c;
     if(!continuation.continuationStarted)need(continuation.newEffectsAllowed&&now<=c.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
   }
-  if (session.mode === 'start') need(now <= dispatch.storageResult.observationExpiresAtMilliseconds
+  if (session.mode === 'start'&&!preJournalProof) need(now <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= now + 5000, 'fresh-storage-required-before-start');
   const initDirectory = join(absolute(start.outputRoot), 'request-' + session.operationId);
   need(absolute(session.initialization.path) === join(initDirectory, 'initialization.json')
@@ -206,17 +211,18 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
     && graph.sourceFiles.every((ref, index) => absolute(reference(ref).path) === expectedGraph[index].path && ref.sha256 === expectedGraph[index].sha256),
   'storage-source-graph-changed');
   // A retained first-start capability cannot open a new journal or replay effects.
-  if (session.mode === 'start') need(!existsSync(initialization.journalDirectory), 'storage-start-already-dispatched-use-resume');
+  if (session.mode === 'start'&&!preJournalProof) need(!existsSync(initialization.journalDirectory), 'storage-start-already-dispatched-use-resume');
   else need(existsSync(initialization.journalDirectory), 'storage-original-journal-unavailable');
   // Source verification takes real time. Recheck immediately before returning
   // the permit to the CLI's journal-open boundary, never using its entry clock.
   const finishedAt = clock();
   need(Number.isSafeInteger(finishedAt) && session.issuedAtMilliseconds <= finishedAt + 5000
     && finishedAt - session.issuedAtMilliseconds <= 300000, 'storage-session-expired');
-  if (session.mode === 'start') need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
+  if (session.mode === 'start'&&!preJournalProof) need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= finishedAt + 5000, 'fresh-storage-required-before-start');
   if(continuation&&!continuation.continuationStarted)need(finishedAt<continuation.expiresAtMs&&finishedAt<=continuedDispatch.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
-  return { operationId: session.operationId, journalDirectory: initialization.journalDirectory, descriptor: session.descriptor };
+  return { operationId: session.operationId, journalDirectory: initialization.journalDirectory, descriptor: session.descriptor,
+    ...(preJournalProof?{preJournalProof}:{} ) };
 }
 
 /** The existing private runner owns the same deployment byte lock throughout
@@ -261,7 +267,8 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
   if (!['start', 'resume','reconcile-prepackage'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
     if(args[0]==='reconcile-prepackage')await verifyReconciliationSession(args,entry,{env});
-    else await verifyStorageSession(args, entry, { env }); return { handled: false };
+    else {const permit=await verifyStorageSession(args, entry, { env });return {handled:false,...(permit.preJournalProof?{preJournalProof:permit.preJournalProof}:{})};}
+    return { handled: false };
   }
   const mode = args[0];
   need(mode === 'start' ? (args.length === 2 || (args.length === 4 && args[2] === '--storage-budget')) : mode==='reconcile-prepackage'?args.length===4:args.length === 3,

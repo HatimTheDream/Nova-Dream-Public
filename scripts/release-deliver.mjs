@@ -10,7 +10,7 @@ import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
 import { reconcileCapabilityGap } from './release-delivery-capability-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 import { routeStorageDelivery } from './release-storage-default.mjs';
-import { assertDeliveryOperator, reconcileExpiredPrepackage, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import { assertDeliveryOperator, operatorObservationDeadline, reconcileExpiredPrepackage, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const verificationReason = error => /^[a-z][a-z0-9-]{0,99}$/.test(error?.message ?? '') ? error.message : 'producer-verification-rejected';
@@ -39,7 +39,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
     const existing = journal.deliveryPhase(operationId, phase);
     if (existing?.state === 'failed') return existing;
     const grant=journal.deliveryOperatorContinuation(operationId);
-    if(!existing&&grant&&clock()>=grant.proof.expiresAtMs)return {state:'gap',reason:'operator-continuation-window-expired'};
+    if(!existing&&grant&&clock()>=operatorObservationDeadline(journal,operationId))return {state:'gap',reason:'operator-continuation-window-expired'};
     const prior = Object.fromEntries(DELIVERY_PHASES.filter(p => p !== phase).map(p => [p, journal.deliveryPhase(operationId, p)]).filter(([, p]) => p?.state === 'completed').map(([p, v]) => [p, v.current.output]));
     const phaseGaps = await registry.phasePreflight?.(phase,descriptor,prior) ?? [];
     if (phaseGaps.length) return { state:'gap',reason:phaseGaps[0],integrationGaps:phaseGaps };
@@ -149,11 +149,13 @@ export async function deliveryMain(args) {
       const inputPath = resolve(value), descriptor = deliveryDescriptorSchema.parse(JSON.parse(readReleaseInputFile(inputPath)));
       descriptor.target.path = resolve(dirname(inputPath), descriptor.target.path);
       for (const side of ['private', 'public']) descriptor.sources[side].root = resolve(dirname(inputPath), descriptor.sources[side].root);
-      journal.initializeDelivery(descriptor); id = descriptor.operation.id;
+      if(storage.preJournalProof)journal.initializeReconciledDelivery(descriptor,JSON.parse(readEvidenceFile(storage.preJournalProof)));
+      else journal.initializeDelivery(descriptor);
+      id = descriptor.operation.id;
     }
     const retained = journal.loadDelivery(id),grant=journal.deliveryOperatorContinuation(id);
     if(grant)verifyContinuationGrant(journal,id);
-    const remainingMs = (grant?grant.proof.expiresAtMs:retained.created_at + retained.descriptor.observationBudgetMs) - Date.now();
+    const remainingMs = operatorObservationDeadline(journal,id) - Date.now();
     const result=remainingMs<=0&&!grant?{...journal.deliveryStatus(id),observationBudgetExpired:true}
       :await deliver(journal, id, createDeliveryRegistry(), { invocationMs: Math.max(1,remainingMs), progress: result => process.stderr.write(JSON.stringify(result) + '\n') });
     const {exportSuccessorProfile}=await import('./release-delivery-initialize.mjs');
