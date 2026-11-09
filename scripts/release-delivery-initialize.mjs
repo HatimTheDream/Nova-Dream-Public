@@ -35,6 +35,7 @@ export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targ
  sources:z.object({private:source,public:source}).strict(),
  accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref,feedDependencies:z.object({archive:ref,metadata:ref}).strict().optional()}).strict(),
  qualificationEvidence:z.array(ref).max(32).default([]),
+  operatorProvenance:ref.optional(),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
   sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional()}).strict()
   .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
@@ -136,6 +137,7 @@ export async function deriveDeliveryConfiguration(input,profile,{command=fixedCo
  const target=deliveryTargetSchema.parse(json(profile.target,256*1024));
  need(deliveryTargetIdentity({target:profile.target})===profile.targetIdentity,'configured-target-identity-changed');
  const accepted=validateAcceptedProfile(profile,target,acceptedOptions);
+ if(profile.operatorProvenance)json(profile.operatorProvenance);
  const qualified=await qualifyDeliverySources(input,profile,target,accepted,{command,...sourceOptions});
  const version=qualified.package.version,buildVersion=qualified.package.edition3.buildVersion;
  const createdAt=new Date(input.timeline.startedAtMs).toISOString(),expiresAt=new Date(input.timeline.startedAtMs+7*86400000).toISOString();
@@ -255,7 +257,7 @@ function retainedSavedReply(journal,descriptor,parent,prior){
  need(same(parent.current.output,{format:1,kind:'nova-delivery-saved-assistant-reply',operationId:id,key:parent.key,inputSha256:parent.inputSha256,
   originalDeadlineAtMs:parent.createdAtMs+300000,...proof}),'successor-saved-assistant-proof-changed');
 }
-export async function exportSuccessorProfile(journal,id,{command=fixedCommand,feedContract=loadSelectedFeedContract,prepareFeedDependencies=materializeRetainedFeedDependencies}={}){
+export async function exportSuccessorProfile(journal,id,{command=fixedCommand,feedContract=loadSelectedFeedContract,prepareFeedDependencies=materializeRetainedFeedDependencies,operatorAuthority=async args=>(await import('./release-delivery-continuation.mjs')).verifyContinuationStorageAuthority(args)}={}){
  const descriptor=journal.loadDelivery(id).descriptor,directory=dirname(descriptor.target.path),recordPath=join(directory,'initialization.json');
  if(!existsSync(recordPath))return {gap:'data-profile-initialization-unavailable'};
  const record=JSON.parse(frontendRegular(recordPath,2*1024**2));
@@ -345,6 +347,11 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  }
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
   publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...browserEvidence};
+ const operatorGrant=journal.deliveryOperatorContinuation?.(id);
+ if(operatorGrant){
+  await operatorAuthority({journal,operationId:id});
+  profile.operatorProvenance=exactFile(join(directory,'accepted-operator-continuation.json'),encoded(operatorGrant));
+ }
  profile.target=exactFile(join(directory,'successor-target.json'),encoded(deliveryTargetSchema.parse(target)));
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.

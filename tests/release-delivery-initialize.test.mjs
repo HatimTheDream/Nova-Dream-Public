@@ -404,3 +404,19 @@ test('runtime successor refuses missing, changed or wrongly bound original quali
   assert.equal(existsSync(join(f.input.outputRoot,'request-'+f.input.operationId,'successor-profile.json')),false);
  }
 });
+
+test('accepted successor keeps candidate sources while retaining separately verified operator provenance',async t=>{
+ const f=initializeFixture(t),v=await initialize(f),c=completedDeliveryFixture(f,v);
+ const grant={proof:{kind:'synthetic-tested-authority-boundary',operationId:f.input.operationId,operator:{sources:{private:{commit:'e'.repeat(40)},public:{commit:'f'.repeat(40)}}}},sha256:sha256('synthetic grant'),recordedAtMs:f.now};
+ c.journal.deliveryOperatorContinuation=()=>grant;let checks=0;
+ const out=await exportSuccessorProfile(c.journal,f.input.operationId,{...f.options,operatorAuthority:async args=>{checks++;assert.equal(args.journal,c.journal);assert.equal(args.operationId,f.input.operationId);}});
+ assert.equal(checks,1);const profile=JSON.parse(readFileSync(out.profile.path));
+ assert.deepEqual(profile.sources,f.profile.sources);assert.deepEqual(JSON.parse(readFileSync(profile.operatorProvenance.path)),grant);
+ assert.deepEqual(profile.previousDelivery.sourceCandidates.private,JSON.parse(readFileSync(profile.target.path)).bases.private.manifest);
+ validateAcceptedProfile(profile,JSON.parse(readFileSync(profile.target.path)));
+ const originalProvenance=readFileSync(profile.operatorProvenance.path);
+ f.input.operationId=randomUUID();f.input.profile=out.profile;f.input.sourceCommits={private:'3'.repeat(40),public:'4'.repeat(40)};
+ for(const side of ['private','public']){f.packages[side].version='3.3.0';f.packages[side].edition3.buildVersion='1.0.401';f.locks[side].version='3.3.0';f.locks[side].packages[''].version='3.3.0';}
+ await deriveDeliveryConfiguration(f.input,profile,f.options);
+ assert.deepEqual(readFileSync(profile.operatorProvenance.path),originalProvenance);
+});

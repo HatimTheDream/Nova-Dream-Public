@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
+import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), commit = z.string().regex(/^[a-f0-9]{40}$/);
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
@@ -80,6 +81,30 @@ function event(journal, id, kind, value, now) {
   const v = encoded(value); journal.db.prepare('INSERT INTO delivery_events(operation_id,at_ms,kind,payload_json,payload_hash) VALUES(?,?,?,?,?)').run(id, now, kind, v.text, v.hash);
 }
 export const deliveryJournalMethods = {
+  deliveryOperatorContinuation(id) {
+    z.uuid().parse(id);
+    if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_operator_continuations'").get())return null;
+    const row=this.db.prepare('SELECT * FROM delivery_operator_continuations WHERE operation_id=?').get(id);if(!row)return null;
+    const proof=continuationGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id,'continuation-stored-operation-changed');
+    return {proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
+  },
+  recordOperatorContinuation(id,raw,now=Date.now(),{assertAbsent}={}) {
+    const proof=continuationGrantSchema.parse(raw);need(!this.readOnly,'continuation-readonly-journal');
+    return this.transaction(()=>{
+      const old=this.deliveryOperatorContinuation(id);if(old){need(canonical(old.proof)===canonical(proof),'continuation-already-granted');return old;}
+      need(proof.operationId===id&&now>=proof.issuedAtMs&&now-proof.issuedAtMs<=60000,'continuation-grant-stale');
+      const request=continuationRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      const snapshot=continuationSnapshot(this,id,now,{request,assertAbsent});
+      need(Object.keys(snapshot).every(k=>canonical(snapshot[k])===canonical(proof[k])),'continuation-snapshot-changed-before-grant');
+      this.db.exec(`CREATE TABLE IF NOT EXISTS delivery_operator_continuations(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id),at_ms INTEGER NOT NULL,proof_json TEXT NOT NULL,proof_hash TEXT NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS continuation_no_update BEFORE UPDATE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;
+        CREATE TRIGGER IF NOT EXISTS continuation_no_delete BEFORE DELETE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;`);
+      const v=encoded(proof);this.db.prepare('INSERT INTO delivery_operator_continuations VALUES(?,?,?,?)').run(id,now,v.text,v.hash);
+      verifyContinuationGrant(this,id,{now,effect:true});
+      event(this,id,'expired-prepackage-continuation-granted',{grantSha256:v.hash,originalBudgetExpired:true,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs},now);
+      return this.deliveryOperatorContinuation(id);
+    });
+  },
   initializeDelivery(raw, now = Date.now()) {
     const d = deliveryDescriptorSchema.parse(raw), v = encoded(d); ensureDeliverySchema(this);
     readEvidenceFile(d.target, { maximum: 256 * 1024 });
@@ -179,8 +204,10 @@ export const deliveryJournalMethods = {
           need(dependency?.state === 'completed' && dependency.validation?.state !== 'failed', 'assistant-substep-prerequisite-incomplete');
         }
       }
-      const assessed = this.deliveryTimeline(id, now);
-      need(assessed.eta.dueReviews.length === 0 && assessed.eta.suspendNewAttemptsFor.length === 0, 'delivery-overrun-review-required');
+      const grant=this.deliveryOperatorContinuation(id);
+      if(grant)verifyContinuationGrant(this,id,{now,effect:true});
+      else{const assessed = this.deliveryTimeline(id, now);
+        need(assessed.eta.dueReviews.length === 0 && assessed.eta.suspendNewAttemptsFor.length === 0, 'delivery-overrun-review-required');}
       const key = randomUUID(); this.db.prepare('INSERT INTO delivery_phases VALUES(?,?,?,?,?,?)').run(id, phase, key, v.text, v.hash, time(now));
       event(this, id, 'phase-reserved', { phase, key, inputSha256: v.hash }, now);
       return { newlyReserved: true, intent: this.deliveryPhase(id, phase) };

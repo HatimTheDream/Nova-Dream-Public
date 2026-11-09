@@ -208,6 +208,35 @@ app. Coordinator exit success means the command returned a report, not that the
 release passed; inspect the intent, plan and uncertainty fields. Rejected input,
 storage or evidence produces a bounded error and exit `1`.
 
+### Expired delivery before packaging
+
+An expired delivery can receive an explicit continuation only when its original
+source, CI, artifact and route phases are complete, all original owners are
+closed, and no packaging or later effect has been reserved. Use the maintained
+entrypoint with a reviewed request kept outside source control:
+
+```sh
+npm run release:deliver -- reconcile-prepackage JOURNAL_DIRECTORY OPERATION_UUID REQUEST_JSON
+npm run release:deliver -- resume JOURNAL_DIRECTORY OPERATION_UUID
+```
+
+Reconciliation runs under the configured storage runner's existing owner lock.
+It verifies the original records and separately authenticates the current paired
+operator source, adapter graph and exact successful operator CI. The frozen app
+commits, artifacts, dependencies and startup proof remain bound to their original
+identities. Operator CI is not a replacement claim for the app's original CI.
+
+The journal appends one immutable continuation grant with its own finite window;
+it does not reset the original clock or budget, rewrite the descriptor, replace
+phase keys, or erase failures. The first continuation dispatch requires fresh
+storage admission. Later resumes authenticate that dispatch and observe the
+same work. Grant expiry prevents new effects while preserving observation and
+safe completion of recovery already authorized. There is no automatic renewal.
+
+This policy cannot reconcile uncertain or already-started downstream work.
+Normal signature, capacity, rehearsal, installation and real saved-reply/browser
+acceptance checks still apply. A recorded grant is not release completion.
+
 ### Descriptor and adapter records
 
 `releaseCoordinatorDescriptorSchema` in `scripts/release-coordinate.mjs` is

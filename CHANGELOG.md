@@ -1,3 +1,8 @@
+## [2.28.32] - 2026-11-08
+
+- Add explicit continuation for an expired delivery that stopped before packaging, retaining its original candidate, completed checks, and history.
+- Verify the current delivery controller separately from the application being installed, while preserving storage, recovery, and single-dispatch checks.
+
 ## [2.28.31] - 2026-11-07
 
 - Make slow-start lifecycle verification wait for the child's completed launch marker, avoiding a race when a newly created file is still empty.

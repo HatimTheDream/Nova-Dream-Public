@@ -1,0 +1,104 @@
+name: Operator continuation quality
+on:
+  push:
+    branches: ['codex/operator-continuation-31']
+permissions:
+  contents: read
+concurrency:
+  group: operator-continuation-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix deploy/vercel
+      - name: Run npm run quality
+        run: npm run quality
+      - name: Verify Linux update recovery
+        timeout-minutes: 30
+        run: |
+          python3 -B tests/release-install-request.test.py -v
+          python3 -B tests/release-prestage-no-start.test.py -v
+          python3 -B tests/update-runner.test.py -v
+          python3 -B tests/update-runtime-profile.test.py -v
+          python3 -B tests/recovery-native98.test.py -v
+          python3 -B tests/recovery-schema-transition.test.py -v
+          python3 -B tests/update-qualification-preflight.test.py -v
+          python3 -B tests/hosted-retained-catalog.test.py -v
+          python3 -B tests/recovery-event-retention.test.py -v
+          python3 -B tests/recovery-allocation.test.py -v
+          python3 -B tests/update-snapshot-admission.test.py -v
+          python3 -B tests/recovery-managed-generation.test.py -v
+          python3 -B tests/update-closed-readers.test.py -v
+          python3 -B tests/update-log-retention.test.py -v
+          python3 -B tests/update-startup-window.test.py -v
+          python3 -B tests/update-startup-lifecycle.test.py -v
+          python3 -B tests/update-log-retention-integration.test.py -v
+          NODE_BINARY="$(command -v node)"
+          env "NODE_BINARY=$NODE_BINARY" python3 -B tests/test_frontend.py -v
+          python3 -B tests/update-app-archive.test.py -v
+          # Hosted runners may allow the runner user to write /opt. Keep the real
+          # production ownership checks and put privileged fixtures under /root.
+          QA_PROTECTED_PARENT="$(sudo mktemp -d /root/nova-recovery-ci.XXXXXX)"
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B - <<'PY'
+          import json, os, pathlib, stat
+          fixture = pathlib.Path(os.environ['QA_PROTECTED_PARENT'])
+          if fixture.parent != pathlib.Path('/root') or not fixture.name.startswith('nova-recovery-ci.'):
+              raise SystemExit('Unexpected recovery fixture parent.')
+          paths = [pathlib.Path('/opt'), *reversed((fixture, *fixture.parents))]
+          for path in paths:
+              info = path.lstat()
+              mode = stat.S_IMODE(info.st_mode)
+              print(json.dumps({'path': str(path), 'uid': info.st_uid, 'mode': oct(mode)}), flush=True)
+              if path != pathlib.Path('/opt') and (info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or mode & 0o022):
+                  raise SystemExit(f'Unprotected recovery fixture ancestor: {path}')
+          PY
+          # Execute every physical package/admission positive and semantic
+          # refusal under the same root-protected authority used in production.
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-native98.test.py CopiedCodexAdmissionsTests PackageBuildProjectionTests -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-startup-exec.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-derived-state.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/recovery-catalog-files.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/workspace-key-reader.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-app-dependencies.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-admission-driver.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/update-dependency-selection.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/operator-rehearsal.test.py -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/protected-config-files.test.py -v
+          sudo env "NODE_BINARY=$NODE_BINARY" "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/test_frontend.py ProtectedFilesystemTests -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" "NODE_BINARY=$NODE_BINARY" "$NODE_BINARY" node_modules/tsx/dist/cli.mjs --test tests/frontend-http.test.ts
+          # Resumable release producers: portable fixtures; no external effects.
+          python3 -B tests/release-delivery-ci.test.py -v
+          python3 -B tests/release-delivery-artifacts.test.py -v
+          python3 -B tests/release-ci-publication.test.py -v
+          python3 -B tests/release-private-ci-transport.test.py -v
+          python3 -B tests/ci-artifact-budget.test.py -v
+          python3 -B tests/release-github-transport.test.py -v
+          python3 -B tests/release-delivery-frontend.test.py -v
+          python3 -B tests/release-frontend-stage.test.py -v
+          python3 -B tests/release-frontend-plan.test.py -v
+          python3 -B tests/release-frontend-executor.test.py -v
+          sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/release-frontend-readiness.test.py -v
+          python3 -B tests/test_release_delivery_browser_remote.py -v
+          python3 -B tests/release-assistant-transport.test.py -v
+          python3 -B tests/release-assistant-runtime-stream.test.py -v
+          python3 -B tests/release-installed-identity.test.py -v
+          python3 -B tests/test_dependency_local_worker.py -v
+          python3 -B tests/test_dependency_metadata_policy.py -v
+          python3 -I -B tests/test_retained_feed_dependencies.py -v
+          python3 -B tests/release-delivery-full-publication.test.py -v
+          python3 -B tests/release-delivery-full-prestage.test.py -v
+          python3 -B tests/release-prestage-plan-precision.test.py -v
+          python3 -B tests/release-runtime-publication.test.py -v
+          python3 -B tests/test_runtime_qualification.py -v
+          python3 -B tests/release-full-runtime-capacity.test.py -v
+          python3 -B tests/release-runtime-retained-proof.test.py -v
+          sudo -n "$(command -v python3)" -I -B tests/release-startup-retained-proof.test.py -v
+          python3 -B tests/release-host-preflight.test.py -v
+          python3 -B tests/release-operator-ci.test.py -v

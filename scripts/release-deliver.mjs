@@ -10,6 +10,7 @@ import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
 import { reconcileCapabilityGap } from './release-delivery-capability-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 import { routeStorageDelivery } from './release-storage-default.mjs';
+import { assertDeliveryOperator, reconcileExpiredPrepackage, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const verificationReason = error => /^[a-z][a-z0-9-]{0,99}$/.test(error?.message ?? '') ? error.message : 'producer-verification-rejected';
@@ -20,7 +21,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
   if (journal.deliveryDisposition(operationId)) return journal.deliveryStatus(operationId,clock());
   const descriptor = journal.loadDelivery(operationId).descriptor;
   readEvidenceFile(descriptor.target, { maximum: 256 * 1024 });
-  need(await registry.identity(descriptor) === descriptor.adapterIdentity, 'delivery-adapter-changed');
+  await assertDeliveryOperator(journal,operationId,registry,{clock});
   need(await registry.targetIdentity(descriptor) === descriptor.targetIdentity, 'delivery-target-changed');
   const integrationGaps = await registry.preflight?.(descriptor) ?? [];
   const capabilityGaps = await registry.capabilityGaps?.(descriptor) ?? [];
@@ -37,6 +38,8 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
   const advance = async (phase, forceVerification = false, scope = {}) => {
     const existing = journal.deliveryPhase(operationId, phase);
     if (existing?.state === 'failed') return existing;
+    const grant=journal.deliveryOperatorContinuation(operationId);
+    if(!existing&&grant&&clock()>=grant.proof.expiresAtMs)return {state:'gap',reason:'operator-continuation-window-expired'};
     const prior = Object.fromEntries(DELIVERY_PHASES.filter(p => p !== phase).map(p => [p, journal.deliveryPhase(operationId, p)]).filter(([, p]) => p?.state === 'completed').map(([p, v]) => [p, v.current.output]));
     const phaseGaps = await registry.phasePreflight?.(phase,descriptor,prior) ?? [];
     if (phaseGaps.length) return { state:'gap',reason:phaseGaps[0],integrationGaps:phaseGaps };
@@ -75,18 +78,19 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
       if (adapter.admit) {
         input = await adapter.admit({ descriptor, prior, input, journal });
         readEvidenceFile(descriptor.target, { maximum:256*1024 });
-        need(await registry.identity(descriptor) === descriptor.adapterIdentity, 'delivery-adapter-changed');
+        await assertDeliveryOperator(journal,operationId,registry,{clock,effect:true});
         need(await registry.targetIdentity(descriptor) === descriptor.targetIdentity, 'delivery-target-changed');
         await adapter.validate({ descriptor, prior, input, journal });
       }
     }
+    if(!existing)await assertDeliveryOperator(journal,operationId,registry,{clock,effect:true});
     const reservation = journal.reserveDeliveryPhase(operationId, phase, input, clock());
     const context = { descriptor, prior, intent: reservation.intent, journal,
       // An existing parent may advance a never-started child after interruption.
       // Child effects must reverify outer dependencies, even on an observe call.
       beforeNewEffect: async () => {
         readEvidenceFile(descriptor.target, { maximum: 256 * 1024 });
-        need(await registry.identity(descriptor) === descriptor.adapterIdentity, 'delivery-adapter-changed');
+        await assertDeliveryOperator(journal,operationId,registry,{clock,effect:true});
         need(await registry.targetIdentity(descriptor) === descriptor.targetIdentity, 'delivery-target-changed');
         need((await registry.phasePreflight?.(phase,descriptor,prior) ?? []).length===0,'delivery-phase-capability-unavailable');
         need(await verifyPrerequisites(phase) === null, 'delivery-prerequisite-verification-failed');
@@ -131,12 +135,13 @@ export async function deliveryMain(args) {
   const storage = await routeStorageDelivery(args, fileURLToPath(import.meta.url));
   if (storage.handled) return storage.result;
   const [mode, directory, value, extra] = args;
-  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability'].includes(mode) && (['checkpoint','reconcile-capability'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
+  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability','reconcile-prepackage'].includes(mode) && (['checkpoint','reconcile-capability','reconcile-prepackage'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
   const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' });
   try {
     if (mode === 'status') return journal.deliveryStatus(value);
     if (mode === 'checkpoint') return journal.checkpointDelivery(value, JSON.parse(readReleaseInputFile(resolve(extra))));
     if (mode === 'reconcile-capability') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileCapabilityGap(journal,value,{path,sha256:sha256(bytes)}); }
+    if (mode === 'reconcile-prepackage') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileExpiredPrepackage(journal,value,{path,sha256:sha256(bytes)}); }
     const { createDeliveryRegistry } = await import('./release-delivery-adapters.mjs');
     if (mode === 'reconcile-failure') return await reconcileFailedDelivery(journal,value,createDeliveryRegistry());
     let id = value;
@@ -146,9 +151,11 @@ export async function deliveryMain(args) {
       for (const side of ['private', 'public']) descriptor.sources[side].root = resolve(dirname(inputPath), descriptor.sources[side].root);
       journal.initializeDelivery(descriptor); id = descriptor.operation.id;
     }
-    const retained = journal.loadDelivery(id), remainingMs = retained.created_at + retained.descriptor.observationBudgetMs - Date.now();
-    const result=remainingMs<=0?{...journal.deliveryStatus(id),observationBudgetExpired:true}
-      :await deliver(journal, id, createDeliveryRegistry(), { invocationMs: remainingMs, progress: result => process.stderr.write(JSON.stringify(result) + '\n') });
+    const retained = journal.loadDelivery(id),grant=journal.deliveryOperatorContinuation(id);
+    if(grant)verifyContinuationGrant(journal,id);
+    const remainingMs = (grant?grant.proof.expiresAtMs:retained.created_at + retained.descriptor.observationBudgetMs) - Date.now();
+    const result=remainingMs<=0&&!grant?{...journal.deliveryStatus(id),observationBudgetExpired:true}
+      :await deliver(journal, id, createDeliveryRegistry(), { invocationMs: Math.max(1,remainingMs), progress: result => process.stderr.write(JSON.stringify(result) + '\n') });
     const {exportSuccessorProfile}=await import('./release-delivery-initialize.mjs');
     try{return {...result,successor:await exportSuccessorProfile(journal,id)};}
     catch(error){return {...result,successor:{gap:/^[a-z][a-z0-9-]{1,99}$/.test(error.message)?error.message:'successor-profile-evidence-unavailable'}};}

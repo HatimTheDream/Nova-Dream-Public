@@ -24,7 +24,7 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
-import { fullHostOptionsSchema, FULL_HELPERS, FULL_APPLICATION_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity } from './release-delivery-full-host.mjs';
+import { fullHostOptionsSchema, FULL_HELPERS, FULL_APPLICATION_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
@@ -99,7 +99,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
     'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',
     'release-delivery-startup-retained.mjs', 'release-delivery-qualified-dependencies.mjs', 'release-startup-retained-proof.py', 'release-delivery-capability-disposition.mjs',
-    'release-deliver.mjs', 'release-storage-default.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs'];
+    'release-deliver.mjs', 'release-storage-default.mjs', 'release-delivery-initialize.mjs', 'release-delivery-journal.mjs', 'release-delivery-disposition.mjs', 'release-coordinate.mjs', 'release-plan.mjs', 'release-adapters.mjs', 'release-delivery-continuation.mjs', 'release-operator-ci.py'];
   return files;
 }
 export function deliveryAdapterIdentity() {
@@ -247,6 +247,16 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     return Object.fromEntries(['prepare','validate','apply'].map(method=>[method,async context=>{protectedAssets(context);return admission[method](context);} ]));
   };
   return { identity: async () => deliveryAdapterIdentity(), targetIdentity: async descriptor => deliveryTargetIdentity(descriptor),
+    continuationFacts: async descriptor => {
+      const {target,transport}=targetInput(descriptor);
+      need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
+      const proof=await createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})();
+      const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition);
+      const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
+      need(response.exitCode===0&&!response.uncertain&&response.stderr===''&&Buffer.byteLength(response.stdout)<=131072,'continuation-current-host-unavailable');
+      const facts=JSON.parse(response.stdout);verifyFullFacts(facts,spec,clock(),true);
+      return {spec,facts,stdoutRawBase64:Buffer.from(response.stdout).toString('base64'),stdoutSha256:sha256(Buffer.from(response.stdout)),hostWrites:false};
+    },
     preflight: async descriptor => { const { target } = targetInput(descriptor); return [...(target.sourceTools ? [] : ['source-toolchain-not-configured']), ...(target.artifactTools ? [] : ['artifact-toolchain-not-configured']),
       ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...await runtimeGaps(descriptor,target)]; },
     phasePreflight: async (phase,descriptor,prior) => {

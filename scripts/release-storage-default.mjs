@@ -133,8 +133,20 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   const request = document(session.request), dispatch = document(session.dispatch), intent = document(session.observationIntent);
   const initialization = document(session.initialization), descriptor = document(session.descriptor), graph = document(session.sourceGraph);
   const start = document(request.releaseInput), profile = document(start.profile), target = document(profile.target);
+  let continuation=null,originalConfig=config;
+  if(config.operatorContinuation){
+    const c=config.operatorContinuation;
+    need(session.mode==='resume'&&c.operationId===session.operationId&&same(c.originalRequest,session.request)
+      &&absolute(c.journalDirectory)===absolute(initialization.journalDirectory),'storage-continuation-original-context-changed');
+    originalConfig=document(c.originalConfig);
+    const {ReleaseJournal}=await import('./release-coordinate.mjs');
+    const {verifyContinuationStorageAuthority}=await import('./release-delivery-continuation.mjs');
+    const journal=new ReleaseJournal(c.journalDirectory,{create:false,readOnly:true});
+    try{continuation=await verifyContinuationStorageAuthority({journal,operationId:session.operationId,entry,now});}finally{journal.close();}
+    need(same(session.operatorContinuation,continuation),'storage-continuation-authority-changed');
+  }else need(session.operatorContinuation===undefined&&session.continuationDispatch===undefined,'storage-unconfigured-continuation');
   need(request.format === 1 && request.operationId === session.operationId && start.operationId === session.operationId
-    && same(request.independentSourceReview, config.storageReview), 'storage-original-request-changed');
+    && same(request.independentSourceReview, originalConfig.storageReview), 'storage-original-request-changed');
   need(dispatch.format === 1 && same(dispatch.request, session.request) && dispatch.automaticNewOperationPermitted === false
     && same(intent.request, session.request) && intent.sameReleaseOperation === true, 'storage-original-dispatch-changed');
   const storageInput = document(dispatch.storageInput), budget = document(request.storageBudget);
@@ -144,6 +156,18 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
     && dispatch.startedAtMilliseconds <= dispatch.storageResult.observationExpiresAtMilliseconds,
   'storage-original-admission-required');
   verifyCapacityProof(dispatch.storageResult, storageInput, budget);
+  let continuedDispatch=null;
+  if(continuation){
+    const r=reference(session.continuationDispatch),c=document(r),base=join(root,'continuations',continuation.grantSha256);
+    need(/^admission-[0-9]{4,}[\\/]release-dispatch\.json$/.test(relative(base,r.path))&&same(c.originalDispatch,session.dispatch)
+      &&c.grantSha256===continuation.grantSha256&&same(c.request,session.request)&&c.format===1&&c.automaticNewOperationPermitted===false,'storage-continuation-dispatch-changed');
+    const currentInput=document(c.storageInput);
+    need(same(currentInput.profile,start.profile)&&same(currentInput.budget,request.storageBudget),'storage-continuation-budget-context-changed');
+    need(c.storageResult?.state==='ready'&&c.storageResult.historical!==true&&Number.isSafeInteger(c.startedAtMilliseconds)
+      &&c.startedAtMilliseconds<=c.storageResult.observationExpiresAtMilliseconds,'storage-continuation-original-admission-required');
+    verifyCapacityProof(c.storageResult,currentInput,budget);continuedDispatch=c;
+    if(!continuation.continuationStarted)need(continuation.newEffectsAllowed&&now<=c.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
+  }
   if (session.mode === 'start') need(now <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= now + 5000, 'fresh-storage-required-before-start');
   const initDirectory = join(absolute(start.outputRoot), 'request-' + session.operationId);
@@ -160,20 +184,22 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   'storage-original-descriptor-changed');
   const privateRoot = canonical(join(profile.sources.private.root, 'edition3'));
   const publicRoot = canonical(profile.sources.public.root), actualEntry = canonical(entry);
-  need(same(config.applicationRoots.map(canonical), [privateRoot, publicRoot])
-    && actualEntry === join(privateRoot, 'scripts', 'release-deliver.mjs')
-    && absolute(request.deliveryEntry.path) === actualEntry, 'storage-current-delivery-entry-changed');
+  const operatorRoots=continuation?continuation.operatorRoots.map(canonical):[privateRoot,publicRoot];
+  need(same(config.applicationRoots.map(canonical),operatorRoots)&&actualEntry===join(operatorRoots[0],'scripts/release-deliver.mjs')
+    &&absolute(request.deliveryEntry.path)===join(privateRoot,'scripts/release-deliver.mjs'),'storage-current-delivery-entry-changed');
+  if(continuation)need(same(originalConfig.applicationRoots.map(canonical),[privateRoot,publicRoot]),'storage-original-candidate-roots-changed');
   readEvidenceFile(request.deliveryEntry); readEvidenceFile(request.node, { maximum: 128 * 1024 ** 2 });
   need(same(request.node, target.artifactTools.node) && canonical(request.node.path) === canonical(executable), 'storage-node-identity-changed');
   const expectedArgs = session.mode === 'start'
     ? ['start', initialization.journalDirectory, session.descriptor.path]
     : ['resume', initialization.journalDirectory, session.operationId];
-  need(same(args, expectedArgs) && same(session.argv, intent.argv) && same(session.argv, [request.node.path, request.deliveryEntry.path, ...args]),
+  need(same(args, expectedArgs) && same(session.argv, intent.argv) && same(session.argv, [request.node.path, actualEntry, ...args]),
     'storage-session-argv-changed');
   const { deliveryAdapterIdentity, deliveryAdapterSourceFiles } = await import('./release-delivery-adapters.mjs');
   const adapterIdentity = deliveryAdapterIdentity();
-  need(hash(session.adapterIdentity) && session.adapterIdentity === adapterIdentity && descriptor.adapterIdentity === adapterIdentity
-    && initialization.adapterIdentity === adapterIdentity && graph.format === 1 && graph.adapterIdentity === adapterIdentity,
+  const originalAdapter=continuation?continuation.originalAdapterIdentity:adapterIdentity;
+  need(hash(session.adapterIdentity) && session.adapterIdentity === adapterIdentity && descriptor.adapterIdentity === originalAdapter
+    && initialization.adapterIdentity === originalAdapter && graph.format === 1 && graph.adapterIdentity === adapterIdentity,
   'storage-adapter-identity-changed');
   const expectedGraph = deliveryAdapterSourceFiles().map(name => inputReference(fileURLToPath(new URL(name, import.meta.url))));
   need(Array.isArray(graph.sourceFiles) && graph.sourceFiles.length === expectedGraph.length
@@ -189,7 +215,31 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
     && finishedAt - session.issuedAtMilliseconds <= 300000, 'storage-session-expired');
   if (session.mode === 'start') need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= finishedAt + 5000, 'fresh-storage-required-before-start');
+  if(continuation&&!continuation.continuationStarted)need(finishedAt<continuation.expiresAtMs&&finishedAt<=continuedDispatch.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
   return { operationId: session.operationId, journalDirectory: initialization.journalDirectory, descriptor: session.descriptor };
+}
+
+/** The existing private runner owns the same deployment byte lock throughout
+ * this child. This permit cannot launch a delivery or bypass storage admission. */
+export async function verifyReconciliationSession(args,entry,{env=process.env,clock=Date.now}={}){
+  const loaded=storageDefaultConfiguration({env}),{config}=loaded,c=config.operatorContinuation;
+  need(c&&args.length===4&&args[0]==='reconcile-prepackage'&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
+  const sr=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),s=document(sr),root=join(canonical(config.operationsRoot),'release-'+c.operationId);
+  need(/^reconciliations[\\/]reconciliation-[0-9]{4,}[\\/]session\.json$/.test(relative(root,sr.path)),'storage-reconciliation-session-location-changed');
+  need(s.format===1&&s.kind==='nova-storage-prepackage-reconciliation-session'&&s.mode==='reconcile-prepackage'&&s.operationId===c.operationId
+    &&same(s.config,loaded.ref)&&same(s.sourceReview,config.sourceReview)&&same(s.storageReview,config.storageReview)
+    &&same(s.request,c.originalRequest)&&same(s.reconciliationRequest,inputReference(resolve(args[3]))),'storage-reconciliation-session-changed');
+  const request=document(s.request),start=document(request.releaseInput),init=document(s.initialization),d=document(s.descriptor),graph=document(s.sourceGraph),waiting=document(s.waitingLauncher);
+  need(same(init.input,start)&&same(init.descriptor.reference,s.descriptor)&&same(init.descriptor.value,d)&&init.journalDirectory===c.journalDirectory
+    &&d.operation.id===c.operationId&&same(d.operation.sourceCommits,start.sourceCommits),'storage-reconciliation-original-initialization-changed');
+  const actual=canonical(entry),expected=join(canonical(config.applicationRoots[0]),'scripts/release-deliver.mjs');
+  need(actual===expected&&same(s.argv,[request.node.path,actual,...args])&&Number.isSafeInteger(s.runnerPid)&&s.runnerPid===process.ppid
+    &&waiting.kind==='verified-waiting-release-launcher'&&waiting.mode==='reconcile-prepackage'&&waiting.operationId===c.operationId
+    &&waiting.worker.pid===s.runnerPid&&same(waiting.entry,inputReference(actual))&&same(waiting.config,loaded.ref),'storage-reconciliation-lock-owner-changed');
+  const A=await import('./release-delivery-adapters.mjs'),expectedGraph=A.deliveryAdapterSourceFiles().map(n=>inputReference(fileURLToPath(new URL(n,import.meta.url))));
+  need(s.adapterIdentity===A.deliveryAdapterIdentity()&&graph.adapterIdentity===s.adapterIdentity&&same(graph.sourceFiles,expectedGraph),'storage-reconciliation-current-graph-changed');
+  const now=clock();need(Number.isSafeInteger(s.issuedAtMilliseconds)&&s.issuedAtMilliseconds<=now&&now-s.issuedAtMilliseconds<=300000,'storage-reconciliation-session-expired');
+  return {operationId:c.operationId,journalDirectory:c.journalDirectory};
 }
 
 function runRunner(executable, args) {
@@ -208,12 +258,13 @@ function runRunner(executable, args) {
 }
 
 export async function routeStorageDelivery(args, entry, { env = process.env, launch = runRunner } = {}) {
-  if (!['start', 'resume'].includes(args[0])) return { handled: false };
+  if (!['start', 'resume','reconcile-prepackage'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
-    await verifyStorageSession(args, entry, { env }); return { handled: false };
+    if(args[0]==='reconcile-prepackage')await verifyReconciliationSession(args,entry,{env});
+    else await verifyStorageSession(args, entry, { env }); return { handled: false };
   }
   const mode = args[0];
-  need(mode === 'start' ? (args.length === 2 || (args.length === 4 && args[2] === '--storage-budget')) : args.length === 3,
+  need(mode === 'start' ? (args.length === 2 || (args.length === 4 && args[2] === '--storage-budget')) : mode==='reconcile-prepackage'?args.length===4:args.length === 3,
     'storage-required-use-release-deliver-start-input');
   const { ref, config } = storageDefaultConfiguration({ env }), actualEntry = canonical(entry);
   need(config.applicationRoots.some(root => join(canonical(root), 'scripts', 'release-deliver.mjs') === actualEntry), 'storage-entry-not-configured');
@@ -224,11 +275,12 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     if (args.length === 4) argv.push('--budget', absolute(resolve(args[3])));
   } else {
     need(uuid(args[2]), 'storage-original-operation-required'); argv.push('--journal', absolute(resolve(args[1])), '--operation', args[2]);
+    if(mode==='reconcile-prepackage')argv.push('--reconciliation-request',absolute(resolve(args[3])));
   }
   const { code, value } = await launch(config.python.path, argv);
-  need(value && typeof value === 'object' && ['complete', 'release-pending', 'acceptance-or-storage-gap', 'original-start-not-observed', 'stopped'].includes(value.state),
+  need(value && typeof value === 'object' && ['complete', 'release-pending', 'acceptance-or-storage-gap', 'original-start-not-observed', 'stopped', 'continuation-granted'].includes(value.state),
     'storage-runner-result-invalid');
   const complete = value.state === 'complete' && value.release?.complete === true && value.storageCloseoutPerformed === true;
-  need(code !== 0 || complete, 'storage-runner-incomplete-success-rejected');
+  need(code !== 0 || complete || mode==='reconcile-prepackage'&&value.state==='continuation-granted', 'storage-runner-incomplete-success-rejected');
   return { handled: true, result: { ...value, complete } };
 }
