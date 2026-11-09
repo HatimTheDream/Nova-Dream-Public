@@ -1,3 +1,8 @@
+## [2.28.37] - 2026-11-09
+
+- Recognize the reviewed startup verification sources throughout release preparation, preserving complete saved-work, restart and recovery evidence checks.
+- Keep historical capture lifecycle validation intact when the current verification source changes.
+
 ## [2.28.36] - 2026-11-09
 
 - Verify packaged dependency files from the application's selected node_modules directory while preserving complete dependency and saved-work checks.

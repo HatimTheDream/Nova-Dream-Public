@@ -6,7 +6,7 @@ import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-p
 import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
 import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
-import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
+import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
 import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
@@ -19,6 +19,56 @@ test('startup request is strict and requires independently frozen producer sourc
   assert.throws(()=>startupRetainedRequest(f.options,{...f.sources,'qualified-parent.py':null}),/reviewed-startup/);
   assert.throws(()=>startupRetainedRequest({...f.options,producer:{...f.options.producer,sha256:'0'.repeat(64)}},f.sources),/reviewed-startup/);
   assert.throws(()=>startupRetainedRequest(f.options),/reviewed-startup/);
+});
+
+const reviewedProductionSources={
+  'qualified-startup.py':'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10',
+  'qualified-parent.py':'11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722',
+  'produce-startup-inputs.py':'caedf6794abfeb20f55b48d983bec238c73d57b501c9b212d800fda7a5d803b5',
+  'contracts.py':'99b4ec258324ce3d87e52a01ddd17dcddd76324c204fc6ce6ad991ee3fdbb32d',
+};
+
+test('production collector uses the reviewed source family without overrides and keeps all lifecycle gates',async t=>{
+  const f=startupCommandFixture(t,{schemaMigration:true,sources:reviewedProductionSources});
+  const sshConfig=f.put(join(f.root,'synthetic-ssh-config'),Buffer.from('Host fixture\n'));
+  const transport=f.put(join(f.root,'synthetic-transport.json'),{format:1,sshConfig,hostAlias:'fixture'});
+  const now=1_800_000_000_000;
+  let observed=structuredClone(f.proof),calls=0;
+  const collect=createStartupRetainedCollector({transport,options:f.options,clock:()=>now,run:async(target,program,options)=>{
+    calls++;assert.equal(target.hostAlias,'fixture');assert.deepEqual(options,{captureDiagnostics:true});
+    const payload=JSON.parse(Buffer.from(program.match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1],'base64'));
+    assert.deepEqual(payload.sources,reviewedProductionSources);
+    assert.deepEqual(payload.request,f.proof.request);
+    assert.equal(payload.sha256,sha256(readFileSync(new URL('../scripts/release-startup-retained-proof.py',import.meta.url))));
+    return{exitCode:0,stdout:JSON.stringify({ok:true,value:{...observed,observedAtMilliseconds:now}})};
+  }});
+  assert.deepEqual(await collect(),f.proof);
+  assert.doesNotThrow(()=>assertStartupQualifiedCandidate(f.proof,f.assertion));
+  for(const change of [p=>delete p.references.baselineManifest,p=>delete p.scenarios[0].captureRetirement,
+    p=>delete p.scenarios[1].replicaConfigObservation,p=>p.scenarios[1].captureRetirement.roles[0].predecessorProofSha256='f'.repeat(64)]){
+    observed=structuredClone(f.proof);change(observed);await assert.rejects(collect);
+  }
+  assert.equal(calls,5);
+  assert.throws(()=>createStartupRetainedCollector({transport,options:{...f.options,producer:{...f.options.producer,sha256:'a'.repeat(64)}}}),/reviewed-startup-producer/);
+});
+
+test('historical source families retain baseline and capture guards after the production default advances',t=>{
+  const f=startupCommandFixture(t,{schemaMigration:true,sources:reviewedProductionSources});
+  const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
+  for(const producer of ['479a10e7303411aaf5e76a08d857747798cf6a65362fdd75a2808d7f2a585294','4404a1c0a7658c206b49d6daa64e4f7c1c0bf8ffa905ce19a4015312c823d599']){
+    const proof=structuredClone(f.proof),sources={...reviewedProductionSources,'qualified-startup.py':producer};
+    if(producer.startsWith('479a'))sources['produce-startup-inputs.py']='f3924c9350636eb7ecb0bcebaef62dcb21b38acf7c3653399ae01be2a8442d89';
+    proof.sourceHashes=sources;proof.request.producer.sha256=producer;
+    proof.requestSha256=sha256(Buffer.from(canonical(proof.request)+'\n'));proof.references.producer.sha256=producer;
+    for(const [name,sha256]of Object.entries(sources))proof.references['source/'+name].sha256=sha256;
+    verifyStartupRetainedProjection(proof,proof.request,sources);
+    assert.throws(()=>startupRetainedRequest({format:1,parent:proof.request.parent,producer:proof.request.producer}),/reviewed-startup-producer/);
+    for(const change of [p=>delete p.references.baselineManifest,p=>delete p.scenarios[0].captureRetirement,
+      p=>p.scenarios[1].captureRetirement.roles[0].predecessorProofSha256='e'.repeat(64),p=>delete p.scenarios[2].replicaConfigObservation]){
+      const damaged=structuredClone(proof);change(damaged);
+      assert.throws(()=>verifyStartupRetainedProjection(damaged,damaged.request,sources));
+    }
+  }
 });
 
 test('complete changed service candidate is admitted by exact proof, never prior byte equality',t=>{

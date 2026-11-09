@@ -15,7 +15,8 @@ def load(name, path):
 
 
 subject = load('startup_retained', ROOT / 'scripts/release-startup-retained-proof.py')
-fixture = load('startup_fixture', ROOT / 'support/startup-retained-fixture.py').fixture
+fixture_module = load('startup_fixture', ROOT / 'support/startup-retained-fixture.py')
+fixture = fixture_module.fixture
 
 
 class Checks(unittest.TestCase):
@@ -72,6 +73,29 @@ class Checks(unittest.TestCase):
 
 
     def consume(self, f): return subject.consume(f['request'], f['read'], f['sources'])
+
+    def test_current_and_historical_producers_cannot_skip_capture_helper_or_baseline_admission(self):
+        # Only the synthetic producer's source identity is substituted to select
+        # the real registered family. Every receipt/content hash still passes
+        # through the actual consumer; this is not qualification evidence.
+        original_sha = fixture_module.sha
+        for producer in (
+            'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10',
+            '4404a1c0a7658c206b49d6daa64e4f7c1c0bf8ffa905ce19a4015312c823d599',
+            '479a10e7303411aaf5e76a08d857747798cf6a65362fdd75a2808d7f2a585294',
+        ):
+            def synthetic_source_identity(raw):
+                return producer if raw == b'# synthetic qualified-startup.py' else original_sha(raw)
+            with self.subTest(producer=producer), patch.object(fixture_module, 'sha', synthetic_source_identity), patch.object(subject, 'sha', synthetic_source_identity):
+                with self.assertRaisesRegex(RuntimeError, 'capture-lifecycle-helper-source-required'):
+                    self.consume(fixture(schema_migration=True))
+                def helpers(binding):
+                    binding['helpers'].update({
+                        'recovery.py': '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15',
+                        'install.py': '522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24',
+                    })
+                with self.assertRaisesRegex(RuntimeError, 'original-capture-manifest-input-binding'):
+                    self.consume(fixture({'binding': helpers, 'plan': lambda value: value.update(inputHashes={})}, schema_migration=True))
 
     def test_explicit_schema_migration_retains_pristine55_and_qualifies_two_actual60_starts(self):
         result=self.consume(fixture(schema_migration=True))

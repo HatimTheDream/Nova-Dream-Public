@@ -17,14 +17,16 @@ export const startupQualificationOptionsSchema=z.object({format:z.literal(1),par
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
-  'qualified-startup.py':'479a10e7303411aaf5e76a08d857747798cf6a65362fdd75a2808d7f2a585294',
+  'qualified-startup.py':'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10',
   'qualified-parent.py':'11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722',
-  'produce-startup-inputs.py':'f3924c9350636eb7ecb0bcebaef62dcb21b38acf7c3653399ae01be2a8442d89',
+  'produce-startup-inputs.py':'caedf6794abfeb20f55b48d983bec238c73d57b501c9b212d800fda7a5d803b5',
   'contracts.py':'99b4ec258324ce3d87e52a01ddd17dcddd76324c204fc6ce6ad991ee3fdbb32d',
 });
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
-const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',QUALIFIED_STARTUP_SOURCES['qualified-startup.py']]);
+const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
+  '479a10e7303411aaf5e76a08d857747798cf6a65362fdd75a2808d7f2a585294',
+  '4404a1c0a7658c206b49d6daa64e4f7c1c0bf8ffa905ce19a4015312c823d599',QUALIFIED_STARTUP_SOURCES['qualified-startup.py']]);
 export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-restart','pristine-prior-restoration']);
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
 const HELPERS=['install.py','recovery.py','operator_rehearsal.py','app_dependencies.py','codex_log_retention.py','workspace_key.py','verify-session-bindings.mjs'];
