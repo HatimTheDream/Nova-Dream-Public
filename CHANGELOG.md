@@ -1,3 +1,8 @@
+## [2.28.38] - 2026-11-13
+
+- Verify isolated startup with readable, read-only dependency mounts while preserving the protected original files and complete saved-work checks.
+- Retain capture and recovery validation for both current and historical startup verification sources.
+
 ## [2.28.37] - 2026-11-09
 
 - Recognize the reviewed startup verification sources throughout release preparation, preserving complete saved-work, restart and recovery evidence checks.

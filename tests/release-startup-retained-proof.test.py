@@ -80,6 +80,7 @@ class Checks(unittest.TestCase):
         # through the actual consumer; this is not qualification evidence.
         original_sha = fixture_module.sha
         for producer in (
+            'f8de414f4822707675dbe0fca150ad0dd917202579bacd8432a6115c4a218a28',
             'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10',
             '4404a1c0a7658c206b49d6daa64e4f7c1c0bf8ffa905ce19a4015312c823d599',
             '479a10e7303411aaf5e76a08d857747798cf6a65362fdd75a2808d7f2a585294',
