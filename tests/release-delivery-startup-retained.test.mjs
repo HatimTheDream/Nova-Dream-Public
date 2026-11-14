@@ -22,7 +22,7 @@ test('startup request is strict and requires independently frozen producer sourc
 });
 
 const reviewedProductionSources={
-  'qualified-startup.py':'f8de414f4822707675dbe0fca150ad0dd917202579bacd8432a6115c4a218a28',
+  'qualified-startup.py':'82794c1b913e241bd881d8c89dac4871c2c4b5ae70c12f362754f9fcc60cc9fb',
   'qualified-parent.py':'11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722',
   'produce-startup-inputs.py':'caedf6794abfeb20f55b48d983bec238c73d57b501c9b212d800fda7a5d803b5',
   'contracts.py':'99b4ec258324ce3d87e52a01ddd17dcddd76324c204fc6ce6ad991ee3fdbb32d',
@@ -340,7 +340,8 @@ test('new lifecycle profile accepts only bound role reaping and preserves old re
   verify(reaped);
   // The previous reviewed producer keeps the same strict lifecycle evidence contract.
   for(const producer of ['7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb',
-    'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10']){
+    'f1004fc0fafec1669c5bd4822cf27925d64e861b0bb74301a033a431becccc10',
+    'f8de414f4822707675dbe0fca150ad0dd917202579bacd8432a6115c4a218a28']){
   const previous=structuredClone(reaped),previousSources={...fixture.sources,'qualified-startup.py':producer};
   previous.sourceHashes=previousSources;
   previous.request.producer.sha256=previousSources['qualified-startup.py'];

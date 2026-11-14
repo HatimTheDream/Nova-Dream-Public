@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { Script } from 'node:vm';
 import { ReleaseJournal, normalizeCoordinatorDescriptor, normalizePlanInput, validateJournalDirectory } from '../scripts/release-coordinate.mjs';
 import { sha256 } from '../scripts/release-plan.mjs';
 
@@ -203,4 +204,68 @@ test('repository and OneDrive journal paths are rejected before creating a journ
   assert.throws(() => validateJournalDirectory(join(repository, 'journal'), { create: true }), /repository/);
   const synced = join(f.root, 'OneDrive', 'journal'); assert.throws(() => validateJournalDirectory(synced, { create: true }), /synced/);
   assert.deepEqual(readdirSync(repository), ['.git']);
+});
+
+// Exercise the production ACL boundary on every platform without launching a
+// shell. Actual Windows ACL creation/refusal remains a separate integration check.
+function windowsAclBoundary(execFileSync, env = {}) {
+  const source = readFileSync(scriptPath, 'utf8');
+  const start = source.indexOf('const windowsAclScript = `');
+  const end = source.indexOf('export function validateJournalDirectory', start);
+  assert.ok(start >= 0 && end > start);
+  return new Script(source.slice(start, end) + '\nprotectDirectory;').runInNewContext({
+    Buffer, Error, process: { platform: 'win32', env: { SystemRoot: 'C:\\Windows', ...env } },
+    join: win32.join, execFileSync, sha256,
+  });
+}
+
+test('Windows ACL uses a fixed readable command and keeps directory data in its environment', () => {
+  const calls = [], directory = "C:\\task owned\\literal'; Write-Output injected";
+  const protect = windowsAclBoundary((executable, argv, options) => {
+    calls.push({ executable, argv: Array.from(argv), options }); return Buffer.from('protected\r\n');
+  }, { PRIVATE_TEST_MARKER: 'not-a-diagnostic-field' });
+  protect(directory, false); protect('C:\\new owned directory', true);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.executable, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    assert.deepEqual(call.argv.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+    assert.equal(call.argv.length, 4);
+    assert.match(call.argv[3], /^\$ErrorActionPreference='Stop'\r?\n/);
+    assert.ok(call.argv[3].includes("[Console]::Out.WriteLine('protected')"));
+    assert.ok(!call.argv[3].includes(directory));
+    assert.equal(call.options.shell, false); assert.equal(call.options.windowsHide, true);
+    assert.equal(call.options.timeout, 15000); assert.equal(call.options.maxBuffer, 32768);
+    assert.deepEqual(Array.from(call.options.stdio), ['ignore', 'pipe', 'pipe']);
+    assert.equal(call.options.env.PRIVATE_TEST_MARKER, 'not-a-diagnostic-field');
+  }
+  assert.equal(calls[0].argv[3], calls[1].argv[3]);
+  assert.equal(calls[0].options.env.NOVA_RELEASE_DIRECTORY, directory);
+  assert.equal(calls[0].options.env.NOVA_RELEASE_ACL_CREATE, '0');
+  assert.equal(calls[1].options.env.NOVA_RELEASE_ACL_CREATE, '1');
+});
+
+test('Windows ACL preserves a nonzero child failure and does not retry it', () => {
+  const failure = Object.assign(new Error('child refused'), { status: 1, stdout: Buffer.from('blocked'), stderr: Buffer.from('policy refusal') });
+  let calls = 0;
+  const protect = windowsAclBoundary(() => { calls++; throw failure; });
+  assert.throws(() => protect('C:\\owned directory'), error => error === failure);
+  assert.equal(calls, 1); assert.equal(failure.aclProcess, undefined);
+});
+
+test('Windows ACL refuses empty or malformed successful output with bounded original-byte diagnostics', () => {
+  for (const output of [Buffer.alloc(0), Buffer.from('protected\r\nunexpected'), Buffer.alloc(8192, 120)]) {
+    let calls = 0;
+    const protect = windowsAclBoundary(() => { calls++; return output; }, { PRIVATE_TEST_MARKER: 'must-not-appear' });
+    assert.throws(() => protect('C:\\owned directory'), error => {
+      assert.equal(error.message, 'unprotected-journal-directory');
+      assert.equal(error.aclProcess.status, 0);
+      assert.equal(error.aclProcess.stdoutBytes, output.length);
+      assert.equal(error.aclProcess.stdoutSha256, sha256(output));
+      assert.deepEqual(Buffer.from(error.aclProcess.stdoutBase64, 'base64'), output.subarray(0, 4096));
+      assert.equal(error.aclProcess.stdoutTruncated, output.length > 4096);
+      assert.ok(!JSON.stringify(error.aclProcess).includes('must-not-appear'));
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
 });

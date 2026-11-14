@@ -1,3 +1,8 @@
+## [2.28.39] - 2026-11-13
+
+- Run Windows release permission checks as readable, fixed PowerShell commands while preserving the existing access restrictions.
+- Retain bounded process output when a permission check returns an unexpected result, making controller failures easier to diagnose without blind retries.
+
 ## [2.28.38] - 2026-11-13
 
 - Verify isolated startup with readable, read-only dependency mounts while preserving the protected original files and complete saved-work checks.

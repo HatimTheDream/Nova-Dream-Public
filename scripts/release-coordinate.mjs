@@ -57,11 +57,16 @@ if(-not ($rules | Where-Object {$_.IdentityReference.Value -eq $owner.Value -and
 function protectDirectory(path, newlyCreated = false) {
   if (process.platform === 'win32') {
     const executable = join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-    const output = execFileSync(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript, 'utf16le').toString('base64')], {
+    const output = execFileSync(executable, ['-NoProfile', '-NonInteractive', '-Command', windowsAclScript], {
       shell: false, windowsHide: true, timeout: 15_000, maxBuffer: 32 * 1024,
       env: { ...process.env, NOVA_RELEASE_DIRECTORY: path, NOVA_RELEASE_ACL_CREATE: newlyCreated ? '1' : '0' }, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    requireThat(output.toString().trim() === 'protected', 'unprotected-journal-directory');
+    if (output.toString().trim() !== 'protected') {
+      const error = new Error('unprotected-journal-directory');
+      error.aclProcess = { executable, status: 0, stdoutBytes: output.length, stdoutSha256: sha256(output),
+        stdoutBase64: output.subarray(0, 4096).toString('base64'), stdoutTruncated: output.length > 4096 };
+      throw error;
+    }
   } else {
     const info = lstatSync(path); requireThat(info.uid === process.getuid() && (info.mode & 0o077) === 0, 'unprotected-journal-directory');
   }
