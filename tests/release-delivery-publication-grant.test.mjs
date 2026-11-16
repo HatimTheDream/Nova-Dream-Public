@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname,resolve,basename} from 'node:path';
@@ -11,7 +12,7 @@ import {sha256,assessTimeline} from '../scripts/release-plan.mjs';
 import {PREWRITE_PREREQUISITES} from '../scripts/release-delivery-disposition.mjs';
 import {deliveryAdapterIdentity,deliveryAdapterSourceFiles} from '../scripts/release-delivery-adapters.mjs';
 import {browserBinding} from '../scripts/release-delivery-browser.mjs';
-import {verifyContinuationGrant,verifyContinuationStorageAuthority} from '../scripts/release-delivery-continuation.mjs';
+import {verifyContinuationGrant,verifyContinuationStorageAuthority,verifyCompletedOriginalStorage,originalOwnerObservationArguments,verifyPublicationStorageAdmission} from '../scripts/release-delivery-continuation.mjs';
 import {PUBLICATION_PACKAGE_SUBSTEPS,PUBLICATION_CONTINUATION_PREREQUISITES,publicationContinuationSnapshot,publicationContinuationRequestSchema,verifyPublicationContinuationAdmission} from '../scripts/release-delivery-continuation.mjs';
 import {stepDelivery} from '../scripts/release-deliver.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
@@ -35,7 +36,7 @@ function fixture(t){
  journal.recordDeliveryObservation(id,phase,{key:intent.key,state:'completed',reason:'synthetic-verified',externalId:null,receipt:null,output:phase==='route'?{route:'full',targetCandidateId:sha256('candidate')}:phase==='sign'?{candidateId:sha256('candidate'),priorCandidateId:operation.priorCandidateId}:{phase}},now+1);}
  const reserved=journal.reserveDeliveryPhase(id,'publication',{phase:'publication',candidateCommit:d.sources.private.commit},now+2);
  journal.recordDeliveryObservation(id,'publication',{key:reserved.intent.key,state:'gap',reason:'browser-original-response-unavailable',externalId:null,receipt:null,output:null},now+3);
- const at=now+120000,originalRequest=save('owner/request.json',{format:1,operationId:id,node,deliveryEntry:oldEntry,releaseInput:save('original-start.json',{synthetic:true}),storageBudget:save('budget.json',{synthetic:true})});
+ const at=now+120000,originalRequest=save('owner/request.json',{format:1,operationId:id,node,deliveryEntry:oldEntry,releaseInput:save('original-start.json',{profile:save('original-profile.json',{synthetic:true})}),storageBudget:save('budget.json',{allocations:[{id:'candidate',bytes:100}]})});
  const oldRequest=JSON.parse(readFileSync(originalRequest.path));
  const process=(pid,parentPid)=>({pid,parentPid,created:'/Date('+now+')/',executable:node.path,commandLineSha256:sha256('process'+pid)});
  const launcher=save('owner/waiting.json',{format:1,kind:'verified-waiting-release-launcher',dispatchAuthority:false,operationId:id,mode:'resume',cwd:oldRoot,node,entry:oldEntry,start:oldRequest.releaseInput,budget:oldRequest.storageBudget,runner:save('runner.bin',Buffer.from('synthetic runner')),config:save('config.json',{}),owner:process(100,1),worker:process(101,100)});
@@ -57,7 +58,7 @@ function admission(f,override=null){
  const s=snapshot(f),operator=override??{adapterIdentity:sha256('operator'),sources:f.request.operatorSources,sourceFiles:[{name:'synthetic',sha256:sha256('source')}],ci:{private:f.save('ci-private.json',{}),public:f.save('ci-public.json',{})}};
  const requestRef=f.save('planned-request.json',f.request),plan=f.save('plan.json',{format:1,kind:'nova-publication-continuation-plan',operationId:f.id,request:requestRef,snapshot:s,operator,hostFacts:f.save('synthetic-plan-host.json',{}),prestagePlan:f.save('prestage-plan.json',{synthetic:true}),plannedAtMs:f.at,readOnly:true,hostEffects:false,journalWrites:false});
  const review=f.save('review.json',{format:1,kind:'nova-publication-continuation-plan-review',plan,operatorAdapterIdentity:operator.adapterIdentity,status:'passed',independentReview:true});
- const intent=f.save('grant-intent.json',{format:1,kind:'nova-publication-continuation-grant-intent',operationId:f.id,action:'grant-original-publication-continuation',request:requestRef,plan,review,notBeforeMs:f.at,notAfterMs:f.at+300000,automaticRenewal:false});
+ const intent=f.save('grant-intent.json',{format:1,kind:'nova-publication-continuation-grant-intent',operationId:f.id,action:f.request.successor?'grant-original-publication-storage-successor':'grant-original-publication-continuation',request:requestRef,plan,review,notBeforeMs:f.at,notAfterMs:f.at+300000,automaticRenewal:false});
  return {request:{...f.request,admission:{plan,review,intent}},operator,snapshot:s};
 }
 test('publication snapshot retains ten completed phases and a genuine closed gap without relabeling the old result expired',t=>{
@@ -184,4 +185,124 @@ test('publication storage admission detects duplicated event and changed retaine
  assert.throws(()=>f.journal.deliveryPublicationContinuationAdmission(f.id),/duplicate/);
  const g=fixture(t),y=await storageAdmissionFixture(g);g.journal.recordPublicationContinuationAdmission(g.id,y.admission,g.at);
  writeFileSync(y.admission.dispatch.path,'{}');assert.throws(()=>g.journal.deliveryPublicationContinuationAdmission(g.id),/evidence-hash-changed/);
+});
+
+
+function completedStorageFixture(f,previous){
+ const save=f.save,parentId='a1111111-1111-4111-8111-111111111111',childId='5656c24f-0cc8-5606-a624-11a1351738bc',generationId='10145439-e729-52d7-a6d1-6720cefe84b1';
+ const prefix='owner/continuations/'+previous.sha256+'/admission-0002/before-delivery',directory=join(f.dir,prefix),batchDirectory=join(directory,'batch-001');mkdirSync(batchDirectory,{recursive:true});
+ const original=JSON.parse(readFileSync(f.request.owner.request.path)),deadline=new Date(previous.proof.expiresAtMs).toISOString(),configuration=save('storage-config.json',{synthetic:true});
+ const parent={format:1,operationId:parentId,phase:'before-allocation',originalDeadline:deadline,profile:JSON.parse(readFileSync(original.releaseInput.path)).profile,budget:original.storageBudget,configuration};
+ const originalInput=save(prefix+'/input.json',parent),batchInput=save(prefix+'/batch-001-input.json',{...parent,operationId:childId});
+ const observer=save('observer.py',Buffer.from('# synthetic readonly observer')),launcher=JSON.parse(readFileSync(f.attempt.launcher.path));
+ const observerInput=save('observer-input.json',{originalRoots:{owner:launcher.owner,worker:launcher.worker}});
+ const closure=save('locked-owner.json',{kind:'exact-original-caller-closure-observation',status:'passed',closed:true,readOnly:true,releaseAdmission:false,releaseOperationId:f.id,stopOrKillCalls:0,remoteHostCalls:0,censusPasses:2,
+  snapshots:[0,1].map(()=>({closed:true,descendantCandidates:[],identityConflicts:[],taskProcessConflicts:[]})),source:observer,input:observerInput,waitingLauncher:f.attempt.launcher,sources:{caller:observer}});
+ const fixed={releaseOperationId:f.id,grantSha256:previous.sha256,journalDirectory:f.journal.directory,storageInput:originalInput,batchInput,request:f.request.owner.request,configuration,directory,batchDirectory,generationOperationId:generationId,originalDeadline:deadline,ownerObserver:observer,ownerObserverInput:observerInput};
+ const planSource=save('storage-adapter.py',Buffer.from('# synthetic qualified single batch adapter'));
+ const plan=save('storage-recovery-plan.json',{source:planSource,kind:'original-storage-recovery-plan',releaseOperationId:f.id,maximumBatches:1,releaseDispatchPermitted:false,automaticRetry:false,fixedContext:save('fixed-storage.json',fixed),originalInput,batchInput,originalRequest:f.request.owner.request,configuration,directory,batchDirectory,storageOperationId:parentId,generationOperationId:generationId,originalDeadline:deadline});
+ const planReview=save('storage-plan-review.json',{status:'passed',independentReview:true,plan,source:planSource}),intent=save('storage-intent.json',{plan,review:planReview,automaticRetry:false});
+ const inventory=save(prefix+'/batch-001/inventory.json',{readOnly:true,observedAtMilliseconds:previous.proof.expiresAtMs,sourceEvidence:{profile:parent.profile,configuration}});
+ const finalPreflight=save(prefix+'/batch-001/after-cleanup.json',{format:1,kind:'private-storage-preflight',state:'ready',phase:'before-allocation',originalDeadline:deadline,inventory,
+  assessment:{format:1,kind:'storage-lifecycle-budget-result',phase:'before-allocation',fits:true,allocationBudgetAdmissionOnly:true,releaseAdmission:false,stoppedAndPostStartChecksStillRequired:true,observationExpiresAtMilliseconds:previous.proof.expiresAtMs+120000,
+  filesystems:[{availableBytes:1000,requiredFreeBytes:100,deficitBytes:0,allocations:[{id:'candidate',bytes:100}]}]}});
+ const cleanup=save(prefix+'/batch-001/cleanup-closed.json',{cleanupComplete:true,protectedRolesVerified:true,originalWorkerClosed:true,originalDeadline:deadline,observedFreeIncreaseBytes:100});
+ const storage={format:1,kind:'private-storage-maintenance-result',state:'ready',operationId:childId,originalDeadline:deadline,cleanupPerformed:true,protectedRolesVerified:true,releaseAdmission:false,reclaimedBytes:100,cleanup,finalPreflight,observationExpiresAtMilliseconds:previous.proof.expiresAtMs+120000};
+ storage.result=save(prefix+'/batch-001/complete.json',{...storage});
+ const result=save('storage-recovery-result.json',{format:1,kind:'original-storage-recovery-result',recordedAt:new Date(previous.proof.expiresAtMs+1).toISOString(),state:'ready',storage,plan,review:planReview,intent,releaseDispatched:false,deploymentLockReleased:true,originalDeadline:deadline});
+ const review=save('storage-outcome-review.json',{kind:'independent-original-storage-recovery-outcome-review',status:'passed',independentReview:true,recoveryResult:result,nativeCompletion:storage.result,batchInput,lockedOwnerClosure:closure,originalDeadline:deadline,releaseDispatched:false,noSuccessorBatch:true,completedOriginalStorageVerified:true,noReleaseAdmission:true,originalBatchOnly:true});
+ return {marker:{result,review},directory,batchDirectory,storage,plan,review,result};
+}
+function successorFixture(t){
+ const f=fixture(t),original=grantFixture(f),previous=original.grant(),storage=completedStorageFixture(f,previous),save=f.save;
+ const request={...f.request,operatorSources:Object.fromEntries(Object.entries(f.request.operatorSources).map(([k,v])=>[k,{...v,branch:'operator/publication-storage-successor-r1'}])),
+  successor:{predecessorGrantSha256:previous.sha256,completedOriginalStorage:storage.marker,reason:'Original reserved storage completed after the first finite window.'}};
+ const next={...f,request,at:previous.proof.expiresAtMs+1,save:(name,value)=>save('successor/'+name,value)},g=grantFixture(next);
+ return {f,next,original,previous,storage,proof:g.proof,grant:()=>f.journal.recordPublicationStorageSuccessor(f.id,g.proof,next.at,{assertAbsent:()=>{}})};
+}
+test('one explicit storage successor is append-only and preserves original proof, clock, scope and all passed keys',t=>{
+ const x=successorFixture(t),before=x.f.journal.loadDelivery(x.f.id),oldRow=x.f.journal.db.prepare('SELECT * FROM delivery_operator_continuations').get(),keys=x.proof.prerequisites.map(p=>p.key),saved=x.grant();
+ assert.deepEqual(x.f.journal.loadDelivery(x.f.id),before);assert.deepEqual(x.f.journal.db.prepare('SELECT * FROM delivery_operator_continuations').get(),oldRow);
+ assert.deepEqual(x.f.journal.deliveryOriginalOperatorContinuation(x.f.id),x.previous);assert.deepEqual(x.grant(),saved);assert.notEqual(saved.sha256,x.previous.sha256);
+ assert.deepEqual(saved.proof.prerequisites.map(p=>p.key),keys);assert.equal(saved.proof.originalCreatedAtMs,x.original.proof.originalCreatedAtMs);assert.equal(saved.proof.originalBudgetMs,x.original.proof.originalBudgetMs);
+ assert.deepEqual(saved.proof.browser,x.original.proof.browser);assert.equal(saved.proof.automaticRenewal,false);
+ assert.throws(()=>x.f.journal.recordOperatorContinuation(x.f.id,x.proof,x.next.at),/explicit-record/);
+ assert.throws(()=>x.f.journal.recordPublicationStorageSuccessor(x.f.id,{...x.proof,expiresAtMs:x.proof.expiresAtMs+1},x.next.at),/already-granted/);
+ assert.throws(()=>x.f.journal.db.prepare("DELETE FROM delivery_events WHERE kind='publication-storage-successor-granted'").run(),/immutable/);
+ assert.throws(()=>x.f.journal.db.prepare("UPDATE delivery_events SET at_ms=at_ms+1 WHERE kind='publication-storage-successor-granted'").run(),/immutable/);
+});
+test('successor authority derives exactly one completed-storage marker and expires new effects normally',async t=>{
+ const x=successorFixture(t);x.grant();const authority=await verifyContinuationStorageAuthority({journal:x.f.journal,operationId:x.f.id,now:x.next.at});
+ assert.equal(Object.keys(authority).length,11);assert.deepEqual(authority.completedOriginalStorage,x.storage.marker);assert.equal(authority.continuationStarted,false);
+ verifyContinuationGrant(x.f.journal,x.f.id,{now:x.next.at,effect:true,assertAbsent:()=>{}});
+ assert.throws(()=>verifyContinuationGrant(x.f.journal,x.f.id,{now:x.proof.expiresAtMs,effect:true,assertAbsent:()=>{}}),/window-expired/);
+ assert.doesNotThrow(()=>verifyContinuationGrant(x.f.journal,x.f.id,{now:x.proof.expiresAtMs+1,effect:false}));
+});
+test('successor requires a distinct explicit intent action and unchanged original scope',t=>{
+ const x=successorFixture(t),bad={...x.next.request,browser:{...x.next.request.browser,successorSessionId:randomUUID()}};
+ assert.throws(()=>publicationContinuationSnapshot(x.f.journal,x.f.id,x.next.at,{request:bad,assertAbsent:()=>{}}),/original-scope/);
+ const request=JSON.parse(readFileSync(x.proof.request.path)),intent=JSON.parse(readFileSync(request.admission.intent.path));intent.action='grant-original-publication-continuation';
+ request.admission.intent=x.f.save('wrong-successor-intent.json',intent);
+ assert.throws(()=>verifyPublicationContinuationAdmission(request,x.proof.operator,snapshot(x.next),x.next.at),/separate-intent/);
+});
+test('unexpired predecessor, a competing installation, and a second successor refuse before granting',t=>{
+ const x=successorFixture(t);
+ assert.throws(()=>publicationContinuationSnapshot(x.f.journal,x.f.id,x.previous.proof.expiresAtMs-1,{request:x.next.request,assertAbsent:()=>{}}),/recovery-time|not-expired/);
+ x.f.journal.db.prepare('INSERT INTO delivery_phases VALUES(?,?,?,?,?,?)').run(x.f.id,'installation',randomUUID(),'{}',sha256('{}'),x.next.at);
+ assert.throws(()=>x.grant(),/downstream-reservation/);assert.deepEqual(x.f.journal.deliveryOperatorContinuation(x.f.id),x.previous);
+});
+test('successor refuses a predecessor native admission or an existing later batch',async t=>{
+ const f=fixture(t),admitted=await storageAdmissionFixture(f);f.journal.recordPublicationContinuationAdmission(f.id,admitted.admission,f.at);
+ const storage=completedStorageFixture(f,admitted.saved),request={...f.request,operatorSources:Object.fromEntries(Object.entries(f.request.operatorSources).map(([k,v])=>[k,{...v,branch:'operator/publication-storage-successor-r1'}])),successor:{predecessorGrantSha256:admitted.saved.sha256,completedOriginalStorage:storage.marker,reason:'Must refuse already admitted predecessor.'}};
+ assert.throws(()=>publicationContinuationSnapshot(f.journal,f.id,admitted.saved.proof.expiresAtMs+1,{request,assertAbsent:()=>{}}),/already-admitted/);
+ const x=successorFixture(t);mkdirSync(join(x.storage.directory,'batch-002'));
+ assert.throws(()=>x.grant(),/original-admission-already-used/);
+});
+test('successor requires genuine completion, protected cleanup, original lineage and independent outcome',t=>{
+ for(const field of ['state','protectedRolesVerified','operationId']){
+  const x=successorFixture(t),result=JSON.parse(readFileSync(x.storage.result.path));result.storage[field]=field==='state'?'cleanup-insufficient':field==='protectedRolesVerified'?false:randomUUID();
+  const marker={...x.storage.marker,result:x.f.save('tampered-'+field+'.json',result)};
+  assert.throws(()=>verifyCompletedOriginalStorage(x.f.journal,x.f.id,marker,{predecessor:x.previous,now:x.next.at}),/native-completion|independent-outcome/);
+ }
+ const x=successorFixture(t),review=JSON.parse(readFileSync(x.storage.review.path));review.independentReview=false;
+ assert.throws(()=>verifyCompletedOriginalStorage(x.f.journal,x.f.id,{...x.storage.marker,review:x.f.save('not-independent.json',review)},{predecessor:x.previous,now:x.next.at}),/independent-outcome/);
+});
+test('legacy authority stays exactly ten fields and no implicit successor is issued by observation',async t=>{
+ const f=fixture(t),g=grantFixture(f),old=g.grant(),authority=await verifyContinuationStorageAuthority({journal:f.journal,operationId:f.id,now:g.proof.expiresAtMs+1});
+ assert.equal(Object.keys(authority).length,10);assert.equal(authority.newEffectsAllowed,false);assert.equal(authority.completedOriginalStorage,undefined);
+ assert.deepEqual(f.journal.deliveryOperatorContinuation(f.id),old);assert.equal(f.journal.db.prepare("SELECT count(*) AS n FROM delivery_events WHERE kind='publication-storage-successor-granted'").get().n,0);
+});
+
+test('Windows owner observation uses the identical readable bounded query and rejects noninteger process ids',()=>{
+ const argv=originalOwnerObservationArguments(1234);
+ assert.deepEqual(argv.slice(0,3),['-NoProfile','-NonInteractive','-Command']);assert.equal(argv.length,4);
+ assert.match(argv[3],/Get-CimInstance Win32_Process -Filter 'ProcessId = 1234'/);assert.match(argv[3],/CreationDate/);
+ assert(!argv.includes('-EncodedCommand'));assert(!argv[3].includes('Stop-Process'));
+ for(const pid of [0,-1,1.5,'1234;bad'])assert.throws(()=>originalOwnerObservationArguments(pid),/process-id-invalid/);
+});
+
+test('readable Windows owner query observes the current process without elevation', {skip:process.platform!=='win32'},()=>{
+ const raw=execFileSync(join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),originalOwnerObservationArguments(process.pid),{encoding:'utf8',timeout:15000,maxBuffer:65536,windowsHide:true,stdio:['ignore','pipe','pipe']});
+ const observed=JSON.parse(raw);assert.equal(observed.pid,process.pid);assert.match(observed.created,/^\/Date\([0-9]+\)\/$/);
+});
+
+test('successor native admission requires the exact marker on both session and readonly dispatch',async t=>{
+ const x=successorFixture(t),saved=x.grant(),authority=await verifyContinuationStorageAuthority({journal:x.f.journal,operationId:x.f.id,now:x.next.at});
+ const make=(n,change={})=>{
+  const prefix='owner/continuations/'+saved.sha256+'/admission-'+String(n).padStart(4,'0'),storageInput=x.f.save(prefix+'/before-delivery/input.json',{synthetic:true});
+  const readonly=x.f.save(prefix+'/readonly.json',{kind:'private-storage-preflight',state:'ready',cleanupPerformed:false,assessment:{fits:true,releaseAdmission:false}});
+  const result={state:'ready',historical:false,result:readonly,cleanupPerformed:false,scope:'fresh-capacity-admission-check-only',observationExpiresAtMilliseconds:x.next.at+120000};
+  const originalDispatch=x.f.save('owner/release-dispatch.json',{synthetic:true});
+  const dispatchValue={format:1,grantSha256:saved.sha256,request:x.f.request.owner.request,originalDispatch,automaticNewOperationPermitted:false,startedAtMilliseconds:x.next.at,
+   completedOriginalStorage:x.storage.marker,storageInput,storageMaintenanceInput:storageInput,storageMaintenanceResult:result,storageResult:result,...change.dispatch};
+  const dispatch=x.f.save(prefix+'/release-dispatch.json',dispatchValue),session=x.f.save('owner/session-observation-'+String(n+10).padStart(4,'0')+'.json',{
+   format:1,kind:'nova-storage-default-session',mode:'resume',operationId:x.f.id,request:x.f.request.owner.request,dispatch:originalDispatch,continuationDispatch:dispatch,
+   operatorContinuation:{...authority,...change.authority},issuedAtMilliseconds:x.next.at,descriptor:x.f.save('successor-storage-descriptor.json',x.f.d),sourceGraph:x.f.save('successor-storage-graph.json',{format:1,adapterIdentity:x.proof.operator.adapterIdentity})});
+  return {format:1,kind:'nova-publication-continuation-storage-admission',operationId:x.f.id,grantSha256:saved.sha256,dispatch,session,verifiedAtMs:x.next.at};
+ };
+ assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(1,{authority:{completedOriginalStorage:undefined}})),/readonly-admission/);
+ assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(2,{dispatch:{completedOriginalStorage:undefined}})),/readonly-admission/);
+ assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(3,{dispatch:{storageMaintenanceResult:{cleanupPerformed:true}}})),/readonly-admission/);
+ const good=make(4);x.f.journal.recordPublicationContinuationAdmission(x.f.id,good,x.next.at);
+ assert.equal((await verifyContinuationStorageAuthority({journal:x.f.journal,operationId:x.f.id,now:x.next.at+1})).continuationStarted,true);
 });
