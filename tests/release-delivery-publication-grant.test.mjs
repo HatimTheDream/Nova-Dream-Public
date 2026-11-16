@@ -43,6 +43,8 @@ function fixture(t){
  const attempt={launcher,intent:save(o+'intent.json',{request:originalRequest,sameReleaseOperation:true,argv:[node.path,oldEntry.path,'resume',journal.directory,id]}),exit:save(o+'exit.json',{finishedAtMilliseconds:at-1,returnCode:2}),
   childResult:save(o+'default-child-result.json',{automaticNewOperationPermitted:false,logBoundExceeded:false,originalChildClosed:true,returnCode:2}),stdout:save(o+'stdout.json',{...journal.deliveryStatus(id,at)})};
  const operatorSources={private:{root:basename(app)==='edition3'?dirname(app):join(dir,'current-private'),repository:'HatimTheDream/Nova-Dream',branch:'operator/publication-continuation-r1',commit:'e'.repeat(40)},public:{root:basename(app)==='edition3'?join(dir,'current-public'):app,repository:'HatimTheDream/Nova-Dream-Public',branch:'operator/publication-continuation-r1',commit:'f'.repeat(40)}};
+ // The authority always references the private operator entry, including in the standalone public layout.
+ if(basename(app)!=='edition3')save('current-private/edition3/scripts/release-deliver.mjs',readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));
  const request={format:1,kind:'nova-expired-publication-request',operationId:id,historical:{root:oldRoot,manifest:save('original-graph.json',{format:1,adapterIdentity:d.adapterIdentity,sourceFiles:[oldAdapter,oldEntry]})},owner:{request:originalRequest,attempts:[attempt]},operatorSources,ciRuns:{private:10,public:20},durationMs:60000,publication:{key:reserved.intent.key,inputSha256:reserved.intent.inputSha256,observationSha256:sha256(canonical(journal.deliveryPhase(id,'publication').current))},browser:{predecessor:save('browser-original.json',{synthetic:true}),status:save('browser-closed.json',{synthetic:true}),successorSessionId:randomUUID()}};
 
  const target=JSON.parse(readFileSync(d.target.path)),binding=browserBinding({descriptor:d,prior:{route:journal.deliveryPhase(id,'route').current.output,sign:journal.deliveryPhase(id,'sign').current.output}},target.browserTools,target.transport);
@@ -136,6 +138,7 @@ test('all seven completed package child identities are retained; a failed child 
 async function storageAdmissionFixture(f){
  const g=grantFixture(f),saved=g.grant(),authority=await verifyContinuationStorageAuthority({journal:f.journal,operationId:f.id,now:f.at});
  assert.equal(authority.continuationStarted,false);
+ assert(readFileSync(authority.operatorEntry.path).equals(readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url))));
  const originalDispatch=f.save('owner/release-dispatch.json',{synthetic:true}),dispatch=f.save('owner/continuations/'+saved.sha256+'/admission-0001/release-dispatch.json',{
   format:1,grantSha256:saved.sha256,request:f.request.owner.request,originalDispatch,automaticNewOperationPermitted:false,startedAtMilliseconds:f.at,
   storageResult:{state:'ready',historical:false,observationExpiresAtMilliseconds:f.at+120000}});
