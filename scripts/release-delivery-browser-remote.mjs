@@ -40,13 +40,19 @@ export function verifyRemoteBrowserSessionAlive(status,original,dir,now=Date.now
 export async function prepareRemoteBrowser(kept,context,{options,transport,inspectOnly=false,clock=Date.now,run}={}){
   const {dir}=kept;
   if(!kept.record){need(!inspectOnly,'browser-original-preparation-not-dispatched');await context.beforeNewEffect();
-    const now=clock();writeBrowserOnce(kept.path,{binding:kept.binding,startedAtMs:now,deadlineAtMs:now+options.timeoutMs});}
+    const now=clock();if(kept.binding.publicationContinuation)need(now+options.timeoutMs<=kept.binding.publicationContinuation.expiresAtMs,'browser-successor-budget-exceeds-grant');
+    writeBrowserOnce(kept.path,{binding:kept.binding,startedAtMs:now,deadlineAtMs:now+options.timeoutMs});}
   const original=read(kept.path),launch=join(dir,'remote-launch-intent.json');
   if(!existsSync(launch)){
     need(!inspectOnly,'browser-original-preparation-not-dispatched');
     const plan=await remoteBrowserCall(original,transport,'plan',{},run);need(plan.state==='planned'&&!plan.existingOperation,'browser-remote-operation-already-exists');
     writeBrowserOnce(join(dir,'remote-plan.json'),plan);const intent={operationId:original.binding.operationId,planSha256:plan.planSha256,originalSha256:plan.plan.originalSha256};
     await context.beforeNewEffect();writeBrowserOnce(launch,intent);await remoteBrowserCall(original,transport,'start',{intent},run);
+  }
+  if(Date.now()>=original.deadlineAtMs){
+    const status=keepStatus(dir,await remoteBrowserCall(original,transport,'status',{},run),original);
+    if(status.files.failed)throw Error(status.files.failed.reason);
+    need(!status.files.closed,'browser-original-session-closed');throw Error('browser-original-deadline-exhausted');
   }
   const deadline=Math.min(Date.now()+90000,original.deadlineAtMs);
   while(Date.now()<deadline){

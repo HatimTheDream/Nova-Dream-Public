@@ -43,6 +43,13 @@ def json_file(path):
     if not path.exists():return None
     need(path.is_file() and not path.is_symlink() and path.stat().st_size<2097152,'browser-remote-result-not-bounded-file')
     return json.loads(path.read_bytes())
+def browser_session_scope(root,binding):
+    operation=str(uuid.UUID(binding['operationId']))
+    need(operation==binding['operationId'],'browser-remote-input-invalid')
+    session=binding.get('sessionId',operation)
+    need(str(uuid.UUID(session))==session and ('sessionId' not in binding or session!=operation),'browser-successor-session-invalid')
+    return session,pathlib.Path(root)/session,'nova-browser-'+session
+
 def main(data):
     import pwd
     need(os.geteuid()==0,'browser-remote-root-required')
@@ -53,7 +60,28 @@ def main(data):
     who=pwd.getpwnam(options['user']);need(who.pw_uid>0,'browser-remote-user-must-be-unprivileged')
     root=pathlib.Path(options['directoryRoot']);protected(root,True)
     need(root.stat().st_gid==who.pw_gid and root.stat().st_mode&0o777==0o750,'browser-remote-parent-access-changed')
-    path=root/operation;unit='nova-browser-'+operation;unit_state=lambda: subprocess.run(['systemctl','show',unit+'.service','--property=ActiveState,SubState,MainPID,ExecMainStatus'],capture_output=True,text=True,timeout=10).stdout
+    session,path,unit=browser_session_scope(root,binding)
+    unit_state=lambda: subprocess.run(['systemctl','show',unit+'.service','--property=ActiveState,SubState,MainPID,ExecMainStatus'],capture_output=True,text=True,timeout=10).stdout
+    if session!=operation:
+        lineage=binding.get('browserPredecessor');grant=binding.get('publicationContinuation')
+        need(isinstance(lineage,dict) and set(lineage)=={'original','status'} and isinstance(grant,dict) and set(grant)=={'request','issuedAtMs','expiresAtMs'},'browser-successor-lineage-invalid')
+        for ref in (lineage['original'],lineage['status'],grant['request']):need(isinstance(ref,dict) and set(ref)=={'path','sha256'} and re.fullmatch('[a-f0-9]{64}',ref['sha256']),'browser-successor-reference-invalid')
+        predecessor=root/operation
+        need(predecessor.is_dir() and not predecessor.is_symlink(),'browser-successor-predecessor-missing')
+        before=json_file(predecessor/'original.json')
+        need((predecessor/'original.json').stat().st_uid==0 and digest(canonical(before)+b'\n')==lineage['original']['sha256'],'browser-successor-predecessor-changed')
+        base={k:v for k,v in binding.items() if k not in ('sessionId','browserPredecessor','publicationContinuation')}
+        need(before['binding']==base and original['startedAtMs']>=before['deadlineAtMs'] and original['startedAtMs']>=grant['issuedAtMs'] and original['deadlineAtMs']<=grant['expiresAtMs'],'browser-successor-target-or-clock-changed')
+        if mode in ('plan','start'):
+            failed=json_file(predecessor/'failed.json');closed=json_file(predecessor/'closed.json')
+            need(failed and failed.get('operationId')==operation and failed.get('reason')=='browser-original-deadline-exhausted' and closed and closed.get('operationId')==operation and closed.get('browserClosed') is True and closed.get('tunnelClosed') is True and not json_file(predecessor/'acceptance.json'),'browser-successor-closed-predecessor-required')
+            old_unit='nova-browser-'+operation+'.service'
+            old_state=subprocess.run(['systemctl','show',old_unit,'--property=ActiveState,MainPID'],capture_output=True,text=True,timeout=10).stdout
+            need(re.search(r'ActiveState=(inactive|failed)\n',old_state) and 'MainPID=0\n' in old_state,'browser-successor-predecessor-unit-active')
+            for proc in pathlib.Path('/proc').iterdir():
+                if proc.name.isdigit():
+                    try:need(old_unit not in (proc/'cgroup').read_text(),'browser-successor-predecessor-process-active')
+                    except (FileNotFoundError,ProcessLookupError):pass
     original_bytes=canonical(original)+b'\n'
     source={name:base64.b64decode(data['sources'][name]['base64'],validate=True) for name in NAMES}
     for name,value in source.items():need(len(value)<262144 and digest(value)==data['sources'][name]['sha256'],'browser-remote-worker-source-changed')
@@ -61,6 +89,7 @@ def main(data):
     plan={'format':1,'kind':'nova-remote-browser-plan','operationId':operation,'directory':str(path),'unit':unit,'uid':who.pw_uid,'gid':who.pw_gid,
           'workerSha256':worker_sha,'originalSha256':digest(original_bytes),'node':options['node'],'executable':options['executable'],'playwrightSha256':options['playwright']['sha256'],
           'memoryMaxBytes':MEMORY_MAX_BYTES,'hostReserveBytes':HOST_RESERVE_BYTES}
+    if session!=operation:plan['sessionId']=session
     if mode in ('plan','start'):
         need(time.time()*1000<original['deadlineAtMs'] and original['deadlineAtMs']==original['startedAtMs']+options['timeoutMs'] and 300000<=options['timeoutMs']<=1800000,'browser-original-deadline-exhausted')
         bytes_ref(options['node']);bytes_ref(options['executable'],536870912)

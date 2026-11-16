@@ -24,7 +24,7 @@ cpSync(zodRoot, join(app, 'node_modules', 'zod'), { recursive: true });
 writeFileSync(join(app, 'package.json'), '{"type":"module"}\n');
 const { sha256 } = await import(pathToFileURL(join(app, 'scripts', 'release-plan.mjs')));
 const { deliveryAdapterIdentity, deliveryAdapterSourceFiles } = await import(pathToFileURL(join(app, 'scripts', 'release-delivery-adapters.mjs')));
-const { routeStorageDelivery, verifyStorageSession, storageDefaultConfiguration } = await import(pathToFileURL(join(app, 'scripts', 'release-storage-default.mjs')));
+const { routeStorageDelivery, verifyStorageSession, verifyReconciliationSession, continuationSessionAuthorityMatches, storageDefaultConfiguration } = await import(pathToFileURL(join(app, 'scripts', 'release-storage-default.mjs')));
 const entry = join(app, 'scripts', 'release-deliver.mjs');
 const coordinate = join(app, 'scripts', 'release-coordinate.mjs');
 const ref = path => ({ path: resolve(path), sha256: sha256(readFileSync(path)) });
@@ -206,4 +206,69 @@ test('read-only/checkpoint/reconcile modes do not load storage config; module is
     { env: { NOVA_RELEASE_STORAGE_CONFIG: 'invalid' } }), { handled: false });
   assert.ok(deliveryAdapterSourceFiles().includes('release-storage-default.mjs'));
   assert.throws(() => storageDefaultConfiguration({ env: { NOVA_RELEASE_STORAGE_CONFIG: 'relative.json' } }), /storage-absolute-path-required/);
+});
+
+
+function reconciliationFixture(t,mode='reconcile-publication'){
+  const f=fixture(t),request=f.put('reconciliation-request.json',{operationId:f.id});
+  f.config.operatorContinuation={operationId:f.id,journalDirectory:f.journalDirectory,originalRequest:f.session.request};
+  writeFileSync(f.configRef.path,JSON.stringify(f.config)+'\n');
+  const configRef=ref(f.configRef.path),args=[mode,f.journalDirectory,f.id,request.path];
+  const waiting=f.put('waiting-launcher.json',{kind:'verified-waiting-release-launcher',mode,operationId:f.id,
+    worker:{pid:process.ppid},entry:ref(entry),config:configRef});
+  const session={format:1,kind:mode==='reconcile-publication'?'nova-storage-publication-reconciliation-session':'nova-storage-prepackage-reconciliation-session',
+    mode,operationId:f.id,config:configRef,sourceReview:f.config.sourceReview,storageReview:f.config.storageReview,
+    request:f.session.request,reconciliationRequest:request,initialization:f.session.initialization,descriptor:f.session.descriptor,
+    sourceGraph:f.session.sourceGraph,adapterIdentity:f.session.adapterIdentity,argv:[process.execPath,entry,...args],
+    runnerPid:process.ppid,waitingLauncher:waiting,issuedAtMilliseconds:f.now};
+  const save=()=>{const r=f.put(f.op+'/reconciliations/reconciliation-0001/session.json',session);f.env.NOVA_RELEASE_STORAGE_SESSION=r.path;};
+  save();return {...f,args,session,save};
+}
+test('both bounded reconciliation modes require the exact storage-owner session',async t=>{
+  for(const mode of ['reconcile-prepackage','reconcile-publication']){
+    const f=reconciliationFixture(t,mode);
+    assert.equal((await verifyReconciliationSession(f.args,entry,{env:f.env,clock:()=>f.now})).operationId,f.id);
+    assert.equal(existsSync(f.journalDirectory),false);
+  }
+});
+test('publication reconciliation refuses changed mode, owner, request, graph and expired session',async t=>{
+  for(const change of ['mode','owner','request','graph','expired']){
+    const f=reconciliationFixture(t);
+    if(change==='mode')f.session.mode='reconcile-prepackage';
+    if(change==='owner')f.session.runnerPid++;
+    if(change==='request')f.session.reconciliationRequest=f.put('other-reconciliation.json',{operationId:f.id});
+    if(change==='graph')f.session.adapterIdentity='0'.repeat(64);
+    if(change==='expired')f.session.issuedAtMilliseconds-=300001;
+    f.save();
+    await assert.rejects(verifyReconciliationSession(f.args,entry,{env:f.env,clock:()=>f.now}),/storage-reconciliation-/);
+    assert.equal(existsSync(f.journalDirectory),false);
+  }
+});
+test('publication grant routes through the configured guarded runner, not raw delivery',async t=>{
+  const f=fixture(t);delete f.env.NOVA_RELEASE_STORAGE_SESSION;
+  const request=f.put('publication-request.json',{operationId:f.id}),calls=[];
+  const result=await routeStorageDelivery(['reconcile-publication',f.journalDirectory,f.id,request.path],entry,{env:f.env,
+    launch:async(executable,argv)=>{calls.push({executable,argv});return{code:0,value:{state:'continuation-granted',complete:false}};}});
+  assert.equal(result.result.complete,false);assert.equal(calls.length,1);
+  assert.equal(calls[0].executable,process.execPath);
+  assert.deepEqual(calls[0].argv.slice(-6),['--journal',f.journalDirectory,'--operation',f.id,'--reconciliation-request',request.path]);
+  assert.equal(calls[0].argv[calls[0].argv.indexOf('--mode')+1],'reconcile-publication');
+  assert.equal(existsSync(f.journalDirectory),false);
+});
+
+test('only the recorded first continuation session may reenter after its admission marker',()=>{
+  const session={path:resolve('synthetic-session.json'),sha256:'a'.repeat(64)},dispatch={path:resolve('synthetic-dispatch.json'),sha256:'b'.repeat(64)};
+  const before={grantSha256:'c'.repeat(64),continuationStarted:false,newEffectsAllowed:true,expiresAtMs:12345};
+  const current={...before,continuationStarted:true},admission={grantSha256:before.grantSha256,session,dispatch};
+  assert.equal(continuationSessionAuthorityMatches(before,current,admission,session,dispatch),true);
+  assert.equal(continuationSessionAuthorityMatches(current,current,null,session,dispatch),true);
+  for(const [saved,authority,record,sr,dr]of[
+    [before,current,null,session,dispatch],
+    [before,current,admission,{...session,sha256:'d'.repeat(64)},dispatch],
+    [before,current,admission,session,{...dispatch,path:resolve('other-dispatch.json')}],
+    [before,{...current,newEffectsAllowed:false},admission,session,dispatch],
+    [before,{...current,expiresAtMs:12346},admission,session,dispatch],
+    [before,current,{...admission,grantSha256:'e'.repeat(64)},session,dispatch],
+    [null,null,admission,session,dispatch]
+  ])assert.equal(continuationSessionAuthorityMatches(saved,authority,record,sr,dr),false);
 });

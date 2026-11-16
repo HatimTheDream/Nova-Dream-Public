@@ -112,6 +112,14 @@ function verifyCapacityProof(checked, storageInput, budget) {
 
 /** Stable evidence is required even on resume; only the old capacity admission's
  * age may be retained. The maintained producers refresh their effect-time checks. */
+export function continuationSessionAuthorityMatches(saved,current,admission,sessionRef,dispatchRef){
+  if(!saved||!current)return false;
+  if(same(saved,current))return true;
+  return Boolean(admission&&saved?.continuationStarted===false&&current?.continuationStarted===true
+    &&admission.grantSha256===current.grantSha256&&same(admission.session,sessionRef)&&same(admission.dispatch,dispatchRef)
+    &&same(saved,{...current,continuationStarted:false}));
+}
+
 export async function verifyStorageSession(args, entry, { env = process.env, clock = Date.now, now = clock(), executable = process.execPath } = {}) {
   need(typeof env.NOVA_RELEASE_STORAGE_SESSION === 'string' && env.NOVA_RELEASE_STORAGE_SESSION.length > 0,
     'storage-session-required-use-release-deliver');
@@ -133,7 +141,7 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   const request = document(session.request), dispatch = document(session.dispatch), intent = document(session.observationIntent);
   const initialization = document(session.initialization), descriptor = document(session.descriptor), graph = document(session.sourceGraph);
   const start = document(request.releaseInput), profile = document(start.profile), target = document(profile.target);
-  let continuation=null,originalConfig=config,preJournalProof=null;
+  let continuation=null,originalConfig=config,preJournalProof=null,publicationContinuation=false,publicationAdmission=null;
   if(config.operatorContinuation){
     const c=config.operatorContinuation;
     need((session.mode==='resume'||session.mode==='start'&&c.preJournalProof)&&c.operationId===session.operationId&&same(c.originalRequest,session.request)
@@ -146,9 +154,13 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
       continuation=await verifyPreJournalStorageAuthority({proofReference:preJournalProof,entry,operationId:session.operationId,journalDirectory:initialization.journalDirectory,now});
     }else{
       const journal=new ReleaseJournal(c.journalDirectory,{create:false,readOnly:true});
-      try{continuation=await verifyContinuationStorageAuthority({journal,operationId:session.operationId,entry,now});}finally{journal.close();}
+      try{
+        continuation=await verifyContinuationStorageAuthority({journal,operationId:session.operationId,entry,now});
+        publicationContinuation=journal.deliveryOperatorContinuation(session.operationId)?.proof.kind==='nova-expired-publication-continuation';
+        if(publicationContinuation)publicationAdmission=journal.deliveryPublicationContinuationAdmission(session.operationId)?.admission??null;
+      }finally{journal.close();}
     }
-    need(same(session.operatorContinuation,continuation)&&continuation.descriptorSha256===sha256(encoded(descriptor).subarray(0,-1)),'storage-continuation-authority-changed');
+    need(continuationSessionAuthorityMatches(session.operatorContinuation,continuation,publicationAdmission,sessionRef,session.continuationDispatch)&&continuation.descriptorSha256===sha256(encoded(descriptor).subarray(0,-1)),'storage-continuation-authority-changed');
   }else need(session.operatorContinuation===undefined&&session.continuationDispatch===undefined,'storage-unconfigured-continuation');
   need(request.format === 1 && request.operationId === session.operationId && start.operationId === session.operationId
     && same(request.independentSourceReview, originalConfig.storageReview), 'storage-original-request-changed');
@@ -221,6 +233,12 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   if (session.mode === 'start'&&!preJournalProof) need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= finishedAt + 5000, 'fresh-storage-required-before-start');
   if(continuation&&!continuation.continuationStarted)need(finishedAt<continuation.expiresAtMs&&finishedAt<=continuedDispatch.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
+  if(publicationContinuation&&!publicationAdmission){
+    const {ReleaseJournal}=await import('./release-coordinate.mjs'),journal=new ReleaseJournal(initialization.journalDirectory,{create:false});
+    try{const at=clock();journal.recordPublicationContinuationAdmission(session.operationId,{format:1,kind:'nova-publication-continuation-storage-admission',
+      operationId:session.operationId,grantSha256:continuation.grantSha256,dispatch:reference(session.continuationDispatch),session:sessionRef,verifiedAtMs:at},at);}
+    finally{journal.close();}
+  }
   return { operationId: session.operationId, journalDirectory: initialization.journalDirectory, descriptor: session.descriptor,
     ...(preJournalProof?{preJournalProof}:{} ) };
 }
@@ -229,10 +247,11 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
  * this child. This permit cannot launch a delivery or bypass storage admission. */
 export async function verifyReconciliationSession(args,entry,{env=process.env,clock=Date.now}={}){
   const loaded=storageDefaultConfiguration({env}),{config}=loaded,c=config.operatorContinuation;
-  need(c&&args.length===4&&args[0]==='reconcile-prepackage'&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
+  const mode=args[0],sessionKind={ 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session' }[mode];
+  need(c&&sessionKind&&args.length===4&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
   const sr=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),s=document(sr),root=join(canonical(config.operationsRoot),'release-'+c.operationId);
   need(/^reconciliations[\\/]reconciliation-[0-9]{4,}[\\/]session\.json$/.test(relative(root,sr.path)),'storage-reconciliation-session-location-changed');
-  need(s.format===1&&s.kind==='nova-storage-prepackage-reconciliation-session'&&s.mode==='reconcile-prepackage'&&s.operationId===c.operationId
+  need(s.format===1&&s.kind===sessionKind&&s.mode===mode&&s.operationId===c.operationId
     &&same(s.config,loaded.ref)&&same(s.sourceReview,config.sourceReview)&&same(s.storageReview,config.storageReview)
     &&same(s.request,c.originalRequest)&&same(s.reconciliationRequest,inputReference(resolve(args[3]))),'storage-reconciliation-session-changed');
   const request=document(s.request),start=document(request.releaseInput),init=document(s.initialization),d=document(s.descriptor),graph=document(s.sourceGraph),waiting=document(s.waitingLauncher);
@@ -240,7 +259,7 @@ export async function verifyReconciliationSession(args,entry,{env=process.env,cl
     &&d.operation.id===c.operationId&&same(d.operation.sourceCommits,start.sourceCommits),'storage-reconciliation-original-initialization-changed');
   const actual=canonical(entry),expected=join(canonical(config.applicationRoots[0]),'scripts/release-deliver.mjs');
   need(actual===expected&&same(s.argv,[request.node.path,actual,...args])&&Number.isSafeInteger(s.runnerPid)&&s.runnerPid===process.ppid
-    &&waiting.kind==='verified-waiting-release-launcher'&&waiting.mode==='reconcile-prepackage'&&waiting.operationId===c.operationId
+    &&waiting.kind==='verified-waiting-release-launcher'&&waiting.mode===mode&&waiting.operationId===c.operationId
     &&waiting.worker.pid===s.runnerPid&&same(waiting.entry,inputReference(actual))&&same(waiting.config,loaded.ref),'storage-reconciliation-lock-owner-changed');
   const A=await import('./release-delivery-adapters.mjs'),expectedGraph=A.deliveryAdapterSourceFiles().map(n=>inputReference(fileURLToPath(new URL(n,import.meta.url))));
   need(s.adapterIdentity===A.deliveryAdapterIdentity()&&graph.adapterIdentity===s.adapterIdentity&&same(graph.sourceFiles,expectedGraph),'storage-reconciliation-current-graph-changed');
@@ -264,14 +283,15 @@ function runRunner(executable, args) {
 }
 
 export async function routeStorageDelivery(args, entry, { env = process.env, launch = runRunner } = {}) {
-  if (!['start', 'resume','reconcile-prepackage'].includes(args[0])) return { handled: false };
+  const reconcile=['reconcile-prepackage','reconcile-publication'].includes(args[0]);
+  if (!['start', 'resume','reconcile-prepackage','reconcile-publication'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
-    if(args[0]==='reconcile-prepackage')await verifyReconciliationSession(args,entry,{env});
+    if(reconcile)await verifyReconciliationSession(args,entry,{env});
     else {const permit=await verifyStorageSession(args, entry, { env });return {handled:false,...(permit.preJournalProof?{preJournalProof:permit.preJournalProof}:{})};}
     return { handled: false };
   }
   const mode = args[0];
-  need(mode === 'start' ? (args.length === 2 || (args.length === 4 && args[2] === '--storage-budget')) : mode==='reconcile-prepackage'?args.length===4:args.length === 3,
+  need(mode === 'start' ? (args.length === 2 || (args.length === 4 && args[2] === '--storage-budget')) : reconcile?args.length===4:args.length === 3,
     'storage-required-use-release-deliver-start-input');
   const { ref, config } = storageDefaultConfiguration({ env }), actualEntry = canonical(entry);
   need(config.applicationRoots.some(root => join(canonical(root), 'scripts', 'release-deliver.mjs') === actualEntry), 'storage-entry-not-configured');
@@ -282,12 +302,12 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     if (args.length === 4) argv.push('--budget', absolute(resolve(args[3])));
   } else {
     need(uuid(args[2]), 'storage-original-operation-required'); argv.push('--journal', absolute(resolve(args[1])), '--operation', args[2]);
-    if(mode==='reconcile-prepackage')argv.push('--reconciliation-request',absolute(resolve(args[3])));
+    if(reconcile)argv.push('--reconciliation-request',absolute(resolve(args[3])));
   }
   const { code, value } = await launch(config.python.path, argv);
   need(value && typeof value === 'object' && ['complete', 'release-pending', 'acceptance-or-storage-gap', 'original-start-not-observed', 'stopped', 'continuation-granted'].includes(value.state),
     'storage-runner-result-invalid');
   const complete = value.state === 'complete' && value.release?.complete === true && value.storageCloseoutPerformed === true;
-  need(code !== 0 || complete || mode==='reconcile-prepackage'&&value.state==='continuation-granted', 'storage-runner-incomplete-success-rejected');
+  need(code !== 0 || complete || reconcile&&value.state==='continuation-granted', 'storage-runner-incomplete-success-rejected');
   return { handled: true, result: { ...value, complete } };
 }

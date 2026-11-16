@@ -60,6 +60,67 @@ class OriginalChildTests(unittest.TestCase):
   request={'binding':None,'helperHashes':{n:hashlib.sha256((HERE/n).read_bytes()).hexdigest() for n in M.NAMES}}
   source=M.program(request,'facts').decode();self.assertLess(source.index('hashlib.sha256'),source.index('exec(compile'));self.assertIn('signal.alarm(300)',source)
 
+ def test_restored_facts_reach_unchanged_remote_boundary_without_projection(self):
+  import runpy
+  restored_tests=runpy.run_path(str(HERE.parent/'tests/release-prestage-restored.test.py'))
+  original=restored_tests['RestoredFacts']().fixture()[0]
+  with tempfile.TemporaryDirectory() as tmp:
+   request=original_prepare_request(pathlib.Path(tmp));request.update(binding={'FACTS_INPUT':original},files={})
+   with patch.object(M,'remote',return_value={'readOnly':True,'hostWrites':False}) as remote:
+    result=M.produce('facts',request)
+    self.assertEqual(result['state'],'completed')
+    self.assertEqual(remote.call_args.args,(request,'facts'))
+    self.assertEqual(remote.call_args.args[0]['binding']['FACTS_INPUT'],original)
+   root=pathlib.Path(request['outputDirectory'])
+   self.assertEqual(list(root.iterdir()),[])
+ def test_unknown_facts_kind_or_asset_payload_refuses_before_remote_or_directory(self):
+  for kind,with_files in [('explicit-other-prior-facts',False),('explicit-restored-prior-facts',True)]:
+   with self.subTest(kind=kind,with_files=with_files),tempfile.TemporaryDirectory() as tmp:
+    request=original_prepare_request(pathlib.Path(tmp))
+    request['binding']={'FACTS_INPUT':{'kind':kind}}
+    if not with_files:request['files']={}
+    with patch.object(M,'remote') as remote,self.assertRaisesRegex(RuntimeError,'prestage-facts-input-scope'):
+     M.produce('facts',request)
+    remote.assert_not_called();self.assertFalse(pathlib.Path(request['outputDirectory']).exists())
+ def test_upload_uses_qualified_gnu_timeout_and_keeps_one_exclusive_nonroot_attempt(self):
+  import shlex
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory() as tmp:
+   request=original_prepare_request(pathlib.Path(tmp))
+   with patch.object(M.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'',stderr=b'')) as remote:
+    result=M.produce('upload-bundle',request)
+    command=remote.call_args.args[0]
+    self.assertEqual(command[:-1],M.argv(request))
+    self.assertEqual(shlex.split(command[-1]),['/usr/bin/gnutimeout','--signal=TERM','--kill-after=5s','300s','/bin/sh','-c',
+     'umask 077; set -C; cat > '+request['binding']['INCOMING']+'/bundle.json'])
+    self.assertEqual(remote.call_args.kwargs['timeout'],330)
+    self.assertNotIn('sudo',command[-1])
+    self.assertTrue(result['output']['authenticatedSourcePreserved'])
+    self.assertTrue(result['output']['transferred'])
+    with self.assertRaises(FileExistsError):M.produce('upload-bundle',request)
+    self.assertEqual(remote.call_count,1)
+ def test_timed_out_upload_keeps_original_dispatch_and_observation_never_resends(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   request=original_prepare_request(pathlib.Path(tmp));directory=pathlib.Path(request['outputDirectory'])
+   with patch.object(M.subprocess,'run',side_effect=M.subprocess.TimeoutExpired('owned-upload',330)) as upload:
+    with self.assertRaises(M.subprocess.TimeoutExpired):M.produce('upload-bundle',request)
+    intent=(directory/'upload-bundle-dispatch.json').read_bytes()
+    with self.assertRaises(FileExistsError):M.produce('upload-bundle',request)
+    with patch.object(M,'remote',return_value={'readOnly':True,'hostWrites':False}) as observer:
+     result=M.produce('transfer-observe',request)
+     self.assertEqual(observer.call_args.args[1],'transfer-observe')
+     self.assertEqual(result['state'],'completed')
+    self.assertEqual((directory/'upload-bundle-dispatch.json').read_bytes(),intent)
+    self.assertEqual(upload.call_count,1)
+
+ def test_verify_plan_is_readonly_and_never_reserves_an_effect(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   request=original_prepare_request(pathlib.Path(tmp));directory=pathlib.Path(request['outputDirectory'])
+   with patch.object(M,'remote',return_value={'readOnly':True,'hostWrites':False}) as remote:
+    result=M.produce('verify-plan',request)
+    self.assertEqual(result['state'],'completed');self.assertEqual(remote.call_args.args[1],'verify-plan')
+   self.assertEqual(list(directory.iterdir()),[])
+
 class RootPrimitiveTests(unittest.TestCase):
  def functions(self,*names):
   source=(HERE/'full-host-primitives/asset-stage.py').read_bytes();tree=ast.parse(source);nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
@@ -85,6 +146,23 @@ class RootPrimitiveTests(unittest.TestCase):
    calls=[n.func.id for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)]
    self.assertNotIn('save',calls);self.assertNotIn('write',calls);self.assertNotIn('sync',calls)
   observe=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='observe_original');self.assertIn('Observed destination artifact bytes changed.',ast.unparse(observe))
+
+ def test_host_verify_plan_delegates_exact_raw_plan_check_and_returns_before_writes(self):
+  import argparse,contextlib,io,os,signal,sys
+  s=self.functions('main');verified=[]
+  s.update(argparse=argparse,json=json,os=os,frozen_gate=lambda:None,preflight=lambda:'/protected/staging',
+   BUNDLE='a'*64,SPECS={'app-dependencies.tgz':(1,'b'*64)},JOB='original-job',
+   CURRENT_FACTS={'result':{'sha256':'c'*64}},PROOF='d'*64,INCOMING='/var/tmp/original',
+   NONCE='original-nonce',STAGE_INTENT={'planSha256':'e'*64},runtime_pins=lambda:{},
+   verify_dispatch_plan=lambda:verified.append(True),save=lambda *_args:self.fail('readonly verification wrote host receipt'))
+  output=io.StringIO()
+  with patch.object(sys,'argv',['asset-stage','verify-plan']),patch.object(os,'geteuid',return_value=0,create=True),\
+       patch.object(os,'umask'),patch.dict(os.environ,SUDO_UID='1000',SUDO_GID='1000'),\
+       patch.object(signal,'SIGALRM',14,create=True),patch.object(signal,'signal'),patch.object(signal,'alarm',create=True),contextlib.redirect_stdout(output):
+   s['main']()
+  self.assertEqual(verified,[True]);result=json.loads(output.getvalue())
+  self.assertEqual(result,dict(format=1,kind='exact-full-private-prestage-plan-reverified',readOnly=True,hostWrites=False,
+   planSha256='e'*64,bundleSha256='a'*64,nonce='original-nonce'))
 
 class MetadataStageTests(unittest.TestCase):
  @classmethod

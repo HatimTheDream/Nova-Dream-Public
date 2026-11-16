@@ -9,7 +9,7 @@ import { verifyFullPremaintenanceArtifacts,verifyFullCompletion,collectFullOnlin
 import { buildFullCoordinatorDescriptor } from './release-delivery-install.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
-import { advanceFullPrestage,verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
+import { advanceFullPrestage,verifyFullProtectedAssets,planFullPrestageContinuation,verifyFullPrestageContinuation } from './release-delivery-full-prestage.mjs';
 import { withVerificationPass,verificationOnce,verificationEffect } from './release-verification-pass.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
@@ -170,4 +170,21 @@ export function createFullPublicationAdapter({tools,releaseIds,options,transport
    if(v.state!=='completed')return;
    return withVerificationPass(c,c=>verifyResult(v,c,verifyFullPublicationInput(c.intent.input,c.descriptor,clock(),c)),{readOnly:true});
   }};
+}
+
+function fullPublicationContinuationInputs(c,{tools,releaseIds,options,clock=Date.now}){
+ need(same(c.input??c.intent.input,fullPublicationInput({...c,tools,releaseIds,options})),'full-publication-continuation-input-changed');
+ const specs=verifyFullPublicationInput(c.intent.input,c.descriptor,clock(),c),record=retained(c,'full-assets.json');
+ need(record&&record.value.kind==='nova-delivery-full-assets'&&record.value.operationId===c.descriptor.operation.id
+  &&record.value.key===c.intent.key&&record.value.inputSha256===c.intent.inputSha256&&record.value.assets.length===specs.length,'full-publication-continuation-authenticated-assets-required');
+ specs.forEach((spec,i)=>verifyFullPublishedAsset(record.value.assets[i],spec,c));
+ return{assets:record.value.assets,assetsReceipt:record.ref};
+}
+export async function planFullPublicationContinuation(c,args){
+ const checked=fullPublicationContinuationInputs(c,args);
+ return planFullPrestageContinuation(c,{...args,...checked,options:args.options.host});
+}
+export async function verifyFullPublicationContinuationPlan(ref,c,args){
+ const checked=fullPublicationContinuationInputs(c,args);
+ return verifyFullPrestageContinuation(ref,c,{...args,...checked,options:args.options.host});
 }

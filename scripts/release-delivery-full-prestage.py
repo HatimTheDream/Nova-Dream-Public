@@ -19,7 +19,7 @@ def inspect(request):
  root=P(request['outputDirectory']);need(root.is_absolute() and root.parent.resolve(strict=True)==root.parent and root.name=='full-prestage-'+request['key'],'prestage-output-scope');need(not root.is_symlink(),'prestage-output-redirected')
  binding=request['binding']
  if binding is not None and set(binding)=={'FACTS_INPUT'}:
-  need(set(request['files'])==set() and binding['FACTS_INPUT']['kind'] in ('explicit-no-start-prior-facts','explicit-unchanged-prior-facts'),'prestage-facts-input-scope')
+  need(set(request['files'])==set() and binding['FACTS_INPUT']['kind'] in ('explicit-no-start-prior-facts','explicit-unchanged-prior-facts','explicit-restored-prior-facts'),'prestage-facts-input-scope')
  elif binding is not None:
   runtime=binding.get('RUNTIME')
   fields={'BUNDLE','BUNDLE_BYTES','TARGET','PRIOR','PRIOR_VERSION','EPOCH','JOB','LEASE','PROOF','INCOMING','NONCE','SPECS','CURRENT_FACTS','CAPACITY','EXCLUDED','acceptedInstallation','hostConfiguration','STAGE_PLAN','STAGE_INTENT','STAGE_PLAN_RAW_BASE64'}
@@ -48,7 +48,7 @@ def remote(request,mode):
  return {'remoteResult':json.loads(r.stdout),'stdoutRawBase64':base64.b64encode(r.stdout).decode(),'stdoutSha256':sha(r.stdout),'stderrSha256':sha(r.stderr)}
 def produce(mode,request):
  root=inspect(request);effect=mode in ('prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage')
- need(mode in ('facts','plan','prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage','observe','transfer-observe'),'prestage-fixed-mode')
+ need(mode in ('facts','plan','verify-plan','prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage','observe','transfer-observe'),'prestage-fixed-mode')
  facts_input=request['binding'] is not None and set(request['binding'])=={'FACTS_INPUT'}
  need((mode=='facts' and (request['binding'] is None or facts_input)) or (mode!='facts' and request['binding'] is not None and not facts_input),'prestage-facts-binding-mode')
  if not root.exists():root.mkdir(mode=0o700)
@@ -57,8 +57,8 @@ def produce(mode,request):
  if effect:F.save(root/(mode+'-dispatch.json'),intent)
  if mode.startswith('upload-'):
   name={'upload-bundle':'bundle.json','upload-dependencies':'app-dependencies.tgz','upload-runtime':'runtime.tgz'}[mode];path=P(request['files'][name]['path']);expected=request['binding']['SPECS'][name];incoming=request['binding']['INCOMING']
-  # Same qualified nonroot, exclusive, 300-second transfer as release234.
-  command='/usr/lib/cargo/bin/coreutils/timeout --signal=TERM --kill-after=5s 300s /bin/sh -c '+shlex.quote('umask 077; set -C; cat > '+incoming+'/'+name)
+  # Qualified GNU process-group timeout; retain nonroot exclusive writes and the finite transfer bound.
+  command='/usr/bin/gnutimeout --signal=TERM --kill-after=5s 300s /bin/sh -c '+shlex.quote('umask 077; set -C; cat > '+incoming+'/'+name)
   before=path.stat();identity=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_nlink)
   with path.open('rb') as source:
    need(identity(os.fstat(source.fileno()))==identity(before),'prestage-transfer-source-replaced')
@@ -69,7 +69,7 @@ def produce(mode,request):
  else:value=remote(request,mode)
  return {'state':'completed','reason':'full-prestage-'+mode+'-observed','externalId':request['operationId'],'receipt':None,'output':value}
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('mode',choices=('facts','plan','prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage','observe','transfer-observe'));p.add_argument('--request',type=P,required=True);p.add_argument('--request-sha256',required=True);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('mode',choices=('facts','plan','verify-plan','prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage','observe','transfer-observe'));p.add_argument('--request',type=P,required=True);p.add_argument('--request-sha256',required=True);a=p.parse_args()
  try:
   raw=F.raw(a.request,2*1024**2);need(sha(raw)==a.request_sha256,'prestage-request-changed');value=produce(a.mode,json.loads(raw))
  except Exception as error:value={'state':'uncertain','reason':'full-original-prestage-unsettled','externalId':None,'receipt':None,'output':None,'privateDiagnostic':{'type':type(error).__name__[:100],'message':str(error)[:1000]}}

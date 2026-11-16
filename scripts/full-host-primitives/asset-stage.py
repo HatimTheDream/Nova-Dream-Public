@@ -202,17 +202,17 @@ def stage_capacity(paid_copies=0):
 
 def transfer_timeout_identity():
  # Exact executable authority, distinct from private single-link evidence.
- # Ubuntu supplies this canonical multicall entry as a protected hardlink.
- path=P('/usr/lib/cargo/bin/coreutils/timeout');protect(path.parent,True)
+ # GNU coreutils 9.7 supplies this canonical single-link executable.
+ path=P('/usr/bin/gnutimeout');protect(path.parent,True)
  require(path.resolve(strict=True)==path,'Timeout executable redirected.')
  def identity(s):return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
  before=path.lstat()
- require(stat.S_ISREG(before.st_mode) and before.st_uid==0 and before.st_gid==0 and stat.S_IMODE(before.st_mode)==0o755 and before.st_nlink==115 and before.st_size==11352352,'Exact timeout executable authority changed.')
+ require(stat.S_ISREG(before.st_mode) and before.st_uid==0 and before.st_gid==0 and stat.S_IMODE(before.st_mode)==0o755 and before.st_nlink==1 and before.st_size==39968,'Exact timeout executable authority changed.')
  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
  try:
   require(identity(os.fstat(fd))==identity(before),'Timeout executable replaced.')
-  with os.fdopen(fd,'rb',closefd=False) as stream:data=stream.read(11352353)
-  require(len(data)==11352352 and hashlib.sha256(data).hexdigest()=='48893b0fb21436b54619db80486e83ef39dfccaf1aefe83dfa00c02d6146e8c0' and identity(os.fstat(fd))==identity(before) and identity(path.lstat())==identity(before),'Timeout executable bytes changed.')
+  with os.fdopen(fd,'rb',closefd=False) as stream:data=stream.read(39969)
+  require(len(data)==39968 and hashlib.sha256(data).hexdigest()=='1ba715580334044dbd32873bddd7f8a19687cda1cf5e9f44be7266af6c048766' and identity(os.fstat(fd))==identity(before) and identity(path.lstat())==identity(before),'Timeout executable bytes changed.')
  finally:os.close(fd)
  return {'path':str(path),'sha256':hashlib.sha256(data).hexdigest(),'identity':list(identity(before))}
 
@@ -304,12 +304,15 @@ def main():
  import signal
  def finite_phase_timeout(_signum,_frame):raise TimeoutError('Original private staging phase exceeded 300 seconds; reconcile original intent and paths, never replay.')
  signal.signal(signal.SIGALRM,finite_phase_timeout);signal.alarm(300)
- parser=argparse.ArgumentParser();parser.add_argument('mode',choices=['plan','prepare-input','stage','observe','transfer-observe']);args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('mode',choices=['plan','verify-plan','prepare-input','stage','observe','transfer-observe']);args=parser.parse_args()
  if args.mode=='transfer-observe':observe_transfers();return
  if args.mode=='observe':observe_original();return
  frozen_gate();require(os.geteuid()==0,'Root required.');os.umask(0o077);destination=preflight();uid=int(os.environ['SUDO_UID']);gid=int(os.environ['SUDO_GID']);require(uid>0,'Fixed SSH nonroot transfer user required.')
  pins={'format':1,'bundleSha256':BUNDLE,'dependenciesSha256':SPECS['app-dependencies.tgz'][1],**runtime_pins(),'jobId':JOB,'completedResultSha256':CURRENT_FACTS['result']['sha256'],'proofSha256':PROOF,'incoming':str(INCOMING),'transferUid':uid,'automaticRetry':False}
  if args.mode=='plan':print(json.dumps(read_only_plan()));return
+ if args.mode=='verify-plan':
+  verify_dispatch_plan()
+  print(json.dumps({'format':1,'kind':'exact-full-private-prestage-plan-reverified','readOnly':True,'hostWrites':False,'planSha256':STAGE_INTENT['planSha256'],'bundleSha256':BUNDLE,'nonce':NONCE}));return
  if args.mode=='prepare-input':
   verify_dispatch_plan()
   require(not os.path.lexists(INCOMING) and not os.path.lexists(destination),'Existing incoming or destination evidence must be reconciled.')

@@ -10,7 +10,7 @@ import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
 import { reconcileCapabilityGap } from './release-delivery-capability-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
 import { routeStorageDelivery } from './release-storage-default.mjs';
-import { assertDeliveryOperator, operatorObservationDeadline, reconcileExpiredPrepackage, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import { assertDeliveryOperator, operatorObservationDeadline, reconcileExpiredPrepackage, reconcileExpiredPublication, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const verificationReason = error => /^[a-z][a-z0-9-]{0,99}$/.test(error?.message ?? '') ? error.message : 'producer-verification-rejected';
@@ -135,13 +135,14 @@ export async function deliveryMain(args) {
   const storage = await routeStorageDelivery(args, fileURLToPath(import.meta.url));
   if (storage.handled) return storage.result;
   const [mode, directory, value, extra] = args;
-  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability','reconcile-prepackage'].includes(mode) && (['checkpoint','reconcile-capability','reconcile-prepackage'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
-  const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' });
+  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(mode) && (['checkpoint','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
+  const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' || mode === 'plan-publication-continuation' });
   try {
     if (mode === 'status') return journal.deliveryStatus(value);
     if (mode === 'checkpoint') return journal.checkpointDelivery(value, JSON.parse(readReleaseInputFile(resolve(extra))));
     if (mode === 'reconcile-capability') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileCapabilityGap(journal,value,{path,sha256:sha256(bytes)}); }
     if (mode === 'reconcile-prepackage') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileExpiredPrepackage(journal,value,{path,sha256:sha256(bytes)}); }
+    if (mode === 'reconcile-publication' || mode === 'plan-publication-continuation') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileExpiredPublication(journal,value,{path,sha256:sha256(bytes)},{planOnly:mode==='plan-publication-continuation'}); }
     const { createDeliveryRegistry } = await import('./release-delivery-adapters.mjs');
     if (mode === 'reconcile-failure') return await reconcileFailedDelivery(journal,value,createDeliveryRegistry());
     let id = value;

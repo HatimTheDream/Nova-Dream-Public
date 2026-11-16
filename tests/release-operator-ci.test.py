@@ -37,9 +37,16 @@ class OperatorCiTests(unittest.TestCase):
   with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',return_value=(200,run)):
    with self.assertRaisesRegex(RuntimeError,'exact-success'):M.collect(request)
  def test_unlisted_branch_refused_before_credential(self):
-  for branch in ('main','operator/prejournal-other','operator/prejournal-c494-r1-extra'):
+  for branch in ('main','operator/prejournal-other','operator/prejournal-c494-r1-extra','operator/publication-continuation-r1-extra'):
    request,_,_=self.fixture();request['source']['branch']=branch
    with patch.object(M.D,'credential') as credential:
     with self.assertRaisesRegex(RuntimeError,'source-invalid'):M.collect(request)
     credential.assert_not_called()
+ def test_publication_operator_requires_its_exact_authenticated_success(self):
+  request,run,jobs=self.fixture();request['source']['branch']='operator/publication-continuation-r1';run['head_branch']=request['source']['branch']
+  with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',side_effect=[(200,run),(200,jobs)]) as api:
+   self.assertEqual(M.collect(request),{'run':run,'jobs':jobs,'requestedAttempt':1});self.assertEqual(api.call_count,2)
+  run['head_branch']='main'
+  with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',return_value=(200,run)):
+   with self.assertRaisesRegex(RuntimeError,'exact-success'):M.collect(request)
 if __name__=='__main__':unittest.main()

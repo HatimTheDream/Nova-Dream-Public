@@ -25,7 +25,7 @@ import { createFullAssistantHostTransport } from './release-delivery-assistant-f
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
 import { fullHostOptionsSchema, FULL_HELPERS, FULL_APPLICATION_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
-import { createFullPublicationAdapter } from './release-delivery-full-publication.mjs';
+import { createFullPublicationAdapter,planFullPublicationContinuation,verifyFullPublicationContinuationPlan } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
 import {createRuntimeRetainedCollector} from './release-delivery-runtime-retained.mjs';
@@ -88,7 +88,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
-    'release-delivery-browser.mjs', 'release-delivery-browser-driver.mjs',
+    'release-delivery-browser.mjs', 'release-delivery-browser-continuation.mjs', 'release-delivery-browser-driver.mjs',
     'release-delivery-browser-checks.mjs', 'release-delivery-browser-primitives.mjs',
     'release-delivery-browser-remote.mjs', 'release-delivery-browser-remote-worker.mjs', 'release-delivery-browser-remote.py',
     'release-delivery-assistant.mjs', 'release-delivery-assistant-transport.mjs', 'release-assistant-transport.py',
@@ -200,6 +200,11 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       options:target.browserTools, transport:target.transport, clock, inspectOnly });
     return withBrowserPreparation(adapter,prepare);
   };
+  const publicationPlanOptions = context => {
+    const {target}=targetInput(context.descriptor),releaseIds=Object.fromEntries(['private','public'].map(side=>[side,context.prior[side+'-ci']?.release?.id]));
+    need(target.full?.host&&target.sourceTools&&target.artifactTools&&Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0),'publication-continuation-plan-route-required');
+    return{tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,transport:target.transport,command,clock,monotonic,wait};
+  };
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
     ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}),
@@ -248,6 +253,8 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     return Object.fromEntries(['prepare','validate','apply'].map(method=>[method,async context=>{protectedAssets(context);return admission[method](context);} ]));
   };
   return { identity: async () => deliveryAdapterIdentity(), targetIdentity: async descriptor => deliveryTargetIdentity(descriptor),
+    publicationContinuationPlan: context => planFullPublicationContinuation(context,publicationPlanOptions(context)),
+    verifyPublicationContinuationPlan: (ref,context) => verifyFullPublicationContinuationPlan(ref,context,publicationPlanOptions(context)),
     continuationFacts: async (descriptor,{journal}={}) => {
       need(journal,'continuation-observation-journal-required');
       const {target,transport}=targetInput(descriptor);

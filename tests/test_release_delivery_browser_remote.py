@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+import uuid
 
 spec = importlib.util.spec_from_file_location('browser_remote', pathlib.Path(__file__).parents[1] / 'scripts' / 'release-delivery-browser-remote.py')
 browser = importlib.util.module_from_spec(spec)
@@ -21,6 +22,26 @@ class BrowserMemoryAdmissionTest(unittest.TestCase):
             self.fail('retained observation sampled launch capacity')
         for mode in ('start', 'status', 'request', 'close', 'screenshot', 'cleanup'):
             self.assertIsNone(browser.memory_admission(mode, True, forbidden))
+
+class BrowserLinkedSessionScopeTest(unittest.TestCase):
+    def test_legacy_operation_scope_is_unchanged(self):
+        operation=str(uuid.uuid4());root=pathlib.Path('/opt/nova-browser-data')
+        session,directory,unit=browser.browser_session_scope(root,{'operationId':operation})
+        self.assertEqual((session,directory,unit),(operation,root/operation,'nova-browser-'+operation))
+
+    def test_successor_has_distinct_directory_and_unit_but_preserves_operation(self):
+        operation=str(uuid.uuid4());successor=str(uuid.uuid4());root=pathlib.Path('/opt/nova-browser-data')
+        binding={'operationId':operation,'sessionId':successor};before=dict(binding)
+        session,directory,unit=browser.browser_session_scope(root,binding)
+        self.assertEqual((session,directory,unit),(successor,root/successor,'nova-browser-'+successor))
+        self.assertNotEqual(directory,root/operation);self.assertNotEqual(unit,'nova-browser-'+operation)
+        self.assertEqual(binding,before)
+
+    def test_reused_or_invalid_successor_identity_is_refused(self):
+        operation=str(uuid.uuid4());root=pathlib.Path('/opt/nova-browser-data')
+        for session in (operation,'../escape','not-a-uuid',str(uuid.uuid4()).upper()):
+            with self.assertRaises((RuntimeError,ValueError)):
+                browser.browser_session_scope(root,{'operationId':operation,'sessionId':session})
 
 if __name__ == '__main__':
     unittest.main()

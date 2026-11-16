@@ -10,6 +10,8 @@ import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import { assistantAcceptanceInput } from './release-delivery-assistant.mjs';
 import {prepareRemoteBrowser,remoteBrowserAcceptance} from './release-delivery-browser-remote.mjs';
+import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
+import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord} from './release-delivery-browser-continuation.mjs';
 import {verifyFullBundledIdentity,verifyDocumentIdentity,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -53,12 +55,19 @@ function directory(context) {
   return validateJournalDirectory(join(context.journal.directory,'browser-session'),{create:true});
 }
 function original(context,options,transport) {
-  const dir=directory(context),path=join(dir,'original.json');
-  if(!existsSync(path))return {dir,path,binding:browserBinding(context,options,transport),record:null};
-  const record=read(path),binding=browserBinding(context,options,transport);
-  need(isDeepStrictEqual(record.binding,binding),'browser-original-binding-changed');
+  let dir=directory(context),binding=browserBinding(context,options,transport),linkedContinuation=null;
+  const saved=context.journal.deliveryOperatorContinuation?.(context.descriptor.operation.id);
+  if(saved?.proof.kind==='nova-expired-publication-continuation'){
+    const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:false});
+    const browser=verifyPublicationBrowserContinuation(proof.browser,{descriptor:context.descriptor,journal:context.journal});
+    linkedContinuation=proof;binding=linkedBrowserBinding(binding,browser,proof);
+    dir=validateJournalDirectory(join(dir,'successor-'+browser.successorSessionId),{create:true});
+  }
+  const path=join(dir,'original.json');
+  if(!existsSync(path))return {dir,path,binding,record:null,linkedContinuation};
+  const record=read(path);need(isDeepStrictEqual(record.binding,binding),'browser-original-binding-changed');
   need(Number.isSafeInteger(record.startedAtMs)&&record.deadlineAtMs===record.startedAtMs+options.timeoutMs,'browser-original-clock-changed');
-  return {dir,path,binding,record};
+  verifyLinkedBrowserRecord(record);return {dir,path,binding,record,linkedContinuation};
 }
 async function waitResult(dir,name,budget=90000) {
   const deadline=Date.now()+budget,path=join(dir,name);
@@ -84,7 +93,13 @@ export function verifyBrowserSessionAlive(dir,record,now=Date.now()) {
 }
 export async function prepareDeliveryBrowser(context,{options,transport,launch=spawn,clock=Date.now,inspectOnly=false,run}={}) {
   const kept=original(context,options,transport);
-  if(options.mode==='remote')return prepareRemoteBrowser(kept,context,{options,transport,inspectOnly,clock,run});
+  if(options.mode==='remote'){
+    if(kept.linkedContinuation&&(!kept.record||!existsSync(join(kept.dir,'remote-launch-intent.json')))){
+      const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:true});
+      need(kept.record?kept.record.deadlineAtMs<=proof.expiresAtMs:clock()+options.timeoutMs<=proof.expiresAtMs,'browser-successor-budget-exceeds-grant');
+    }
+    return prepareRemoteBrowser(kept,context,{options,transport,inspectOnly:kept.linkedContinuation?false:inspectOnly,clock,run});
+  }
   if(existsSync(join(kept.dir,'prepared.json'))){
     const prepared=read(join(kept.dir,'prepared.json'));
     need(prepared.bindingSha256===hash(kept.binding),'browser-preparation-binding-changed');
@@ -123,6 +138,7 @@ export function browserAcceptanceInput(context,options,transport) {
 }
 export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
   const original=JSON.parse(readEvidenceFile(input.original)),prepared=JSON.parse(readEvidenceFile(input.prepared));
+  verifyLinkedBrowserRecord(original);
   need(original.binding.operationId===input.operationId&&original.binding.route===input.installed.route
     &&prepared.bindingSha256===hash(original.binding)&&prepared.epoch===original.binding.epoch
     &&prepared.document.candidateId===original.binding.priorCandidateId,'browser-preparation-proof-changed');

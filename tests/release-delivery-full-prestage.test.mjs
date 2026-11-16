@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sha256} from '../scripts/release-plan.mjs';
-import {bindFullPrestagePlan,unwrapFullPrestage,verifyFullPrestageResult,fullPrestageHelpers,advanceFullPrestage,verifyFullProtectedAssets,fullPrestageFactsInput,fullPrestageBinding} from '../scripts/release-delivery-full-prestage.mjs';
+import {validateJournalDirectory} from '../scripts/release-coordinate.mjs';
+import {bindFullPrestagePlan,unwrapFullPrestage,verifyFullPrestageResult,fullPrestageHelpers,advanceFullPrestage,verifyFullProtectedAssets,fullPrestageFactsInput,fullPrestageBinding,planFullPrestageContinuation,verifyFullPrestageContinuation} from '../scripts/release-delivery-full-prestage.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,existsSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -143,4 +144,67 @@ for(const variant of ['legacy','runtime','qualified-dependencies','no-start','un
  }
  const count2=calls.length;assert.equal((await advanceFullPrestage(c,options)).state,'completed');assert.equal(calls.length,count2);
  if(variant==='qualified-dependencies'){writeFileSync(archive.path,'changed dependencies');assert.throws(()=>verifyFullProtectedAssets(result,{operationId:f.key,publicationKey:f.key,bundle,dependencies:c.prior.sign.dependencies}),/qualified-dependency-changed/);}
+});
+
+function continuationPlanFixture(t){
+ const f=fullHostFixture(),scratch=mkdtempSync(join(tmpdir(),'nova-prestage-admission-')),root=join(scratch,'journal');
+ validateJournalDirectory(root,{create:true});t.after(()=>rmSync(scratch,{recursive:true,force:true}));
+ const put=(name,value)=>{const path=join(root,name),raw=Buffer.from(typeof value==='string'?value:JSON.stringify(value));writeFileSync(path,raw);return{path,sha256:sha256(raw)};};
+ const bundle=put('bundle','synthetic bundle'),archive=put('archive','synthetic dependencies'),metadata=put('metadata',{archiveBytes:100,expandedBytes:200,fileCount:3});
+ const transport=put('transport',{format:1,hostAlias:'synthetic',sshConfig:put('config','Host synthetic\n')}),python=put('python','synthetic interpreter');
+ const proof=put('proof',Buffer.from(f.completed.proofRawBase64,'base64').toString());
+ f.descriptor.target=put('target',{transport});f.values.stage=f.options.stageParent+'/rehearsal-'+f.values.leaseId;f.completed.completedProof.finalPhaseSha256=h('7');
+ const row={state:'gap',key:f.key,inputSha256:h('8'),input:{fixture:'original publication'},current:{state:'gap',reason:'original prerequisite unavailable'}};
+ const c={descriptor:f.descriptor,journal:{directory:root,deliveryPhase:(_id,phase)=>phase==='publication'?row:null,loadDelivery:()=>({descriptor:f.descriptor})},
+  intent:row,input:row.input,beforeNewEffect:async()=>assert.fail('admission dispatched an effect'),prior:{
+   sign:{candidateId:h('9'),bundle,release:{bundle:{bytes:16}},dependencies:{archive,description:{archiveBytes:22,expandedBytes:500,fileCount:10}}},
+   artifacts:{repositories:{private:{metadata}}},capacity:{facts:{protectedHashes:{'/etc/nova-update/runner.json':h('6')}}},
+   recovery:{kind:'nova-delivery-full-rehearsal',leaseId:f.values.leaseId,values:f.values,completion:f.completed,evidence:{proof}}}};
+ const assets=[['bundle',bundle,16],['dependencies',archive,22]].map(([role,ref,bytes])=>({role,operationId:f.key,key:f.key,inputSha256:h('8'),
+  asset:{authenticatedDownloadVerified:true,sha256:ref.sha256,bytes,localPath:ref.path}}));
+ const assetsReceipt=put('retained-assets',{assets}),facts={format:1,kind:'current-install-prestage-facts',readOnly:true,hostWrites:false,observedAtMilliseconds:1000,
+  hostConfiguration:f.options.hostConfiguration,result:f.options.acceptedInstallation,currentJob:{id:f.options.priorJobId,state:'completed',hold:false,candidateId:f.descriptor.operation.priorCandidateId},
+  controller:{holdFor:null,job:{id:f.options.priorJobId,state:'completed'}},resultValue:{candidateId:f.descriptor.operation.priorCandidateId,jobId:f.options.priorJobId,
+   outcome:'completed',savedWorkVerified:true,accountsVerified:true,recoveryVerified:true,healthVerified:true}};
+ let now=1000,badVerification=false;const calls=[],command=async(_binary,args)=>{
+  const mode=args[2],request=JSON.parse(readFileSync(args[4]));calls.push(mode);
+  assert.ok(['facts','plan','verify-plan'].includes(mode));assert.ok(request.outputDirectory.startsWith(join(root,'delivery-continuation-evidence')));
+  let output;if(mode==='facts')output=wrap(facts);
+  else if(mode==='plan'){
+   const b=request.binding,value={format:1,kind:'exact-full-private-prestage-plan',readOnly:true,automaticReplayPermitted:false,
+    bundleSha256:b.BUNDLE,candidateId:b.TARGET,priorCandidateId:b.PRIOR,rehearsalLeaseId:b.LEASE,rehearsalProofSha256:b.PROOF,incoming:b.INCOMING,
+    destination:'/var/lib/nova-update/staging/'+b.BUNDLE,files:Object.fromEntries(Object.entries(b.SPECS).map(([n,[bytes,sha256]])=>[n,{bytes,sha256}])),
+    currentJob:facts.currentJob,currentResult:facts.result,transferTimeout:{path:'/usr/bin/gnutimeout',identity:['UNSAFE_NS']},
+    capacity:{...capacity(0),completedRehearsal:b.CAPACITY.rehearsal}};
+   const raw=Buffer.from(JSON.stringify(value).replace('"UNSAFE_NS"','1794466056712671701')+'\n');
+   output={remoteResult:JSON.parse(raw),stdoutRawBase64:raw.toString('base64'),stdoutSha256:sha256(raw),stderrSha256:sha256('')};
+  }else{
+   assert.ok(Buffer.from(request.binding.STAGE_PLAN_RAW_BASE64,'base64').toString().includes('1794466056712671701'));
+   output=wrap({format:1,kind:'exact-full-private-prestage-plan-reverified',readOnly:true,hostWrites:false,
+    planSha256:badVerification?h('0'):request.binding.STAGE_INTENT.planSha256,bundleSha256:request.binding.BUNDLE,nonce:request.binding.NONCE});
+  }
+  return JSON.stringify({state:'completed',externalId:f.key,output});
+ };
+ return{root,c,row,calls,assetsReceipt,args:{assets,assetsReceipt,transport,options:f.options,tools:{python},command,clock:()=>now},
+  setTime:value=>now=value,badReply:()=>badVerification=true};
+}
+test('continuation admission plans and rechecks original host bytes without canonical input or effects',async t=>{
+ const f=continuationPlanFixture(t),ref=await planFullPrestageContinuation(f.c,f.args);
+ assert.deepEqual(f.calls,['facts','plan']);const proof=JSON.parse(readFileSync(ref.path));
+ assert.equal(proof.canonicalInputAdopted,false);assert.equal(proof.journalWrites,false);
+ const verified=await verifyFullPrestageContinuation(ref,f.c,f.args);
+ assert.deepEqual(f.calls,['facts','plan','verify-plan']);assert.deepEqual(JSON.parse(readFileSync(verified.path)).plan,ref);
+ assert.equal(existsSync(join(f.root,'delivery-evidence')),false);assert.equal(existsSync(join(f.root,'full-prestage-'+f.row.key)),false);
+});
+test('continuation admission refuses stale evidence or changed original publication before host recheck',async t=>{
+ const f=continuationPlanFixture(t),ref=await planFullPrestageContinuation(f.c,f.args);f.setTime(301001);
+ await assert.rejects(()=>verifyFullPrestageContinuation(ref,f.c,f.args),/freshness/);assert.deepEqual(f.calls,['facts','plan']);
+ f.setTime(1000);f.row.current={state:'gap',reason:'changed'};
+ await assert.rejects(()=>verifyFullPrestageContinuation(ref,f.c,f.args),/binding/);assert.deepEqual(f.calls,['facts','plan']);
+});
+test('continuation admission refuses a wrong host plan digest and an existing original effect',async t=>{
+ const f=continuationPlanFixture(t),ref=await planFullPrestageContinuation(f.c,f.args);f.badReply();
+ await assert.rejects(()=>verifyFullPrestageContinuation(ref,f.c,f.args),/current-plan-unverified/);
+ mkdirSync(join(f.root,'delivery-evidence'));writeFileSync(join(f.root,'delivery-evidence',f.row.key+'-full-prestage-prepare-input-dispatch.json'),'{}');
+ const before=f.calls.length;await assert.rejects(()=>planFullPrestageContinuation(f.c,f.args),/original-effect-present/);assert.equal(f.calls.length,before);
 });

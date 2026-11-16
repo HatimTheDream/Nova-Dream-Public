@@ -1,7 +1,9 @@
 /** Fixed private-asset prestaging. Every transfer/copy has one durable child;
  * a lost response is reconciled against that child's exact host paths. */
-import {readFileSync,existsSync} from 'node:fs';
-import {join} from 'node:path';
+import {readFileSync,existsSync,mkdirSync,realpathSync,lstatSync,openSync,writeSync,fsyncSync,closeSync} from 'node:fs';
+import {join,dirname} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {validateJournalDirectory} from './release-coordinate.mjs';
 import {fileURLToPath} from 'node:url';
 import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,readReleaseInputFile,sha256} from './release-plan.mjs';
@@ -209,4 +211,92 @@ export async function advanceFullPrestage(c,{assets,transport,options,tools,comm
  const value={format:1,kind:'nova-delivery-full-protected-assets',operationId:common.operationId,key:common.key,inputSha256:common.inputSha256,
   input:retained(c,'full-prestage-input.json').ref,prepared:preparation.output,stage:staged.output,applicationActivated:false,installDispatched:false};
  return{state:'completed',output:value,receipt:save(c,storeReceipt,'full-prestage-result.json',value)};
+}
+
+/** Admission-only prestaging. These calls cannot prepare directories on the
+ * host, upload files, stage assets or write the canonical publication journal. */
+function continuationPrestageContext(c,{transport,options,tools,assetsReceipt}){
+ const id=c.descriptor.operation.id,row=c.journal.deliveryPhase(id,'publication');
+ need(row&&['gap','uncertain'].includes(row.state)&&row.key===c.intent.key&&row.inputSha256===c.intent.inputSha256
+  &&same(row.input,c.input??c.intent.input)&&same(c.journal.loadDelivery(id).descriptor,c.descriptor),'full-prestage-continuation-original-context-changed');
+ const stages=['prepare-input','upload-bundle','upload-dependencies','upload-runtime','stage'];
+ need(!retained(c,'full-prestage-input.json')&&!retained(c,'full-prestage-result.json')
+  &&stages.every(mode=>!retained(c,'full-prestage-'+mode+'-dispatch.json')
+   &&!existsSync(join(c.journal.directory,'full-prestage-'+row.key,mode+'-dispatch.json'))),'full-prestage-continuation-original-effect-present');
+ readEvidenceFile(assetsReceipt,{maximum:2*1024**2});
+ return{operationId:id,key:row.key,inputSha256:row.inputSha256,publicationObservationSha256:sha256(canonical(row.current)),
+  descriptorSha256:sha256(canonical(c.descriptor)),priorSha256:sha256(canonical(c.prior)),target:c.descriptor.target,
+  transport,optionsSha256:sha256(canonical(options)),tools,assetsReceipt,helperHashes:fullPrestageHelpers()};
+}
+function continuationPrestageDirectory(c){
+ const journal=validateJournalDirectory(c.journal.directory,{create:false}),parent=join(journal,'delivery-continuation-evidence');
+ if(!existsSync(parent))mkdirSync(parent,{mode:0o700});
+ need(realpathSync(parent)===parent&&lstatSync(parent).isDirectory()&&!lstatSync(parent).isSymbolicLink(),'full-prestage-continuation-directory-changed');
+ return parent;
+}
+function continuationPrestageSave(root,name,value){
+ const path=join(root,name),bytes=encoded(value),fd=openSync(path,'wx',0o600);
+ try{writeSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}
+ return{path,sha256:sha256(bytes)};
+}
+function continuationPrestageProofRoot(c,ref){
+ const parent=continuationPrestageDirectory(c),root=dirname(ref.path);
+ need(dirname(root)===parent&&/^prestage-plan-[a-f0-9-]{36}$/.test(root.slice(parent.length+1))
+  &&ref.path===join(root,'proof.json')&&realpathSync(root)===root&&!lstatSync(root).isSymbolicLink(),'full-prestage-continuation-proof-scope');
+ return root;
+}
+async function continuationPrestageCall(c,mode,binding,files,{transport,tools,command},root){
+ need(['facts','plan','verify-plan'].includes(mode),'full-prestage-continuation-readonly-mode-required');
+ const target=JSON.parse(readEvidenceFile(transport));readEvidenceFile(target.sshConfig,{maximum:65536});
+ const hashes=fullPrestageHelpers(),request={format:1,operationId:c.descriptor.operation.id,key:c.intent.key,inputSha256:c.intent.inputSha256,
+  transport:target,binding,files,outputDirectory:join(root,'full-prestage-'+c.intent.key),helperHashes:hashes};
+ const ref=continuationPrestageSave(root,mode+'-request.json',request);
+ readEvidenceFile(tools.python,{maximum:128*1024**2});
+ const raw=await command(tools.python.path,['-B',fileURLToPath(new URL('release-delivery-full-prestage.py',import.meta.url)),mode,'--request',ref.path,'--request-sha256',ref.sha256],
+  {maximum:1024**2,timeoutMs:380000,acceptJsonFailure:true});
+ need(same(hashes,fullPrestageHelpers()),'full-prestage-continuation-source-changed');
+ const response=JSON.parse(raw);continuationPrestageSave(root,mode+'-response.json',response);
+ need(response.state==='completed'&&response.externalId===c.descriptor.operation.id,'full-prestage-continuation-readonly-call-unsettled');
+ unwrapFullPrestage(response.output);
+ return continuationPrestageSave(root,mode+'-actual.json',response.output);
+}
+export async function planFullPrestageContinuation(c,args){
+ const {assets,options,clock=Date.now,monotonic,wait}=args,before=continuationPrestageContext(c,args),parent=continuationPrestageDirectory(c);
+ const root=join(parent,'prestage-plan-'+randomUUID());mkdirSync(root,{mode:0o700});
+ const startedAtMs=clock(),factsInput=fullPrestageFactsInput(c,options);
+ const actualFacts=await continuationPrestageCall(c,'facts',factsInput?{FACTS_INPUT:factsInput}:null,{},args,root);
+ const facts=unwrapFullPrestage(JSON.parse(readEvidenceFile(actualFacts,{maximum:2*1024**2})));
+ await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});
+ const initial=fullPrestageBinding(c,options,facts,assets);
+ const actualPlan=await continuationPrestageCall(c,'plan',initial.binding,initial.files,args,root);
+ const binding=bindFullPrestagePlan(initial.binding,JSON.parse(readEvidenceFile(actualPlan,{maximum:2*1024**2})));
+ await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});
+ need(same(before,continuationPrestageContext(c,args)),'full-prestage-continuation-context-raced');
+ return continuationPrestageSave(root,'proof.json',{format:1,kind:'nova-publication-prestage-readonly-plan',context:before,
+  startedAtMs,plannedAtMs:clock(),actualFacts,actualPlan,files:initial.files,binding,readOnly:true,hostWrites:false,journalWrites:false,canonicalInputAdopted:false});
+}
+export async function verifyFullPrestageContinuation(ref,c,args){
+ const {assets,options,clock=Date.now,monotonic,wait}=args,root=continuationPrestageProofRoot(c,ref);
+ const proof=JSON.parse(readEvidenceFile(ref,{maximum:2*1024**2})),context=continuationPrestageContext(c,args);
+ need(proof.format===1&&proof.kind==='nova-publication-prestage-readonly-plan'&&same(proof.context,context)
+  &&proof.readOnly===true&&proof.hostWrites===false&&proof.journalWrites===false&&proof.canonicalInputAdopted===false
+  &&Number.isSafeInteger(proof.startedAtMs)&&Number.isSafeInteger(proof.plannedAtMs)&&proof.startedAtMs<=proof.plannedAtMs
+  &&clock()>=proof.plannedAtMs&&clock()-proof.plannedAtMs<=300000,'full-prestage-continuation-plan-binding-or-freshness-changed');
+ for(const [name,r]of [['facts',proof.actualFacts],['plan',proof.actualPlan]])need(r.path===join(root,name+'-actual.json'),'full-prestage-continuation-receipt-scope');
+ const facts=unwrapFullPrestage(JSON.parse(readEvidenceFile(proof.actualFacts,{maximum:2*1024**2})));
+ await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});
+ const initial=fullPrestageBinding(c,options,facts,assets),wrapped=JSON.parse(readEvidenceFile(proof.actualPlan,{maximum:2*1024**2}));
+ need(same(proof.files,initial.files)&&same(proof.binding,bindFullPrestagePlan(initial.binding,wrapped)),'full-prestage-continuation-native-binding-changed');
+ const checkRoot=join(root,'verification-'+randomUUID());mkdirSync(checkRoot,{mode:0o700});
+ // Host Python compares the original authenticated JSON integers, not the
+ // informational JavaScript projection. Only measured freeBytes may vary.
+ const actual=await continuationPrestageCall(c,'verify-plan',proof.binding,proof.files,args,checkRoot);
+ const result=unwrapFullPrestage(JSON.parse(readEvidenceFile(actual,{maximum:2*1024**2})));
+ need(result.format===1&&result.kind==='exact-full-private-prestage-plan-reverified'&&result.readOnly===true&&result.hostWrites===false
+  &&result.planSha256===proof.binding.STAGE_INTENT.planSha256&&result.bundleSha256===proof.binding.BUNDLE&&result.nonce===proof.binding.NONCE,
+  'full-prestage-continuation-current-plan-unverified');
+ await awaitFullPrestageFactsTime(facts.observedAtMilliseconds,{clock,monotonic,wait});
+ need(same(context,continuationPrestageContext(c,args))&&clock()-proof.plannedAtMs<=300000,'full-prestage-continuation-current-context-raced');
+ return continuationPrestageSave(checkRoot,'verification.json',{format:1,kind:'nova-publication-prestage-plan-verification',
+  plan:ref,context,actual,verifiedAtMs:clock(),readOnly:true,hostWrites:false,journalWrites:false,canonicalInputAdopted:false});
 }
