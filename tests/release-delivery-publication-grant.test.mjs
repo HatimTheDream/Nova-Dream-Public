@@ -303,6 +303,19 @@ test('successor native admission requires the exact marker on both session and r
  assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(1,{authority:{completedOriginalStorage:undefined}})),/readonly-admission/);
  assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(2,{dispatch:{completedOriginalStorage:undefined}})),/readonly-admission/);
  assert.throws(()=>verifyPublicationStorageAdmission(x.f.journal,x.f.id,make(3,{dispatch:{storageMaintenanceResult:{cleanupPerformed:true}}})),/readonly-admission/);
- const good=make(4);x.f.journal.recordPublicationContinuationAdmission(x.f.id,good,x.next.at);
- assert.equal((await verifyContinuationStorageAuthority({journal:x.f.journal,operationId:x.f.id,now:x.next.at+1})).continuationStarted,true);
+ // These owners are synthetic: never probe unrelated runner processes with their fixture PIDs.
+ let ownerProbeCode='EPERM';
+ const ownerProbe=t.mock.method(process,'kill',(pid,signal)=>{
+  assert([100,101].includes(pid));assert.equal(signal,0);
+  throw Object.assign(new Error('Synthetic owner observation'),{code:ownerProbeCode});
+ });
+ try{
+  const good=make(4);
+  assert.throws(()=>x.f.journal.recordPublicationContinuationAdmission(x.f.id,good,x.next.at),/owner-closure-unavailable/);
+  assert.equal(x.f.journal.deliveryPublicationContinuationAdmission(x.f.id),null);
+  ownerProbeCode='ESRCH';
+  x.f.journal.recordPublicationContinuationAdmission(x.f.id,good,x.next.at);
+  assert.deepEqual(ownerProbe.mock.calls.map(call=>call.arguments),[[100,0],[100,0],[101,0]]);
+  assert.equal((await verifyContinuationStorageAuthority({journal:x.f.journal,operationId:x.f.id,now:x.next.at+1})).continuationStarted,true);
+ }finally{ownerProbe.mock.restore();}
 });
