@@ -19,6 +19,7 @@ import {verifyInstalledIdentity} from './release-delivery-installed-identity.mjs
 import {validateInstalledIdentityRequest} from './release-delivery-assistant-full.mjs';
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
+import { postinstallCoverageSchema, postinstallCoverage, verifyScopedBrowserAcceptance, verifyPostinstallAuthority } from './release-delivery-postinstall-recovery.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
 import {FULL_HELPERS,priorFailedInstallationAuthority} from './release-delivery-full-host.mjs';
 import {pairedFullPublicationReceipt} from './release-delivery-full-publication.mjs';
@@ -37,7 +38,9 @@ export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targ
  qualificationEvidence:z.array(ref).max(32).default([]),
   operatorProvenance:ref.optional(),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
-  sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional()}).strict()
+  sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional(),
+  acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional()}).strict()
+  .refine(value=>value.acceptanceScope ? value.browserAccepted&&postinstallCoverageSchema.safeParse({acceptanceScope:value.acceptanceScope,originalTransitionCoverage:value.originalTransitionCoverage,transitionCoverageGaps:value.transitionCoverageGaps}).success : value.originalTransitionCoverage===undefined&&value.transitionCoverageGaps===undefined,'Explicit browser recovery coverage required.')
   .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
     'Accepted browser evidence must be complete and separate from saved Assistant evidence.').optional()}).strict();
 const need=(v,r)=>{if(!v)throw Error(r);};
@@ -92,7 +95,8 @@ export function validateAcceptedProfile(profile,target,{candidate=verifyCandidat
  if(profile.previousDelivery?.browserAccepted){
   const prior=profile.previousDelivery,input=json(prior.browserInput),output=json(prior.browserReceipt);
   need(input.operationId===prior.operationId&&same(input.assistant,json(prior.assistantReceipt)),'accepted-browser-original-delivery-changed');
-  verifyBrowserAcceptance(output,input);
+  if(prior.acceptanceScope){need(same(postinstallCoverage(output),postinstallCoverage(prior)),'accepted-browser-recovery-scope-changed');verifyScopedBrowserAcceptance(output,input);}
+  else{need(output.acceptanceScope===undefined,'accepted-unqualified-browser-scope-refused');verifyBrowserAcceptance(output,input);}
  }
  return {bases,identity,operation,pair};
 }
@@ -343,20 +347,23 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  if(browser?.state==='completed'&&browser.validation?.state!=='failed'){
   need(browser.current.receipt&&same(json(browser.current.receipt),browser.current.output)
    &&browser.input.operationId===id&&same(browser.input.assistant,accepted.current.output),'successor-browser-original-evidence-changed');
-  verifyBrowserAcceptance(browser.current.output,browser.input);
+  const coverage=postinstallCoverage(browser.current.output);
+  if(coverage.acceptanceScope)verifyScopedBrowserAcceptance(browser.current.output,browser.input);else verifyBrowserAcceptance(browser.current.output,browser.input);
   browserEvidence={browserAccepted:true,browserInput:exactFile(join(directory,'accepted-browser-input.json'),encoded(browser.input)),
-   browserReceipt:normalizedRef(browser.current.receipt)};
+   browserReceipt:normalizedRef(browser.current.receipt),...coverage};
  }
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
   publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...browserEvidence};
  const operatorGrant=journal.deliveryOperatorContinuation?.(id);
- if(operatorGrant){
+ const postinstall=journal.deliveryPostinstallRecovery?.(id);
+ if(postinstall){verifyPostinstallAuthority(journal,id);profile.operatorProvenance=exactFile(join(directory,'accepted-operator-postinstall-recovery.json'),encoded(postinstall));}
+ else if(operatorGrant){
   await operatorAuthority({journal,operationId:id});
   profile.operatorProvenance=exactFile(join(directory,'accepted-operator-continuation.json'),encoded(operatorGrant));
  }
  profile.target=exactFile(join(directory,'successor-target.json'),encoded(deliveryTargetSchema.parse(target)));
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.
- const output=exactFile(join(directory,browserEvidence.browserAccepted?'successor-profile-browser-accepted.json':'successor-profile.json'),encoded(deliveryProfileSchema.parse(profile)));
- return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,mutableSelectionUpdated:false};
+ const output=exactFile(join(directory,browserEvidence.acceptanceScope?'successor-profile-browser-recovery-accepted.json':browserEvidence.browserAccepted?'successor-profile-browser-accepted.json':'successor-profile.json'),encoded(deliveryProfileSchema.parse(profile)));
+ return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
 }

@@ -91,6 +91,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
+    'release-delivery-postinstall-recovery.mjs', 'release-delivery-postinstall-browser.mjs', 'release-delivery-postinstall-browser-worker.mjs', 'release-delivery-postinstall-browser.py',
     'release-delivery-browser.mjs', 'release-delivery-browser-continuation.mjs', 'release-delivery-browser-driver.mjs',
     'release-delivery-browser-checks.mjs', 'release-delivery-browser-primitives.mjs',
     'release-delivery-browser-remote.mjs', 'release-delivery-browser-remote-worker.mjs', 'release-delivery-browser-remote.py',

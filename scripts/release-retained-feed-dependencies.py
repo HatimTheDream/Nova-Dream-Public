@@ -8,7 +8,7 @@ import argparse, base64, contextlib, hashlib, io, json, os, pathlib, re, stat, s
 P = pathlib.Path
 PARSER_SHA = 'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290'
 MAX = 128 * 1024**2
-VERSION = '4.4.3'
+SUPPORTED_VERSIONS = frozenset(('4.4.3', '4.6.6'))
 
 def need(value, code):
     if not value:
@@ -93,8 +93,9 @@ def prepare(request):
          and pair['applicationDependencies'] == description, 'feed-dependency-accepted-pair-changed')
     lock_raw = read_file(root / 'package-lock.json'); lock = json.loads(lock_raw)
     need(sha(lock_raw) == description['packageLockSha256'], 'feed-dependency-candidate-lock-changed')
-    need(package.get('dependencies', {}).get('zod') == VERSION
-         and lock.get('packages', {}).get('node_modules/zod', {}).get('version') == VERSION,
+    version = package.get('dependencies', {}).get('zod')
+    need(version in SUPPORTED_VERSIONS
+         and lock.get('packages', {}).get('node_modules/zod', {}).get('version') == version,
          'feed-dependency-zod-version-unsupported')
     raw = read(request['archive'])
     need(request['archive']['sha256'] == description['archiveSha256']
@@ -129,7 +130,7 @@ def prepare(request):
             expanded += len(data); need(expanded <= 8 * 1024**2, 'feed-dependency-zod-expansion-limit')
             files[relative] = data
     zod = json.loads(files.get('package.json', b'{}'))
-    need(zod.get('name') == 'zod' and zod.get('version') == VERSION and not zod.get('dependencies')
+    need(zod.get('name') == 'zod' and zod.get('version') == version and not zod.get('dependencies')
          and not zod.get('optionalDependencies'), 'feed-dependency-zod-closure-invalid')
     for name in files:
         directories.update(str(p).replace('\\', '/') for p in P(name).parents if str(p) != '.')
@@ -202,7 +203,7 @@ def completed_output_reuse(request, prior, root, work, snapshot, files, director
     need(set(p.name for p in modules.iterdir()) == {'zod'}, 'feed-dependency-other-modules-present')
     need(identities == [identity(canonical(p).stat()) for p in paths], 'feed-dependency-reuse-directory-changed')
     return {'format': 1, 'candidateId': request['base']['candidateId'], 'archiveSha256': request['archive']['sha256'],
-            'destination': str(destination), 'version': VERSION, 'files': len(files),
+            'destination': str(destination), 'version': json.loads(files['package.json'])['version'], 'files': len(files),
             'bytes': sum(map(len, files.values())), 'materialized': True, 'candidateUnchanged': True,
             'completedOutputReused': True, 'retainedOwnerSha256': sha(prior)}
 
@@ -251,7 +252,7 @@ def materialize(request, *, checkpoint=lambda _: None):
         inspect_tree(destination, files, directories)
         need(candidate_snapshot(request['base'])[0] == snapshot, 'feed-dependency-candidate-mutated')
         return {'format': 1, 'candidateId': request['base']['candidateId'], 'archiveSha256': request['archive']['sha256'],
-                'destination': str(destination), 'version': VERSION, 'files': len(files),
+                'destination': str(destination), 'version': json.loads(files['package.json'])['version'], 'files': len(files),
                 'bytes': sum(map(len, files.values())), 'materialized': True, 'candidateUnchanged': True}
 
 if __name__ == '__main__':

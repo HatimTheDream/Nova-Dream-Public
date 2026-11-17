@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ReleaseJournal } from './release-coordinate.mjs';
 import { DELIVERY_PHASES, deliveryDescriptorSchema } from './release-delivery-journal.mjs';
 import { readEvidenceFile, readReleaseInputFile, sha256 } from './release-plan.mjs';
+import { reconcilePostinstallBrowser } from './release-delivery-postinstall-recovery.mjs';
 import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
 import { reconcileCapabilityGap } from './release-delivery-capability-disposition.mjs';
 import { withVerificationPass, verificationEffect } from './release-verification-pass.mjs';
@@ -135,10 +136,11 @@ export async function deliveryMain(args) {
   const storage = await routeStorageDelivery(args, fileURLToPath(import.meta.url));
   if (storage.handled) return storage.result;
   const [mode, directory, value, extra] = args;
-  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(mode) && (['checkpoint','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
-  const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' || mode === 'plan-publication-continuation' });
+  need(['start', 'resume', 'status', 'checkpoint', 'reconcile-failure','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(mode) && (['checkpoint','reconcile-capability','reconcile-prepackage','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(mode) ? args.length === 4 : args.length === 3), 'invalid-delivery-command');
+  const journal = new ReleaseJournal(directory, { create: mode === 'start', readOnly: mode === 'status' || mode === 'plan-publication-continuation' || mode === 'plan-browser-recovery' });
   try {
     if (mode === 'status') return journal.deliveryStatus(value);
+    if (['plan-browser-recovery','reconcile-browser-recovery'].includes(mode)) { const path=resolve(extra),bytes=readReleaseInputFile(path);return await reconcilePostinstallBrowser(journal,value,{path,sha256:sha256(bytes)},{planOnly:mode==='plan-browser-recovery'}); }
     if (mode === 'checkpoint') return journal.checkpointDelivery(value, JSON.parse(readReleaseInputFile(resolve(extra))));
     if (mode === 'reconcile-capability') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileCapabilityGap(journal,value,{path,sha256:sha256(bytes)}); }
     if (mode === 'reconcile-prepackage') { const path=resolve(extra),bytes=readReleaseInputFile(path); return await reconcileExpiredPrepackage(journal,value,{path,sha256:sha256(bytes)}); }
@@ -165,7 +167,7 @@ export async function deliveryMain(args) {
   } finally { journal.close(); }
 }
 export function deliveryExitCode(mode, result) {
-  return ['start', 'resume'].includes(mode) && !result.complete ? 2 : 0;
+  return ['start', 'resume','reconcile-browser-recovery'].includes(mode) && !result.complete ? 2 : 0;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try { const result = await deliveryMain(process.argv.slice(2)); process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = deliveryExitCode(process.argv[2], result); }

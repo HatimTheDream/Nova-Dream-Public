@@ -1,7 +1,7 @@
 name: Operator continuation quality
 on:
   push:
-    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1']
+    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1', 'operator/browser-postinstall-recovery-r1']
 permissions:
   contents: read
 concurrency:
@@ -88,6 +88,7 @@ jobs:
           python3 -B tests/release-frontend-executor.test.py -v
           sudo env "QA_PROTECTED_PARENT=$QA_PROTECTED_PARENT" python3 -B tests/release-frontend-readiness.test.py -v
           python3 -B tests/test_release_delivery_browser_remote.py -v
+          python3 -B tests/test_release_delivery_postinstall_browser.py -v
           python3 -B tests/release-assistant-transport.test.py -v
           python3 -B tests/release-assistant-runtime-stream.test.py -v
           python3 -B tests/release-installed-identity.test.py -v

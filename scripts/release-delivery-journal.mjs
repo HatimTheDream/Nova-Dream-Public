@@ -7,6 +7,8 @@ import { deriveFailedDisposition, failedDispositionSchema } from './release-deli
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
 import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
+import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
+
 const hash = z.string().regex(/^[a-f0-9]{64}$/), commit = z.string().regex(/^[a-f0-9]{40}$/);
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
 const source = z.object({ root: z.string().min(1).max(4096), repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), commit, baseCommit: commit, branch: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_/-]{0,99}$/) }).strict();
@@ -254,6 +256,27 @@ export const deliveryJournalMethods = {
       return this.deliveryStatus(id,now);
     });
   },
+  deliveryPostinstallRecovery(id) {
+    if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_postinstall_recoveries'").get())return null;
+    const row=this.db.prepare('SELECT * FROM delivery_postinstall_recoveries WHERE operation_id=?').get(id);if(!row)return null;
+    const proof=postinstallAuthoritySchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id,'postinstall-stored-operation-changed');
+    return {proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
+  },
+  recordPostinstallRecovery(id,raw,now=Date.now(),{assertAbsent}={}) {
+    need(!this.readOnly,'postinstall-readonly-journal');const proof=postinstallAuthoritySchema.parse(raw);
+    return this.transaction(()=>{const old=this.deliveryPostinstallRecovery(id);if(old){need(canonical(old.proof)===canonical(proof),'postinstall-second-or-conflicting-recovery');return old;}
+      need(proof.operationId===id&&now>=proof.startedAtMs&&now-proof.startedAtMs<=60000,'postinstall-stale-reservation');
+      const request=postinstallRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      need(canonical(postinstallSnapshot(this,id,request,{now,assertAbsent}))===canonical(proof.snapshot),'postinstall-snapshot-changed-before-reservation');
+      verifyPostinstallAdmission(request,JSON.parse(readEvidenceFile(request.admission.plan)),proof.snapshot,proof.operator,now);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS delivery_postinstall_recoveries(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id),at_ms INTEGER NOT NULL,proof_json TEXT NOT NULL,proof_hash TEXT NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS postinstall_no_update BEFORE UPDATE ON delivery_postinstall_recoveries BEGIN SELECT RAISE(ABORT,'immutable-postinstall-recovery'); END;
+        CREATE TRIGGER IF NOT EXISTS postinstall_no_delete BEFORE DELETE ON delivery_postinstall_recoveries BEGIN SELECT RAISE(ABORT,'immutable-postinstall-recovery'); END;`);
+      const v=encoded(proof);this.db.prepare('INSERT INTO delivery_postinstall_recoveries VALUES(?,?,?,?)').run(id,now,v.text,v.hash);
+      event(this,id,'postinstall-browser-observation-reserved',{authoritySha256:v.hash,sessionId:proof.sessionId,startedAtMs:proof.startedAtMs,deadlineAtMs:proof.deadlineAtMs,originalHistoryPreserved:true},now);
+      return this.deliveryPostinstallRecovery(id);
+    });
+  },
   deliveryPhase(id, phase) {
     const row = this.db.prepare('SELECT * FROM delivery_phases WHERE operation_id=? AND phase=?').get(id, phase); if (!row) return null;
     const observations = this.db.prepare('SELECT * FROM delivery_observations WHERE operation_id=? AND phase=? ORDER BY id').all(id, phase);
@@ -367,8 +390,11 @@ export const deliveryJournalMethods = {
     const d = this.loadDelivery(id), phases = DELIVERY_PHASES.map(phase => this.deliveryPhase(id, phase));
     const complete = phases.every(p => p?.state === 'completed' && p.validation?.state !== 'failed');
     const disposition = this.deliveryDisposition(id);
+    const browser=phases.at(-1),recovery=this.deliveryPostinstallRecovery(id),coverage=browser?.state==='completed'?postinstallCoverage(browser.current.output):recovery?postinstallCoverage(recovery.proof):{};
+    if(browser?.state==='completed'&&coverage.acceptanceScope){need(recovery&&browser.current.receipt&&canonical(JSON.parse(readEvidenceFile(browser.current.receipt)))===canonical(browser.current.output)
+      &&canonical(JSON.parse(readEvidenceFile(browser.current.output.authority)))===canonical(recovery.proof),'postinstall-status-authority-required');verifyScopedBrowserAcceptance(browser.current.output,browser.input);}
     need(!closedDeliveryState(d.state) || disposition, 'delivery-disposition-missing');
-    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, closed: closedDeliveryState(d.state), disposition,
+    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, ...coverage, closed: closedDeliveryState(d.state), disposition,
       createdAtMs: d.created_at, elapsedMs: Math.max(0, now - d.created_at),
       originalEstimate: d.descriptor.timeline.original, originalDeadlineAtMs: d.descriptor.timeline.original.remainingMs === null ? null : d.descriptor.timeline.original.issuedAtMs + d.descriptor.timeline.original.remainingMs[1], eta: this.deliveryTimeline(id, now).eta,
       packageSubsteps: PACKAGE_SUBSTEPS.map(name => { const row = this.deliveryPhase(id, 'package/' + name); return { name,

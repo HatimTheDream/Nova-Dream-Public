@@ -11,7 +11,7 @@ import {ReleaseJournal,validateJournalDirectory} from './release-coordinate.mjs'
 
 const need=(value,code)=>{if(!value)throw Error(code);};
 const MAX=128*1024**2;
-const WORKER_SHA='261f4308d27a734525b99542593534a92b5b9bdabffd8b2b33bc74ae045d13f1';
+const WORKER_SHA='389a8095cb1d39e444a18ea88dec27e0bfc47f246b3fe23a813cb7f275b354bc';
 const PARSER_SHA='e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290';
 const worker=fileURLToPath(new URL('./release-retained-feed-dependencies.py',import.meta.url));
 const parser=fileURLToPath(new URL('../deploy/update-runner/app_dependencies.py',import.meta.url));

@@ -12,11 +12,11 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding='utf-8'); return ref(path)
 
 class Fixture:
-    def __init__(self, root, *, version='4.4.3', extra=None):
+    def __init__(self, root, *, version='4.4.3', lock_version=None, archive_version=None, extra=None):
         self.root = root; self.base = root / 'candidate'; self.base.mkdir()
         package = {'name':'synthetic','version':'1.0.1','type':'module','dependencies':{'zod':version,'unrelated':'1.0.0'}}
         lock = {'lockfileVersion':3,'packages':{'':{'dependencies':package['dependencies']},
-            'node_modules/zod':{'version':version},'node_modules/unrelated':{'version':'1.0.0'}}}
+            'node_modules/zod':{'version':lock_version or version},'node_modules/unrelated':{'version':'1.0.0'}}}
         write_json(self.base/'package.json',package); write_json(self.base/'package-lock.json',lock)
         sources = {'dist/client/index.html':b'<p>synthetic</p>', 'dist/service/apps/service/main.js':b'export {};',
             'dist/service/apps/service/update-feed.js':b'import {schema} from "../../packages/domain/software-update.js"; export const updateManifestSchema=schema; export const updateFeedLimits={maxBytes:131072}; export class UpdateFeed {}',
@@ -30,7 +30,7 @@ class Fixture:
         (self.base/'node_modules').mkdir()
         self.entries={'package.json':(self.base/'package.json').read_bytes(),'package-lock.json':(self.base/'package-lock.json').read_bytes(),
             'node_modules':None,'node_modules/zod':None,
-            'node_modules/zod/package.json':json.dumps({'name':'zod','version':version,'type':'module','exports':'./index.mjs'}).encode(),
+            'node_modules/zod/package.json':json.dumps({'name':'zod','version':archive_version or version,'type':'module','exports':'./index.mjs'}).encode(),
             'node_modules/zod/index.mjs':b'export const z={string:()=>({parse:x=>{if(typeof x!=="string")throw Error("string");return x;}})};',
             'node_modules/unrelated':None,'node_modules/unrelated/package.json':b'{"name":"unrelated","version":"1.0.0"}',
             'node_modules/unrelated/private.txt':b'not materialized'}
@@ -148,6 +148,31 @@ class MaterializationTests(unittest.TestCase):
         (f.base/'node_modules/zod/index.mjs').write_bytes(b'bad')
         failed=subprocess.run(command,capture_output=True,text=True,timeout=20)
         self.assertNotEqual(failed.returncode,0);self.assertIn('output-corrupt',failed.stderr)
+    def test_exact_466_archive_materializes_and_preserves_candidate(self):
+        f=Fixture(self.root,version='4.6.6');before=worker.candidate_snapshot(f.request['base'])[0]
+        result=worker.materialize(f.request)
+        self.assertEqual(result['version'],'4.6.6')
+        self.assertEqual(before,worker.candidate_snapshot(f.request['base'])[0])
+        self.assertEqual((f.base/'node_modules/zod/package.json').read_bytes(),f.entries['node_modules/zod/package.json'])
+        self.assertEqual(worker.materialize(self.alias_request(f))['version'],'4.6.6')
+    def test_supported_version_must_match_exact_lock_and_archive(self):
+        for name,kwargs,error in (('lock',{'lock_version':'4.4.3'},'version-unsupported'),
+                                  ('archive',{'archive_version':'4.4.3'},'differs from the lockfile')):
+            with self.subTest(name=name):
+                root=self.root/name;root.mkdir();f=Fixture(root,version='4.6.6',**kwargs)
+                with self.assertRaisesRegex(RuntimeError,error):worker.materialize(f.request)
+                self.assertFalse((f.work/'owner.json').exists())
+                self.assertFalse((f.base/'node_modules/zod').exists())
+    def test_466_plan_checks_archive_without_materialization(self):
+        f=Fixture(self.root,version='4.6.6');raw=worker.encode(f.request)
+        before={p.relative_to(self.root):(p.read_bytes(),p.stat().st_mtime_ns) for p in self.root.rglob('*') if p.is_file()}
+        result=subprocess.run([sys.executable,'-I','-B',str(ROOT/'scripts/release-retained-feed-dependencies.py'),
+            '--request-base64',base64.b64encode(raw).decode(),'--request-sha',worker.sha(raw),'--plan'],
+            capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout),{'passed':True,'readOnly':True})
+        self.assertEqual(before,{p.relative_to(self.root):(p.read_bytes(),p.stat().st_mtime_ns) for p in self.root.rglob('*') if p.is_file()})
+        self.assertEqual(list(f.work.iterdir()),[]);self.assertEqual(list((f.base/'node_modules').iterdir()),[])
     def test_wrong_version_refused(self):
         f=Fixture(self.root,version='9.9.9')
         with self.assertRaisesRegex(RuntimeError,'version-unsupported'):worker.materialize(f.request)

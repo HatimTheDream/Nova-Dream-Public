@@ -248,7 +248,7 @@ export function originalOwnerObservationArguments(pid){
  const script="$ProgressPreference='SilentlyContinue';$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter 'ProcessId = "+pid+"';if($null -eq $p){'null'}else{@{pid=[int]$p.ProcessId;created=$p.CreationDate}|ConvertTo-Json -Compress}";
  return ['-NoProfile','-NonInteractive','-Command',script];
 }
-function absentOwner(owner){
+export function verifyOriginalOwnerAbsent(owner){
  need(Number.isSafeInteger(owner.pid)&&owner.pid>0&&/^\/Date\([0-9]+\)\/$/.test(owner.created??'')&&typeof owner.executable==='string'&&hash.safeParse(owner.commandLineSha256).success,'continuation-original-process-identity-invalid');
  try{process.kill(owner.pid,0);}catch(e){if(e.code==='ESRCH')return;throw Error('continuation-owner-closure-unavailable');}
  need(process.platform==='win32','continuation-original-owner-still-present');
@@ -256,6 +256,7 @@ function absentOwner(owner){
  const raw=execFileSync(join(process.env.SystemRoot??'C:\\Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),args,{encoding:'utf8',timeout:15000,maxBuffer:65536,windowsHide:true,stdio:['ignore','pipe','pipe']});
  const current=JSON.parse(raw);need(current===null||(current.pid===owner.pid&&/^\/Date\([0-9]+\)\/$/.test(current.created)&&current.created!==owner.created),'continuation-original-owner-still-present');
 }
+const absentOwner=verifyOriginalOwnerAbsent;
 export function verifyOriginalContinuationGraph(request,descriptor){
  const graph=json(request.historical.manifest);need(graph.format===1&&graph.adapterIdentity===descriptor.adapterIdentity&&Array.isArray(graph.sourceFiles)&&graph.sourceFiles.length>0&&graph.sourceFiles.length<=512,'continuation-original-graph-invalid');
  const rows=graph.sourceFiles.map(r=>{ref.parse(r);const name=relative(join(request.historical.root,'scripts'),r.path).replaceAll('\\','/');need(!isAbsolute(name)&&!name.startsWith('../../')&&!name.includes('\0'),'continuation-original-graph-path-invalid');readEvidenceFile(r,{maximum:8*1024**2});return{name,sha256:r.sha256};});

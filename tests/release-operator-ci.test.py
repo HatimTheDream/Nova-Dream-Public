@@ -37,7 +37,7 @@ class OperatorCiTests(unittest.TestCase):
   with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',return_value=(200,run)):
    with self.assertRaisesRegex(RuntimeError,'exact-success'):M.collect(request)
  def test_unlisted_branch_refused_before_credential(self):
-  for branch in ('main','operator/prejournal-other','operator/prejournal-c494-r1-extra','operator/publication-continuation-r1-extra','operator/publication-storage-successor-r1-extra','operator/publication-storage-successor-r2','operator/browser-window-recovery-r1-extra','operator/browser-window-recovery-r2'):
+  for branch in ('main','operator/prejournal-other','operator/prejournal-c494-r1-extra','operator/publication-continuation-r1-extra','operator/publication-storage-successor-r1-extra','operator/publication-storage-successor-r2','operator/browser-window-recovery-r1-extra','operator/browser-window-recovery-r2','operator/browser-postinstall-recovery-r2','operator/browser-postinstall-recovery-r1-extra'):
    request,_,_=self.fixture();request['source']['branch']=branch
    with patch.object(M.D,'credential') as credential:
     with self.assertRaisesRegex(RuntimeError,'source-invalid'):M.collect(request)
@@ -66,6 +66,19 @@ class OperatorCiTests(unittest.TestCase):
   for repository in ('HatimTheDream/Nova-Dream','HatimTheDream/Nova-Dream-Public'):
    with self.subTest(repository=repository):
     request,run,jobs=self.fixture();request['source'].update(repository=repository,branch='operator/browser-window-recovery-r1');run['head_branch']=request['source']['branch']
+    with patch.object(M.D,'credential',return_value='synthetic') as credential,patch.object(M.D.C,'api',side_effect=[(200,run),(200,jobs)]) as api:
+     self.assertEqual(M.collect(request),{'run':run,'jobs':jobs,'requestedAttempt':1});credential.assert_called_once_with(request['tools'])
+     self.assertEqual([c.args[0] for c in api.call_args_list],['/repos/'+repository+'/actions/runs/123','/repos/'+repository+'/actions/runs/123/attempts/1/jobs?per_page=100'])
+    for field,value in [('head_branch','operator/publication-continuation-r1'),('head_sha','b'*40),('id',124),('path','other.yml'),('event','pull_request'),('conclusion','failure')]:
+     with self.subTest(repository=repository,field=field):
+      changed=dict(run);changed[field]=value
+      with patch.object(M.D,'credential',return_value='synthetic'),patch.object(M.D.C,'api',return_value=(200,changed)) as api:
+       with self.assertRaisesRegex(RuntimeError,'exact-success'):M.collect(request)
+       self.assertEqual(api.call_count,1)
+ def test_postinstall_browser_recovery_retains_exact_authenticated_run_contract(self):
+  for repository in ('HatimTheDream/Nova-Dream','HatimTheDream/Nova-Dream-Public'):
+   with self.subTest(repository=repository):
+    request,run,jobs=self.fixture();request['source'].update(repository=repository,branch='operator/browser-postinstall-recovery-r1');run['head_branch']=request['source']['branch']
     with patch.object(M.D,'credential',return_value='synthetic') as credential,patch.object(M.D.C,'api',side_effect=[(200,run),(200,jobs)]) as api:
      self.assertEqual(M.collect(request),{'run':run,'jobs':jobs,'requestedAttempt':1});credential.assert_called_once_with(request['tools'])
      self.assertEqual([c.args[0] for c in api.call_args_list],['/repos/'+repository+'/actions/runs/123','/repos/'+repository+'/actions/runs/123/attempts/1/jobs?per_page=100'])
