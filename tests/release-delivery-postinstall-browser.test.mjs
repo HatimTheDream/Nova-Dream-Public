@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {sha256} from '../scripts/release-plan.mjs';
 import {canonicalBrowser} from '../scripts/release-delivery-browser-primitives.mjs';
-import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,prepareSingleRecoveryPage,RECOVERY_GAPS} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
+import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,prepareSingleRecoveryPage,recoveryRequestDiagnostic,recoveryFailureDiagnostics,RECOVERY_GAPS} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
 import {verifyPostinstallBrowserRecovery} from '../scripts/release-delivery-postinstall-browser.mjs';
 import {postinstallReadinessFixture,postinstallAcceptanceFixture} from '../support/postinstall-browser-fixture.mjs';
 const now=1000000,origin='http://127.0.0.1:4383',candidate='a'.repeat(64),device='00000000-0000-4000-8000-000000000001',token='existing-fixture-token',cookie={name:'e3_session_'+'b'.repeat(32),value:token,domain:'127.0.0.1',path:'/'};
@@ -65,17 +65,18 @@ test('file-backed recovery evidence preserves explicit original-transition gap a
 });
 
 
-test('actual startup and Assistant read producers fit the complete narrow contract',()=>{
+test('required startup Home Tasks and saved Assistant read producers fit the narrow contract',()=>{
  const source=name=>readFileSync(new URL('../apps/client/src/'+name,import.meta.url),'utf8');
- const initial=source('prepared-views.ts'),inbox=source('OriginalInbox.tsx'),assistant=source('useAssistant.ts');
+ const initial=source('prepared-views.ts'),inbox=source('OriginalInbox.tsx'),assistant=source('useAssistant.ts'),home=source('HomeLibrary.tsx'),taskCalendar=source('useTaskCalendar.ts'),groups=source('useAssistantGroups.ts');
  const group=initial.match(/Promise\.all\(\[([^\]]+)\]\.map/);assert.ok(group,'actual initial-view request list changed; audit it');
  const paths=[...group[1].matchAll(/'([^']+)'/g)].map(m=>m[1]);assert.ok(group[1].includes('calendarReadPath(range)'));assert.match(initial,/addDays\(from, 42\)/);assert.match(initial,/calendarReadPath.*calendar\/state\?/);
  const inboxRead=inbox.match(/const accounts = await request<AccountsState>\('([^']+)'\)/);assert.ok(inboxRead);paths.push(inboxRead[1]);
  for(const m of assistant.matchAll(/read: signal => request<[^>]+>\('([^']+)', undefined, signal\)/g))paths.push(m[1]);
- paths.push('calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles');
- assert.deepEqual([...new Set(paths)].sort(),['accounts','agents/hub?archived=false','assistant/models','assistant/outputs','assistant/state','calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles','profile/progress'].sort());
+ const homeRead=home.match(/request<unknown>\('([^']+)'\)/);assert.ok(homeRead);paths.push(homeRead[1]);assert.match(groups,/request\(`assistant\/groups\$\{/);paths.push('assistant/groups');assert.match(taskCalendar,/to: addDays\(from, 60\)/);
+ paths.push('calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles','calendar/state?from=2026-10-25&to=2026-12-24&timezone=America%2FLos_Angeles');
+ assert.deepEqual([...new Set(paths)].sort(),['accounts','agents/hub?archived=false','assistant/groups','assistant/models','assistant/outputs','assistant/state','home/library','calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles','calendar/state?from=2026-10-25&to=2026-12-24&timezone=America%2FLos_Angeles','profile/progress'].sort());
  for(const p of paths){assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),true,p);assert.equal(allowedRecoveryRequest('POST',origin+'/api/'+p,'{}',input.assistant.conversationId),false,p);assert.equal(allowedRecoveryRequest('GET','http://127.0.0.1:4384/api/'+p,'',input.assistant.conversationId),false,p);}
- for(const p of ['accounts?extra=1','profile/progress?extra=1','agents/hub?archived=true','agents/hub?archived=false&before=x','calendar/state?from=2026-10-25&to=2026-12-06&timezone=UTC&extra=1','calendar/state?from=2026-02-30&to=2026-04-13&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-07&timezone=UTC','assistant/outputs?extra=1','assistant/conversations','mail/read','mail/index'])assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),false,p);
+ for(const p of ['accounts?extra=1','profile/progress?extra=1','agents/hub?archived=true','agents/hub?archived=false&before=x','calendar/state?from=2026-10-25&to=2026-12-06&timezone=UTC&extra=1','calendar/state?from=2026-02-30&to=2026-04-13&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-07&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-23&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-25&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-26&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-24&timezone=UTC&from=2026-10-25','home/library?extra=1','assistant/groups?after='+device,'assistant/account','assistant/goal/'+input.assistant.conversationId,'assistant/outputs?extra=1','assistant/conversations','mail/read','mail/index'])assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),false,p);
 });
 
 
@@ -87,4 +88,15 @@ test('persistent recovery creates its replacement before closing old pages and a
 test('unexpected new page, failed replacement or failed old-page closure never arms recovery',async()=>{
  for(const fault of ['create','close','extra']){const old={isClosed:()=>false,close:async()=>{if(fault==='close')throw Error('close failed');pages.splice(pages.indexOf(old),1);}},replacement={isClosed:()=>false},pages=[old];let armed=false;const context={pages:()=>pages,async newPage(){if(fault==='create')throw Error('create failed');pages.push(replacement);if(fault==='extra')pages.push({isClosed:()=>false});return replacement;}};await assert.rejects(prepareSingleRecoveryPage(context,{arm:()=>{armed=true;}}));assert.equal(armed,false);if(fault==='create')assert.deepEqual(pages,[old]);}
  let created=false;await assert.rejects(prepareSingleRecoveryPage({pages:()=>[],newPage:async()=>{created=true;}},{arm:()=>assert.fail('must not arm')}),/original-window-required/);assert.equal(created,false);
+});
+
+test('failure query diagnostics expose only bounded calendar fields and hashes',()=>{
+ const diagnostic=recoveryRequestDiagnostic(origin+'/api/calendar/state?from=2026-10-25&to=2026-12-24&timezone=America%2FLos_Angeles&token=do-not-record');
+ assert.deepEqual(diagnostic.calendarQuery,{from:'2026-10-25',to:'2026-12-24',timezone:'America/Los_Angeles'});assert.match(diagnostic.querySha256,/^[a-f0-9]{64}$/);assert.equal(JSON.stringify(diagnostic).includes('do-not-record'),false);
+ const other=recoveryRequestDiagnostic(origin+'/api/assistant/history/'+input.assistant.conversationId+'?messageId=private-message&token=do-not-record');assert.deepEqual(Object.keys(other).sort(),['path','querySha256']);assert.equal(JSON.stringify(other).includes('private-message'),false);
+ assert.deepEqual(recoveryRequestDiagnostic(origin+'/api/calendar/state?from=2026-10-25&from=2026-10-26&timezone='+encodeURIComponent('x'.repeat(101))).calendarQuery,{});assert.equal(recoveryRequestDiagnostic(origin+'/'+'x'.repeat(400)).path.length,192);
+});
+test('failure screenshot and DOM collection refusal stays secondary to the original error',async()=>{
+ const original=Error('original-tasks-click-failure'),before=original.message;const diagnostics=await recoveryFailureDiagnostics({isClosed:()=>false,evaluate:async()=>{throw Error('context closed');},screenshot:async()=>{throw Error('screenshot unavailable');}},'/unused');
+ assert.deepEqual(diagnostics,{pageAvailable:true,stateUnavailable:true,screenshotUnavailable:true});assert.equal(original.message,before);assert.deepEqual(await recoveryFailureDiagnostics({isClosed:()=>true},'/unused'),{pageAvailable:false});
 });

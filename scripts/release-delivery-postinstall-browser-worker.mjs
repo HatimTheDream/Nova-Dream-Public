@@ -26,10 +26,21 @@ export function allowedRecoveryRequest(method,url,body,conversationId,origin='ht
  if(parsed.pathname==='/api/calendar/state'){
   if(keys.length!==3||new Set(keys).size!==3||keys.some(k=>!['from','to','timezone'].includes(k)))return false;
   const from=params.get('from'),to=params.get('to'),zone=params.get('timezone'),date=s=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
-  return date(from)&&date(to)&&Date.parse(to)-Date.parse(from)===42*86400000&&typeof zone==='string'&&zone.length<=100&&/^[A-Za-z0-9_+/-]+$/.test(zone);
+  return date(from)&&date(to)&&[42,60].includes((Date.parse(to)-Date.parse(from))/86400000)&&typeof zone==='string'&&zone.length<=100&&/^[A-Za-z0-9_+/-]+$/.test(zone);
  }
  if(parsed.pathname==='/api/assistant/history/'+conversationId)return keys.length<=3&&new Set(keys).size===keys.length&&keys.every(k=>k==='offset'?/^(0|[1-9][0-9]{0,6})$/.test(params.get(k)):k==='resume'?params.get(k)==='1':k==='messageId'?/^[A-Za-z0-9_:.-]{1,200}$/.test(params.get(k)):false);
- return !parsed.search&&['/api/health','/api/access/context','/api/snapshot','/api/accounts','/api/profile/progress','/api/assistant/service','/api/assistant/state','/api/assistant/models','/api/assistant/outputs'].includes(parsed.pathname);
+ return !parsed.search&&['/api/health','/api/access/context','/api/snapshot','/api/accounts','/api/home/library','/api/assistant/groups','/api/profile/progress','/api/assistant/service','/api/assistant/state','/api/assistant/models','/api/assistant/outputs'].includes(parsed.pathname);
+}
+export function recoveryRequestDiagnostic(url){
+ const parsed=new URL(url),result={path:parsed.pathname.slice(0,192)};
+ if(parsed.search){result.querySha256=sha256(parsed.search);if(parsed.pathname==='/api/calendar/state'){const p=parsed.searchParams;result.calendarQuery={};for(const key of ['from','to','timezone']){const value=p.get(key);if(p.getAll(key).length===1&&typeof value==='string'&&(key==='timezone'?value.length<=100&&/^[A-Za-z0-9_+/-]+$/.test(value):/^\d{4}-\d{2}-\d{2}$/.test(value)))result.calendarQuery[key]=value;}}}
+ return result;
+}
+export async function recoveryFailureDiagnostics(page,directory){
+ const result={pageAvailable:!!page&&!page.isClosed()};if(!result.pageAvailable)return result;
+ let timer;try{result.state=await Promise.race([page.evaluate(()=>({path:location.pathname.slice(0,192),startupHandoffs:document.querySelectorAll('.startup-handoff').length,settledWorkspaces:document.querySelectorAll('.app-shell:not(.startup-handoff .app-shell)').length,taskSearchControls:document.querySelectorAll('[aria-controls="task-search-disclosure"]').length,taskSearchFields:document.querySelectorAll('[aria-label="Search tasks"]').length,activeElement:document.activeElement?.tagName??null})),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('diagnostic-state-timeout')),1500);})]);}catch{result.stateUnavailable=true;}finally{clearTimeout(timer);}
+ try{const path=join(directory,'failure-ui.png');await page.screenshot({path,fullPage:false,timeout:2000});result.screenshot={path,sha256:sha256(readFileSync(path))};}catch{result.screenshotUnavailable=true;}
+ return result;
 }
 function verifyRecoveryAccounts(value){need(Array.isArray(value.accounts)&&!value.accounts.some(a=>['connected','refreshing'].includes(a.state)&&a.capabilities?.mailRead),'browser-recovery-connected-mail-not-admitted');}
 export async function installRecoveryFence(context,api,input,authority,sessions,record,{clock=Date.now,priorCandidateId,origin='http://127.0.0.1:4383'}={}){
@@ -46,12 +57,12 @@ export async function installRecoveryFence(context,api,input,authority,sessions,
  };
  const initial=await guard();record('existing-session-authenticated',initial);
  need(typeof context.routeWebSocket==='function','browser-recovery-websocket-fence-unavailable');
- await context.routeWebSocket('**',ws=>{blockedRecord({method:'WEBSOCKET',path:new URL(ws.url()).pathname});ws.close();});
+ await context.routeWebSocket('**',ws=>{blockedRecord({method:'WEBSOCKET',...recoveryRequestDiagnostic(ws.url())});ws.close();});
  await context.route('**/*',async route=>{
   const request=route.request(),url=request.url(),method=request.method(),body=request.postData()??'';
   try{
-   current();if(!designatedPage||request.frame().page()!==designatedPage){blockedRecord({method,path:new URL(url).pathname,reason:'browser-recovery-page-not-armed'});await route.abort('blockedbyclient');return;}if(!allowedRecoveryRequest(method,url,body,input.assistant.conversationId,origin)){
-    blockedRecord({method,path:new URL(url).pathname,bodySha256:body?sha256(body):null});await route.abort('blockedbyclient');return;
+   current();if(!designatedPage||request.frame().page()!==designatedPage){blockedRecord({method,...recoveryRequestDiagnostic(url),reason:'browser-recovery-page-not-armed'});await route.abort('blockedbyclient');return;}if(!allowedRecoveryRequest(method,url,body,input.assistant.conversationId,origin)){
+    blockedRecord({method,...recoveryRequestDiagnostic(url),bodySha256:body?sha256(body):null});await route.abort('blockedbyclient');return;
    }
    const pathname=new URL(url).pathname;
    if(pathname.startsWith('/api/'))need(!request.isNavigationRequest(),'browser-recovery-api-navigation-refused');
@@ -70,7 +81,7 @@ export async function installRecoveryFence(context,api,input,authority,sessions,
    if(method==='POST'){const value=await response.json();need(response.status()===200&&value.deviceId===selected.row.deviceId&&value.apiVersion===1,'browser-recovery-session-response-changed');sessionPosts++;}
    if(stale){const value=await response.json();need(response.status()===409&&value.code==='client_update','browser-recovery-stale-client-not-rejected');staleObserved=true;record('current-stale-client-get-rejected',{status:409,code:value.code,priorCandidateId:forwarded['x-edition3-candidate'],currentCandidateId:expected.candidateId});}
    await route.fulfill({response});await response.dispose();
-  }catch(error){blockedRecord({method,path:new URL(url).pathname,reason:error.message});failure=/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-fence-failed';await route.abort('blockedbyclient').catch(()=>{});}
+  }catch(error){blockedRecord({method,...recoveryRequestDiagnostic(url),reason:error.message});failure=/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-fence-failed';await route.abort('blockedbyclient').catch(()=>{});}
  });
  return{guard,arm:page=>{need(!designatedPage&&context.pages().length===1&&context.pages()[0]===page,'browser-recovery-single-page-required');designatedPage=page;},armStale:()=>{staleArmed=true;},staleObserved:()=>staleObserved,summary:()=>({backendObservationSemantics:RECOVERY_READ_SEMANTICS,connectedMailReadAccounts:0,sessionDigest:selected.row.digest,deviceId:selected.row.deviceId,sessionPosts,sessionAttempts,blocked,mutatingRequestsForwarded:forwardedPosts,onlyExistingSessionPost:true,failure,webSocketsForwarded:0,serviceWorkers:'block'})};
 }
@@ -109,15 +120,15 @@ export async function currentBrowserWorker(requestPath){
  const entry=verifyPlaywrightClosure({path:join(directory,'playwright-closure.json'),sha256:options.playwright.sha256});const checks=[];
  const memory=name=>{const cgroup=readFileSync('/proc/self/cgroup','utf8').split('\n').find(l=>l.startsWith('0::'))?.slice(3);need(cgroup?.startsWith('/')&&!cgroup.split('/').includes('..'),'browser-recovery-cgroup-invalid');const root='/sys/fs/cgroup'+cgroup;const proof={atMs:Date.now(),currentBytes:Number(readFileSync(root+'/memory.current','utf8')),peakBytes:Number(readFileSync(root+'/memory.peak','utf8')),maxBytes:Number(readFileSync(root+'/memory.max','utf8')),events:readFileSync(root+'/memory.events','utf8')};writeBrowserOnce(join(directory,'memory-'+name+'.json'),proof);need(proof.maxBytes===2147483648&&!/^oom(?:_kill|_group_kill)? [1-9]/m.test(proof.events),'browser-recovery-memory-limit-failed');return proof;};
  const record=(name,detail)=>{need(!checks.some(c=>c.name===name),'browser-recovery-duplicate-check');const check={name,passed:true,atMs:Date.now(),detail};writeBrowserOnce(join(directory,'check-'+String(checks.length+1).padStart(2,'0')+'.json'),check);checks.push(check);};
- let context,api,result,timer,fence;
+ let context,api,result,timer,fence,page;
  try{
   memory('before-launch');const playwright=await import(pathToFileURL(entry).href);api=await playwright.request.newContext({baseURL:'http://127.0.0.1:4383',ignoreHTTPSErrors:false,timeout:15000});
   context=await playwright.chromium.launchPersistentContext(join(directory,'profile'),{executablePath:options.executable.path,headless:true,chromiumSandbox:true,serviceWorkers:'block',viewport:{width:1280,height:800},acceptDownloads:false,timeout:30000,args:['--proxy-server=http://nova-browser-recovery-deny.invalid:9','--proxy-bypass-list=<-loopback>','--host-resolver-rules=MAP nova-browser-recovery-deny.invalid ~NOTFOUND']});context.setDefaultTimeout(20000);
   fence=await installRecoveryFence(context,api,input,authority,request.sessions,record,{priorCandidateId:request.original.binding.priorCandidateId});
-  const page=await prepareSingleRecoveryPage(context,fence);
+  page=await prepareSingleRecoveryPage(context,fence);
   timer=setTimeout(()=>context.close().catch(()=>{}),Math.max(1,authority.deadlineAtMs-Date.now()));
   result=await runCurrentBrowserChecks(context,page,request,record,fence);const peak=memory('accepted');need(peak.peakBytes<=Math.floor(2147483648*0.8),'browser-recovery-memory-headroom-insufficient');
- }catch(error){writeBrowserOnce(join(directory,'failed.json'),{operationId:input.operationId,reason:/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-ui-check-failed',detail:String(error.message).slice(0,2000),atMs:Date.now(),completedChecks:checks.map(c=>c.name),fence:fence?.summary()??null});}
+ }catch(error){let diagnostics;try{diagnostics=await recoveryFailureDiagnostics(page,directory);}catch{diagnostics={unavailable:true};}writeBrowserOnce(join(directory,'failed.json'),{diagnostics,operationId:input.operationId,reason:/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-ui-check-failed',detail:String(error.message).slice(0,2000),atMs:Date.now(),completedChecks:checks.map(c=>c.name),fence:fence?.summary()??null});}
  finally{clearTimeout(timer);if(context)await context.close().catch(()=>{});if(api)await api.dispose().catch(()=>{});const closed={operationId:input.operationId,sessionId:authority.sessionId,browserClosed:!context||context.pages().length===0,atMs:Date.now()};writeBrowserOnce(join(directory,'closed.json'),closed);memory('closed');}
  if(result&&!existsSync(join(directory,'failed.json')))writeBrowserOnce(join(directory,'result.json'),{format:1,kind:'nova-postinstall-browser-recovery-acceptance',accepted:true,browserUiVerified:true,acceptanceScope:'current-installed-browser-crash-recovery',operationId:input.operationId,authority:request.authorityRef,inputSha256:hash(input),sessionId:authority.sessionId,startedAtMs:authority.startedAtMs,completedAtMs:Date.now(),originalTransitionCoverage:'unverified',transitionCoverageGaps:[...RECOVERY_GAPS],checks,...result,savedMessageId:input.assistant.savedMessageId,savedReplySha256:input.assistant.replySha256,newAssistantMessages:0,installationDispatched:false,sourceProfileInventorySha256:request.plan.profile.inventorySha256});
 }
