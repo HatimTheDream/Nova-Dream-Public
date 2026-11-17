@@ -13,10 +13,10 @@ const session={digest:sha256(token),deviceId:device,expiresAtMs:now+86400000},au
 const health={application:'nova-dream-edition-3',status:'ready',candidateId:candidate,processIdentity:'unchanged-process',serviceInputsSha256:'f'.repeat(64),epoch:'epoch',frontend:{source:'bundled',id:candidate,version:'2.28.39',buildVersion:'1.0.412'}};
 const input={operationId:'00000000-0000-4000-8000-000000000005',installed:{installedHealth:health},fullTarget:{candidateId:candidate,version:'2.28.39',buildVersion:'1.0.412'},assistant:{conversationId:'00000000-0000-4000-8000-000000000006',nativeId:'native-existing',savedMessageId:'message-existing',replySha256:sha256('existing-reply')}};
 const response=(value,status=200,headers={})=>({status:()=>status,headers:()=>headers,json:async()=>value,dispose:async()=>{}});
-function rig({cookieList=[cookie],healthValue=health,snapshot={epoch:'epoch',deviceId:device},postHeaders={}}={}){
+function rig({cookieList=[cookie],healthValue=health,snapshot={epoch:'epoch',deviceId:device},postHeaders={},accountsState={accounts:[]}}={}){
  const page={},other={},pages=[page],calls=[],records=[];let handler;
  const context={cookies:async()=>cookieList,pages:()=>pages,routeWebSocket:async()=>{},route:async(_url,fn)=>{handler=fn;}};
- const api={get:async url=>response(url.endsWith('/api/health')?healthValue:snapshot),fetch:async(url,args)=>{calls.push({url,...args});return response({deviceId:device,apiVersion:1},200,postHeaders);}};
+ const api={get:async url=>response(url.endsWith('/api/health')?healthValue:url.endsWith('/api/accounts')?accountsState:snapshot),fetch:async(url,args)=>{calls.push({url,...args});return response({deviceId:device,apiVersion:1},200,postHeaders);}};
  const route=(method='POST',pathname='/api/session',body='{}',owner=page)=>({request:()=>({url:()=>origin+pathname,method:()=>method,postData:()=>body,headers:()=>({'content-type':'application/json'}),isNavigationRequest:()=>false,frame:()=>({page:()=>owner})}),abort:async()=>{},fulfill:async()=>{}});
  return{page,other,context,api,calls,records,route,invoke:(...args)=>handler(route(...args))};
 }
@@ -43,6 +43,10 @@ test('sixth bootstrap is rejected before forwarding and token rotation cannot qu
 test('installed process, epoch or authenticated device drift refuses before any bootstrap',async()=>{
  for(const r of [rig({healthValue:{...health,processIdentity:'other'}}),rig({snapshot:{epoch:'other',deviceId:device}}),rig({snapshot:{epoch:'epoch',deviceId:'other'}})]){await assert.rejects(fence(r));assert.equal(r.calls.length,0);}
 });
+test('connected or refreshing mail is refused before navigation or any session POST',async()=>{
+ for(const state of ['connected','refreshing']){const r=rig({accountsState:{accounts:[{state,capabilities:{mailRead:true}}]}});await assert.rejects(fence(r),/connected-mail-not-admitted/);assert.equal(r.calls.length,0);assert.equal(r.records.length,0);}
+ const r=rig({accountsState:{accounts:[{state:'disconnected',capabilities:{mailRead:true}}]}}),f=await fence(r);assert.equal(f.summary().connectedMailReadAccounts,0);assert.equal(r.records[0].detail.backendObservationSemantics,'maintained-get-projections-with-existing-housekeeping');
+});
 test('expired fixed authority cannot acquire a new clock or dispatch',async()=>{
  const r=rig();await assert.rejects(installRecoveryFence(r.context,r.api,input,authority,[session],()=>{},{clock:()=>authority.deadlineAtMs,priorCandidateId:'0'.repeat(64)}));assert.equal(r.calls.length,0);
 });
@@ -58,4 +62,18 @@ test('file-backed recovery evidence preserves explicit original-transition gap a
   assert.throws(()=>verifyPostinstallBrowserRecovery(output,{...input,operationId:'other'}));
   writeFileSync(output.checkReceipts[0].path,'{}');assert.throws(()=>verifyPostinstallBrowserRecovery(output,input));
  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
+
+test('actual startup and Assistant read producers fit the complete narrow contract',()=>{
+ const source=name=>readFileSync(new URL('../apps/client/src/'+name,import.meta.url),'utf8');
+ const initial=source('prepared-views.ts'),inbox=source('OriginalInbox.tsx'),assistant=source('useAssistant.ts');
+ const group=initial.match(/Promise\.all\(\[([^\]]+)\]\.map/);assert.ok(group,'actual initial-view request list changed; audit it');
+ const paths=[...group[1].matchAll(/'([^']+)'/g)].map(m=>m[1]);assert.ok(group[1].includes('calendarReadPath(range)'));assert.match(initial,/addDays\(from, 42\)/);assert.match(initial,/calendarReadPath.*calendar\/state\?/);
+ const inboxRead=inbox.match(/const accounts = await request<AccountsState>\('([^']+)'\)/);assert.ok(inboxRead);paths.push(inboxRead[1]);
+ for(const m of assistant.matchAll(/read: signal => request<[^>]+>\('([^']+)', undefined, signal\)/g))paths.push(m[1]);
+ paths.push('calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles');
+ assert.deepEqual([...new Set(paths)].sort(),['accounts','agents/hub?archived=false','assistant/models','assistant/outputs','assistant/state','calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles','profile/progress'].sort());
+ for(const p of paths){assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),true,p);assert.equal(allowedRecoveryRequest('POST',origin+'/api/'+p,'{}',input.assistant.conversationId),false,p);assert.equal(allowedRecoveryRequest('GET','http://127.0.0.1:4384/api/'+p,'',input.assistant.conversationId),false,p);}
+ for(const p of ['accounts?extra=1','profile/progress?extra=1','agents/hub?archived=true','agents/hub?archived=false&before=x','calendar/state?from=2026-10-25&to=2026-12-06&timezone=UTC&extra=1','calendar/state?from=2026-02-30&to=2026-04-13&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-07&timezone=UTC','assistant/outputs?extra=1','assistant/conversations','mail/read','mail/index'])assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),false,p);
 });

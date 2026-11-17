@@ -6,7 +6,7 @@ import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {runInstallTransport,releaseTransportSchema} from './release-adapters.mjs';
 import {canonicalBrowser,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
 import {verifyDocumentIdentity} from './release-delivery-browser-checks.mjs';
-import {RECOVERY_CHECKS,RECOVERY_GAPS} from './release-delivery-postinstall-browser-worker.mjs';
+import {RECOVERY_CHECKS,RECOVERY_GAPS,RECOVERY_READ_SEMANTICS} from './release-delivery-postinstall-browser-worker.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},hash=v=>sha256(canonicalBrowser(v)),read=r=>JSON.parse(readEvidenceFile(r,{maximum:8*1024**2}));
 const ref=p=>({path:p,sha256:sha256(readFileSync(p))});
 const normalized=request=>{const {admission,...base}=request;return base;};
@@ -59,13 +59,13 @@ export function verifyPostinstallBrowserRecovery(output,input){
  for(const name of ['copied-draft-before-edit','copied-draft-after-reload','copied-draft-after-client-reload'])need(check(name).draftSha256===draftHash,'postinstall-browser-draft-check-changed');
  need(same(check('existing-saved-reply-visible'),{conversationId:input.assistant.conversationId,nativeId:input.assistant.nativeId,savedMessageId:input.assistant.savedMessageId,replySha256:input.assistant.replySha256}),'postinstall-browser-saved-reply-check-changed');
  need(same(check('current-stale-client-get-rejected'),{status:409,code:'client_update',priorCandidateId:original.binding.priorCandidateId,currentCandidateId:input.installed.installedHealth.candidateId})&&check('current-ui-reload-reaction').realServerResponse===true,'postinstall-browser-stale-client-check-changed');
- const session=output.checks[0].detail;need(plan.sessions.some(r=>r.digest===session.sessionDigest&&r.deviceId===session.deviceId&&r.expiresAtMs===session.expiresAtMs&&r.expiresAtMs>authority.deadlineAtMs+30000),'postinstall-browser-session-authority-changed');
+ const session=output.checks[0].detail;need(session.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&session.connectedMailReadAccounts===0,'postinstall-browser-startup-read-scope-changed');need(plan.sessions.some(r=>r.digest===session.sessionDigest&&r.deviceId===session.deviceId&&r.expiresAtMs===session.expiresAtMs&&r.expiresAtMs>authority.deadlineAtMs+30000),'postinstall-browser-session-authority-changed');
  verifyDocumentIdentity(output.loadedDocument,input.installed.installedHealth,{route:'full'});readEvidenceFile(output.screenshot,{maximum:16*1024**2});readEvidenceFile(output.draftScreenshot,{maximum:16*1024**2});need(output.checks[2].detail.screenshotSha256===output.draftScreenshot.sha256,'postinstall-browser-draft-screenshot-changed');
  const closed=read(output.closed),unit=read(output.unitCloseout),copy=read(output.profileCopy),memory=read(output.memory);
  need(closed.operationId===input.operationId&&closed.sessionId===authority.sessionId&&closed.browserClosed===true&&unit.operationId===input.operationId&&unit.sessionId===authority.sessionId&&unit.originalProfileUnchanged===true&&unit.ownedPids?.length===0&&/ActiveState=(inactive|failed)\n/.test(unit.unitState)&&unit.unitState.includes('MainPID=0\n'),'postinstall-browser-process-closeout-incomplete');
  need(copy.sourceUnchanged===true&&same(copy.source,plan.profile)&&output.sourceProfileInventorySha256===plan.profile.inventorySha256&&copy.excludedSingletonLinks.every(n=>['SingletonLock','SingletonCookie','SingletonSocket'].includes(n)),'postinstall-browser-source-profile-changed');
  need(memory.maxBytes===2147483648&&Number.isSafeInteger(memory.peakBytes)&&memory.peakBytes<=Math.floor(2147483648*0.8)&&!/^oom(?:_kill|_group_kill)? [1-9]/m.test(memory.events),'postinstall-browser-memory-proof-changed');
- const fence=output.fence;need(fence.failure===null&&fence.onlyExistingSessionPost===true&&Number.isSafeInteger(fence.sessionPosts)&&fence.sessionPosts>=1&&fence.sessionPosts<=5&&fence.sessionAttempts===fence.sessionPosts&&fence.mutatingRequestsForwarded===fence.sessionPosts&&fence.webSocketsForwarded===0&&fence.serviceWorkers==='block'&&fence.sessionDigest===session.sessionDigest&&fence.deviceId===session.deviceId,'postinstall-browser-request-fence-changed');return output;
+ const fence=output.fence;need(fence.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&fence.connectedMailReadAccounts===0&&fence.failure===null&&fence.onlyExistingSessionPost===true&&Number.isSafeInteger(fence.sessionPosts)&&fence.sessionPosts>=1&&fence.sessionPosts<=5&&fence.sessionAttempts===fence.sessionPosts&&fence.mutatingRequestsForwarded===fence.sessionPosts&&fence.webSocketsForwarded===0&&fence.serviceWorkers==='block'&&fence.sessionDigest===session.sessionDigest&&fence.deviceId===session.deviceId,'postinstall-browser-request-fence-changed');return output;
 }
 export async function observePostinstallBrowserRecovery(context,options={}){
  const {authority,authorityRef}=context,{base,input}=inputs(context),clock=options.clock??Date.now;
