@@ -5,6 +5,7 @@ import {performance} from 'node:perf_hooks';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {runInstallTransport,releaseTransportSchema} from './release-adapters.mjs';
 import {canonicalBrowser,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
+import {verifyLinkedBrowserRecord} from './release-delivery-browser-continuation.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms)),hash=v=>sha256(canonicalBrowser(v));
 const read=p=>JSON.parse(readFileSync(p,'utf8'));
 const names=['release-delivery-browser-primitives.mjs','release-delivery-browser-checks.mjs','release-delivery-browser-remote-worker.mjs'];
@@ -16,7 +17,7 @@ export async function remoteBrowserCall(original,transport,mode,extra={},run=run
   const helper=readFileSync(new URL('release-delivery-browser-remote.py',import.meta.url),'utf8');
   const program=`import base64,json\nDATA=json.loads(base64.b64decode('${Buffer.from(JSON.stringify(data)).toString('base64')}'))\n`+helper;
   const started=monotonic(),result=await run(config,program,{captureDiagnostics:true}),transportElapsedMs=monotonic()-started;
-  need(typeof result.stdout==='string'&&!result.diagnosticsTruncated,'browser-remote-response-unavailable');
+  need(result.uncertain!==true&&typeof result.stdout==='string'&&!result.diagnosticsTruncated,'browser-remote-response-unavailable');
   const output=JSON.parse(result.stdout);if(output.state==='gap')throw Error(output.reason);
   need(result.exitCode===0,'browser-remote-caller-failed');
   // This duration belongs to the local transport; host timestamps remain on the host clock.
@@ -37,28 +38,58 @@ export function verifyRemoteBrowserSessionAlive(status,original,dir,now=Date.now
     &&Number.isFinite(localElapsedMs)&&localElapsedMs>=0&&hostNow-beat.atMs+localElapsedMs<=10000
     &&status.unitState.includes('ActiveState=active\n')&&status.unitState.includes(`MainPID=${beat.pid}\n`),'browser-original-remote-session-unavailable');
 }
+function verifyRemoteLaunchPlan(response,original){
+  const plan=response?.plan,options=original.binding.options;
+  need(response?.state==='planned'&&response.existingOperation===false&&plan?.operationId===original.binding.operationId
+    &&response.planSha256===hash(plan)&&plan.originalSha256===sha256(Buffer.from(canonicalBrowser(original)+'\n'))
+    &&canonicalBrowser(plan.node)===canonicalBrowser(options.node)&&canonicalBrowser(plan.executable)===canonicalBrowser(options.executable)
+    &&plan.playwrightSha256===options.playwright.sha256
+    &&(!original.binding.sessionId||(plan.sessionId===original.binding.sessionId&&plan.directory===options.directoryRoot+'/'+plan.sessionId&&plan.unit==='nova-browser-'+plan.sessionId)),'browser-remote-plan-binding-changed');
+  return {operationId:original.binding.operationId,planSha256:response.planSha256,originalSha256:plan.originalSha256};
+}
 export async function prepareRemoteBrowser(kept,context,{options,transport,inspectOnly=false,clock=Date.now,run}={}){
-  const {dir}=kept;
+  const {dir}=kept,reservation=kept.binding.publicationContinuation?.browserReservation;
+  // A fixed reservation may be materialized after a crash, but never restarted.
+  if(reservation){
+    const fixed={binding:kept.binding,startedAtMs:reservation.startedAtMs,deadlineAtMs:reservation.deadlineAtMs};
+    verifyLinkedBrowserRecord(fixed);
+    if(!kept.record)need(clock()>=reservation.startedAtMs&&clock()<reservation.deadlineAtMs,'browser-original-deadline-exhausted');
+  }
   if(!kept.record){need(!inspectOnly,'browser-original-preparation-not-dispatched');await context.beforeNewEffect();
-    const now=clock();if(kept.binding.publicationContinuation)need(now+options.timeoutMs<=kept.binding.publicationContinuation.expiresAtMs,'browser-successor-budget-exceeds-grant');
-    writeBrowserOnce(kept.path,{binding:kept.binding,startedAtMs:now,deadlineAtMs:now+options.timeoutMs});}
-  const original=read(kept.path),launch=join(dir,'remote-launch-intent.json');
+    const now=clock(),startedAtMs=reservation?.startedAtMs??now,deadlineAtMs=reservation?.deadlineAtMs??now+options.timeoutMs;
+    need(now>=startedAtMs&&now<deadlineAtMs,'browser-original-deadline-exhausted');
+    if(kept.binding.publicationContinuation)need(deadlineAtMs<=kept.binding.publicationContinuation.expiresAtMs,'browser-successor-budget-exceeds-grant');
+    writeBrowserOnce(kept.path,{binding:kept.binding,startedAtMs,deadlineAtMs});}
+  const original=read(kept.path),launch=join(dir,'remote-launch-intent.json'),planPath=join(dir,'remote-plan.json');
+  need(canonicalBrowser(original.binding)===canonicalBrowser(kept.binding),'browser-original-binding-changed');
+  if(reservation)verifyLinkedBrowserRecord(original);
   if(!existsSync(launch)){
     need(!inspectOnly,'browser-original-preparation-not-dispatched');
-    const plan=await remoteBrowserCall(original,transport,'plan',{},run);need(plan.state==='planned'&&!plan.existingOperation,'browser-remote-operation-already-exists');
-    writeBrowserOnce(join(dir,'remote-plan.json'),plan);const intent={operationId:original.binding.operationId,planSha256:plan.planSha256,originalSha256:plan.plan.originalSha256};
-    await context.beforeNewEffect();writeBrowserOnce(launch,intent);await remoteBrowserCall(original,transport,'start',{intent},run);
+    // Expiry before intent dispatch cannot create any remote browser effect.
+    need(clock()>=original.startedAtMs&&clock()<original.deadlineAtMs,'browser-original-deadline-exhausted');
+    let plan;
+    if(reservation&&existsSync(planPath))plan=read(planPath);
+    else{
+      plan=await remoteBrowserCall(original,transport,'plan',{},run);need(plan.state==='planned'&&!plan.existingOperation,'browser-remote-operation-already-exists');
+      if(reservation)verifyRemoteLaunchPlan(plan,original);
+      writeBrowserOnce(planPath,plan);
+    }
+    const intent=reservation?verifyRemoteLaunchPlan(plan,original):{operationId:original.binding.operationId,planSha256:plan.planSha256,originalSha256:plan.plan.originalSha256};
+    await context.beforeNewEffect();need(clock()<original.deadlineAtMs,'browser-original-deadline-exhausted');
+    writeBrowserOnce(launch,intent);await remoteBrowserCall(original,transport,'start',{intent},run);
+  }else if(reservation){
+    need(existsSync(planPath)&&canonicalBrowser(read(launch))===canonicalBrowser(verifyRemoteLaunchPlan(read(planPath),original)),'browser-remote-launch-intent-changed');
   }
-  if(Date.now()>=original.deadlineAtMs){
+  if(clock()>=original.deadlineAtMs){
     const status=keepStatus(dir,await remoteBrowserCall(original,transport,'status',{},run),original);
     if(status.files.failed)throw Error(status.files.failed.reason);
     need(!status.files.closed,'browser-original-session-closed');throw Error('browser-original-deadline-exhausted');
   }
-  const deadline=Math.min(Date.now()+90000,original.deadlineAtMs);
-  while(Date.now()<deadline){
+  const deadline=Math.min(clock()+90000,original.deadlineAtMs);
+  while(clock()<deadline){
     const status=keepStatus(dir,await remoteBrowserCall(original,transport,'status',{},run),original);
     if(status.files.failed)throw Error(status.files.failed.reason);
-    if(status.files.prepared){verifyRemoteBrowserSessionAlive(status,original,dir);const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};}
+    if(status.files.prepared){verifyRemoteBrowserSessionAlive(status,original,dir,clock());const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};}
     need(!status.files.closed,'browser-original-session-closed');await sleep(1500);
   }
   throw Error('browser-original-response-unavailable');

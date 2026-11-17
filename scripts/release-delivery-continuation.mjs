@@ -11,7 +11,8 @@ import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { PREWRITE_PREREQUISITES } from './release-delivery-disposition.mjs';
 import { withVerificationPass } from './release-verification-pass.mjs';
 import { fullFactsSpec, verifyFullFacts } from './release-delivery-full-host.mjs';
-import { verifyPublicationBrowserContinuation } from './release-delivery-browser-continuation.mjs';
+import { verifyPublicationBrowserContinuation, verifyBrowserWindowRecoveryReadiness, assertBrowserWindowRecoveryUnmaterialized } from './release-delivery-browser-continuation.mjs';
+import { configuredBrowserWindowRecoveryStorageReadiness, verifyBrowserWindowRecoveryStorageReadiness } from './release-storage-default.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -38,22 +39,25 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
 /** One bounded continuation of the already reserved publication phase. */
 export const PUBLICATION_CONTINUATION_PREREQUISITES=Object.freeze([...PREWRITE_PREREQUISITES,'package','sign','capacity','recovery']);
 export const PUBLICATION_PACKAGE_SUBSTEPS=Object.freeze(['dependency-stage','dependency-plan','dependency-intent','dependency-execute','dependency-retrieval','pair','bundle'].map(n=>'package/'+n));
-const PUBLICATION_BRANCH='operator/publication-continuation-r1',STORAGE_SUCCESSOR_BRANCH='operator/publication-storage-successor-r1';
-const publicationSource=source.extend({branch:z.enum([PUBLICATION_BRANCH,STORAGE_SUCCESSOR_BRANCH])});
+const PUBLICATION_BRANCH='operator/publication-continuation-r1',STORAGE_SUCCESSOR_BRANCH='operator/publication-storage-successor-r1',BROWSER_RECOVERY_BRANCH='operator/browser-window-recovery-r1';
+const publicationSource=source.extend({branch:z.enum([PUBLICATION_BRANCH,STORAGE_SUCCESSOR_BRANCH,BROWSER_RECOVERY_BRANCH])});
 export const completedOriginalStorageSchema=z.object({result:ref,review:ref}).strict();
 export const publicationStorageSuccessorSchema=z.object({predecessorGrantSha256:hash,completedOriginalStorage:completedOriginalStorageSchema,reason:z.string().trim().min(1).max(1000)}).strict();
-const publicationBranchMatches=v=>Object.values(v.operatorSources??v.operator.sources).every(s=>s.branch===(v.successor?STORAGE_SUCCESSOR_BRANCH:PUBLICATION_BRANCH));
+export const browserWindowRecoverySchema=z.object({predecessorGrantSha256:hash,storageAdmission:z.object({eventId:z.number().int().positive(),sha256:hash,session:ref,dispatch:ref}).strict(),reason:z.string().trim().min(1).max(1000)}).strict();
+export const browserWindowReservationSchema=z.object({sessionId:z.uuid(),startedAtMs:z.number().int().nonnegative(),deadlineAtMs:z.number().int().positive()}).strict();
+const publicationBranchMatches=v=>!(v.successor&&v.browserWindowRecovery)&&Object.values(v.operatorSources??v.operator.sources).every(s=>s.branch===(v.browserWindowRecovery?BROWSER_RECOVERY_BRANCH:v.successor?STORAGE_SUCCESSOR_BRANCH:PUBLICATION_BRANCH));
+const browserWindowShape=v=>Boolean(v.browserWindowRecovery)===Boolean(v.browserReservation)&&Boolean(v.browserWindowRecovery)===Boolean(v.browserWindowReadiness)&&Boolean(v.browserWindowRecovery)===Boolean(v.storageWindowReadiness)&&(!v.browserWindowRecovery||(v.browserReservation.sessionId===v.browser.successorSessionId&&v.browserReservation.startedAtMs===v.issuedAtMs&&v.browserReservation.deadlineAtMs===v.issuedAtMs+1800000&&v.browserReservation.deadlineAtMs<=v.expiresAtMs));
 const publicationReservation=z.object({key:z.uuid(),inputSha256:hash,observationSha256:hash}).strict();
 const publicationBrowser=z.object({predecessor:ref,status:ref,successorSessionId:z.uuid()}).strict();
 const publicationAdmission=z.object({plan:ref,review:ref,intent:ref}).strict();
 export const publicationContinuationRequestSchema=continuationRequestSchema.extend({kind:z.literal('nova-expired-publication-request'),
- operatorSources:pair(publicationSource),publication:publicationReservation,browser:publicationBrowser,admission:publicationAdmission.optional(),successor:publicationStorageSuccessorSchema.optional()}).refine(publicationBranchMatches,'publication-successor-source-branch-required');
+ operatorSources:pair(publicationSource),publication:publicationReservation,browser:publicationBrowser,admission:publicationAdmission.optional(),successor:publicationStorageSuccessorSchema.optional(),browserWindowRecovery:browserWindowRecoverySchema.optional()}).refine(publicationBranchMatches,'publication-successor-source-branch-required');
 export const publicationContinuationGrantSchema=z.object({...continuationGrantSchema.shape,kind:z.literal('nova-expired-publication-continuation'),
  prerequisites:z.array(z.object({phase:z.enum(PUBLICATION_CONTINUATION_PREREQUISITES),key:z.uuid(),inputSha256:hash,observationSha256:hash}).strict()).length(10),
  packageSubsteps:z.array(z.object({phase:z.enum(PUBLICATION_PACKAGE_SUBSTEPS),key:z.uuid(),inputSha256:hash,observationSha256:hash,parentKey:z.uuid(),parentInputSha256:hash}).strict()).length(7),
- publication:publicationReservation,browser:publicationBrowser,admission:publicationAdmission,prestageVerification:ref,successor:publicationStorageSuccessorSchema.optional(),
+ publication:publicationReservation,browser:publicationBrowser,admission:publicationAdmission,prestageVerification:ref,successor:publicationStorageSuccessorSchema.optional(),browserWindowRecovery:browserWindowRecoverySchema.optional(),browserReservation:browserWindowReservationSchema.optional(),browserWindowReadiness:ref.optional(),storageWindowReadiness:ref.optional(),
  operator:z.object({adapterIdentity:hash,sources:pair(publicationSource),sourceFiles:graphSchema,ci:pair(ref)}).strict()
-}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required').refine(publicationBranchMatches,'publication-successor-source-branch-required');
+}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required').refine(publicationBranchMatches,'publication-successor-source-branch-required').refine(browserWindowShape,'browser-window-fixed-reservation-required');
 
 const preJournalSource=source.extend({branch:z.enum(['operator/prejournal-c494-r1','operator/prejournal-c494-r2'])});
 const noChildDispositionSchema=z.object({format:z.literal(1),kind:z.literal('nova-prejournal-no-child-disposition'),operationId:z.uuid(),
@@ -369,6 +373,51 @@ function verifyStorageSuccessorPredecessor(journal,id,successor,{now,assertAbsen
  verifyCompletedOriginalStorage(journal,id,successor.completedOriginalStorage,{predecessor:previous,now,assertAbsent,observeOwners});return previous;
 }
 
+
+/** The completed admission belongs to the expired predecessor, never the new clock. */
+export function verifyBrowserWindowRecoveryPredecessor(journal,id,raw,{now=Date.now(),assertAbsent=absentOwner,observeOwners=false}={}){
+ const marker=browserWindowRecoverySchema.parse(raw),previous=journal.deliveryStorageSuccessorContinuation(id);
+ need(previous?.proof.successor&&!previous.proof.browserWindowRecovery&&previous.sha256===marker.predecessorGrantSha256,'browser-window-recovery-predecessor-changed');
+ verifyStoredContinuationGrant(journal,id,previous,{now,effect:false,assertAbsent});
+ const admitted=journal.deliveryPublicationContinuationAdmission(id);
+ need(admitted&&admitted.admission.grantSha256===previous.sha256&&same(marker.storageAdmission,{eventId:admitted.eventId,sha256:admitted.sha256,session:admitted.admission.session,dispatch:admitted.admission.dispatch}),'browser-window-recovery-historical-admission-changed');
+ if(observeOwners)verifyStorageSuccessorPredecessor(journal,id,previous.proof.successor,{now,assertAbsent,observeOwners:true});
+ return previous;
+}
+function browserWindowRecoveryOwners(journal,id,request,previous,now,assertAbsent){
+ const previousRequest=publicationContinuationRequestSchema.parse(json(previous.proof.request)),original=json(request.owner.request),root=resolve(request.owner.request.path,'..');
+ need(same(request.owner.request,previousRequest.owner.request)&&request.owner.attempts.length>previousRequest.owner.attempts.length
+  &&same(request.owner.attempts.slice(0,previousRequest.owner.attempts.length),previousRequest.owner.attempts),'browser-window-recovery-owner-history-changed');
+ const dirs=[],ownerPids=[];
+ for(const [index,a]of request.owner.attempts.entries()){
+  const launcher=json(a.launcher),intent=json(a.intent),closed=json(a.childResult),exit=json(a.exit),status=json(a.stdout),dir=resolve(a.intent.path,'..'),name=relative(join(root,'observations'),dir);dirs.push(dir);
+  need(/^observation-[0-9]{4,}$/.test(name)&&a.intent.path===join(dir,'intent.json')&&a.exit.path===join(dir,'exit.json')&&a.childResult.path===join(dir,'default-child-result.json')&&a.stdout.path===join(dir,'stdout.json'),'continuation-original-observation-path-changed');
+  const retained=index<previousRequest.owner.attempts.length,expectedEntry=retained?original.deliveryEntry:reference(join(previous.proof.operator.sources.private.root,'edition3/scripts/release-deliver.mjs'));
+  need(launcher.kind==='verified-waiting-release-launcher'&&launcher.dispatchAuthority===false&&launcher.operationId===id&&['start','resume'].includes(launcher.mode)
+   &&same(launcher.node,original.node)&&same(launcher.entry,expectedEntry)&&same(launcher.start,original.releaseInput)&&same(launcher.budget,original.storageBudget)
+   &&resolve(launcher.cwd)===resolve(retained?request.historical.root:join(previous.proof.operator.sources.private.root,'edition3'))&&launcher.worker.parentPid===launcher.owner.pid,'continuation-original-owner-identity-changed');
+  for(const r of [launcher.node,launcher.entry,launcher.runner,launcher.config])readEvidenceFile(r,{maximum:128*1024**2});
+  const tail=launcher.mode==='resume'?id:join(resolve(journal.directory,'..'),'request-'+id,'descriptor.json');
+  need(same(intent.request,request.owner.request)&&intent.sameReleaseOperation===true&&same(intent.argv,[launcher.node.path,launcher.entry.path,launcher.mode,journal.directory,tail]),'continuation-original-child-argv-changed');
+  need(closed.originalChildClosed===true&&closed.logBoundExceeded===false&&closed.automaticNewOperationPermitted===false&&closed.returnCode===exit.returnCode
+   &&Number.isSafeInteger(exit.finishedAtMilliseconds)&&exit.finishedAtMilliseconds<=now,'continuation-original-owner-not-closed');
+  if(retained||exit.returnCode===2){need(exit.returnCode===2&&status.operationId===id&&status.complete===false&&status.closed===false,'continuation-original-result-changed');}
+  else need(exit.returnCode===1&&status.kind==='nova-release-delivery-error'&&typeof status.reason==='string'&&status.reason.length>0&&status.automaticReplayPermitted===false,'browser-window-recovery-closed-error-required');
+  if(!retained){
+   const session=json(reference(join(root,'session-'+name+'.json'))),config=json(launcher.config),graph=json(session.sourceGraph);
+   need(session.kind==='nova-storage-default-session'&&session.mode==='resume'&&session.operationId===id&&same(session.request,request.owner.request)
+    &&Number.isSafeInteger(session.issuedAtMilliseconds)&&session.issuedAtMilliseconds>=previous.proof.issuedAtMs&&session.issuedAtMilliseconds<=exit.finishedAtMilliseconds
+    &&same(session.config,launcher.config)&&same(session.continuationDispatch,request.browserWindowRecovery.storageAdmission.dispatch)
+    &&session.operatorContinuation?.grantSha256===previous.sha256&&session.adapterIdentity===previous.proof.operator.adapterIdentity&&graph.adapterIdentity===previous.proof.operator.adapterIdentity
+    &&config.operatorContinuation?.operationId===id&&resolve(config.operatorContinuation.journalDirectory)===resolve(journal.directory)&&same(config.operatorContinuation.originalRequest,request.owner.request),'browser-window-recovery-closed-session-changed');
+  }
+  for(const p of [launcher.owner,launcher.worker]){need(Number(p.created.match(/^\/Date\(([0-9]+)\)\/$/)?.[1])<=exit.finishedAtMilliseconds,'continuation-original-owner-time-changed');assertAbsent(p);ownerPids.push(p.pid);}
+ }
+ const actual=readdirSync(join(root,'observations')).filter(n=>/^observation-[0-9]{4,}$/.test(n)).map(n=>join(root,'observations',n));
+ need(new Set(dirs).size===dirs.length&&same([...dirs].sort(),actual.sort()),'continuation-unclassified-original-owner');
+ return ownerPids;
+}
+
 export function publicationContinuationSnapshot(journal,id,now,{assertAbsent=absentOwner,request=null}={}){
  need(request,'publication-continuation-request-required');request=publicationContinuationRequestSchema.parse(request);
  if(request.successor){
@@ -377,6 +426,15 @@ export function publicationContinuationSnapshot(journal,id,now,{assertAbsent=abs
   const previousRequest=publicationContinuationRequestSchema.parse(json(previous.proof.request));
   need(same(request.historical,previousRequest.historical)&&same(request.owner,previousRequest.owner)&&same(request.publication,previous.proof.publication)&&same(request.browser,previous.proof.browser),'publication-storage-successor-original-scope-changed');
   need(!journal.deliveryPublicationContinuationAdmission(id),'publication-storage-successor-already-admitted');
+ }
+ let recoveryPrevious=null;
+ if(request.browserWindowRecovery){
+  recoveryPrevious=verifyBrowserWindowRecoveryPredecessor(journal,id,request.browserWindowRecovery,{now,assertAbsent,observeOwners:true});
+  need(journal.deliveryOperatorContinuation(id)?.sha256===recoveryPrevious.sha256&&now>=recoveryPrevious.proof.expiresAtMs,'browser-window-recovery-not-expired-or-already-granted');
+  const previousRequest=publicationContinuationRequestSchema.parse(json(recoveryPrevious.proof.request));
+  need(same(request.historical,previousRequest.historical)&&same(request.publication,recoveryPrevious.proof.publication)&&same(request.browser,recoveryPrevious.proof.browser),'browser-window-recovery-original-scope-changed');
+  need(request.durationMs>=1800000,'browser-window-recovery-full-window-required');
+  assertBrowserWindowRecoveryUnmaterialized(journal,request.browser.successorSessionId);
  }
  const retained=journal.loadDelivery(id),d=retained.descriptor;
  need(retained.state==='active'&&!journal.deliveryDisposition(id),'continuation-original-active-operation-required');
@@ -393,8 +451,8 @@ export function publicationContinuationSnapshot(journal,id,now,{assertAbsent=abs
  need(!journal.db.prepare("SELECT id FROM delivery_events WHERE operation_id=? AND kind='rejected-producer-observation'").get(id),'continuation-rejected-effect-history');
  const reservation={key:publication.key,inputSha256:publication.inputSha256,observationSha256:sha256(canonical(publication.current))};
  need(same(reservation,request.publication),'publication-continuation-reservation-changed');
- let ownerPids=[];
- if(request){
+ let ownerPids=recoveryPrevious?browserWindowRecoveryOwners(journal,id,request,recoveryPrevious,now,assertAbsent):[];
+ if(request&&!recoveryPrevious){
   need(request.operationId===id,'continuation-request-operation-changed');verifyOriginalContinuationGraph(request,d);
   const original=json(request.owner.request),root=resolve(request.owner.request.path,'..'),target=json(d.target),dirs=[];
   need(original.operationId===id&&same(original.node,target.artifactTools.node),'continuation-original-storage-request-changed');
@@ -421,7 +479,7 @@ export function publicationContinuationSnapshot(journal,id,now,{assertAbsent=abs
  }
  return {descriptorSha256:retained.descriptor_hash,targetIdentity:d.targetIdentity,originalAdapterIdentity:d.adapterIdentity,
   originalTimelineSha256:sha256(canonical(d.timeline)),originalBudgetMs:d.observationBudgetMs,originalCreatedAtMs:retained.created_at,...history(journal,id),
-  snapshotSha256:sha256(canonical([...phases,...substeps,publication])),publication:reservation,browser:request.browser,...(request.successor?{successor:request.successor}:{}),
+  snapshotSha256:sha256(canonical([...phases,...substeps,publication])),publication:reservation,browser:request.browser,...(request.successor?{successor:request.successor}:{}),...(request.browserWindowRecovery?{browserWindowRecovery:request.browserWindowRecovery}:{}),
   packageSubsteps:substeps.map(p=>({phase:p.phase,key:p.key,inputSha256:p.inputSha256,observationSha256:sha256(canonical(p.current)),parentKey:p.input.parentKey,parentInputSha256:p.input.parentInputSha256})),
   prerequisites:phases.map(p=>({phase:p.phase,key:p.key,inputSha256:p.inputSha256,observationSha256:sha256(canonical(p.current))})),ownerPids};
 }
@@ -483,7 +541,7 @@ export async function reconcileExpiredPrepackage(journal,id,requestRef,{clock=Da
  }
  const prior=Object.fromEntries(PREWRITE_PREREQUISITES.map(p=>[p,journal.deliveryPhase(id,p).current.output]));
  await withVerificationPass({},async scope=>{for(const phase of PREWRITE_PREREQUISITES){const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior),context={...scope,journal,descriptor:d,prior,intent,input:intent.input};need(adapter,'continuation-current-verifier-missing');await adapter.validate(context);await adapter.verify(intent.current,context);}},{readOnly:true});
- need((await registry.phasePreflight('package',d,prior)).length===0,'continuation-package-prerequisite-unavailable');
+ need((await registry.phasePreflight('package',d,prior,{journal})).length===0,'continuation-package-prerequisite-unavailable');
  const facts=await registry.continuationFacts(d,{journal});const hostFacts=save(journal,'current-idle-host',facts);
  const at=clock(),after=continuationSnapshot(journal,id,at,{request,assertAbsent});need(same(before,after),'continuation-original-history-changed');
  const proof=continuationGrantSchema.parse({format:1,kind:'nova-expired-prepackage-continuation',operationId:id,...after,request:requestRef,operator,hostFacts,
@@ -504,7 +562,7 @@ export function verifyPublicationContinuationAdmission(request,operator,snapshot
  need(review.format===1&&review.kind==='nova-publication-continuation-plan-review'&&review.status==='passed'&&review.independentReview===true
   &&same(review.plan,a.plan)&&review.operatorAdapterIdentity===operator.adapterIdentity,'publication-continuation-plan-review-required');
  need(intent.format===1&&intent.kind==='nova-publication-continuation-grant-intent'&&intent.operationId===request.operationId
-  &&intent.action===(request.successor?'grant-original-publication-storage-successor':'grant-original-publication-continuation')&&same(intent.request,plan.request)&&same(intent.plan,a.plan)&&same(intent.review,a.review)
+  &&intent.action===(request.browserWindowRecovery?'grant-original-publication-browser-window-recovery':request.successor?'grant-original-publication-storage-successor':'grant-original-publication-continuation')&&same(intent.request,plan.request)&&same(intent.plan,a.plan)&&same(intent.review,a.review)
   &&Number.isSafeInteger(intent.notBeforeMs)&&Number.isSafeInteger(intent.notAfterMs)&&intent.notBeforeMs>=plan.plannedAtMs
   &&now>=intent.notBeforeMs&&now<intent.notAfterMs&&intent.notAfterMs<=plan.plannedAtMs+900000
   &&intent.automaticRenewal===false,'publication-continuation-separate-intent-required');
@@ -512,10 +570,18 @@ export function verifyPublicationContinuationAdmission(request,operator,snapshot
 }
 export async function reconcileExpiredPublication(journal,id,requestRef,{clock=Date.now,assertAbsent,command,registry,planOnly=false}={}){
  const request=publicationContinuationRequestSchema.parse(json(requestRef)),old=journal.deliveryOperatorContinuation(id);
- if(old&&(!request.successor||old.proof.successor)){
-  need(!planOnly&&same(old.proof.request,requestRef),'continuation-already-granted');await verifyContinuationStorageAuthority({journal,operationId:id});return old;
+ if(old&&(request.browserWindowRecovery?Boolean(old.proof.browserWindowRecovery):(!request.successor||old.proof.successor))){
+  need(!planOnly&&same(old.proof.request,requestRef),'continuation-already-granted');await verifyContinuationStorageAuthority({journal,operationId:id,now:clock()});
+  if(old.proof.browserWindowRecovery){
+   verifyContinuationGrant(journal,id,{now:clock(),effect:true,assertAbsent});
+   const A=await import('./release-delivery-adapters.mjs');registry??=A.createDeliveryRegistry({command,clock});
+   const prior=Object.fromEntries(PUBLICATION_CONTINUATION_PREREQUISITES.map(p=>[p,journal.deliveryPhase(id,p).current.output])),intent=journal.deliveryPhase(id,'publication');
+   need(typeof registry.prepareBrowserWindowRecovery==='function','browser-window-recovery-preparation-unavailable');
+   await registry.prepareBrowserWindowRecovery({journal,descriptor:journal.loadDelivery(id).descriptor,prior,intent,input:intent.input});
+  }
+  return old;
  }
- need(Boolean(request.successor)===Boolean(old),'publication-storage-successor-original-grant-required');
+ need(Boolean(request.successor||request.browserWindowRecovery)===Boolean(old),'publication-storage-successor-original-grant-required');
  need(planOnly?!request.admission:Boolean(request.admission),'publication-continuation-plan-or-intent-required');
  const before=publicationContinuationSnapshot(journal,id,clock(),{request,assertAbsent}),d=journal.loadDelivery(id).descriptor;
  verifyPublicationBrowserContinuation(request.browser,{descriptor:d,journal,now:clock()});
@@ -534,12 +600,12 @@ export async function reconcileExpiredPublication(journal,id,requestRef,{clock=D
  const all=Object.fromEntries(PUBLICATION_CONTINUATION_PREREQUISITES.map(p=>[p,journal.deliveryPhase(id,p).current.output]));
  for(const phase of PUBLICATION_CONTINUATION_PREREQUISITES){
   const prior=Object.fromEntries(Object.entries(all).filter(([p])=>p!==phase));
-  need((await registry.phasePreflight(phase,d,prior)).length===0,'publication-continuation-prerequisite-unavailable');
+  need((await registry.phasePreflight(phase,d,prior,{journal})).length===0,'publication-continuation-prerequisite-unavailable');
   const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior);
   need(adapter,'continuation-current-verifier-missing');
   await withVerificationPass({journal,descriptor:d,prior,intent,input:intent.input},async context=>{await adapter.validate(context);await adapter.verify(intent.current,context);},{readOnly:true});
  }
- need((await registry.phasePreflight('publication',d,all)).length===0,'publication-continuation-prerequisite-unavailable');
+ need((await registry.phasePreflight('publication',d,all,{journal})).length===0,'publication-continuation-prerequisite-unavailable');
  const publication=journal.deliveryPhase(id,'publication'),adapter=registry.adapter('publication',d,all);need(adapter,'continuation-current-verifier-missing');
  await withVerificationPass({journal,descriptor:d,prior:all,intent:publication,input:publication.input},context=>adapter.validate(context),{readOnly:true});
  let prestagePlan,prestageVerification;
@@ -548,15 +614,25 @@ export async function reconcileExpiredPublication(journal,id,requestRef,{clock=D
   else{prestagePlan=ref.parse(json(request.admission.plan).prestagePlan);need(typeof registry.verifyPublicationContinuationPlan==='function','publication-continuation-host-plan-verifier-unavailable');prestageVerification=ref.parse(await registry.verifyPublicationContinuationPlan(prestagePlan,context));readEvidenceFile(prestageVerification);}
   readEvidenceFile(prestagePlan);
  },{readOnly:true});
+ let browserWindowReadiness,storageWindowReadiness;
+ if(request.browserWindowRecovery){
+  need(typeof registry.browserWindowRecoveryReadiness==='function'&&typeof registry.prepareBrowserWindowRecovery==='function','browser-window-recovery-readiness-unavailable');
+  browserWindowReadiness=ref.parse(await registry.browserWindowRecoveryReadiness({journal,descriptor:d,prior:all,intent:publication,input:publication.input,request}));
+  verifyBrowserWindowRecoveryReadiness(browserWindowReadiness,{descriptor:d,journal,request,now:clock(),requireUnmaterialized:true});
+  storageWindowReadiness=configuredBrowserWindowRecoveryStorageReadiness({journal,operationId:id,requestRef,request,operator,now:clock()});
+ }
  const facts=await registry.continuationFacts(d,{journal}),hostFacts=save(journal,'publication-current-idle-host',facts);
  const at=clock(),after=publicationContinuationSnapshot(journal,id,at,{request,assertAbsent});need(same(before,after),'continuation-original-history-changed');
  verifyPublicationBrowserContinuation(request.browser,{descriptor:d,journal,now:at});
  if(planOnly){const value={format:1,kind:'nova-publication-continuation-plan',operationId:id,request:requestRef,snapshot:after,operator,hostFacts,prestagePlan,
-  plannedAtMs:at,readOnly:true,hostEffects:false,journalWrites:false};return {plan:save(journal,'publication-continuation-plan',value),value};}
+  ...(request.browserWindowRecovery?{browserWindowReadiness,storageWindowReadiness}:{}),plannedAtMs:at,readOnly:true,hostEffects:false,journalWrites:false};return {plan:save(journal,'publication-continuation-plan',value),value};}
  verifyPublicationContinuationAdmission(request,operator,after,at);
  const proof=publicationContinuationGrantSchema.parse({format:1,kind:'nova-expired-publication-continuation',operationId:id,...after,request:requestRef,
-  admission:request.admission,prestageVerification,operator,hostFacts,issuedAtMs:at,expiresAtMs:at+request.durationMs,automaticRenewal:false,originalHistoryPreserved:true});
- return request.successor?journal.recordPublicationStorageSuccessor(id,proof,at,{assertAbsent}):journal.recordOperatorContinuation(id,proof,at,{assertAbsent});
+  admission:request.admission,prestageVerification,operator,hostFacts,issuedAtMs:at,expiresAtMs:at+request.durationMs,
+  ...(request.browserWindowRecovery?{browserWindowReadiness,storageWindowReadiness,browserReservation:{sessionId:request.browser.successorSessionId,startedAtMs:at,deadlineAtMs:at+1800000}}:{}),automaticRenewal:false,originalHistoryPreserved:true});
+ const saved=request.browserWindowRecovery?journal.recordBrowserWindowRecovery(id,proof,at,{assertAbsent}):request.successor?journal.recordPublicationStorageSuccessor(id,proof,at,{assertAbsent}):journal.recordOperatorContinuation(id,proof,at,{assertAbsent});
+ if(request.browserWindowRecovery){need(typeof registry.prepareBrowserWindowRecovery==='function','browser-window-recovery-preparation-unavailable');await registry.prepareBrowserWindowRecovery({journal,descriptor:d,prior:all,intent:publication,input:publication.input});}
+ return saved;
 }
 
 /** The grant admits only the already elapsed baseline; later misses retain the
@@ -595,8 +671,14 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
  const request=(publicationGrant?publicationContinuationRequestSchema:continuationRequestSchema).parse(json(p.request));verifyOriginalContinuationGraph(request,d.descriptor);
  if(publicationGrant){
   const phase=journal.deliveryPhase(id,'publication');need(phase?.key===p.publication.key&&phase.inputSha256===p.publication.inputSha256,'publication-continuation-reservation-changed');
-  need(same(p.admission,request.admission)&&same(p.browser,request.browser)&&same(p.publication,request.publication)&&same(p.successor,request.successor),'publication-continuation-request-changed');
+  need(same(p.admission,request.admission)&&same(p.browser,request.browser)&&same(p.publication,request.publication)&&same(p.successor,request.successor)&&same(p.browserWindowRecovery,request.browserWindowRecovery),'publication-continuation-request-changed');
   if(p.successor){const previous=verifyStorageSuccessorPredecessor(journal,id,p.successor,{now,assertAbsent,observeOwners:effect});need(p.issuedAtMs>=previous.proof.expiresAtMs,'publication-storage-successor-predecessor-not-expired');}
+  if(p.browserWindowRecovery){
+   const previous=verifyBrowserWindowRecoveryPredecessor(journal,id,p.browserWindowRecovery,{now,assertAbsent,observeOwners:effect});
+   need(p.issuedAtMs>=previous.proof.expiresAtMs,'browser-window-recovery-predecessor-not-expired');
+   verifyBrowserWindowRecoveryReadiness(p.browserWindowReadiness,{descriptor:d.descriptor,journal,request,now:p.issuedAtMs});
+   verifyBrowserWindowRecoveryStorageReadiness(p.storageWindowReadiness,{journal,operationId:id,requestRef:p.request,request,operator:p.operator,now:p.issuedAtMs});
+  }
   const packageParent=journal.deliveryPhase(id,'package');
   need(same(p.packageSubsteps.map(row=>row.phase),PUBLICATION_PACKAGE_SUBSTEPS),'publication-continuation-package-substeps-changed');
   for(const row of p.packageSubsteps){const original=journal.deliveryPhase(id,row.phase);need(original?.state==='completed'&&original.validation?.state!=='failed'&&original.key===row.key&&original.inputSha256===row.inputSha256&&sha256(canonical(original.current))===row.observationSha256&&original.input.parentKey===row.parentKey&&original.input.parentInputSha256===row.parentInputSha256&&row.parentKey===packageParent.key&&row.parentInputSha256===packageParent.inputSha256,'publication-continuation-package-substeps-changed');}
@@ -620,7 +702,7 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
 export const publicationStorageAdmissionSchema=z.object({format:z.literal(1),kind:z.literal('nova-publication-continuation-storage-admission'),
  operationId:z.uuid(),grantSha256:hash,dispatch:ref,session:ref,verifiedAtMs:z.number().int().nonnegative()}).strict();
 export function verifyPublicationStorageAdmission(journal,id,raw){
- const admission=publicationStorageAdmissionSchema.parse(raw),saved=journal.deliveryOperatorContinuation(id);
+ const admission=publicationStorageAdmissionSchema.parse(raw),saved=journal.deliveryOperatorContinuationBySha256(id,admission.grantSha256);
  need(saved?.proof.kind==='nova-expired-publication-continuation'&&admission.operationId===id&&admission.grantSha256===saved.sha256,'publication-storage-admission-grant-changed');
  const p=saved.proof,request=publicationContinuationRequestSchema.parse(json(p.request)),session=json(admission.session),dispatch=json(admission.dispatch),root=resolve(request.owner.request.path,'..');
  need(/^session-observation-[0-9]{4,}\.json$/.test(relative(root,admission.session.path))
@@ -660,9 +742,10 @@ export async function verifyContinuationStorageAuthority({journal,operationId,en
  need(entry===null||resolve(entry)===resolve(actual),'continuation-current-operator-entry-changed');
  need([join(roots[0],'scripts/release-deliver.mjs'),join(roots[1],'scripts/release-deliver.mjs')].map(p=>resolve(p)).includes(fileURLToPath(new URL('release-deliver.mjs',import.meta.url))),'continuation-current-module-root-changed');
  const initialized=p.kind==='nova-pre-journal-dispatch-reconciliation',d=initialized?journal.loadDelivery(operationId):null;
+ const browserRecovery=p.browserWindowRecovery?verifyBrowserWindowRecoveryPredecessor(journal,operationId,p.browserWindowRecovery,{now}):null;
  const expires=initialized?d.created_at+d.descriptor.observationBudgetMs:p.expiresAtMs,issued=initialized?d.created_at:p.issuedAtMs;
  return {grantSha256:saved.sha256,operatorAdapterIdentity:p.operator.adapterIdentity,operatorEntry:reference(actual),operatorRoots:roots,operatorSources:p.operator.sources,
-  expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,...(p.successor?{completedOriginalStorage:p.successor.completedOriginalStorage}:{}),
+  expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,...(p.successor?{completedOriginalStorage:p.successor.completedOriginalStorage}:browserRecovery?{completedOriginalStorage:browserRecovery.proof.successor.completedOriginalStorage,browserWindowRecovery:p.browserWindowRecovery,browserReservation:p.browserReservation,historicalStorageAdmission:journal.deliveryPublicationContinuationAdmission(operationId)}:{}),
   newEffectsAllowed:now>=issued&&now<expires,continuationStarted:p.kind==='nova-expired-publication-continuation'
    ?Boolean(journal.deliveryPublicationContinuationAdmission(operationId)):initialized||Boolean(journal.deliveryPhase(operationId,'package'))};
 }

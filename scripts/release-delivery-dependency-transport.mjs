@@ -92,9 +92,9 @@ function exactBundle(referenceValue,pairReference){
 export function createMaintainedDependencyTransport({options:rawOptions,base,storeReceipt,run,runtimeCollector=null,startupCollector=null,startupSources=QUALIFIED_STARTUP_SOURCES,clock=Date.now}){
  const options=dependencyTransportSchema.parse(rawOptions),runtimeRoute=options.format===3,qualifiedRoute=options.format===6,startupRoute=[5,6].includes(options.format),producerFormat=runtimeRoute?2:[4,5,6].includes(options.format)?3:options.format;
  let retainedProof=null,startupProof=null;
- const ensureQualification=async()=>{
+ const ensureQualification=async context=>{
   if(runtimeRoute&&!retainedProof){need(typeof runtimeCollector==='function','actual-settled-runtime-qualification-producer-required');retainedProof=await runtimeCollector();}
-  if(startupRoute&&!startupProof){need(typeof startupCollector==='function','actual-settled-startup-qualification-producer-required');startupProof=await startupCollector();}
+  if(startupRoute&&!startupProof){need(typeof startupCollector==='function','actual-settled-startup-qualification-producer-required');startupProof=await startupCollector(context);}
  };
  const checkNamespace={};
  const check=c=>verificationOnce(c,checkNamespace,{descriptor:c.descriptor,parent:pIntent(c),input:pIntent(c)?.input??c.input,journalDirectory:c.journal?.directory??null,options,base,retainedProof,startupProof},()=>{
@@ -256,7 +256,7 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
  }
  // The registry selects its helper roster from the same verified candidate.
  const validate=async context=>{
-  await ensureQualification();
+  await ensureQualification(context);
   return check(context).candidates.private.manifest.schemaVersion;
  };
  return{validate,steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};

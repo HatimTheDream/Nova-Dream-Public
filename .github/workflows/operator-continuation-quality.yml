@@ -1,7 +1,7 @@
 name: Operator continuation quality
 on:
   push:
-    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1']
+    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1']
 permissions:
   contents: read
 concurrency:

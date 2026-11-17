@@ -85,10 +85,10 @@ export const deliveryJournalMethods = {
     z.uuid().parse(id);
     if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_operator_continuations'").get())return null;
     const row=this.db.prepare('SELECT * FROM delivery_operator_continuations WHERE operation_id=?').get(id);if(!row)return null;
-    const proof=operatorGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id&&proof.successor===undefined,'continuation-stored-operation-changed');
+    const proof=operatorGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id&&proof.successor===undefined&&proof.browserWindowRecovery===undefined,'continuation-stored-operation-changed');
     return {proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
   },
-  deliveryOperatorContinuation(id) {
+  deliveryStorageSuccessorContinuation(id) {
     const original=this.deliveryOriginalOperatorContinuation(id);
     const rows=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='publication-storage-successor-granted' ORDER BY id").all(id);
     need(rows.length<=1,'publication-storage-successor-duplicate');if(!rows.length)return original;
@@ -97,8 +97,35 @@ export const deliveryJournalMethods = {
       &&proof.issuedAtMs>=original.proof.expiresAtMs&&row.at_ms>=proof.issuedAtMs&&row.at_ms-proof.issuedAtMs<=60000,'publication-storage-successor-record-changed');
     return {proof,sha256:row.payload_hash,recordedAtMs:row.at_ms,eventId:row.id};
   },
+  deliveryOperatorContinuation(id) {
+    const previous=this.deliveryStorageSuccessorContinuation(id);
+    const rows=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='publication-browser-window-recovery-granted' ORDER BY id").all(id);
+    need(rows.length<=1,'browser-window-recovery-duplicate');if(!rows.length)return previous;
+    const row=rows[0],proof=publicationContinuationGrantSchema.parse(decoded(row.payload_json,row.payload_hash));
+    need(previous?.proof.successor&&!previous.proof.browserWindowRecovery&&proof.operationId===id&&proof.browserWindowRecovery?.predecessorGrantSha256===previous.sha256
+      &&proof.issuedAtMs>=previous.proof.expiresAtMs&&row.at_ms===proof.issuedAtMs,'browser-window-recovery-record-changed');
+    return {proof,sha256:row.payload_hash,recordedAtMs:row.at_ms,eventId:row.id};
+  },
+  deliveryOperatorContinuationBySha256(id,digest) {
+    for(const saved of [this.deliveryOriginalOperatorContinuation(id),this.deliveryStorageSuccessorContinuation(id),this.deliveryOperatorContinuation(id)])if(saved?.sha256===digest)return saved;
+    return null;
+  },
+  recordBrowserWindowRecovery(id,raw,now=Date.now(),{assertAbsent}={}) {
+    need(!this.readOnly,'continuation-readonly-journal');const proof=publicationContinuationGrantSchema.parse(raw);
+    need(proof.browserWindowRecovery&&!proof.successor,'browser-window-recovery-explicit-proof-required');
+    return this.transaction(()=>{
+      const current=this.deliveryOperatorContinuation(id);need(current?.proof.successor||current?.proof.browserWindowRecovery,'browser-window-recovery-predecessor-required');
+      if(current.proof.browserWindowRecovery){need(canonical(current.proof)===canonical(proof),'browser-window-recovery-already-granted');return current;}
+      need(proof.operationId===id&&now===proof.issuedAtMs,'browser-window-recovery-grant-stale');
+      const request=publicationContinuationRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      const snapshot=publicationContinuationSnapshot(this,id,now,{request,assertAbsent});
+      need(Object.keys(snapshot).every(k=>canonical(snapshot[k])===canonical(proof[k])),'continuation-snapshot-changed-before-grant');
+      event(this,id,'publication-browser-window-recovery-granted',proof,now);
+      verifyContinuationGrant(this,id,{now,effect:true,assertAbsent});return this.deliveryOperatorContinuation(id);
+    });
+  },
   recordOperatorContinuation(id,raw,now=Date.now(),{assertAbsent}={}) {
-    const publication=raw?.kind==='nova-expired-publication-continuation',proof=(publication?publicationContinuationGrantSchema:continuationGrantSchema).parse(raw);need(!this.readOnly,'continuation-readonly-journal');need(!proof.successor,'publication-storage-successor-explicit-record-required');
+    const publication=raw?.kind==='nova-expired-publication-continuation',proof=(publication?publicationContinuationGrantSchema:continuationGrantSchema).parse(raw);need(!this.readOnly,'continuation-readonly-journal');need(!proof.successor&&!proof.browserWindowRecovery,'publication-storage-successor-explicit-record-required');
     return this.transaction(()=>{
       const old=this.deliveryOperatorContinuation(id);if(old){need(canonical(old.proof)===canonical(proof),'continuation-already-granted');return old;}
       need(proof.operationId===id&&now>=proof.issuedAtMs&&now-proof.issuedAtMs<=60000,'continuation-grant-stale');
@@ -117,7 +144,7 @@ export const deliveryJournalMethods = {
 
   recordPublicationStorageSuccessor(id,raw,now=Date.now(),{assertAbsent}={}) {
     need(!this.readOnly,'continuation-readonly-journal');const proof=publicationContinuationGrantSchema.parse(raw);
-    need(proof.successor,'publication-storage-successor-explicit-proof-required');
+    need(proof.successor&&!proof.browserWindowRecovery,'publication-storage-successor-explicit-proof-required');
     return this.transaction(()=>{
       const current=this.deliveryOperatorContinuation(id);need(current,'publication-storage-successor-original-grant-required');
       if(current.proof.successor){need(canonical(current.proof)===canonical(proof),'publication-storage-successor-already-granted');return current;}

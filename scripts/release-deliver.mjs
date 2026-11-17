@@ -41,7 +41,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
     const grant=journal.deliveryOperatorContinuation(operationId);
     if(!existing&&grant&&clock()>=operatorObservationDeadline(journal,operationId))return {state:'gap',reason:'operator-continuation-window-expired'};
     const prior = Object.fromEntries(DELIVERY_PHASES.filter(p => p !== phase).map(p => [p, journal.deliveryPhase(operationId, p)]).filter(([, p]) => p?.state === 'completed').map(([p, v]) => [p, v.current.output]));
-    const phaseGaps = await registry.phasePreflight?.(phase,descriptor,prior) ?? [];
+    const phaseGaps = await registry.phasePreflight?.(phase,descriptor,prior,{journal}) ?? [];
     if (phaseGaps.length) return { state:'gap',reason:phaseGaps[0],integrationGaps:phaseGaps };
     const adapter = registry.adapter(phase, descriptor, prior);
     if (!adapter) return { state: 'gap', reason: `missing-${phase}-adapter` };
@@ -92,7 +92,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
         readEvidenceFile(descriptor.target, { maximum: 256 * 1024 });
         await assertDeliveryOperator(journal,operationId,registry,{clock,effect:true});
         need(await registry.targetIdentity(descriptor) === descriptor.targetIdentity, 'delivery-target-changed');
-        need((await registry.phasePreflight?.(phase,descriptor,prior) ?? []).length===0,'delivery-phase-capability-unavailable');
+        need((await registry.phasePreflight?.(phase,descriptor,prior,{journal}) ?? []).length===0,'delivery-phase-capability-unavailable');
         need(await verifyPrerequisites(phase) === null, 'delivery-prerequisite-verification-failed');
       } };
     let result, rejectedObservation;

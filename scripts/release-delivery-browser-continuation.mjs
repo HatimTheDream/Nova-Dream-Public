@@ -1,5 +1,6 @@
 /** A linked browser attempt preserves the expired predecessor and never rewrites its clock. */
 import {resolve,join} from 'node:path';
+import {existsSync,lstatSync,readdirSync} from 'node:fs';
 import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {canonicalBrowser} from './release-delivery-browser-primitives.mjs';
@@ -35,13 +36,77 @@ export function verifyPublicationBrowserContinuation(browser,{descriptor,journal
 export function linkedBrowserBinding(base,browser,grant){
  verifyBrowserPredecessor(browser,base);
  need(grant.kind==='nova-expired-publication-continuation'&&same(grant.browser,browser)&&ref(grant.request)&&Number.isSafeInteger(grant.issuedAtMs)&&Number.isSafeInteger(grant.expiresAtMs)&&grant.expiresAtMs>grant.issuedAtMs,'browser-successor-grant-changed');
- return{...base,sessionId:browser.successorSessionId,browserPredecessor:{original:browser.predecessor,status:browser.status},publicationContinuation:{request:grant.request,issuedAtMs:grant.issuedAtMs,expiresAtMs:grant.expiresAtMs}};
+  if(grant.browserWindowRecovery)verifyBrowserWindowReservation(grant.browserReservation,{browser,issuedAtMs:grant.issuedAtMs,expiresAtMs:grant.expiresAtMs,timeoutMs:base.options.timeoutMs});
+ else need(grant.browserReservation===undefined,'browser-window-reservation-without-recovery');
+ return{...base,sessionId:browser.successorSessionId,browserPredecessor:{original:browser.predecessor,status:browser.status},publicationContinuation:{request:grant.request,issuedAtMs:grant.issuedAtMs,expiresAtMs:grant.expiresAtMs,...(grant.browserWindowRecovery?{browserReservation:grant.browserReservation}:{})}};
 }
 export function verifyLinkedBrowserRecord(original){
  const b=original.binding;if(!b.sessionId)return original;
  const {sessionId,browserPredecessor,publicationContinuation,...base}=b;
- need(exact(browserPredecessor,['original','status'])&&exact(publicationContinuation,['request','issuedAtMs','expiresAtMs'])&&ref(publicationContinuation.request),'browser-successor-record-invalid');
+ need(exact(browserPredecessor,['original','status'])&&exact(publicationContinuation,['request','issuedAtMs','expiresAtMs',...(publicationContinuation?.browserReservation?['browserReservation']:[])])&&ref(publicationContinuation.request),'browser-successor-record-invalid');
  const {prior}=verifyBrowserPredecessor({predecessor:browserPredecessor.original,status:browserPredecessor.status,successorSessionId:sessionId},base);
  need(Number.isSafeInteger(original.startedAtMs)&&original.startedAtMs>=prior.deadlineAtMs&&original.startedAtMs>=publicationContinuation.issuedAtMs&&original.deadlineAtMs===original.startedAtMs+b.options.timeoutMs&&original.deadlineAtMs<=publicationContinuation.expiresAtMs,'browser-successor-attempt-clock-changed');
- readEvidenceFile(publicationContinuation.request);return original;
+ const request=read(publicationContinuation.request);
+ if(publicationContinuation.browserReservation){
+  const browser={predecessor:browserPredecessor.original,status:browserPredecessor.status,successorSessionId:sessionId};
+  need(request.browserWindowRecovery&&request.operationId===b.operationId&&same(request.browser,browser),'browser-window-reservation-request-changed');
+  const reservation=verifyBrowserWindowReservation(publicationContinuation.browserReservation,{browser,issuedAtMs:publicationContinuation.issuedAtMs,expiresAtMs:publicationContinuation.expiresAtMs,timeoutMs:b.options.timeoutMs});
+  need(original.startedAtMs===reservation.startedAtMs&&original.deadlineAtMs===reservation.deadlineAtMs,'browser-window-reservation-clock-changed');
+ }else need(!request.browserWindowRecovery,'browser-window-reservation-required');
+ return original;
+}
+
+/** A recovery owns one fixed thirty-minute browser reservation from the grant event. */
+export function verifyBrowserWindowReservation(reservation,{browser,issuedAtMs,expiresAtMs,timeoutMs}){
+ need(exact(reservation,['sessionId','startedAtMs','deadlineAtMs'])&&uuid(reservation.sessionId)
+  &&reservation.sessionId===browser.successorSessionId&&timeoutMs===1800000
+  &&Number.isSafeInteger(reservation.startedAtMs)&&reservation.startedAtMs>=0&&reservation.startedAtMs===issuedAtMs
+  &&Number.isSafeInteger(reservation.deadlineAtMs)&&reservation.deadlineAtMs===reservation.startedAtMs+timeoutMs
+  &&reservation.deadlineAtMs<=expiresAtMs,'browser-window-reservation-changed');
+ return reservation;
+}
+export function assertBrowserWindowRecoveryUnmaterialized(journal,sessionId){
+ need(uuid(sessionId),'browser-window-reservation-session-invalid');
+ const parent=join(journal.directory,'browser-session'),name='successor-'+sessionId,directory=join(parent,name);
+ if(existsSync(parent)){
+  need(lstatSync(parent).isDirectory()&&!lstatSync(parent).isSymbolicLink(),'browser-window-recovery-session-parent-changed');
+  need(readdirSync(parent).filter(entry=>entry.startsWith('successor-')).every(entry=>entry===name),'browser-window-recovery-other-session-present');
+ }
+ if(existsSync(directory))need(lstatSync(directory).isDirectory()&&!lstatSync(directory).isSymbolicLink()&&readdirSync(directory).length===0,'browser-window-recovery-already-materialized');
+ return directory;
+}
+/** This expired-clock probe is read-only. It never becomes an original record. */
+export function browserWindowRecoveryProbe({descriptor,journal,request,now=Date.now()}){
+ const id=descriptor.operation.id,marker=request?.browserWindowRecovery;
+ need(marker&&request.operationId===id,'browser-window-recovery-request-required');
+ const predecessor=journal.deliveryOperatorContinuationBySha256?.(id,marker.predecessorGrantSha256);
+ need(predecessor?.sha256===marker.predecessorGrantSha256&&predecessor.proof?.successor&&!predecessor.proof.browserWindowRecovery
+  &&predecessor.proof.operationId===id&&predecessor.proof.kind==='nova-expired-publication-continuation'
+  &&now>=predecessor.proof.expiresAtMs&&same(predecessor.proof.browser,request.browser),'browser-window-recovery-predecessor-changed');
+ const browser=verifyPublicationBrowserContinuation(request.browser,{descriptor,journal,now});
+ const target=JSON.parse(readEvidenceFile(descriptor.target)),prior={};
+ for(const name of ['route','sign'])prior[name]=journal.deliveryPhase(id,name).current.output;
+ need(target.browserCapability==='available'&&target.browserTools?.mode==='remote'&&target.browserTools.timeoutMs===1800000,'browser-window-recovery-remote-window-required');
+ const binding=linkedBrowserBinding(browserBinding({descriptor,prior},target.browserTools,target.transport),browser,predecessor.proof);
+ const original={binding,startedAtMs:predecessor.proof.issuedAtMs,deadlineAtMs:predecessor.proof.issuedAtMs+target.browserTools.timeoutMs};
+ verifyLinkedBrowserRecord(original);return original;
+}
+export function verifyBrowserWindowRecoveryReadiness(reference,{descriptor,journal,request,now=Date.now(),requireUnmaterialized=false}){
+ const proof=read(reference),original=browserWindowRecoveryProbe({descriptor,journal,request,now}),response=proof.remote;
+ need(exact(proof,['format','kind','operationId','descriptorSha256','requestSha256','observedAtMs','original','remote','hostWrites','localSessionAbsent'])
+  &&proof.format===1&&proof.kind==='nova-browser-window-recovery-readiness'&&proof.operationId===descriptor.operation.id
+  &&proof.descriptorSha256===sha256(canonicalBrowser(descriptor))&&proof.requestSha256===sha256(canonicalBrowser(request))
+  &&same(proof.original,original)&&proof.hostWrites===false&&proof.localSessionAbsent===true
+  &&Number.isSafeInteger(proof.observedAtMs)&&proof.observedAtMs<=now&&now-proof.observedAtMs<=900000,'browser-window-recovery-readiness-changed');
+ const plan=response?.plan,options=original.binding.options;
+ need(response?.state==='ready'&&response.hostWrites===false&&response.existingOperation===false&&response.sessionAbsent===true
+  &&plan?.kind==='nova-remote-browser-plan'&&plan.operationId===descriptor.operation.id&&plan.sessionId===request.browser.successorSessionId
+  &&plan.directory===options.directoryRoot+'/'+plan.sessionId&&plan.unit==='nova-browser-'+plan.sessionId
+  &&plan.originalSha256===sha256(Buffer.from(canonicalBrowser(original)+'\n'))&&response.planSha256===sha256(canonicalBrowser(plan))
+  &&same(plan.node,options.node)&&same(plan.executable,options.executable)&&plan.playwrightSha256===options.playwright.sha256
+  &&plan.memoryMaxBytes===1073741824&&plan.hostReserveBytes===2147483648
+  &&response.memoryAdmission?.requiredBytes===3221225472&&Number.isSafeInteger(response.memoryAdmission?.availableBytes)
+  &&response.memoryAdmission.availableBytes>=response.memoryAdmission.requiredBytes,'browser-window-recovery-remote-readiness-changed');
+ if(requireUnmaterialized)assertBrowserWindowRecoveryUnmaterialized(journal,request.browser.successorSessionId);
+ return proof;
 }

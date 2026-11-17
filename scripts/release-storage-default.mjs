@@ -175,9 +175,11 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   verifyCapacityProof(dispatch.storageResult, storageInput, budget);
   let continuedDispatch=null;
   if(continuation){
-    const r=reference(session.continuationDispatch),c=document(r),base=join(root,'continuations',continuation.grantSha256);
+    const historicalGrant=continuation.browserWindowRecovery?.predecessorGrantSha256??continuation.grantSha256;
+    if(continuation.browserWindowRecovery)need(same(session.continuationDispatch,continuation.browserWindowRecovery.storageAdmission.dispatch)&&same(publicationAdmission?.dispatch,session.continuationDispatch)&&publicationAdmission?.grantSha256===historicalGrant,'browser-window-storage-historical-dispatch-required');
+    const r=reference(session.continuationDispatch),c=document(r),base=join(root,'continuations',historicalGrant);
     need(/^admission-[0-9]{4,}[\\/]release-dispatch\.json$/.test(relative(base,r.path))&&same(c.originalDispatch,session.dispatch)
-      &&c.grantSha256===continuation.grantSha256&&same(c.request,session.request)&&c.format===1&&c.automaticNewOperationPermitted===false,'storage-continuation-dispatch-changed');
+      &&c.grantSha256===historicalGrant&&same(c.request,session.request)&&c.format===1&&c.automaticNewOperationPermitted===false,'storage-continuation-dispatch-changed');
     const currentInput=document(c.storageInput);
     need(same(currentInput.profile,start.profile)&&same(currentInput.budget,request.storageBudget),'storage-continuation-budget-context-changed');
     need(c.storageResult?.state==='ready'&&c.storageResult.historical!==true&&Number.isSafeInteger(c.startedAtMilliseconds)
@@ -233,6 +235,7 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   if (session.mode === 'start'&&!preJournalProof) need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= finishedAt + 5000, 'fresh-storage-required-before-start');
   if(continuation&&!continuation.continuationStarted)need(finishedAt<continuation.expiresAtMs&&finishedAt<=continuedDispatch.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
+  if(continuation?.browserWindowRecovery)need(continuation.newEffectsAllowed&&finishedAt<continuation.expiresAtMs,'continuation-window-expired');
   if(publicationContinuation&&!publicationAdmission){
     const {ReleaseJournal}=await import('./release-coordinate.mjs'),journal=new ReleaseJournal(initialization.journalDirectory,{create:false});
     try{const at=clock();journal.recordPublicationContinuationAdmission(session.operationId,{format:1,kind:'nova-publication-continuation-storage-admission',
@@ -243,11 +246,48 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
     ...(preJournalProof?{preJournalProof}:{} ) };
 }
 
+
+/** Fresh capacity is a separate read-only observation; it never replaces admission. */
+export function verifyBrowserWindowRecoveryStorageReadiness(raw,{journal,operationId,requestRef,request,operator,now=Date.now()}={}){
+ const r=reference(raw),v=document(r),config=document(v.config),original=document(request.owner.request),input=document(v.capacity?.input),result=document(v.capacity?.result),graph=document(v.sourceGraph);
+ need(v.format===1&&v.kind==='nova-browser-window-recovery-storage-readiness'&&v.operationId===operationId&&request.operationId===operationId
+  &&same(v.reconciliationRequest,requestRef)&&same(v.predecessor,request.browserWindowRecovery)&&v.readOnly===true&&v.storageAdmissionCreated===false,'browser-window-storage-readiness-context-changed');
+ need(config.kind==='nova-storage-default'&&same(v.sourceReview,config.sourceReview)&&same(v.storageReview,config.storageReview)&&same(v.runner,config.runner)
+  &&same(config.applicationRoots.map(x=>resolve(x)),[resolve(request.operatorSources.private.root,'edition3'),resolve(request.operatorSources.public.root)])
+  &&same(config.operatorContinuation?.originalRequest,request.owner.request)&&config.operatorContinuation.operationId===operationId
+  &&resolve(config.operatorContinuation.journalDirectory)===resolve(journal.directory),'browser-window-storage-configuration-changed');
+ const review=reviewed(v.sourceReview,'nova-storage-default-source-review');reviewed(v.storageReview,'independent-storage-source-review');
+ reviewedFile(review,v.entry);reviewedFile(review,v.runner);
+ need(resolve(v.entry.path)===resolve(request.operatorSources.private.root,'edition3/scripts/release-deliver.mjs'),'browser-window-storage-entry-changed');
+ need(graph.format===1&&hash(graph.adapterIdentity)&&Array.isArray(graph.sourceFiles)&&graph.sourceFiles.length>0&&graph.sourceFiles.length<=512,'browser-window-storage-source-graph-invalid');
+ for(const item of graph.sourceFiles){reference(item);reviewedFile(review,item);readEvidenceFile(item,{maximum:128*1024**2});}
+ need(operator&&graph.adapterIdentity===operator.adapterIdentity&&config.applicationRoots.some(root=>same(graph.sourceFiles.map(item=>({name:relative(join(root,'scripts'),item.path).replaceAll('\\','/'),sha256:item.sha256})),operator.sourceFiles)),'browser-window-storage-current-graph-changed');
+ need(same(input.profile,document(original.releaseInput).profile)&&same(input.budget,original.storageBudget)&&input.phase==='before-allocation','browser-window-storage-budget-changed');
+ need(result.cleanupPerformed!==true&&result.kind==='private-storage-preflight'&&result.state==='ready','browser-window-storage-readonly-capacity-required');
+ verifyCapacityProof({result:v.capacity.result,cleanupPerformed:false,observationExpiresAtMilliseconds:result.assessment?.observationExpiresAtMilliseconds},input,document(original.storageBudget));
+ const inventory=document(result.inventory),admission=journal.deliveryPublicationContinuationAdmission(operationId);
+ need(admission&&same({eventId:admission.eventId,sha256:admission.sha256,session:admission.admission.session,dispatch:admission.admission.dispatch},request.browserWindowRecovery.storageAdmission)
+  &&admission.admission.grantSha256===request.browserWindowRecovery.predecessorGrantSha256,'browser-window-storage-historical-admission-changed');
+ need(Number.isSafeInteger(v.observedAtMs)&&Number.isSafeInteger(v.expiresAtMs)&&v.observedAtMs<=now&&now<v.expiresAtMs
+  &&inventory.observedAtMilliseconds<=v.observedAtMs&&v.expiresAtMs<=Math.min(result.assessment.observationExpiresAtMilliseconds,v.observedAtMs+300000),'browser-window-storage-readiness-expired');
+ return r;
+}
+export function configuredBrowserWindowRecoveryStorageReadiness({journal,operationId,requestRef,request,operator,now=Date.now(),env=process.env}){
+ const {ref:configRef,config}=storageDefaultConfiguration({env}),sessionRef=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),session=document(sessionRef);
+ const root=join(canonical(config.operationsRoot),'release-'+operationId);
+ need(/^reconciliations[\\/]reconciliation-[0-9]{4,}[\\/]session\.json$/.test(relative(root,sessionRef.path))
+  &&session.kind==='nova-storage-publication-reconciliation-session'&&session.operationId===operationId&&same(session.config,configRef)
+  &&same(session.reconciliationRequest,requestRef)&&same(session.request,request.owner.request),'browser-window-storage-configured-session-required');
+ const r=verifyBrowserWindowRecoveryStorageReadiness(session.browserWindowRecoveryReadiness,{journal,operationId,requestRef,request,operator,now}),v=document(r);
+ need(same(v.config,configRef)&&same(v.sourceReview,session.sourceReview)&&same(v.storageReview,session.storageReview)&&same(v.sourceGraph,session.sourceGraph),'browser-window-storage-session-readiness-changed');
+ return r;
+}
+
 /** The existing private runner owns the same deployment byte lock throughout
  * this child. This permit cannot launch a delivery or bypass storage admission. */
 export async function verifyReconciliationSession(args,entry,{env=process.env,clock=Date.now}={}){
   const loaded=storageDefaultConfiguration({env}),{config}=loaded,c=config.operatorContinuation;
-  const mode=args[0],sessionKind={ 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session' }[mode];
+  const mode=args[0],sessionKind={ 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session', 'plan-publication-continuation':'nova-storage-publication-reconciliation-session' }[mode];
   need(c&&sessionKind&&args.length===4&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
   const sr=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),s=document(sr),root=join(canonical(config.operationsRoot),'release-'+c.operationId);
   need(/^reconciliations[\\/]reconciliation-[0-9]{4,}[\\/]session\.json$/.test(relative(root,sr.path)),'storage-reconciliation-session-location-changed');
@@ -283,8 +323,9 @@ function runRunner(executable, args) {
 }
 
 export async function routeStorageDelivery(args, entry, { env = process.env, launch = runRunner } = {}) {
-  const reconcile=['reconcile-prepackage','reconcile-publication'].includes(args[0]);
-  if (!['start', 'resume','reconcile-prepackage','reconcile-publication'].includes(args[0])) return { handled: false };
+  if(args[0]==='plan-publication-continuation'&&args.length===4&&!document(inputReference(resolve(args[3]))).browserWindowRecovery)return {handled:false};
+  const reconcile=['reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(args[0]);
+  if (!['start', 'resume','reconcile-prepackage','reconcile-publication','plan-publication-continuation'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
     if(reconcile)await verifyReconciliationSession(args,entry,{env});
     else {const permit=await verifyStorageSession(args, entry, { env });return {handled:false,...(permit.preJournalProof?{preJournalProof:permit.preJournalProof}:{})};}
@@ -305,6 +346,7 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     if(reconcile)argv.push('--reconciliation-request',absolute(resolve(args[3])));
   }
   const { code, value } = await launch(config.python.path, argv);
+  if(mode==='plan-publication-continuation'){const p=document(reference(value?.plan));need(code===0&&same(p,value.value)&&p.kind==='nova-publication-continuation-plan'&&p.operationId===args[2]&&p.readOnly===true&&p.hostEffects===false&&p.journalWrites===false,'storage-browser-window-plan-result-invalid');return {handled:true,result:value};}
   need(value && typeof value === 'object' && ['complete', 'release-pending', 'acceptance-or-storage-gap', 'original-start-not-observed', 'stopped', 'continuation-granted'].includes(value.state),
     'storage-runner-result-invalid');
   const complete = value.state === 'complete' && value.release?.complete === true && value.storageCloseoutPerformed === true;

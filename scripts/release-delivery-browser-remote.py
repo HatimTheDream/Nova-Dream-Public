@@ -15,7 +15,7 @@ def available_memory():
     need(match is not None,'browser-remote-memory-unavailable')
     return int(match.group(1))*1024
 def memory_admission(mode, existing, sample=available_memory):
-    if mode!='plan' and (mode!='start' or existing):return None
+    if mode not in ('plan','readiness') and (mode!='start' or existing):return None
     available=sample()
     need(type(available)==int and available>=MEMORY_MAX_BYTES+HOST_RESERVE_BYTES,'browser-remote-memory-headroom-insufficient')
     return {'availableBytes':available,'requiredBytes':MEMORY_MAX_BYTES+HOST_RESERVE_BYTES,'atMs':int(time.time()*1000)}
@@ -50,10 +50,21 @@ def browser_session_scope(root,binding):
     need(str(uuid.UUID(session))==session and ('sessionId' not in binding or session!=operation),'browser-successor-session-invalid')
     return session,pathlib.Path(root)/session,'nova-browser-'+session
 
+def verify_browser_reservation(original,binding,grant):
+    reservation=grant.get('browserReservation')
+    if reservation is None:return
+    need(isinstance(reservation,dict) and set(reservation)=={'sessionId','startedAtMs','deadlineAtMs'}
+         and reservation['sessionId']==binding['sessionId'] and binding['options']['timeoutMs']==1800000
+         and type(reservation['startedAtMs'])==int and reservation['startedAtMs']==grant['issuedAtMs']
+         and type(reservation['deadlineAtMs'])==int and reservation['deadlineAtMs']==reservation['startedAtMs']+1800000
+         and reservation['deadlineAtMs']<=grant['expiresAtMs']
+         and original['startedAtMs']==reservation['startedAtMs'] and original['deadlineAtMs']==reservation['deadlineAtMs'],
+         'browser-window-reservation-changed')
+
 def main(data):
     import pwd
     need(os.geteuid()==0,'browser-remote-root-required')
-    mode=data['mode'];need(mode in ('plan','start','status','request','close','screenshot','cleanup'),'browser-remote-mode-invalid')
+    mode=data['mode'];need(mode in ('readiness','plan','start','status','request','close','screenshot','cleanup'),'browser-remote-mode-invalid')
     original=data['original'];binding=original['binding'];options=binding['options'];operation=str(uuid.UUID(binding['operationId']))
     need(operation==binding['operationId'] and options['mode']=='remote' and options['baseUrl']=='http://127.0.0.1:4383','browser-remote-input-invalid')
     need(re.fullmatch(r'[a-z][a-z0-9_-]{0,31}',options['user']) and re.fullmatch(r'/opt/[a-z][a-z0-9-]{1,63}',options['directoryRoot']),'browser-remote-scope-invalid')
@@ -64,7 +75,8 @@ def main(data):
     unit_state=lambda: subprocess.run(['systemctl','show',unit+'.service','--property=ActiveState,SubState,MainPID,ExecMainStatus'],capture_output=True,text=True,timeout=10).stdout
     if session!=operation:
         lineage=binding.get('browserPredecessor');grant=binding.get('publicationContinuation')
-        need(isinstance(lineage,dict) and set(lineage)=={'original','status'} and isinstance(grant,dict) and set(grant)=={'request','issuedAtMs','expiresAtMs'},'browser-successor-lineage-invalid')
+        need(isinstance(lineage,dict) and set(lineage)=={'original','status'} and isinstance(grant,dict) and set(grant)==({'request','issuedAtMs','expiresAtMs','browserReservation'} if 'browserReservation' in grant else {'request','issuedAtMs','expiresAtMs'}),'browser-successor-lineage-invalid')
+        verify_browser_reservation(original,binding,grant)
         for ref in (lineage['original'],lineage['status'],grant['request']):need(isinstance(ref,dict) and set(ref)=={'path','sha256'} and re.fullmatch('[a-f0-9]{64}',ref['sha256']),'browser-successor-reference-invalid')
         predecessor=root/operation
         need(predecessor.is_dir() and not predecessor.is_symlink(),'browser-successor-predecessor-missing')
@@ -72,7 +84,7 @@ def main(data):
         need((predecessor/'original.json').stat().st_uid==0 and digest(canonical(before)+b'\n')==lineage['original']['sha256'],'browser-successor-predecessor-changed')
         base={k:v for k,v in binding.items() if k not in ('sessionId','browserPredecessor','publicationContinuation')}
         need(before['binding']==base and original['startedAtMs']>=before['deadlineAtMs'] and original['startedAtMs']>=grant['issuedAtMs'] and original['deadlineAtMs']<=grant['expiresAtMs'],'browser-successor-target-or-clock-changed')
-        if mode in ('plan','start'):
+        if mode in ('readiness','plan','start'):
             failed=json_file(predecessor/'failed.json');closed=json_file(predecessor/'closed.json')
             need(failed and failed.get('operationId')==operation and failed.get('reason')=='browser-original-deadline-exhausted' and closed and closed.get('operationId')==operation and closed.get('browserClosed') is True and closed.get('tunnelClosed') is True and not json_file(predecessor/'acceptance.json'),'browser-successor-closed-predecessor-required')
             old_unit='nova-browser-'+operation+'.service'
@@ -90,14 +102,23 @@ def main(data):
           'workerSha256':worker_sha,'originalSha256':digest(original_bytes),'node':options['node'],'executable':options['executable'],'playwrightSha256':options['playwright']['sha256'],
           'memoryMaxBytes':MEMORY_MAX_BYTES,'hostReserveBytes':HOST_RESERVE_BYTES}
     if session!=operation:plan['sessionId']=session
-    if mode in ('plan','start'):
-        need(time.time()*1000<original['deadlineAtMs'] and original['deadlineAtMs']==original['startedAtMs']+options['timeoutMs'] and 300000<=options['timeoutMs']<=1800000,'browser-original-deadline-exhausted')
+    if mode in ('readiness','plan','start'):
+        need((mode=='readiness' or time.time()*1000<original['deadlineAtMs']) and original['deadlineAtMs']==original['startedAtMs']+options['timeoutMs'] and 300000<=options['timeoutMs']<=1800000,'browser-original-deadline-exhausted')
         bytes_ref(options['node']);bytes_ref(options['executable'],536870912)
         closure=base64.b64decode(data['closure'],validate=True);need(digest(closure)==options['playwright']['sha256'],'browser-remote-closure-changed')
         manifest=json.loads(closure)
         need(manifest['format']==1 and len(manifest['files'])<5000,'browser-remote-closure-invalid')
         for ref in manifest['files']:bytes_ref(ref,67108864)
         need(any(ref['path']==manifest['entry'] for ref in manifest['files']),'browser-remote-entry-unbound')
+        if mode=='readiness':
+            need(session!=operation and 'browserReservation' not in binding['publicationContinuation'] and not path.exists(),'browser-window-recovery-session-already-exists')
+            state=unit_state()
+            need(re.search(r'ActiveState=(inactive|failed)\n',state) and 'MainPID=0\n' in state,'browser-window-recovery-session-unit-active')
+            for proc in pathlib.Path('/proc').iterdir():
+                if proc.name.isdigit():
+                    try:need((unit+'.service') not in (proc/'cgroup').read_text(),'browser-window-recovery-session-process-active')
+                    except (FileNotFoundError,ProcessLookupError):pass
+            return {'state':'ready','plan':plan,'planSha256':digest(canonical(plan)),'existingOperation':False,'sessionAbsent':True,'hostWrites':False,'memoryAdmission':memory_admission(mode,False)}
         if mode=='plan':return {'state':'planned','plan':plan,'planSha256':digest(canonical(plan)),'existingOperation':path.exists(),'memoryAdmission':memory_admission(mode,path.exists())}
         need(data['intent']=={'operationId':operation,'planSha256':digest(canonical(plan)),'originalSha256':plan['originalSha256']},'browser-remote-intent-changed')
         # A retained launch reservation is observation-only, even if no unit exists.

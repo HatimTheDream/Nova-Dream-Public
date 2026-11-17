@@ -9,9 +9,9 @@ import { z } from 'zod';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import { assistantAcceptanceInput } from './release-delivery-assistant.mjs';
-import {prepareRemoteBrowser,remoteBrowserAcceptance} from './release-delivery-browser-remote.mjs';
+import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './release-delivery-browser-remote.mjs';
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
-import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord} from './release-delivery-browser-continuation.mjs';
+import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
 import {verifyFullBundledIdentity,verifyDocumentIdentity,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -54,12 +54,12 @@ export function browserBinding(context,options,transport) {
 function directory(context) {
   return validateJournalDirectory(join(context.journal.directory,'browser-session'),{create:true});
 }
-function original(context,options,transport) {
+function original(context,options,transport,now=Date.now()) {
   let dir=directory(context),binding=browserBinding(context,options,transport),linkedContinuation=null;
   const saved=context.journal.deliveryOperatorContinuation?.(context.descriptor.operation.id);
   if(saved?.proof.kind==='nova-expired-publication-continuation'){
-    const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:false});
-    const browser=verifyPublicationBrowserContinuation(proof.browser,{descriptor:context.descriptor,journal:context.journal});
+    const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:false,now});
+    const browser=verifyPublicationBrowserContinuation(proof.browser,{descriptor:context.descriptor,journal:context.journal,now});
     linkedContinuation=proof;binding=linkedBrowserBinding(binding,browser,proof);
     dir=validateJournalDirectory(join(dir,'successor-'+browser.successorSessionId),{create:true});
   }
@@ -92,11 +92,12 @@ export function verifyBrowserSessionAlive(dir,record,now=Date.now()) {
   try{process.kill(heartbeat.pid,0);}catch{throw Error('browser-original-worker-unavailable');}
 }
 export async function prepareDeliveryBrowser(context,{options,transport,launch=spawn,clock=Date.now,inspectOnly=false,run}={}) {
-  const kept=original(context,options,transport);
+  const kept=original(context,options,transport,clock());
   if(options.mode==='remote'){
     if(kept.linkedContinuation&&(!kept.record||!existsSync(join(kept.dir,'remote-launch-intent.json')))){
-      const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:true});
-      need(kept.record?kept.record.deadlineAtMs<=proof.expiresAtMs:clock()+options.timeoutMs<=proof.expiresAtMs,'browser-successor-budget-exceeds-grant');
+      const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:true,now:clock()});
+      const reservation=proof.browserReservation;
+      need(reservation?reservation.deadlineAtMs<=proof.expiresAtMs:kept.record?kept.record.deadlineAtMs<=proof.expiresAtMs:clock()+options.timeoutMs<=proof.expiresAtMs,'browser-successor-budget-exceeds-grant');
     }
     return prepareRemoteBrowser(kept,context,{options,transport,inspectOnly:kept.linkedContinuation?false:inspectOnly,clock,run});
   }
@@ -202,4 +203,15 @@ export function createBrowserAcceptanceAdapter({options,transport,storeReceipt,r
   return {input:async context=>expected(context),validate,execute:context=>run(context),observe:context=>run(context,true),inspect:context=>run(context,true),
     verify:async(value,context)=>{if(value.state==='completed'){verifyBrowserAcceptance(value.output,expected(context));
       need(isDeepStrictEqual(JSON.parse(readEvidenceFile(value.receipt)),value.output),'browser-receipt-changed');}}};
+}
+
+/** Read-only remote admission before the journal fixes the new authority clock. */
+export async function inspectBrowserWindowRecoveryReadiness(context,{options,transport,clock=Date.now,run}={}){
+ const original=browserWindowRecoveryProbe({...context,now:clock()});
+ need(isDeepStrictEqual(original.binding.options,browserOptionsSchema.parse(options))&&isDeepStrictEqual(original.binding.transport,transport),'browser-window-recovery-target-changed');
+ assertBrowserWindowRecoveryUnmaterialized(context.journal,context.request.browser.successorSessionId);
+ const remote=await remoteBrowserCall(original,transport,'readiness',{},run);
+ assertBrowserWindowRecoveryUnmaterialized(context.journal,context.request.browser.successorSessionId);
+ return{format:1,kind:'nova-browser-window-recovery-readiness',operationId:context.descriptor.operation.id,
+  descriptorSha256:hash(context.descriptor),requestSha256:hash(context.request),observedAtMs:clock(),original,remote,hostWrites:false,localSessionAbsent:true};
 }

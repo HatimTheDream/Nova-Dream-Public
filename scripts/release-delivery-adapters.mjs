@@ -32,7 +32,10 @@ import {createRuntimeRetainedCollector} from './release-delivery-runtime-retaine
 import {createStartupRetainedCollector} from './release-delivery-startup-retained.mjs';
 import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
 import {awaitObservationTime} from './release-observation-clock.mjs';
-import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter} from './release-delivery-browser.mjs';
+import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter, inspectBrowserWindowRecoveryReadiness} from './release-delivery-browser.mjs';
+
+import {verifyBrowserWindowRecoveryReadiness} from './release-delivery-browser-continuation.mjs';
+import {verifyContinuationStorageAuthority} from './release-delivery-continuation.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
 const canonical = v => JSON.stringify(v, (_k, x) => x && typeof x === 'object' && !Array.isArray(x)
@@ -191,13 +194,29 @@ export function withBrowserPreparation(adapter, prepare) {
   };
   return {...adapter,execute:context=>advance(context,false),observe:context=>advance(context,true)};
 }
+/** Failure evidence stays in the private journal; qualification predicates are unchanged. */
+export async function collectStartupWithDiagnostics(context,{transport,options,run=runInstallTransport,clock=Date.now,receiptStore=storeReceipt}) {
+  let raw,programSha256;
+  try{return await createStartupRetainedCollector({transport,options,clock,run:async(target,program,args)=>{programSha256=sha256(program);raw=await run(target,program,args);return raw;}})();}
+  catch(error){
+    if(context?.journal&&programSha256){
+      const stdout=Buffer.from(raw?.stdout??''),stderr=Buffer.from(raw?.stderr??''),reason=/^[a-z][a-z0-9-]{0,99}$/.test(error?.message??'')?error.message:'startup-transport-response-rejected';
+      const proof={format:1,kind:'operator-startup-transport-failure',operationId:context.descriptor.operation.id,programSha256,transport,receivedAtMilliseconds:clock(),reason,
+        exitCode:raw?.exitCode??null,uncertain:raw?.uncertain===true,diagnosticsTruncated:raw?.diagnosticsTruncated===true,
+        stdoutRawBase64:stdout.subarray(0,524288).toString('base64'),stdoutBytes:stdout.length,stdoutTruncated:stdout.length>524288,
+        stderrRawBase64:stderr.subarray(0,4096).toString('base64'),stderrBytes:stderr.length,stderrTruncated:stderr.length>4096,hostWrites:false};
+      const bytes=Buffer.from(canonical(proof)+'\n');error.startupResponseReceipt=receiptStore(context.journal,context.descriptor.operation.id,'startup-failure-'+sha256(bytes)+'.json',bytes);
+    }
+    throw error;
+  }
+}
 export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now, monotonic, wait } = {}) {
   // Keep the old document alive before publication. This is an owned browser
   // effect, never an input/admission callback or a manually asserted receipt.
   const publicationBrowser = (adapter, target) => {
     if (target.browserCapability !== 'available' || !target.browserTools) return adapter;
     const prepare = (context, inspectOnly) => prepareDeliveryBrowser(context, {
-      options:target.browserTools, transport:target.transport, clock, inspectOnly });
+      options:target.browserTools, transport:target.transport, clock, inspectOnly, run });
     return withBrowserPreparation(adapter,prepare);
   };
   const publicationPlanOptions = context => {
@@ -208,7 +227,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
   const dependency = target => createMaintainedDependencyTransport({ options:target.full.dependencyTransport,
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
     ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}),
-    ...([5,6].includes(target.full.dependencyTransport.format)?{startupCollector:createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})}: {}) });
+    ...([5,6].includes(target.full.dependencyTransport.format)?{startupCollector:context=>collectStartupWithDiagnostics(context,{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore})}: {}) });
   // This command currently has the maintained schema55/API1 host closure.
   // Actual candidate schema/runtime comparisons still run after authenticated
   // artifact retrieval; declared operation fields cannot override those bytes.
@@ -222,14 +241,14 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     }
     return runtimeAdmissionCapability({fromVersion:op.priorAgentVersion,toVersion:op.agentVersion,schemaVersion:55,apiVersion:1}).gaps.map(gap=>gap.code);
   };
-  const sourceCapabilityGaps = async (descriptor,target,prior) => {
+  const sourceCapabilityGaps = async (descriptor,target,prior,context={}) => {
     // Reuse the maintained source-only validator before any package reservation.
     // Only known unsupported transitions become capability gaps. Corrupt or
     // substituted evidence still fails verification rather than being waived.
     const capabilities=new Set(['changed-runtime-qualification-producer-required','changed-schema-qualification-producer-required',
       'changed-startup-qualification-producer-required','changed-updater-qualification-producer-required','changed-dependency-qualification-producer-required']);
     let schema;
-    try { schema=await dependency(target).validate({descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
+    try { schema=await dependency(target).validate({...context,descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
     catch(error) { if(capabilities.has(error?.message))return [error.message];throw error; }
     const helperHashes=schema===60?FULL_APPLICATION_HELPERS:FULL_HELPERS;
     for(const side of ['private','public'])for(const [name,digest] of Object.entries(helperHashes)) {
@@ -253,13 +272,26 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     return Object.fromEntries(['prepare','validate','apply'].map(method=>[method,async context=>{protectedAssets(context);return admission[method](context);} ]));
   };
   return { identity: async () => deliveryAdapterIdentity(), targetIdentity: async descriptor => deliveryTargetIdentity(descriptor),
+    browserWindowRecoveryReadiness: async context => {
+      const {target}=targetInput(context.descriptor);
+      const proof=await inspectBrowserWindowRecoveryReadiness(context,{options:target.browserTools,transport:target.transport,clock,run});
+      const bytes=Buffer.from(canonical(proof)+'\n');
+      const reference=receiptStore(context.journal,context.descriptor.operation.id,'browser-window-readiness-'+sha256(bytes)+'.json',bytes);
+      verifyBrowserWindowRecoveryReadiness(reference,{...context,now:clock(),requireUnmaterialized:true});return reference;
+    },
+    prepareBrowserWindowRecovery: async context => {
+      const {target}=targetInput(context.descriptor);
+      need(context.journal.deliveryOperatorContinuation(context.descriptor.operation.id)?.proof.browserWindowRecovery,'browser-window-recovery-grant-required');
+      const guarded={...context,beforeNewEffect:()=>verifyContinuationStorageAuthority({journal:context.journal,operationId:context.descriptor.operation.id,now:clock(),effect:true})};
+      return prepareDeliveryBrowser(guarded,{options:target.browserTools,transport:target.transport,clock,run});
+    },
     publicationContinuationPlan: context => planFullPublicationContinuation(context,publicationPlanOptions(context)),
     verifyPublicationContinuationPlan: (ref,context) => verifyFullPublicationContinuationPlan(ref,context,publicationPlanOptions(context)),
     continuationFacts: async (descriptor,{journal}={}) => {
       need(journal,'continuation-observation-journal-required');
       const {target,transport}=targetInput(descriptor);
       need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
-      const proof=await createStartupRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock})();
+      const proof=await collectStartupWithDiagnostics({journal,descriptor},{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore});
       const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition);
       const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
       const stdout=Buffer.from(response.stdout??''),stderr=Buffer.from(response.stderr??'');
@@ -279,10 +311,10 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     },
     preflight: async descriptor => { const { target } = targetInput(descriptor); return [...(target.sourceTools ? [] : ['source-toolchain-not-configured']), ...(target.artifactTools ? [] : ['artifact-toolchain-not-configured']),
       ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...await runtimeGaps(descriptor,target)]; },
-    phasePreflight: async (phase,descriptor,prior) => {
+    phasePreflight: async (phase,descriptor,prior,context={}) => {
       const {target}=targetInput(descriptor),gaps=deliveryPhaseIntegrationGaps(phase,target,prior);
       if(gaps.length||phase!=='package'||prior.route?.route!=='full')return gaps;
-      const sourceGaps=await sourceCapabilityGaps(descriptor,target,prior);
+      const sourceGaps=await sourceCapabilityGaps(descriptor,target,prior,context);
       return sourceGaps.length?sourceGaps:fullHostPrerequisiteGaps({transport:target.transport,options:target.full.host,run});
     },
     // Report unsupported acceptance separately from route admission. Neither a
