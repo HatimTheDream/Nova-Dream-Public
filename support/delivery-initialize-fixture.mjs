@@ -100,7 +100,8 @@ export function completedDeliveryFixture(f,prepared,{route='full',legacy=false,r
   const pair=f.put('signed/reviewed-pair.json',{format:1,candidateId,priorCandidateId,archiveSha256:sha256(app),archiveBytes:app.length}),pairRaw=readFileSync(pair.path);
   const bundle=f.put('signed/bundle.json',{format:1,files:[{name:'reviewed-pair.json',sha256:pair.sha256,data:pairRaw.toString('base64')},{name:'app.tgz',sha256:sha256(app),data:app.toString('base64')}]});
   const result={...f.result,jobId,candidateId,priorCandidateId},raw=enc(result),identity=structuredClone(f.identity),op=identity.request.operation;
-  const requester=sha256(readFileSync(new URL('../deploy/update-runner/request_install.py',import.meta.url)));
+  // This completed schema55 fixture retains its historical requester, independent of the current same60 source.
+  const requester='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941';
   identity.request.requester={path:`/opt/nova-release-tools/${requester}/request_install.py`,sha256:requester};
   Object.assign(op,{operationId:id,candidateId,priorCandidateId,version:descriptor.operation.version,buildVersion:descriptor.operation.buildVersion,bundleSha256:bundle.sha256,priorVersion:'3.1.0',priorBuildVersion:'1.0.399',agentVersion:descriptor.operation.agentVersion,priorAgentVersion:descriptor.operation.priorAgentVersion});
   identity.runtimeProof.openclawVersion=op.agentVersion;

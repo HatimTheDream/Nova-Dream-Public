@@ -33,15 +33,22 @@ def validate_staged_qualification(operation,qualification,pair_raw,projection_ra
       and json.loads(pair_raw)==qualification['pair']
       and sha(projection_raw)==qualification['projectionSha256']==expected['projectionSha256']
       and json.loads(projection_raw)==qualification['proof'],'full-installed-startup-qualification-changed')
+def requester_references(operation):
+    qualification=operation.get('applicationQualification');schema=operation.get('schemaVersion')
+    plain=type(schema) is int and schema==55 and 'applicationQualification' not in operation
+    qualified=type(schema) is int and schema==60 and type(qualification) is dict and type(qualification.get('priorSchemaVersion')) is int
+    prior=qualification.get('priorSchemaVersion') if qualified else None
+    digests=([SAME_SCHEMA60_REQUESTER_SHA] if qualified and prior==60 else
+      [REQUESTER_SHA,SAME_SCHEMA60_REQUESTER_SHA] if plain or (qualified and prior==55) else [])
+    need(digests,'full-supported-requester-capability-required')
+    return [{'path':'/opt/nova-release-tools/'+digest+'/request_install.py','sha256':digest} for digest in digests]
 def requester_reference(operation):
-    qualification=operation.get('applicationQualification')
-    same_schema=operation.get('schemaVersion')==60 and type(qualification) is dict and qualification.get('priorSchemaVersion')==60
-    digest=SAME_SCHEMA60_REQUESTER_SHA if same_schema else REQUESTER_SHA
-    return {'path':'/opt/nova-release-tools/'+digest+'/request_install.py','sha256':digest}
+    # Preserve the historical default for callers explicitly describing old proof.
+    return requester_references(operation)[0]
 def original(binding,s):
     need(set(binding)=={'format','operation','jobId','requester','runtime'} and binding['format']==1,'full-identity-binding-shape')
     op=binding['operation'];need(str(uuid.UUID(binding['jobId']))==binding['jobId'],'full-original-job-id')
-    helper=binding['requester'];need(helper==requester_reference(op),'full-maintained-requester-required')
+    helper=binding['requester'];need(helper in requester_references(op),'full-maintained-requester-required')
     client_module=s.load_module('full_identity_original_requester',helper['path'],s.ref(helper,262144,True))
     client_module.validate_operation(op)
     need(op['apiVersion']==1 and op['schemaVersion'] in (55,60),'full-supported-api-schema-required')

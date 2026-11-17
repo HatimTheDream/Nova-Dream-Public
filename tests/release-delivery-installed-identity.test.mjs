@@ -14,7 +14,7 @@ import { createDeliveryRegistry, deliveryPhaseIntegrationGaps } from '../scripts
 const encoded = value => Buffer.from(JSON.stringify(value) + '\n'), now = 1791990000000;
 const schema = readFileSync(new URL('../scripts/release-coordinate.mjs', import.meta.url), 'utf8')
   .match(/this\.db\.exec\(`(PRAGMA journal_mode=WAL;[\s\S]+?PRAGMA user_version=1; COMMIT;)`\);/)[1].replace('${APPLICATION_ID}', String(0x4e56524c));
-function fixture(t) {
+function fixture(t, {schemaVersion=60,priorSchemaVersion=60} = {}) {
   const parent = resolve(tmpdir()), root = mkdtempSync(join(parent, 'nova-full-identity-integration-'));
   mkdirSync(join(root, 'delivery-evidence'));
   const put = (name, data) => {
@@ -41,7 +41,7 @@ function fixture(t) {
     root: '/' + side, repository: 'Example/' + side, commit: op.sourceCommits[side], baseCommit: (i ? 'd' : 'c').repeat(40), branch: 'main' }])),
     target: put('target.json', target), targetIdentity: sha256('target'), adapterIdentity: sha256('fixture-registry'), observationBudgetMs: 60000, timeline };
   const spec = { format: 1, operationId: op.id, ...Object.fromEntries(['candidateId','priorCandidateId','workspaceEpoch','version','buildVersion','agentVersion','priorAgentVersion','bundleSha256'].map(k => [k,op[k]])),
-    priorVersion: '2.3.4', priorBuildVersion: '1.0.291', schemaVersion: 60, apiVersion: 1, applicationQualification:{priorSchemaVersion:60,reviewedPairSha256:sha256('same-schema pair'),projectionSha256:sha256('same-schema projection')}, rehearsalLeaseId: randomUUID(), rehearsalProofSha256: sha256('proof') };
+    priorVersion: '2.3.4', priorBuildVersion: '1.0.291', schemaVersion, apiVersion: 1, ...(schemaVersion===60?{applicationQualification:{priorSchemaVersion,reviewedPairSha256:sha256('same-schema pair'),projectionSha256:sha256('same-schema projection')}}:{}), rehearsalLeaseId: randomUUID(), rehearsalProofSha256: sha256('proof') };
   const coordinator = { format: 1, input: { format: 1, operation: op, timeline, evidence: { recovery: { proof: { path: join(root,'proof.json'), sha256: spec.rehearsalProofSha256 } } } },
     adapter: { transport, installSpec: put('install-spec.json', spec) } };
   const journal = Object.create(ReleaseJournal.prototype);
@@ -61,7 +61,7 @@ function fixture(t) {
   const request = originalInstalledIdentityRequest(context, completed, options);
   const proof = { format: 1, kind: 'maintained-installed-acceptance-identity', operationId: op.id, candidateId: op.candidateId,
     priorCandidateId: op.priorCandidateId, jobId: request.jobId, idempotencyKey: request.operation.idempotencyKey, request,
-    health: { candidateId: op.candidateId, epoch: op.workspaceEpoch, apiVersion: 1, schemaVersion: 60, serviceInputsSha256: sha256('service'), processIdentity: randomUUID(), frontend: { source: 'bundled' } },
+    health: { candidateId: op.candidateId, epoch: op.workspaceEpoch, apiVersion: 1, schemaVersion, serviceInputsSha256: sha256('service'), processIdentity: randomUUID(), frontend: { source: 'bundled' } },
     appProcess: { ActiveState: 'active', SubState: 'running', MainPID: '123', ExecMainStartTimestampMonotonic: '456' },
     runtimeProof: { openclawVersion: op.agentVersion, configurationSha256: runtime.hostConfig.sha256 },
     installationProof: { jobId: request.jobId, releaseId: op.bundleSha256, candidateId: op.candidateId,
@@ -174,4 +174,15 @@ test('installed identity reads schema60 from the authenticated original spec and
   assert.throws(()=>verifyInstalledIdentity(changed,request),/qualification-binding-changed/);
   const absent=structuredClone(request);delete absent.operation.applicationQualification;
   assert.throws(()=>verifyInstalledIdentity({...proof,request:absent},absent));
+});
+
+test('original installed identity constructor retains the current requester for all supported capabilities',t=>{
+ const current=sha256(readFileSync(new URL('../deploy/update-runner/request_install.py',import.meta.url)));
+ for(const mode of [{schemaVersion:55},{schemaVersion:60,priorSchemaVersion:55},{schemaVersion:60,priorSchemaVersion:60}]){
+  const f=fixture(t,mode),request=originalInstalledIdentityRequest(f.context,f.completed,f.options);
+  assert.deepEqual(request.requester,{path:'/opt/nova-release-tools/'+current+'/request_install.py',sha256:current});
+  assert.equal(request.operation.schemaVersion,mode.schemaVersion);
+  assert.equal(request.operation.applicationQualification?.priorSchemaVersion,mode.schemaVersion===60?mode.priorSchemaVersion:undefined);
+  assert.deepEqual(verifyInstalledIdentity(f.proof,request),f.proof);assert.equal(f.counts().reads,0);
+ }
 });

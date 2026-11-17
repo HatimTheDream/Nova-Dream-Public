@@ -12,7 +12,7 @@ const source=()=>readFileSync(new URL('release-assistant-transport.py',import.me
 const full=()=>readFileSync(new URL('release-installed-identity.py',import.meta.url));
 const existing=()=>readFileSync(new URL('release-assistant-existing-reply.py',import.meta.url));
 const REQUESTER='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941';
-// Distinct reviewed requester for new same-schema60 installations.
+// Current reviewed requester preserves55 and55-to60 support; same60 requires it.
 export const SAME_SCHEMA60_REQUESTER='a606724fc16e74ee135247ef7926d5442d9537824ee1c0fe59cf45528497840b';
 // Original accepted schema55 profiles retain their genuine requester identity.
 // It is not authority for a new schema60 application transition.
@@ -25,7 +25,9 @@ export function validateInstalledIdentityRequest(binding,{allowLegacyProfile=fal
  const {idempotencyKey,...spec}=binding.operation;releaseInstallSpecSchema.parse(spec);
  need(/^[a-f0-9-]{36}$/.test(idempotencyKey)&&/^[a-f0-9-]{36}$/.test(binding.jobId),'full-original-key-job-required');
  const sameSchema=spec.schemaVersion===60&&spec.applicationQualification?.priorSchemaVersion===60;
- const allowed=sameSchema?(SAME_SCHEMA60_REQUESTER===null?[]:[SAME_SCHEMA60_REQUESTER]):[REQUESTER,...(allowLegacyProfile&&spec.schemaVersion===55&&!spec.applicationQualification?[LEGACY_REQUESTER]:[])];
+ const preserved=(spec.schemaVersion===55&&!spec.applicationQualification)||(spec.schemaVersion===60&&spec.applicationQualification?.priorSchemaVersion===55);
+ const allowed=sameSchema?[SAME_SCHEMA60_REQUESTER]:preserved?[REQUESTER,SAME_SCHEMA60_REQUESTER,
+  ...(allowLegacyProfile&&spec.schemaVersion===55&&!spec.applicationQualification?[LEGACY_REQUESTER]:[])]:[];
  need(allowed.some(sha256=>equal(binding.requester,{path:`/opt/nova-release-tools/${sha256}/request_install.py`,sha256})),'full-maintained-requester-required');
  need(Object.keys(binding.runtime).sort().join(',')==='hostConfig,startupReview'&&ref(binding.runtime.hostConfig)&&binding.runtime.hostConfig.path==='/etc/nova-update/config.json'&&ref(binding.runtime.startupReview)&&/^\/opt\/nova-release-tools\/[a-zA-Z0-9/_-]+\/startup-review\.json$/.test(binding.runtime.startupReview.path),'full-reviewed-runtime-inputs-required');
  return binding;

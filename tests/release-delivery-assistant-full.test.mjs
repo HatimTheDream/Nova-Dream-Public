@@ -75,6 +75,24 @@ test('same schema60 identity selects only the reviewed new requester while origi
  assert.throws(()=>validateInstalledIdentityRequest(current,{allowLegacyProfile:true}),/maintained-requester/);
  current.requester={path:'/opt/nova-release-tools/'+digest+'/request_install.py',sha256:digest};
  assert.deepEqual(validateInstalledIdentityRequest(current),current);assert.match(buildInstalledIdentityProgram(current),/result=m\.observe/);
- for(const priorSchemaVersion of [55]){const wrong=structuredClone(current);wrong.operation.applicationQualification.priorSchemaVersion=priorSchemaVersion;assert.throws(()=>validateInstalledIdentityRequest(wrong),/maintained-requester/);}
+ const preserved=structuredClone(current);preserved.operation.applicationQualification.priorSchemaVersion=55;assert.deepEqual(validateInstalledIdentityRequest(preserved),preserved);
  const wrong=structuredClone(current);wrong.requester.path='/opt/nova-release-tools/wrong/request_install.py';assert.throws(()=>validateInstalledIdentityRequest(wrong),/maintained-requester/);
+});
+
+test('exact current requester preserves55 and migration capabilities without cross-schema authority',()=>{
+ const base=fixture().request,old='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941',legacy='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
+ const current=sha256(readFileSync(new URL('../deploy/update-runner/request_install.py',import.meta.url)));assert.equal(current,SAME_SCHEMA60_REQUESTER);
+ for(const mode of ['plain55','transition60','same60']){
+  const request=structuredClone(base);
+  if(mode!=='plain55'){request.operation.schemaVersion=60;request.operation.applicationQualification={priorSchemaVersion:mode==='same60'?60:55,reviewedPairSha256:'a'.repeat(64),projectionSha256:'b'.repeat(64)};}
+  for(const digest of [current,old,legacy,'0'.repeat(64)]){
+   const candidate=structuredClone(request);candidate.requester={path:'/opt/nova-release-tools/'+digest+'/request_install.py',sha256:digest};
+   const supported=digest===current||(digest===old&&mode!=='same60');
+   if(supported){assert.deepEqual(validateInstalledIdentityRequest(candidate),candidate);assert.match(buildInstalledIdentityProgram(candidate),/result=m\.observe/);}
+   else assert.throws(()=>validateInstalledIdentityRequest(candidate),/maintained-requester/);
+   if(digest===legacy&&mode==='plain55')assert.deepEqual(validateInstalledIdentityRequest(candidate,{allowLegacyProfile:true}),candidate);
+   else if(!supported)assert.throws(()=>validateInstalledIdentityRequest(candidate,{allowLegacyProfile:true}),/maintained-requester/);
+  }
+  const wrong=structuredClone(request);wrong.requester={path:'/opt/nova-release-tools/'+old+'/request_install.py',sha256:current};assert.throws(()=>validateInstalledIdentityRequest(wrong),/maintained-requester/);
+ }
 });

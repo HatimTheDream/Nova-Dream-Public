@@ -47,8 +47,28 @@ class Identity(unittest.TestCase):
   self.assertEqual(m.requester_reference(new),{'path':'/opt/nova-release-tools/'+current+'/request_install.py','sha256':current})
   self.assertNotEqual(current,m.REQUESTER_SHA)
   self.assertEqual(m.SAME_SCHEMA60_REQUESTER_SHA,current)
-  for operation,helper in [(old,m.requester_reference(new)),(new,m.requester_reference(old))]:
+  self.assertIn(m.requester_reference(new),m.requester_references(old))
+  for operation,helper in [(new,m.requester_reference(old))]:
    binding={'format':1,'operation':operation,'jobId':self.job['id'],'requester':helper,'runtime':{}}
    with self.assertRaisesRegex(RuntimeError,'full-maintained-requester-required'):
     m.original(binding,types.SimpleNamespace())
+ def test_current_requester_capability_matrix_and_unknown_helpers(self):
+  current=m.sha((ROOT/'deploy/update-runner/request_install.py').read_bytes());self.assertEqual(current,m.SAME_SCHEMA60_REQUESTER_SHA)
+  legacy='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06'
+  for mode,operation in [('plain55',self.op),('transition60',{**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':55}}),('same60',{**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':60}})]:
+   for digest in (current,m.REQUESTER_SHA,legacy,'0'*64):
+    with self.subTest(mode=mode,digest=digest):
+     helper={'path':'/opt/nova-release-tools/'+digest+'/request_install.py','sha256':digest}
+     binding={'format':1,'operation':operation,'jobId':self.job['id'],'requester':helper,'runtime':{}}
+     calls=[]
+     def load(name,path,raw):calls.append((path,raw));raise LookupError('selected-exact-requester')
+     support=types.SimpleNamespace(load_module=load,ref=lambda value,maximum,private: value)
+     if digest==current or (digest==m.REQUESTER_SHA and mode!='same60'):
+      with self.assertRaisesRegex(LookupError,'selected-exact-requester'):m.original(binding,support)
+      self.assertEqual(calls,[(helper['path'],helper)])
+     else:
+      with self.assertRaisesRegex(RuntimeError,'full-maintained-requester-required'):m.original(binding,support)
+      self.assertEqual(calls,[])
+  for operation in [{**self.op,'schemaVersion':56},{**self.op,'applicationQualification':None},{**self.op,'schemaVersion':60},{**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':True}}]:
+   with self.assertRaisesRegex(RuntimeError,'supported-requester-capability'):m.requester_references(operation)
 if __name__=='__main__':unittest.main()

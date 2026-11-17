@@ -1,3 +1,9 @@
+## [2.28.41] - 2026-11-17
+
+- Recognize the server’s verified copy-tool link while preserving exact executable, ownership and saved-work checks.
+- Keep new and historical installation identity checks compatible with their exact reviewed requester.
+- Correct release test fixtures to preserve their original version and transition identity.
+
 ## [2.28.40] - 2026-11-17
 
 - Reuse a bounded set of timezone formatters when viewing and editing Tasks, preserving dates, daylight-saving behavior and saved task history.

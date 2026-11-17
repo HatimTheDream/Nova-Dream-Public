@@ -19,7 +19,7 @@ function fixture(t,{offset=0,stalled=false,invalidIdentity=false}={}){
   dependencyTransport:{...f.transportOptions,format:6,mode:'qualified-application-dependency-successor',qualifiedDependencies:{archive:ssh,metadata:ssh,execution:ssh}}}};
  const descriptor={...h.descriptor,target:f.put(join(f.root,'clock-target.json'),target)};
  const spec=fullFactsSpec(descriptor,h.options,descriptor.operation.id,null,f.proof.qualificationBinding.applicationTransition);
- h.facts.review.helperHashes=spec.helperHashes;h.facts.observedAtMilliseconds=original+offset;
+ h.facts.review.helperHashes=spec.helperHashes;h.facts.review.applicationTransition=spec.applicationTransition;h.facts.observedAtMilliseconds=original+offset;
  if(invalidIdentity)h.facts.health.candidateId='0'.repeat(64);
  const raw=JSON.stringify(h.facts),registry=createDeliveryRegistry({clock:()=>wall,monotonic:()=>mono,
   wait:async ms=>{assert.equal(receipts[0].value.kind,'operator-continuation-host-response');waits.push(ms);mono+=ms;if(!stalled)wall+=ms;},
