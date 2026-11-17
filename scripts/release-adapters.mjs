@@ -19,11 +19,11 @@ export const releaseInstallSpecSchema = z.object({ format: z.literal(1), operati
   priorVersion: version, priorBuildVersion: version, schemaVersion: z.number().int().min(1).max(100000),
   apiVersion: z.number().int().min(1).max(100000), agentVersion: version, priorAgentVersion: version,
   bundleSha256: digest, rehearsalLeaseId: z.uuid(), rehearsalProofSha256: digest,
-  applicationQualification: z.object({ priorSchemaVersion: z.literal(55), reviewedPairSha256: digest,
+  applicationQualification: z.object({ priorSchemaVersion: z.union([z.literal(55),z.literal(60)]), reviewedPairSha256: digest,
     projectionSha256: digest }).strict().optional() }).strict().superRefine((value, ctx) => {
     if (value.applicationQualification ? !(value.schemaVersion === 60 && value.apiVersion === 1
       && value.agentVersion === '2026.9.8' && value.priorAgentVersion === '2026.9.8') : value.schemaVersion === 60)
-      ctx.addIssue({ code: 'custom', message: 'qualified-55-to-60-application-transition-required' });
+      ctx.addIssue({ code: 'custom', message: 'qualified-schema60-application-required' });
   });
 const helperPath = fileURLToPath(new URL('../deploy/update-runner/request_install.py', import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -57,6 +57,13 @@ function validateApplicationEvidence(spec, evidence) {
     && Buffer.isBuffer(evidence.projection) && evidence.projection.length <= 512 * 1024
     && hash(evidence.pair) === spec.applicationQualification.reviewedPairSha256
     && hash(evidence.projection) === spec.applicationQualification.projectionSha256, 'install-application-evidence-changed');
+  const pair=JSON.parse(evidence.pair),proof=JSON.parse(evidence.projection),prior=spec.applicationQualification.priorSchemaVersion;
+  const marker=prior===60?{format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'}
+    :{format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'};
+  const field=prior===60?'sameSchemaQualification':'applicationTransition',other=prior===60?'applicationTransition':'sameSchemaQualification';
+  requireValue(canonical(pair[field])===canonical(marker)&&!Object.hasOwn(pair,other)
+    &&canonical(proof.qualificationBinding?.[field])===canonical(marker)&&!Object.hasOwn(proof.qualificationBinding??{},other),
+    'install-application-qualification-marker-changed');
 }
 
 function adapterInputs({ transport, installSpec, operation, input }) {

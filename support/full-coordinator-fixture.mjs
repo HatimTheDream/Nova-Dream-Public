@@ -38,7 +38,7 @@ export async function coordinatorFixture(t, {seed, packaged: preparedPackage} = 
       logSha256:log.sha256,steps:['Run npm run quality','Verify Linux update recovery'].map(name=>({name,status:'completed',conclusion:'success'}))}]}]}]});
     prior[side+'-ci']={receipt,log};
   }
-  const leaseId=randomUUID(), review=put({candidateId:op.priorCandidateId,workspaceEpoch:op.workspaceEpoch,helperHashes,leaseId});
+  const leaseId=randomUUID(), review=put({candidateId:op.priorCandidateId,workspaceEpoch:op.workspaceEpoch,helperHashes,leaseId,...(prior.package.startupQualification?.binding?.sameSchemaQualification?{sameSchemaQualification:prior.package.startupQualification.binding.sameSchemaQualification}:{})});
   const proofValue={kind:'operator-maintenance-acceptance',outcome:'rehearsed',candidateId:op.priorCandidateId,workspaceEpoch:op.workspaceEpoch,leaseId,
     savedWorkVerified:true,accountsVerified:true,recoveryVerified:true,healthVerified:true},proof=put(proofValue);
   const observation=put({observedAtMilliseconds:now,readOnlyObservation:true,completedProof:{proof:proofValue,proofSha256:proof.sha256,reviewSha256:review.sha256,originalReturned:true,nativeLeaseReleaseSettled:true},

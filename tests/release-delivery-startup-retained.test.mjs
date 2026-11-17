@@ -6,7 +6,7 @@ import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-p
 import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
 import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
-import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
+import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
 import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
@@ -142,8 +142,8 @@ test('fixed collector source is part of the adapter graph and does not launch a 
   assert.match(sha256(source),/^[a-f0-9]{64}$/);
 });
 
-async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false){
-  const f=startupCommandFixture(t,{schemaMigration,newDependencyGraph:qualifiedDependencies,...(schemaMigration?{sources:QUALIFIED_STARTUP_SOURCES}:{})}),commands=[];
+async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false,sameSchema60=false){
+  const f=startupCommandFixture(t,{schemaMigration,sameSchema60,newDependencyGraph:qualifiedDependencies,...(sameSchema60?{sources:SAME_SCHEMA60_STARTUP_SOURCES}:schemaMigration?{sources:QUALIFIED_STARTUP_SOURCES}:{})}),commands=[];
   if(qualifiedDependencies){
     const binding=f.proof.qualificationBinding,archive=f.put(join(f.root,'qualified-dependencies.tgz'),Buffer.from('synthetic freshly qualified different Linux graph'));
     const description={format:1,archiveBytes:readFileSync(archive.path).length,archiveSha256:archive.sha256,expandedBytes:100,fileCount:3,packageLockSha256:binding.targets.private.packageLockSha256,dependencyGraphSha256:sha256('different installed fixture2 graph'),platform:'linux',arch:'x64',nodeVersion:'22.23.2',nodeAbi:127};
@@ -188,7 +188,7 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
   const producer=createDependencyPairProducer({maintained:transport});
   const canonicalInput=structuredClone(f.intent.input);
   for(const artifact of Object.values(canonicalInput.artifacts)) delete artifact.manifest;
-  assert.equal(await transport.validate({descriptor:f.descriptor,input:canonicalInput}),schemaMigration?60:55);
+  assert.equal(await transport.validate({descriptor:f.descriptor,input:canonicalInput}),(schemaMigration||sameSchema60)?60:55);
   assert.equal(commands.length,0);
   const completed=await producer.execute(f.context);
   assert.equal(completed.state,'completed',JSON.stringify({completed,executionErrors}));
@@ -198,9 +198,10 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
   assert.deepEqual(output.startupQualification.binding,f.proof.qualificationBinding);
   const pair=JSON.parse(readFileSync(join(output.directory,'reviewed-pair.json'))),preparation=JSON.parse(readFileSync(output.preparation.path));
   assert.notDeepEqual(pair.startupBarrier.prior,pair.startupBarrier.target);
-  assert.equal(Object.hasOwn(pair,'startupQualification'),schemaMigration);
-  if(schemaMigration){
+  assert.equal(Object.hasOwn(pair,'startupQualification'),schemaMigration||sameSchema60);
+  if(schemaMigration||sameSchema60){
     assert.deepEqual(pair.applicationTransition,f.proof.qualificationBinding.applicationTransition);
+    assert.deepEqual(pair.sameSchemaQualification,f.proof.qualificationBinding.sameSchemaQualification);
     assert.deepEqual(pair.startupQualification,{projection:{path:'startup-qualification.json',sha256:proofRef.sha256},binding:output.startupQualification.binding});
     assert.deepEqual(readFileSync(join(output.directory,'startup-qualification.json')),readFileSync(proofRef.path));
   }
@@ -213,7 +214,7 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
   await reloaded.verify(completed,f.context);
   assert.deepEqual(Object.keys(transport.steps).map(name=>{const row=f.journal.deliveryPhase(f.descriptor.operation.id,'package/'+name);return[row.phase,row.key,row.createdAtMs];}),rows);
   assert.equal(commands.length,qualifiedDependencies?0:2);
-  if(schemaMigration){
+  if(schemaMigration||sameSchema60){
     const options={bundleUrl:'https://example.invalid/migration.json',dependenciesUrl:'https://example.invalid/dependencies.tgz'};
     const full=createFullBundleAdapter({options,pairProducer:{execute:async()=>completed,inspect:async()=>completed,verify:async()=>reloaded.verify(completed,f.context)}});
     const context={...f.context,intent:{...f.intent,input:{...f.intent.input,options}}};
@@ -229,7 +230,7 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
       assert.equal(Object.keys(result.input.operation.helperHashes).length,11);
       assert.equal(planRelease(result.input,{nowMs:coordinatorNow}).phases.filter(p=>p.state==='passed').length,6);
       const spec=JSON.parse(readFileSync(result.adapter.installSpec.path));
-      assert.equal(spec.schemaVersion,60);assert.equal(spec.applicationQualification.priorSchemaVersion,55);
+      assert.equal(spec.schemaVersion,60);assert.equal(spec.applicationQualification.priorSchemaVersion,sameSchema60?60:55);
       assert.equal(spec.applicationQualification.projectionSha256,proofRef.sha256);
       const entries=new Map(envelope.files.map(row=>[row.name,Buffer.from(row.data,'base64')]));
       const actualPair=JSON.parse(entries.get('reviewed-pair.json'));
@@ -238,7 +239,7 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
       for(const mutate of [p=>p.heldBootstrapVerified=false,p=>p.workerClosed=false,
         p=>p.qualificationBinding.sourceCommits.public='c'.repeat(40),p=>p.qualificationBinding.workspaceEpoch='11111111-1111-4111-8111-111111111111',
         p=>p.qualificationBinding.targets.public.candidateId='0'.repeat(64),p=>p.qualificationBinding.helpers['hosted_retained_catalog.py']='0'.repeat(64),
-        p=>p.qualificationBinding.applicationDependencies.archiveSha256='0'.repeat(64),p=>p.qualificationBinding.applicationTransition.toSchemaVersion=61]){
+        p=>p.qualificationBinding.applicationDependencies.archiveSha256='0'.repeat(64),p=>{if(sameSchema60)p.qualificationBinding.sameSchemaQualification.schemaVersion=61;else p.qualificationBinding.applicationTransition.toSchemaVersion=61;}]){
         const changedProof=structuredClone(f.proof);mutate(changedProof);
         const proofBytes=Buffer.from(JSON.stringify(changedProof)+'\n'),changedPair=structuredClone(actualPair),changedEntries=new Map(entries);
         changedPair.startupQualification={projection:{path:'startup-qualification.json',sha256:sha256(proofBytes)},binding:changedProof.qualificationBinding};
@@ -250,7 +251,7 @@ async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false
       }
       const changedHelper=new Map(entries);changedHelper.set('hosted-retained-catalog.mjs',Buffer.from('different helper'));
       assert.throws(()=>qualifyApplicationPackage(actualPair,changedHelper,result.input.operation),/helper-bytes-changed/);
-      const unqualified={...actualPair};delete unqualified.applicationTransition;delete unqualified.startupQualification;
+      const unqualified={...actualPair};delete unqualified.applicationTransition;delete unqualified.sameSchemaQualification;delete unqualified.startupQualification;
       assert.throws(()=>qualifyApplicationPackage(unqualified,entries,result.input.operation));
     }
   }
@@ -278,10 +279,11 @@ test('only the explicit schema55-to60 actual startup proof admits migration; unq
   const transport=createMaintainedDependencyTransport({options:f.transportOptions,base:f.base,run:async()=>{throw Error('No command allowed');},startupCollector:async()=>f.proof,startupSources:f.sources});
   await transport.validate({descriptor:f.descriptor,input:f.intent.input});
   assert.equal(f.calls.length,0);
-  const same=startupCommandFixture(t,{sameSchema60:true});
-  assert.throws(()=>assertStartupQualifiedCandidate(same.proof,same.assertion,same.sources),/same-schema60-producer-unavailable/);
+  const same=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+  const absent=structuredClone(same.proof);delete absent.qualificationBinding.sameSchemaQualification;
+  assert.throws(()=>assertStartupQualifiedCandidate(absent,same.assertion,same.sources),/same-schema|artifact-closure/);
   const stale=structuredClone(same.proof);stale.qualificationBinding.applicationTransition=f.proof.qualificationBinding.applicationTransition;
-  assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/unexpected-startup|startup-qualified-artifact-closure/);
+  assert.throws(()=>assertStartupQualifiedCandidate(stale,same.assertion,same.sources),/marker-conflict|unexpected-startup|startup-qualified-artifact-closure/);
 });
 
 const historicalSources = {
@@ -383,3 +385,63 @@ test('new lifecycle profile accepts only bound role reaping and preserves old re
   assert.throws(()=>verifyStartupRetainedProjection(legacy.proof,legacy.proof.request,legacy.sources));
 });
 
+
+test('same schema60 candidate retains complete startup, prior, source and native proof requirements',async t=>{
+ const f=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ assert.doesNotThrow(()=>assertStartupQualifiedCandidate(f.proof,f.assertion,f.sources));
+ for(const change of [p=>delete p.qualificationBinding.sameSchemaQualification,p=>p.qualificationBinding.sameSchemaQualification.schemaVersion=55,
+  p=>p.qualificationBinding.sameSchemaQualification.apiVersion=2,p=>p.qualificationBinding.sameSchemaQualification.agentVersion='2026.9.9',
+  p=>p.qualificationBinding.sameSchemaQualification.passed=true,p=>p.qualificationBinding.applicationTransition={},
+  p=>p.scenarios[2].candidateId=p.qualificationBinding.targets.private.candidateId,p=>p.scenarios.pop(),
+  p=>p.heldBootstrapVerified=false,p=>p.workerClosed=false,p=>p.completeMaintainedSavedAndNativeState=false,
+  p=>p.qualificationBinding.helpers['recovery.py']='0'.repeat(64),p=>p.qualificationBinding.workspaceEpoch='11111111-1111-4111-8111-111111111111']){
+  const proof=structuredClone(f.proof);change(proof);assert.throws(()=>assertStartupQualifiedCandidate(proof,f.assertion,f.sources));
+ }
+ const transport=createMaintainedDependencyTransport({options:f.transportOptions,base:f.base,run:async()=>{throw Error('No command allowed');},startupCollector:async()=>f.proof,startupSources:f.sources});
+ await assert.rejects(transport.validate({descriptor:f.descriptor,input:f.intent.input}),/same-schema60-qualified-dependency-route-required/);
+ assert.deepEqual(transport.qualification(),f.proof.qualificationBinding.sameSchemaQualification);
+ assert.equal(f.calls.length,0);
+});
+
+test('same schema60 qualified pair reaches the native installer descriptor and reconnects without replay',t=>pairLifecycle(t,false,true,true));
+
+test('closed39 capture evidence is explicit, complete and cannot mix staging and no-staging branches',t=>{
+ const f=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ assert.doesNotThrow(()=>verifyStartupRetainedProjection(f.proof,f.proof.request));
+ for(const change of [p=>delete p.scenarios[0].captureObservation,p=>p.scenarios[0].captureRetirement={},
+  p=>p.scenarios[0].captureObservation.stagingCount=1,p=>p.scenarios[1].captureObservation.classificationSha256=sha256('changed'),
+  p=>p.scenarios[2].captureObservation.inventorySha256=sha256('changed'),p=>p.scenarios[2].captureObservation.unchanged=false,
+  p=>p.scenarios[1].captureObservation.attempt=1,p=>p.scenarios[1].captureObservation.physicalRoots[1][1]++,
+  p=>p.scenarios[2].captureObservation.physicalRoots[1]=p.scenarios[0].captureObservation.physicalRoots[1],
+  p=>p.scenarios[0].captureObservation.physicalRoots[1]=p.scenarios[0].captureObservation.physicalRoots[0],
+  p=>p.scenarios[0].captureObservation.physicalRoots[0][3]=0,
+  p=>{for(const s of p.scenarios)s.captureObservation.physicalRoots[0][0]=3;},
+  p=>{for(const s of p.scenarios)s.captureObservation.physicalRoots[1][0]=3;},
+  p=>p.scenarios[0].captureObservation.selectedRelative='../workspace',p=>p.scenarios[0].captureObservation.workspaceEpoch='11111111-1111-4111-8111-111111111111',
+  p=>p.scenarios[0].captureObservation.candidateId=p.qualificationBinding.prior.candidateId,
+  p=>delete p.references['target-first-start/capture-before'],p=>p.references['target-restart/capture-closed'].sha256=sha256('changed'),
+  p=>delete p.references.retainedSecondPreservation,p=>delete p.scenarios[2].replicaConfigObservation,
+  p=>p.baselineLineage='verified-pre-swap-aborted-operator-snapshot']){
+  const proof=structuredClone(f.proof);change(proof);assert.throws(()=>verifyStartupRetainedProjection(proof,proof.request));
+ }
+ const old=startupCommandFixture(t,{schemaMigration:true,sources:QUALIFIED_STARTUP_SOURCES}),staging=structuredClone(f.proof);
+ for(const [i,scenario]of staging.scenarios.entries()){delete scenario.captureObservation;scenario.captureRetirement=structuredClone(old.proof.scenarios[i].captureRetirement);}
+ assert.doesNotThrow(()=>verifyStartupRetainedProjection(staging,staging.request));
+ staging.scenarios[1].captureRetirement.roles[0].predecessorProofSha256=sha256('wrong predecessor');
+ assert.throws(()=>verifyStartupRetainedProjection(staging,staging.request),/predecessor/);
+ const relabeled=structuredClone(old.proof);delete relabeled.qualificationBinding.applicationTransition;
+ relabeled.qualificationBinding.sameSchemaQualification=f.proof.qualificationBinding.sameSchemaQualification;
+ assert.throws(()=>verifyStartupRetainedProjection(relabeled,relabeled.request),/same-schema-startup-producer/);
+});
+
+test('compiled same-schema collector helper authority comes only from the registered source family',t=>{
+ const current=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ const historical=startupCommandFixture(t,{schemaMigration:true,sources:QUALIFIED_STARTUP_SOURCES});
+ const payload=request=>JSON.parse(Buffer.from(buildStartupRetainedProgram(request).match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1],'base64'));
+ const observed=payload(current.proof.request);
+ assert.deepEqual(observed.sources,SAME_SCHEMA60_STARTUP_SOURCES);
+ assert.deepEqual(observed.sameSchemaHelpers,SAME_SCHEMA60_STARTUP_HELPERS);
+ assert.equal(observed.sha256,sha256(readFileSync(new URL('../scripts/release-startup-retained-proof.py',import.meta.url))));
+ assert.equal(Object.hasOwn(payload(historical.proof.request),'sameSchemaHelpers'),false);
+ assert.throws(()=>payload({...current.proof.request,producer:{...current.proof.request.producer,sha256:'a'.repeat(64)}}),/reviewed-startup/);
+});

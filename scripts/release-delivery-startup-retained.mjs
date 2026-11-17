@@ -8,7 +8,7 @@ import {z} from 'zod';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {frontendRegular} from './frontend-contract.mjs';
 import {releaseTransportSchema,runInstallTransport} from './release-adapters.mjs';
-import {applicationDependencyDescriptionSchema,applicationTransitionSchema} from './release-delivery-qualified-dependencies.mjs';
+import {applicationDependencyDescriptionSchema,applicationTransitionSchema,sameSchemaQualificationSchema,startupQualificationMarker,qualificationMarkerFields} from './release-delivery-qualified-dependencies.mjs';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/);
 const hostPath=z.string().regex(/^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/).refine(p=>!p.split('/').some(x=>x==='.'||x==='..'));
@@ -22,6 +22,13 @@ export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
   'produce-startup-inputs.py':'caedf6794abfeb20f55b48d983bec238c73d57b501c9b212d800fda7a5d803b5',
   'contracts.py':'99b4ec258324ce3d87e52a01ddd17dcddd76324c204fc6ce6ad991ee3fdbb32d',
 });
+// Separate exact producer family for a closed schema-60 source and target.
+export const SAME_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"6366363ce10df8e0c6e54bc358a4e0a26fe2eaf22d4a3eb646a49bd535d013dd","qualified-parent.py":"11bd0945c69845cd66a5f3dd6024328b4630011bbd5a0640690a18584686d722","produce-startup-inputs.py":"24ff4c7ae748dcf5c9101c73e4b320890d0e1e883118fbc5d32b9cfb6164e52b","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
+export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef","recovery.py":"113f2c937e40eac597ec056fcc8042e69392505fa5f5f96dd44a1ea9441e3b11","operator_rehearsal.py":"8fe10fd13b924b78e8eccbe01334ce627e09c46961e5750062c57dcfe957a8d2","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export function reviewedStartupSources(producer){
+ const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
+ need(sources,'reviewed-startup-producer-required');return sources;
+}
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
 const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
@@ -33,20 +40,23 @@ export const STARTUP_SCENARIOS=Object.freeze(['target-first-start','target-resta
 export const STARTUP_BARRIER_FILES=Object.freeze(['gateway.js','http.js','runtime.js','software-updates.js','store.js','update-maintenance.js','update-native-idle.js','update-native-startup.js'].map(n=>'dist/service/apps/service/'+n));
 const HELPERS=['install.py','recovery.py','operator_rehearsal.py','app_dependencies.py','codex_log_retention.py','workspace_key.py','verify-session-bindings.mjs'];
 export const APPLICATION_TRANSITION_HELPERS=Object.freeze(['hosted_retained_configuration.py','local-retained-configuration.mjs','hosted_retained_catalog.py','hosted-retained-catalog.mjs']);
-export function startupHelperNames(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return [...HELPERS,...(transition?APPLICATION_TRANSITION_HELPERS:[])];}
+export function startupHelperNames(marker=null){qualificationMarkerFields(marker);return [...HELPERS,...(marker?APPLICATION_TRANSITION_HELPERS:[])];}
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
 const encoded=v=>Buffer.from(canonical(v)+'\n');
 const digestMap=z.record(z.string().min(1).max(512),hash);
-export {applicationTransitionSchema};
+export {applicationTransitionSchema,sameSchemaQualificationSchema,startupQualificationMarker,qualificationMarkerFields};
 /** This describes the only supported schema change; it grants no qualification.
  * The caller must still authenticate the complete original startup projection. */
 export function assertStartupApplicationTransition(binding,prior,target){
+  const marker=startupQualificationMarker(binding);
   need(prior.apiVersion===1&&target.apiVersion===1,'actual-startup-schema-or-api-unsupported');
   if(prior.schemaVersion===target.schemaVersion&&[55,60].includes(prior.schemaVersion)){
-    need(!Object.hasOwn(binding,'applicationTransition'),'unexpected-startup-application-transition');return null;
+    need(!Object.hasOwn(binding,'applicationTransition'),'unexpected-startup-application-transition');
+    need(prior.schemaVersion===60?marker?.kind==='schema-60-same-runtime':marker===null,'actual-startup-same-schema-qualification-required');return null;
   }
   need(prior.schemaVersion===55&&target.schemaVersion===60,'actual-startup-schema-transition-unsupported');
+  need(!Object.hasOwn(binding,'sameSchemaQualification'),'unexpected-startup-same-schema-qualification');
   return applicationTransitionSchema.parse(binding.applicationTransition);
 }
 const targetSchema=z.object({candidateId:hash,version:z.string(),buildVersion:z.string(),archiveSha256:hash,
@@ -55,27 +65,52 @@ export const startupQualificationBindingSchema=z.object({format:z.literal(1),kin
   sourceCommits:z.object({private:commit,public:commit}).strict(),prior:z.object({candidateId:hash,version:z.string()}).strict(),
   targets:z.object({private:targetSchema,public:targetSchema}).strict(),serviceArtifacts:digestMap,
   hostEntrypointSha256:hash,dependencyGraphSha256:hash,helpers:digestMap,runtime:z.record(z.string(),z.unknown()),workspaceEpoch:z.uuid(),
-  applicationTransition:applicationTransitionSchema.optional(),applicationDependencies:applicationDependencyDescriptionSchema.optional(),
-}).strict();
+  applicationTransition:applicationTransitionSchema.optional(),sameSchemaQualification:sameSchemaQualificationSchema.optional(),applicationDependencies:applicationDependencyDescriptionSchema.optional(),
+}).strict().refine(v=>!(Object.hasOwn(v,'applicationTransition')&&Object.hasOwn(v,'sameSchemaQualification')),'startup-qualification-marker-conflict');
 function sourcesReviewed(sources){
   need(same(Object.keys(sources).sort(),Object.keys(QUALIFIED_STARTUP_SOURCES).sort())
     &&Object.values(sources).every(v=>hash.safeParse(v).success&&v!=='0'.repeat(64)),'reviewed-startup-producer-required');
 }
-export function startupRetainedRequest(options,sources=QUALIFIED_STARTUP_SOURCES){
-  const v=startupQualificationOptionsSchema.parse(options);sourcesReviewed(sources);
+export function startupRetainedRequest(options,sources=undefined){
+  const v=startupQualificationOptionsSchema.parse(options);sources??=reviewedStartupSources(v.producer);sourcesReviewed(sources);
   need(v.producer.sha256===sources['qualified-startup.py']&&v.producer.path.endsWith('/qualified-startup.py')
     &&v.parent.path.endsWith('/evidence/parent-verified.json'),'reviewed-startup-producer-required');
   return{format:1,kind:'collect-actual-retained-startup-proof',parent:v.parent,producer:v.producer};
 }
 export function buildStartupRetainedProgram(request){
   startupRetainedRequest({format:1,parent:request.parent,producer:request.producer});
+  const sources=reviewedStartupSources(request.producer);
   const source=readFileSync(new URL('./release-startup-retained-proof.py',import.meta.url));
-  const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources:QUALIFIED_STARTUP_SOURCES}).toString('base64');
-  return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'])},separators=(',',':')))\n`;
+  const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources,...(SAME_SCHEMA60_STARTUP_SOURCES!==null&&same(sources,SAME_SCHEMA60_STARTUP_SOURCES)?{sameSchemaHelpers:SAME_SCHEMA60_STARTUP_HELPERS}:{})}).toString('base64');
+  return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'))},separators=(',',':')))\n`;
+}
+function verifyNoStagingCaptures(proof,binding){
+  const integer=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+  const directoryMode=integer.max(0o177777).refine(v=>(v&0o170000)===0o040000);
+  const root=z.tuple([integer.positive(),integer.positive(),directoryMode,z.literal(999),z.literal(986)]);
+  const shape=z.object({kind:z.literal('closed-9.8-no-staging-captures'),beforeSha256:hash,closedSha256:hash,
+    classificationSha256:hash,inventorySha256:hash,selectedRelative:z.string().regex(/^recovered-workspaces\/[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/),
+    workspaceEpoch:z.uuid(),candidateId:hash,attempt:z.number().int().min(1).max(3),physicalRoots:z.tuple([root,root]),
+    stagingCount:z.literal(0),unchanged:z.literal(true)}).strict();
+  const rows=proof.scenarios.map(s=>shape.parse(s.captureObservation)),first=rows[0];
+  for(const [i,row]of rows.entries()){
+    const scenario=proof.scenarios[i],before=proof.references?.[scenario.scenario+'/capture-before'],closed=proof.references?.[scenario.scenario+'/capture-closed'];
+    need(row.attempt===i+1&&row.workspaceEpoch===binding.workspaceEpoch&&row.candidateId===scenario.candidateId
+      &&row.selectedRelative===first.selectedRelative&&row.classificationSha256===first.classificationSha256&&row.inventorySha256===first.inventorySha256
+      &&row.physicalRoots[0][0]===scenario.replicaConfigObservation?.sourceDevice
+      &&row.physicalRoots[1][0]===scenario.replicaConfigObservation?.replicaDevice
+      &&same(row.physicalRoots[0],first.physicalRoots[0])&&!same(row.physicalRoots[0].slice(0,2),row.physicalRoots[1].slice(0,2))
+      &&(i!==1||same(row.physicalRoots[1],first.physicalRoots[1]))
+      &&(i!==2||!same(row.physicalRoots[1].slice(0,2),first.physicalRoots[1].slice(0,2))),
+      'same-schema-no-staging-capture-binding-changed');
+    need(hostRef.safeParse({path:before?.path,sha256:before?.sha256}).success&&hostRef.safeParse({path:closed?.path,sha256:closed?.sha256}).success
+      &&Number.isSafeInteger(before.bytes)&&before.bytes>0&&Number.isSafeInteger(closed.bytes)&&closed.bytes>0
+      &&before.sha256===row.beforeSha256&&closed.sha256===row.closedSha256,'same-schema-no-staging-capture-references-required');
+  }
 }
 /** Validate every persisted projection again; never trust its passed flags alone. */
-export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STARTUP_SOURCES){
-  sourcesReviewed(sources);
+export function verifyStartupRetainedProjection(v,request,sources=undefined){
+  sources??=reviewedStartupSources(request?.producer);sourcesReviewed(sources);
   need(v?.format===1&&v.kind==='actual-retained-startup-qualification-observation'&&v.readOnly===true&&v.hostEffects===false
     &&same(v.request,request)&&v.requestSha256===sha256(encoded(request))&&same(v.sourceHashes,sources)
     &&v.scope==='retained-same-runtime-startup-restart-restoration'&&v.actualSettledQualification===true
@@ -87,19 +122,21 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
   need(Number.isSafeInteger(v.workerIdentity?.pid)&&v.workerIdentity.pid>1&&Number.isSafeInteger(v.workerIdentity.startTicks)&&v.workerIdentity.startTicks>0
     &&v.workerIdentity.controlGroup==='/system.slice/nova-qa-qualified-'+v.qualificationOperationId+'.service','startup-proof-original-worker-identity-required');
   const binding=startupQualificationBindingSchema.parse(v.qualificationBinding);
+  if(binding.sameSchemaQualification)need(SAME_SCHEMA60_STARTUP_SOURCES!==null&&same(sources,SAME_SCHEMA60_STARTUP_SOURCES),'same-schema-startup-producer-required');
+  else need(SAME_SCHEMA60_STARTUP_SOURCES===null||!same(sources,SAME_SCHEMA60_STARTUP_SOURCES),'same-schema-startup-marker-required');
   need(binding.prior.candidateId!==binding.targets.private.candidateId&&binding.runtime.agentVersion==='2026.9.8'
-    &&same(Object.keys(binding.helpers).sort(),startupHelperNames(binding.applicationTransition??null).sort())
+    &&same(Object.keys(binding.helpers).sort(),startupHelperNames(startupQualificationMarker(binding)).sort())
     &&Object.keys(binding.serviceArtifacts).length<=1000
     &&Object.keys(binding.serviceArtifacts).every(p=>/^dist\/service\/[a-zA-Z0-9_./-]+$/.test(p)&&!p.split('/').some(v=>['','.','..'].includes(v)))
     &&binding.serviceArtifacts['dist/service/apps/service/main.js']
     &&STARTUP_BARRIER_FILES.every(p=>binding.serviceArtifacts[p]),'startup-qualified-artifact-closure-required');
-  if(binding.applicationDependencies)need(binding.applicationTransition&&binding.applicationDependencies.dependencyGraphSha256===binding.dependencyGraphSha256
+  if(binding.applicationDependencies)need(startupQualificationMarker(binding)&&binding.applicationDependencies.dependencyGraphSha256===binding.dependencyGraphSha256
     &&Object.values(binding.targets).every(t=>t.packageLockSha256===binding.applicationDependencies.packageLockSha256),'startup-qualified-dependencies-changed');
   need(Array.isArray(v.scenarios)&&same(v.scenarios.map(x=>x.scenario),STARTUP_SCENARIOS)
     &&v.scenarios.every(x=>x.candidateId===(x.scenario==='pristine-prior-restoration'?binding.prior.candidateId:binding.targets.private.candidateId)
       &&Number.isSafeInteger(x.startedAtSeconds)&&Number.isSafeInteger(x.closedAtSeconds)&&x.closedAtSeconds>=x.startedAtSeconds
       &&x.closedAtSeconds-x.startedAtSeconds<=3600),'startup-retained-scenarios-incomplete');
-  if([CAPTURE_RETIREMENT_PRODUCER,...CAPTURE_REAPING_PRODUCERS,QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b','0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5','3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])){
+  if([CAPTURE_RETIREMENT_PRODUCER,...CAPTURE_REAPING_PRODUCERS,QUALIFIED_STARTUP_SOURCES['qualified-startup.py'],'9a30fd20d3a8321d763abba55dfc9ba55818d27984b1aa0337f3a17c0607554b','0a45ca346ec848ec8b17a0f1dcab43314ae344b12b5f8a0144f518d05144f3f5','3c433ce80cf48a2988f2fac3818429174b1bcedbdc78bbcc01bee75e3a9479af'].includes(sources['qualified-startup.py'])||binding.sameSchemaQualification){
     const ack=z.object({ordinaryAcknowledgements:z.number().int().min(0).max(1_000_000),
       authenticatedStartSeconds:z.number().int().positive(),retentionDays:z.literal(30)}).strict();
     const original=z.object({mode:z.enum(['unchanged-original-record','same-filesystem-original-equality']),changedFields:z.tuple([])}).strict();
@@ -139,9 +176,15 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
     }
   }
 
-  if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])){
-    need(v.baselineLineage==='verified-pre-swap-aborted-operator-snapshot','incident-capture-baseline-required');
-    need(binding.helpers['recovery.py']==='23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
+  const noStaging=binding.sameSchemaQualification&&v.scenarios.every(s=>Object.hasOwn(s,'captureObservation')&&!Object.hasOwn(s,'captureRetirement'));
+  if(binding.sameSchemaQualification){
+    need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,SAME_SCHEMA60_STARTUP_HELPERS),'same-schema-capture-source-required');
+    need(noStaging||v.scenarios.every(s=>Object.hasOwn(s,'captureRetirement')&&!Object.hasOwn(s,'captureObservation')),'same-schema-capture-branch-changed');
+    if(noStaging)verifyNoStagingCaptures(v,binding);
+  }
+  if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])||(binding.sameSchemaQualification&&!noStaging)){
+    need(v.baselineLineage===(binding.sameSchemaQualification?'verified-closed-schema60-target-retained':'verified-pre-swap-aborted-operator-snapshot'),'incident-capture-baseline-required');
+    need(binding.sameSchemaQualification||binding.helpers['recovery.py']==='23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
       &&['941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59','f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a','522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24'].includes(binding.helpers['install.py']),
       'capture-lifecycle-helper-source-required');
     const id=z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -199,6 +242,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
     ...['result','closure','input','plan','intent','sourceCapture','sourceBefore','sourceAfter','sourcePhysical','sourceMetadata','seedInventory','seedPhysical','seedMetadata','liveContext','effectiveUnit'].map(role=>'homeCapture/'+role),
     ...STARTUP_SCENARIOS.flatMap(x=>['started','process','ready','closed','preservation','bootstrap','clock-attribution'].map(y=>x+'/'+y))];
   if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py']))required.push('baselineManifest');
+  if(binding.sameSchemaQualification)required.push('baselineManifest','baselineVerified','retainedParent','retainedRoles','retainedClosure','retainedSecondPreservation');
   need(v.references&&required.every(k=>hostRef.safeParse({path:v.references[k]?.path,sha256:v.references[k]?.sha256}).success
     &&Number.isSafeInteger(v.references[k]?.bytes)&&v.references[k].bytes>=0),'startup-retained-original-references-incomplete');
   need(v.references.parent.path===request.parent.path&&v.references.parent.sha256===request.parent.sha256
@@ -209,7 +253,7 @@ export function verifyStartupRetainedProjection(v,request,sources=QUALIFIED_STAR
 }
 /** This is the sole new exception to byte-identical prior startup files. It
  * requires the actual candidate, including files outside the eight-file barrier. */
-export function assertStartupQualifiedCandidate(proof,{operation,prior,candidates,artifacts,helpers,dependencyGraphSha256,applicationDependencies=null},sources=QUALIFIED_STARTUP_SOURCES){
+export function assertStartupQualifiedCandidate(proof,{operation,prior,candidates,artifacts,helpers,dependencyGraphSha256,applicationDependencies=null},sources=undefined){
   verifyStartupRetainedProjection(proof,proof.request,sources);
   const b=proof.qualificationBinding;
   need(operation.agentVersion==='2026.9.8'&&operation.priorAgentVersion==='2026.9.8'
@@ -221,7 +265,7 @@ export function assertStartupQualifiedCandidate(proof,{operation,prior,candidate
   for(const side of ['private','public']){
     const candidate=candidates[side],artifact=artifacts[side],qualified=b.targets[side];
     assertStartupApplicationTransition(b,prior.manifest,candidate.manifest);
-    need(b.applicationTransition||candidate.manifest.schemaVersion===55,'actual-startup-same-schema60-producer-unavailable');
+    need(startupQualificationMarker(b)||candidate.manifest.schemaVersion===55,'actual-startup-same-schema60-producer-unavailable');
     need(candidate.id===qualified.candidateId&&candidate.manifest.version===operation.version
       &&candidate.manifest.version===qualified.version&&candidate.manifest.buildVersion===operation.buildVersion
       &&candidate.manifest.buildVersion===qualified.buildVersion,

@@ -30,6 +30,7 @@ jobs:
           python3 -B tests/update-runtime-profile.test.py -v
           python3 -B tests/recovery-native98.test.py -v
           python3 -B tests/recovery-schema-transition.test.py -v
+          python3 -B tests/recovery-same-schema.test.py -v
           python3 -B tests/update-hosted-configuration-authority.test.py -v
           python3 -B tests/update-qualification-preflight.test.py -v
           python3 -B tests/hosted-retained-catalog.test.py -v
@@ -90,6 +91,7 @@ jobs:
           python3 -B tests/test_release_delivery_browser_remote.py -v
           python3 -B tests/test_release_delivery_postinstall_browser.py -v
           python3 -B tests/release-assistant-transport.test.py -v
+          python3 -I -B -W error tests/test_release_assistant_existing_reply.py -v
           python3 -B tests/release-assistant-runtime-stream.test.py -v
           python3 -B tests/release-installed-identity.test.py -v
           python3 -B tests/test_dependency_local_worker.py -v

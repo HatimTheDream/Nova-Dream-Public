@@ -7,7 +7,7 @@ import { describeInstallAdapter, releaseInstallSpecSchema } from './release-adap
 import { planRelease, qualifyApplicationPackage, readEvidenceFile, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { verifyCandidate } from './candidate.mjs';
 import { verifyRetainedCandidate } from './release-delivery-package.mjs';
-import { assertStartupQualifiedCandidate, startupHelperNames } from './release-delivery-startup-retained.mjs';
+import { assertStartupQualifiedCandidate, startupHelperNames, startupQualificationMarker } from './release-delivery-startup-retained.mjs';
 
 const need = (v, reason) => { if (!v) throw Error(reason); };
 const canonical = v => JSON.stringify(v, (_k,x) => x && typeof x === 'object' && !Array.isArray(x)
@@ -40,11 +40,12 @@ export function buildFullCoordinatorDescriptor(context, verifiedPublication, { t
     entries.set(item.name, { bytes: content, sha256: item.sha256 });
   }
   need([...packaged,'app.tgz','reviewed-pair.json'].every(name => entries.has(name)), 'full-coordinator-bundle-incomplete');
-  const pair = JSON.parse(entries.get('reviewed-pair.json').bytes), migration = pair.applicationTransition;
+  const pair = JSON.parse(entries.get('reviewed-pair.json').bytes), migration = startupQualificationMarker(pair);
   const requiredHelpers = migration ? startupHelperNames(migration) : packaged;
   need(requiredHelpers.every(name => entries.has(name)), 'full-coordinator-bundle-incomplete');
   const helperHashes = Object.fromEntries(requiredHelpers.map(name => [name,entries.get(name).sha256]));
   const recovery = prior.recovery.evidence, review = JSON.parse(readEvidenceFile(recovery.review));
+  if(migration?.kind==='schema-60-same-runtime')need(equal(startupQualificationMarker(review),migration),'full-coordinator-rehearsal-qualification-changed');
   if (!migration) helperHashes['operator_rehearsal.py'] = prior.recovery.helperHashes?.['operator_rehearsal.py'];
   need(equal(helperHashes, prior.recovery.helperHashes) && equal(helperHashes, review.helperHashes), 'full-coordinator-rehearsal-helpers-changed');
   for (const side of ['private','public']) for (const [name,digest] of Object.entries(helperHashes))
@@ -87,7 +88,7 @@ export function buildFullCoordinatorDescriptor(context, verifiedPublication, { t
     ...Object.fromEntries(['candidateId','priorCandidateId','workspaceEpoch','version','buildVersion','agentVersion','priorAgentVersion','bundleSha256'].map(k => [k,operation[k]])),
     priorVersion: selected.manifest.version, priorBuildVersion: selected.manifest.buildVersion,
     schemaVersion: candidates.private.manifest.schemaVersion, apiVersion: candidates.private.manifest.apiVersion,
-    ...(migration ? {applicationQualification:{priorSchemaVersion:55,
+    ...(migration ? {applicationQualification:{priorSchemaVersion:selected.manifest.schemaVersion,
       reviewedPairSha256:entries.get('reviewed-pair.json').sha256,projectionSha256:entries.get('startup-qualification.json').sha256}} : {}),
     rehearsalLeaseId: review.leaseId, rehearsalProofSha256: recovery.proof.sha256 });
   const coordinator = normalizeCoordinatorDescriptor({ format: 1, input, adapter: { transport, installSpec: save('full-install-spec.json',spec) } });

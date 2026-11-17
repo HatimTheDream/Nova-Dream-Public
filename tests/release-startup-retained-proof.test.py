@@ -72,6 +72,94 @@ class Checks(unittest.TestCase):
                 check(val,2,initial) if kind=='changed-carry' else check(val,1)
 
 
+    def consume_same_schema(self, changes=None):
+        f = fixture(changes, same_schema=True)
+        review = subject.parse(f['files'][f['roles']['review']['path']])
+        return subject.consume(f['request'], f['read'], f['sources'], review['qualificationBinding']['helpers'])
+
+    def test_same_schema_complete_original_chain_retains_raw_no_staging_proof(self):
+        result = self.consume_same_schema()
+        self.assertEqual(result['qualificationBinding']['sameSchemaQualification'], subject.SAME_SCHEMA_QUALIFICATION)
+        self.assertEqual(result['baselineLineage'], subject.SAME_SCHEMA_BASELINE)
+        self.assertFalse(result['productionAdmission'])
+        self.assertEqual(len(result['references']), 66)
+        first = result['scenarios'][0]['captureObservation']
+        for index, row in enumerate(result['scenarios'], 1):
+            proof = row['captureObservation']
+            self.assertEqual(proof['attempt'], index)
+            self.assertEqual(proof['stagingCount'], 0)
+            self.assertEqual(proof['inventorySha256'], first['inventorySha256'])
+            self.assertEqual(result['references'][row['scenario']+'/capture-before']['sha256'], proof['beforeSha256'])
+            self.assertEqual(result['references'][row['scenario']+'/capture-closed']['sha256'], proof['closedSha256'])
+        self.assertEqual(result['scenarios'][1]['captureObservation']['physicalRoots'], first['physicalRoots'])
+        self.assertNotEqual(result['scenarios'][2]['captureObservation']['physicalRoots'][1], first['physicalRoots'][1])
+
+    def test_same_schema_requires_compiled_family_marker_and_exact_helpers(self):
+        f = fixture(same_schema=True)
+        binding = subject.parse(f['files'][f['roles']['review']['path']])['qualificationBinding']
+        for helpers in (None, {}, {**binding['helpers'], 'install.py':'0'*64}):
+            with self.subTest(helpers=helpers), self.assertRaisesRegex(RuntimeError, 'same-schema'):
+                subject.consume(f['request'], f['read'], f['sources'], helpers)
+        for change in (lambda v:v.update(applicationTransition=subject.APPLICATION_TRANSITION),
+                       lambda v:v['sameSchemaQualification'].update(format=True),
+                       lambda v:v['sameSchemaQualification'].update(schemaVersion=55),
+                       lambda v:v['sameSchemaQualification'].update(unreviewed=True)):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'same-schema'):
+                self.consume_same_schema({'binding':change})
+
+    def test_same_schema_rejects_prior_target_lineage_and_access_time_substitutions(self):
+        cases = [('prior-package',lambda v:v['edition3'].update(schemaVersion=55)),
+                 ('pristine-prior-restoration/ready',lambda v:v['heldReadiness']['health'].update(schemaVersion=55)),
+                 ('retainedParent',lambda v:v.update(targetCandidateId='0'*64)),
+                 ('retainedClosure',lambda v:v.update(ownedProcessesAndNamespacesClosed=False)),
+                 ('baselineVerified',lambda v:v.update(sourceAfterMetadataSha256='0'*64)),
+                 ('baselineVerified',lambda v:v.update(currentLiveSnapshotQualified=True)),
+                 ('baselineVerified',lambda v:v['sourceRootIdentity'].__setitem__(1,11)),
+                 ('homeCapture/sourceCapture',lambda v:v.pop('sourceAccessTimesPreserved')),
+                 ('homeCapture/sourceMetadata',lambda v:v['.'].pop()),
+                 ('homeCapture/sourceMetadata',lambda v:v['.'].__setitem__(10,-1))]
+        for role, change in cases:
+            with self.subTest(role=role), self.assertRaises(RuntimeError):
+                self.consume_same_schema({role:change})
+
+    def test_same_schema_no_staging_rejects_rehashed_changes_and_mixed_branches(self):
+        def both(value): value.update(captureRetirement={})
+        cases = [('target-first-start/capture-before', lambda v:v.update(stagingCount=1)),
+                 ('target-first-start/capture-before', lambda v:v.update(stagingCount=False)),
+                 ('target-first-start/capture-closed', lambda v:v['classification']['live'].clear()),
+                 ('target-first-start/capture-closed', lambda v:v['inventory']['live'].clear()),
+                 ('target-first-start/capture-before', lambda v:v['physicalRoots'][1].__setitem__(3,0)),
+                 ('target-restart/capture-before', lambda v:v['physicalRoots'][1].__setitem__(1,21)),
+                 ('pristine-prior-restoration/capture-before', lambda v:v['physicalRoots'][1].__setitem__(1,20)),
+                 ('target-first-start/preservation', both),
+                 ('target-first-start/preservation', lambda v:v.pop('captureObservation'))]
+        for role, change in cases:
+            with self.subTest(role=role), self.assertRaises(RuntimeError):
+                self.consume_same_schema({role:change})
+        # A fully rehashed pair still cannot omit an inventoried owner or admit a staging sidecar.
+        def omit(value):
+            value['classification']={'baseline':[],'live':[]}
+            value['classificationSha256']=subject.sha(subject.encoded(value['classification']))
+        with self.assertRaisesRegex(RuntimeError, 'no-staging'):
+            self.consume_same_schema({'target-first-start/capture-'+phase:omit for phase in ('before','closed')})
+
+    def test_same_schema_rehashed_capture_device_must_match_original_copy_admission(self):
+        self.consume_same_schema()
+        def wrong_device(value): value['physicalRoots'][1][0] = 3
+        changes = {name+'/capture-'+phase:wrong_device for name in subject.SCENARIOS for phase in ('before','closed')}
+        with self.assertRaisesRegex(RuntimeError, 'no-staging'):
+            self.consume_same_schema(changes)
+
+    def test_same_schema_every_new_raw_reference_is_rehashed(self):
+        roles = ['baselineManifest','baselineVerified','retainedParent','retainedRoles','retainedClosure','retainedSecondPreservation']
+        roles += [name+'/capture-'+phase for name in subject.SCENARIOS for phase in ('before','closed')]
+        for role in roles:
+            f = fixture(same_schema=True)
+            binding = subject.parse(f['files'][f['roles']['review']['path']])['qualificationBinding']
+            f['files'][f['roles'][role]['path']] += b' '
+            with self.subTest(role=role), self.assertRaisesRegex(RuntimeError, 'original-reference-changed'):
+                subject.consume(f['request'], f['read'], f['sources'], binding['helpers'])
+
     def consume(self, f): return subject.consume(f['request'], f['read'], f['sources'])
 
     def test_current_and_historical_producers_cannot_skip_capture_helper_or_baseline_admission(self):

@@ -145,15 +145,80 @@ def _normalize(indexes, derived):
     return [before, after]
 
 
+def _same_schema_semantics(record):
+    """Only candidate-owned physical identity differs after official derivation."""
+    result = copy.deepcopy(record)
+    for name in ('rootDir', 'source', 'manifestPath', 'manifestHash', 'manifestFile', 'packageVersion', 'packageJson'):
+        result.pop(name, None)
+    return result
+
+
+def _normalize_same_schema(indexes, derived):
+    """Keep Direct membership, order and all effective permissions on both sides."""
+    require(type(derived) is dict and set(derived) == {'format', 'nativeVersion', 'sides'}
+            and derived['format'] == 1 and derived['nativeVersion'] == '2026.9.8'
+            and type(derived['sides']) is list and len(derived['sides']) == 2,
+            'Native catalog derivation returned an invalid envelope.')
+    before, after = copy.deepcopy(indexes)
+    ids = [[row['pluginId'] for row in index['plugins']] for index in (before, after)]
+    require(all(len(row) == len(set(row)) for row in ids) and ids[0] == ids[1]
+            and ids[0].count(DIRECT) == 1,
+            'Same-schema catalog changed membership or order.')
+    require(before['installRecords'] == after['installRecords']
+            and before['diagnostics'] == after['diagnostics'],
+            'Same-schema catalog changed installations or diagnostics.')
+    for position, index in enumerate((before, after)):
+        value = derived['sides'][position]
+        require(type(value) is dict and set(value) == {'index', 'policyHash', 'memoryEnabled'},
+                'Native catalog derivation changed shape.')
+        observed = [row for row in index['plugins'] if row['pluginId'] in APP_PLUGINS]
+        native = value['index']
+        require({row['pluginId'] for row in observed} == set(APP_PLUGINS)
+                and [row['pluginId'] for row in native['plugins']] == [row['pluginId'] for row in observed]
+                and native['diagnostics'] == [] and native['installRecords'] == index['installRecords']
+                and all(native[key] == index[key] for key in
+                        ('version', 'warning', 'hostContractVersion', 'compatRegistryVersion', 'migrationVersion')),
+                'Native catalog did not reproduce exact application membership and authority.')
+        require(len(native['plugins']) == len(observed)
+                and all(_comparable_record(a) == _comparable_record(b)
+                        for a, b in zip(observed, native['plugins'])),
+                'Application catalog semantics differ from official physical derivation.')
+        require(value['policyHash'] == index['policyHash'] and native['policyHash'] == index['policyHash'],
+                'Application catalog policy hash differs from official derivation.')
+        memories = [row for row in index['plugins'] if row['pluginId'] == 'memory-core']
+        require(len(memories) == 1 and type(value['memoryEnabled']) is bool
+                and memories[0].get('enabled') is value['memoryEnabled'],
+                'Memory plugin enablement differs from official policy.')
+    old_rows = {row['pluginId']: row for row in before['plugins']}
+    for row in after['plugins']:
+        if row['pluginId'] in APP_PLUGINS:
+            require(_same_schema_semantics(row) == _same_schema_semantics(old_rows[row['pluginId']]),
+                    'Same-schema application catalog permissions or behavior changed.')
+        elif row['pluginId'] == 'memory-core':
+            require(row == old_rows[row['pluginId']], 'Same-schema memory plugin authority changed.')
+    after['plugins'] = [copy.deepcopy(old_rows[row['pluginId']]) if row['pluginId'] in APP_PLUGINS else row
+                        for row in after['plugins']]
+    # Both hashes were independently reproduced from their full authenticated
+    # configurations. Candidate paths are physical inputs to that derivation.
+    after['policyHash'] = before['policyHash']
+    return [before, after]
+
+
 def qualify_application_catalog(indexes, *, node, app_releases, workspace_roots, configuration,
                                 startup_window, catalog_runtime_root, transition):
     from recovery import (_VERIFICATION_SCRATCH, RESERVE, ALLOWANCE, catalog_file, digest,
-                          sqlite_source_identity, verify_sqlite_wal, validate_application_transition)
-    require(type(transition) is dict and set(transition) == {'transition', 'beforeRoot', 'afterRoot',
-            'fromSchemaVersion', 'toSchemaVersion', 'restored'} and transition['restored'] is False
-            and transition['fromSchemaVersion'] == 55 and transition['toSchemaVersion'] == 60,
+                          sqlite_source_identity, verify_sqlite_wal, validate_application_transition, validate_same_schema_qualification)
+    same = type(transition) is dict and 'sameSchemaQualification' in transition
+    marker = 'sameSchemaQualification' if same else 'transition'
+    require(type(transition) is dict and set(transition) == {marker, 'beforeRoot', 'afterRoot',
+            'fromSchemaVersion', 'toSchemaVersion', 'restored'} and type(transition['restored']) is bool
+            and transition['fromSchemaVersion'] == (60 if same else 55) and transition['toSchemaVersion'] == 60
+            and (same or transition['restored'] is False),
             'Application catalog transition scope changed.')
-    validate_application_transition(transition['transition'])
+    if same:
+        validate_same_schema_qualification(transition[marker])
+    else:
+        validate_application_transition(transition[marker])
     require(type(indexes) in (tuple, list) and len(indexes) == 2
             and app_releases is not None and len(app_releases) == 2
             and workspace_roots is not None and len(workspace_roots) == 4,
@@ -184,7 +249,7 @@ def qualify_application_catalog(indexes, *, node, app_releases, workspace_roots,
                     'Application catalog configuration size changed.')
             config = json.loads(raw)
             app_root, manifest = Path(release[0]), release[1]
-            expected = set(APP_PLUGINS) - ({DIRECT} if position == 0 else set())
+            expected = set(APP_PLUGINS) - ({DIRECT} if position == 0 and not same else set())
             app_rows = [row for row in index['plugins'] if row.get('pluginId') in APP_PLUGINS]
             require(len(app_rows) == len(expected) and {row['pluginId'] for row in app_rows} == expected,
                     'Application catalog plugin set is outside the exact transition.')
@@ -239,4 +304,4 @@ def qualify_application_catalog(indexes, *, node, app_releases, workspace_roots,
             for row in index['plugins']:
                 if row.get('pluginId') in APP_PLUGINS:
                     _plugin_files(row, Path(release[0]), release[1], row['pluginId'], position == 1)
-        return _normalize(indexes, derived)
+        return _normalize_same_schema(indexes, derived) if same else _normalize(indexes, derived)

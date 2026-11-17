@@ -46,7 +46,7 @@ export function dependencyFixture(t,{format=1,change,runHook,includeHost=false,t
   const verified=verifyCandidate(directory),archive=put(join(root,side+(base?'-base':'')+'.tgz'),Buffer.from('synthetic application archive '+side+(base?' base':''))),repository='fixture/'+side;
   const metadata={candidateId:verified.id,archiveSha256:archive.sha256},frozenSourceDirectory=join(directory,'frozen-source'),sourceHashes={};
   for(const [n,b]of Object.entries(base?helperBytes:{...helperBytes,...targetHelpers}))sourceHashes['deploy/update-runner/'+n]=put(join(frozenSourceDirectory,'deploy/update-runner',n),b);
-  if(!base)for(const name of migrationHelpers)sourceHashes['deploy/update-runner/'+name]=put(join(frozenSourceDirectory,'deploy/update-runner',name),Buffer.from('synthetic migration helper '+name));
+  if(!base)for(const name of migrationHelpers)sourceHashes['deploy/update-runner/'+name]=put(join(frozenSourceDirectory,'deploy/update-runner',name),targetHelpers[name]??Buffer.from('synthetic migration helper '+name));
   if(includeHost){const host=Buffer.from('// synthetic host.mjs');sourceHashes['scripts/host.mjs']=put(join(frozenSourceDirectory,'scripts/host.mjs'),host);put(join(directory,'scripts/host.mjs'),host);}
   if(!base&&[2,4].includes(format))sourceHashes['scripts/release-deliver.mjs']=put(join(frozenSourceDirectory,'scripts/release-deliver.mjs'),readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));
   if(!base&&format===4)sourceHashes['scripts/quality.mjs']=put(join(frozenSourceDirectory,'scripts/quality.mjs'),readFileSync(new URL('../scripts/quality.mjs',import.meta.url)));

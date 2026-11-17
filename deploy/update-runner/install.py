@@ -30,7 +30,8 @@ sys.dont_write_bytecode = True
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, independent_copy_bytes, inode_ids, prepare_independent,
                       require, saved_state, native_scope, native_preflight, native_saved_state, snapshot_closed, sync_dir, write_json,
                       begin_capture_retention, verification_scratch)
-from recovery import hosted_application_transition, validate_application_qualification, APPLICATION_TRANSITION_HELPERS
+from recovery import (hosted_application_transition, validate_application_qualification, APPLICATION_TRANSITION_HELPERS,
+                      hosted_same_schema_qualification, validate_same_schema_application_qualification)
 import app_dependencies
 from workspace_key import read_workspace_key
 from codex_log_retention import MAX_STARTUP_WINDOW_SECONDS
@@ -371,6 +372,7 @@ class Driver:
         self.application_dependencies = None
         self.session_binding_key = None
         self.application_transition = None
+        self.same_schema_qualification = None
         self.from_schema = self.to_schema = 55
 
     def schema_for(self, expected):
@@ -382,17 +384,23 @@ class Driver:
 
     def application_comparison(self, before, after, *, restored=False):
         transition = getattr(self, 'application_transition', None)
+        same = getattr(self, 'same_schema_qualification', None)
+        require(transition is None or same is None, 'Mixed installer application comparison is refused.')
+        if same is not None:
+            return hosted_same_schema_qualification(same, before, after, restored=restored)
         return (hosted_application_transition(transition, before, after, restored=restored)
                 if transition is not None else contextlib.nullcontext())
 
     def verify_application_qualification(self):
         """No changed-schema effect is admitted by metadata or a source-only plan."""
         self.application_transition = None
+        self.same_schema_qualification = None
         if (self.from_schema, self.to_schema) == (55, 55):
-            require('applicationTransition' not in self.pair and 'startupQualification' not in self.pair,
+            require('applicationTransition' not in self.pair and 'sameSchemaQualification' not in self.pair
+                    and 'startupQualification' not in self.pair,
                     'An unchanged-schema pair cannot silently adopt a migration qualification.')
             return
-        require((self.from_schema, self.to_schema) == (55, 60)
+        require((self.from_schema, self.to_schema) in {(55, 60), (60, 60)}
                 and self.from_engine == self.to_engine == '2026.9.8',
                 'The changed-schema pair is outside the qualified runtime.')
         qualification = self.pair.get('startupQualification', {})
@@ -437,9 +445,14 @@ class Driver:
             protected(self.bundle / name, private=True)
             require(type(expected) is str and re.fullmatch('[a-f0-9]{64}', expected)
                     and digest(self.bundle / name) == expected, 'An actual startup-qualified helper changed.')
-        self.application_transition = validate_application_qualification(self.pair, proof,
-            prior_id=self.prior_id, target_id=self.target_id,
+        validator = (validate_same_schema_application_qualification if self.from_schema == 60
+                     else validate_application_qualification)
+        admitted = validator(self.pair, proof, prior_id=self.prior_id, target_id=self.target_id,
             workspace_epoch=self.expected_prior['workspaceEpoch'], helper_hashes=helpers)
+        if self.from_schema == 60:
+            self.same_schema_qualification = admitted
+        else:
+            self.application_transition = admitted
 
     def stage(self, stage):
         if not self.stdout_open:
@@ -478,7 +491,7 @@ class Driver:
                 and (self.target_id != self.prior_id or self.from_engine != self.to_engine)
                 and type(self.from_schema) is int and type(self.to_schema) is int
                 and ((self.from_schema, self.to_schema) == (55, 55)
-                     or ((self.from_schema, self.to_schema) == (55, 60) and self.from_engine == self.to_engine == '2026.9.8'))
+                     or ((self.from_schema, self.to_schema) in {(55, 60), (60, 60)} and self.from_engine == self.to_engine == '2026.9.8'))
                 and compatibility['reviewed'] is True and compatibility['gatewayProtocol'] == 4
                 and compatibility['pluginVersion'] == self.release['novaVersion'], 'This runner does not qualify this app and engine pair.')
         host_path = pathlib.Path(self.request['hostConfiguration'])
@@ -527,7 +540,7 @@ class Driver:
         self.resolve_prior_dependencies()
         self.pair = read_json(self.bundle / 'reviewed-pair.json', 65536)
         require({'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256'} <= set(self.pair)
-                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime', 'applicationDependencies', 'helpers', 'adoptPrior', 'applicationTransition', 'startupQualification'}
+                and set(self.pair) <= {'format', 'candidateId', 'priorCandidateId', 'archiveBytes', 'archiveSha256', 'startupBarrier', 'runtime', 'applicationDependencies', 'helpers', 'adoptPrior', 'applicationTransition', 'sameSchemaQualification', 'startupQualification'}
                 and self.pair['format'] == 1 and self.pair['candidateId'] == self.target_id and self.pair['priorCandidateId'] == self.prior_id,
                 'The reviewed archive does not identify this exact pair.')
         self.verify_application_qualification()
@@ -570,7 +583,7 @@ class Driver:
                     and self.workspace_key_credential.stat().st_nlink == 1,
                     'The workspace wrapping credential must have independent protected recovery coverage.')
             helpers = self.pair.get('helpers')
-            required_helpers = (APPLICATION_TRANSITION_HELPERS if self.application_transition is not None else
+            required_helpers = (APPLICATION_TRANSITION_HELPERS if self.application_transition is not None or self.same_schema_qualification is not None else
                 {'recovery.py', 'codex_log_retention.py', 'workspace_key.py', 'app_dependencies.py', 'verify-session-bindings.mjs'})
             require(isinstance(helpers, dict) and set(helpers) == required_helpers,
                     'The derived-state verifier helpers are not bound to the reviewed pair.')
@@ -1080,8 +1093,9 @@ class Driver:
                 or recovery is None or not (recovery / 'workspace').is_dir()):
             return
         schemas = (self.from_schema, self.to_schema) if candidate == self.target_id else (self.from_schema,)
-        state = begin_capture_retention(recovery / 'workspace', self.data, self.before['epoch'],
-            self.prior_agent, (self.job_id, candidate, attempt), getattr(self, 'capture_retirement_previous', None), schemas)
+        with self.application_comparison(recovery / 'workspace', self.data, restored=candidate != self.target_id):
+            state = begin_capture_retention(recovery / 'workspace', self.data, self.before['epoch'],
+                self.prior_agent, (self.job_id, candidate, attempt), getattr(self, 'capture_retirement_previous', None), schemas)
         if state is None:
             return
         self.capture_retirement_start = state
@@ -1470,7 +1484,8 @@ class Driver:
         log_reports = []
         window = self.log_retention_window()
         configuration_authority = (self.hosted_configuration_authority(manifest, selected, window)
-            if target and getattr(self, 'application_transition', None) is not None else None)
+            if ((target and getattr(self, 'application_transition', None) is not None)
+                or getattr(self, 'same_schema_qualification', None) is not None) else None)
         capture = getattr(self, 'capture_retirement_start', None)
         closure = None
         if capture is not None:
@@ -1525,16 +1540,42 @@ class Driver:
                         'retired': {str(k): v for k,v in retired.items()}})
             self.capture_retirement_previous['receipt'] = (closed_path, digest(closed_path))
 
+    def bind_same_schema_source(self, closed_source):
+        """Capture the verified stopped source before any owned startup."""
+        if getattr(self, 'same_schema_qualification', None) is None:
+            return
+        from hosted_retained_configuration import file_reference
+        require(not hasattr(self, 'same_schema_prior_source'), 'The original same-schema source is immutable.')
+        closed_source()
+        snapshot = self.recovery / 'workspace'
+        with self.application_comparison(snapshot, self.data, restored=True):
+            selected, epoch = __import__('recovery').selected_workspace(snapshot, self.before['epoch'], closed=True)
+        relative = selected.relative_to(snapshot)
+        entries = inventory(snapshot)[0]
+        manifest_hash = __import__('hashlib').sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        root = snapshot.lstat()
+        record = {'format': 1, 'kind': 'same-schema-closed-prior-source', 'candidateId': self.prior_id,
+            'workspaceEpoch': epoch, 'sourceRoot': str(snapshot), 'sourceIdentity': [root.st_dev, root.st_ino],
+            'manifestSha256': manifest_hash,
+            'configuration': file_reference(selected / 'openclaw-runtime/openclaw.json'),
+            'logicalNativeRoot': str(self.data / relative / 'openclaw-runtime'), 'sourceClosed': True}
+        closed_source()
+        path = self.output / 'same-schema-prior-source.json'
+        write_json(path, record)
+        self.same_schema_prior_source = file_reference(path)
+
     def hosted_configuration_authority(self, manifest, selected, window):
         """Reuse the actual installer owner chain; no receipt-only close override."""
         from hosted_retained_configuration import file_reference
-        require(self.application_transition is not None and selected == self.target
+        same = getattr(self, 'same_schema_qualification', None) is not None
+        require(((self.application_transition is not None and selected == self.target)
+                 or (same and selected in {self.prior, self.target}))
                 and self.closed_startup is not None and window is not None
                 and tuple(window) == self.log_retention_window(),
                 'Configuration derivation requires this installer\'s genuinely closed target.')
         ready, _ = self.ready_startup_record()
         prefix = 'startup-' + str(ready['attempt'])
-        if self.application_dependencies is not None:
+        if self.application_dependencies is not None and selected == self.target:
             # Signed archives are attested from their package root, while the
             # selected app and builder resolve packages from node_modules.
             dependency_root = self.application_dependency_target / 'node_modules'
@@ -1546,10 +1587,21 @@ class Driver:
                  for name, entry in inventory_record.items()
                  if name.startswith(dependency_prefix + 'zod/') and entry.get('kind') == 'file'}
         require(files, 'The previously attested complete Zod dependency closure is required.')
-        return {'format': 1, 'kind': 'hosted-closed-configuration-authority', 'candidateId': self.target_id,
+        result = {'format': 1, 'kind': 'hosted-closed-configuration-authority',
+            'candidateId': self.target_id if selected == self.target else self.prior_id,
             'workspaceEpoch': self.before['epoch'],
             **{name: file_reference(self.output / (prefix + '-' + name + '.json')) for name in ('started', 'ready', 'closed')},
             'dependencyRoot': str(dependency_root), 'dependencyFiles': files, 'nodeSha256': digest(self.node)}
+        if same:
+            prior_files = {name: {key: entry[key] for key in ('size', 'sha256')}
+                           for name, entry in self.dependency_identity.items()
+                           if name.startswith('zod/') and entry.get('kind') == 'file'}
+            require(prior_files, 'The independently attested prior builder dependency closure is required.')
+            require(hasattr(self, 'same_schema_prior_source'), 'The pre-start closed prior source was not bound.')
+            result['priorBuilder'] = {'candidateId': self.prior_id, 'source': self.same_schema_prior_source,
+                'releaseRoot': str(getattr(self, 'adoption_source_prior', self.prior)),
+                'dependencyRoot': str(self.dependencies), 'dependencyFiles': prior_files}
+        return result
 
     def settled_acceptance(self, expected, version, *, restored=False, independent=None):
         # Startup may open otherwise inactive SQLite stores and their transient
@@ -1756,6 +1808,7 @@ class Driver:
                                    catalog_runtime_root=self.prior_agent)
                 write_json(self.recovery / 'prior-acceptance.json', {'health': self.before['health'], 'agentVersion': self.from_engine,
                            'snapshotManifestSha256': digest(self.recovery / 'snapshot-manifest.json'), 'independentRestoreBytes': independent})
+            self.bind_same_schema_source(self.require_stopped)
             require(self.release['manifestExpiresAt'] > int(time.time() * 1000), 'Reviewed release information expired before the switch.')
             self.stage('installing')
             self.switch_attempted = True

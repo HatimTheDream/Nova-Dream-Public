@@ -186,6 +186,92 @@ def retained_runtime_entry(before, physical_package):
     return name, (host_identity, hashlib.sha256(raw_host).hexdigest(), selector_identity, files)
 
 
+def derive_same_schema_configuration(snapshot, live, selected, *, node, app_releases, session_binding_key,
+                                     startup_window, catalog_runtime_root, authority):
+    """Derive retained BEFORE with its prior builder and AFTER with its selected builder."""
+    import recovery as r
+    scope = r.current_same_schema_qualification()
+    require(sys.platform == 'linux' and os.geteuid() == 0 and scope is not None
+            and scope['beforeRoot'] == Path(snapshot) and scope['afterRoot'] == Path(live),
+            'Same-schema configuration derivation escaped its exact hosted roots.')
+    require(type(app_releases) in (tuple, list) and len(app_releases) == 2
+            and isinstance(session_binding_key, (bytes, bytearray)) and len(session_binding_key) == 32
+            and type(authority) is dict and 'priorBuilder' in authority,
+            'Same-schema derivation needs both admitted builders and the protected key.')
+    prior = authority['priorBuilder']
+    require(type(prior) is dict and set(prior) == {'candidateId', 'releaseRoot', 'dependencyRoot', 'dependencyFiles', 'source'},
+            'The prior builder authority changed shape.')
+    closed = {key: value for key, value in authority.items() if key != 'priorBuilder'}
+    source = document(prior['source'])
+    require(type(source) is dict and set(source) == {'format', 'kind', 'candidateId', 'workspaceEpoch',
+            'sourceRoot', 'sourceIdentity', 'manifestSha256', 'configuration', 'logicalNativeRoot', 'sourceClosed'}
+            and source['format'] == 1 and source['kind'] == 'same-schema-closed-prior-source'
+            and source['sourceClosed'] is True and source['sourceRoot'] == str(snapshot)
+            and source['candidateId'] == prior['candidateId']
+            and type(source['manifestSha256']) is str and re.fullmatch('[a-f0-9]{64}', source['manifestSha256']),
+            'The prior builder lacks its immutable pre-start closed source.')
+    root = Path(snapshot).lstat()
+    require(source['sourceIdentity'] == [root.st_dev, root.st_ino], 'The prior closed physical source changed.')
+    relative = Path(selected) / 'openclaw-runtime/openclaw.json'
+    old_path, new_path = Path(snapshot) / relative, Path(live) / relative
+    require(source['configuration'] == file_reference(old_path)
+            and source['logicalNativeRoot'] == str(Path(live) / selected / 'openclaw-runtime'),
+            'The prior source configuration or logical native root changed.')
+    before, after = (r.bounded_json(path, 4 * 1024 * 1024) for path in (old_path, new_path))
+    _, epoch = r.selected_workspace(snapshot, closed=True)
+    require(source['workspaceEpoch'] == epoch, 'The prior source epoch changed.')
+    executable = Path(node)
+    require(executable.resolve(strict=True) == executable and r.digest(executable) == closed.get('nodeSha256'),
+            'The same-schema builder executable changed.')
+    closures = []
+    candidates = []
+    for position, (release, manifest) in enumerate(app_releases):
+        release = Path(release)
+        raw_package, raw_manifest = (release / 'package.json').read_bytes(), (release / 'dist/candidate.json').read_bytes()
+        candidate_id = hashlib.sha256(raw_package + raw_manifest).hexdigest()
+        role = prior if position == 0 else closed
+        require(json.loads(raw_manifest) == manifest and manifest.get('schemaVersion') == 60
+                and manifest.get('apiVersion') == 1 and candidate_id == role['candidateId']
+                and (position != 0 or str(release) == prior['releaseRoot']),
+                'The independently admitted prior or selected builder changed.')
+        closures.append(attest_builder_closure(release, manifest, role['dependencyRoot'], role['dependencyFiles']))
+        candidates.append(candidate_id)
+    closed_authority(closed, candidate_id=candidates[1], epoch=epoch, window=startup_window)
+    runtime_entry, runtime_authority = retained_runtime_entry(before, catalog_runtime_root)
+    script = Path(__file__).with_name('local-retained-configuration.mjs')
+    old_bridge = before.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
+    for position, (observed, path) in enumerate(((before, old_path), (after, new_path))):
+        bridge = observed.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
+        require(type(bridge) is dict and bridge.get('url') == old_bridge.get('url')
+                and type(bridge.get('url')) is str and re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}/workspace', bridge['url'])
+                and type(bridge.get('token')) is str and re.fullmatch('[a-f0-9]{64}', bridge['token'])
+                and type(bridge.get('sessionBindings')) is list and len(bridge['sessionBindings']) <= 100000,
+                'The retained module bridge or session binding contract changed.')
+        r.verified_session_bindings(snapshot, selected, path, executable, session_binding_key)
+        arguments = observed.get('browser', {}).get('extraArgs', [])
+        match = re.fullmatch(r'--proxy-server=(http://127\.0\.0\.1:([0-9]{1,5}))', arguments[0]) if arguments and type(arguments[0]) is str else None
+        require(match is not None and 0 < int(match[2]) < 65536, 'The owned browser proxy contract changed.')
+        payload = {'before': before, 'after': observed, 'bridge': {name: bridge[name] for name in ('url', 'token')},
+            'proxy': match[1], 'epoch': epoch, 'releaseRoot': str(app_releases[position][0]),
+            'nativeRoot': source['logicalNativeRoot'], 'runtimeEntry': runtime_entry,
+            'sessionBindings': bridge['sessionBindings']}
+        call = subprocess.run([str(executable), str(script), '--hosted-same-schema60'],
+            input=json.dumps(payload).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={'PATH': str(executable.parent) + ':/usr/bin:/bin', 'NODE_DISABLE_COMPILE_CACHE': '1'}, timeout=30)
+        require(call.returncode == 0 and len(call.stdout) <= 4 * 1024 * 1024
+                and json.loads(call.stdout) == observed,
+                'The exact prior or selected maintained builder refused the retained configuration.')
+    require(all(path.stat().st_size == value['size'] and r.digest(path) == value['sha256']
+                for closure in closures for path, value in closure.items()),
+            'A prior or selected builder closure changed during derivation.')
+    require(document(prior['source']) == source and source['configuration'] == file_reference(old_path)
+            and retained_runtime_entry(before, catalog_runtime_root) == (runtime_entry, runtime_authority),
+            'The prior source or configured runtime changed during derivation.')
+    closed_authority(closed, candidate_id=candidates[1], epoch=epoch, window=startup_window)
+    return {'path': str(new_path), 'hashes': [r.digest(old_path), r.digest(new_path)],
+            'byteSizes': [old_path.stat().st_size, new_path.stat().st_size], 'sameSchemaDerivation': True}
+
+
 def derive_configuration(snapshot, live, selected, *, node, app_releases, session_binding_key,
                          startup_window, catalog_runtime_root, authority):
     import recovery as r

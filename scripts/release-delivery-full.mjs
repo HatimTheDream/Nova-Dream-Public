@@ -12,7 +12,7 @@ import { verifyCandidate } from './candidate.mjs';
 import { frontendRegular } from './frontend-contract.mjs';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { withVerificationPass, verificationOnce, verificationEffect } from './release-verification-pass.mjs';
-import { assertStartupQualifiedCandidate, applicationTransitionSchema, startupHelperNames } from './release-delivery-startup-retained.mjs';
+import { assertStartupQualifiedCandidate, startupQualificationMarker, startupHelperNames } from './release-delivery-startup-retained.mjs';
 
 const need = (value, code) => { if (!value) throw Error(code); };
 const json = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -46,12 +46,11 @@ function pairCheck(value, context) {
     && output.candidateId === input.route.targetCandidateId && output.publicCandidateId === input.route.publicCandidateId
     && output.priorCandidateId === descriptor.operation.priorCandidateId, 'full-pair-producer-identity-changed');
   const pairRaw = frontendRegular(join(output.directory, 'reviewed-pair.json'), 1024 ** 2), pair = JSON.parse(pairRaw);
-  const migration = pair.applicationTransition;
+  const migration = startupQualificationMarker(pair);
   const helpers = startupHelperNames(migration??null).filter(n=>migration||n!=='operator_rehearsal.py');
   const names = [...helpers, 'app.tgz', 'reviewed-pair.json', ...(migration ? ['startup-qualification.json'] : [])];
   need(resolve(output.directory) === output.directory && isDeepStrictEqual(readdirSync(output.directory).sort(), names.slice().sort()), 'full-pair-file-closure-changed');
   if (migration) {
-    applicationTransitionSchema.parse(migration);
     const qualification = output.startupQualification;
     need(qualification && pair.startupQualification?.projection?.path === 'startup-qualification.json'
       && pair.startupQualification.projection.sha256 === qualification.projection.sha256
@@ -60,7 +59,7 @@ function pairCheck(value, context) {
     need(frontendRegular(join(output.directory, 'startup-qualification.json'), 512 * 1024).equals(proofRaw), 'full-pair-startup-proof-changed');
     const proof = JSON.parse(proofRaw), compatibility = output.release?.compatibility;
     need(isDeepStrictEqual(proof.qualificationBinding, qualification.binding)
-      && isDeepStrictEqual(proof.qualificationBinding.applicationTransition, migration), 'full-pair-startup-binding-changed');
+      && isDeepStrictEqual(startupQualificationMarker(proof.qualificationBinding), migration), 'full-pair-startup-binding-changed');
     assertStartupQualifiedCandidate(proof, { operation: descriptor.operation,
       prior: { id: output.priorCandidateId, manifest: { version: compatibility?.fromNovaVersion, schemaVersion: compatibility?.fromSchemaVersion, apiVersion: 1 } },
       candidates, artifacts: input.artifacts, helpers: Object.fromEntries(helpers.map(name => [name, input.artifacts.private.sourceHashes?.['deploy/update-runner/' + name]?.sha256])),

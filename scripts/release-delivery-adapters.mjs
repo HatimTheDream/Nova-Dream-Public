@@ -24,7 +24,7 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
-import { fullHostOptionsSchema, FULL_HELPERS, FULL_APPLICATION_HELPERS, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
+import { fullHostOptionsSchema, FULL_HELPERS, fullHelpersForQualification, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter,planFullPublicationContinuation,verifyFullPublicationContinuationPlan } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
@@ -96,7 +96,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-browser-checks.mjs', 'release-delivery-browser-primitives.mjs',
     'release-delivery-browser-remote.mjs', 'release-delivery-browser-remote-worker.mjs', 'release-delivery-browser-remote.py',
     'release-delivery-assistant.mjs', 'release-delivery-assistant-transport.mjs', 'release-assistant-transport.py',
-    'release-delivery-assistant-full.mjs', 'release-delivery-installed-identity.mjs', 'release-delivery-full-coordinator.mjs', 'release-installed-identity.py', '../deploy/update-runner/request_install.py',
+    'release-delivery-existing-reply.mjs', 'release-assistant-existing-reply.py', 'release-delivery-assistant-full.mjs', 'release-delivery-installed-identity.mjs', 'release-delivery-full-coordinator.mjs', 'release-installed-identity.py', '../deploy/update-runner/request_install.py',
     'release-delivery-install-admission.mjs', 'release-delivery-full-host.mjs',
     'full-host-primitives/collect-facts.py', 'full-host-primitives/metadata-stage.py', 'full-host-primitives/launch-plan-template.py', 'full-host-primitives/observe-plan-template.py',
     'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/online-capacity.py',
@@ -229,9 +229,9 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     base:target.bases.private,storeReceipt:receiptStore,run:command,clock,
     ...(target.full.dependencyTransport.format===3?{runtimeCollector:createRuntimeRetainedCollector({transport:target.transport,options:target.full.dependencyTransport.runtimeQualification,run,clock})}: {}),
     ...([5,6].includes(target.full.dependencyTransport.format)?{startupCollector:context=>collectStartupWithDiagnostics(context,{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore})}: {}) });
-  // This command currently has the maintained schema55/API1 host closure.
-  // Actual candidate schema/runtime comparisons still run after authenticated
-  // artifact retrieval; declared operation fields cannot override those bytes.
+  // This early check covers native runtime compatibility only. Actual schema,
+  // helper closure and complete startup proof are verified from authenticated
+  // candidates below; operation fields cannot override those bytes.
   const runtimeGaps = async (descriptor,target) => {
     const op=descriptor.operation;
     if(op.priorAgentVersion==='2026.9.6'&&op.agentVersion==='2026.9.8'&&target.full?.dependencyTransport?.format===3){
@@ -248,10 +248,10 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     // substituted evidence still fails verification rather than being waived.
     const capabilities=new Set(['changed-runtime-qualification-producer-required','changed-schema-qualification-producer-required',
       'changed-startup-qualification-producer-required','changed-updater-qualification-producer-required','changed-dependency-qualification-producer-required']);
-    let schema;
-    try { schema=await dependency(target).validate({...context,descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
+    const producer=dependency(target);
+    try { await producer.validate({...context,descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
     catch(error) { if(capabilities.has(error?.message))return [error.message];throw error; }
-    const helperHashes=schema===60?FULL_APPLICATION_HELPERS:FULL_HELPERS;
+    const helperHashes=fullHelpersForQualification(producer.qualification());
     for(const side of ['private','public'])for(const [name,digest] of Object.entries(helperHashes)) {
       const artifact=prior.artifacts.repositories[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];
       if(claimed?.sha256!==digest)return ['full-helper-qualification-capability-required'];
@@ -293,7 +293,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       const {target,transport}=targetInput(descriptor);
       need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
       const proof=await collectStartupWithDiagnostics({journal,descriptor},{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore});
-      const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition);
+      const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition??proof.qualificationBinding.sameSchemaQualification??null);
       const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
       const stdout=Buffer.from(response.stdout??''),stderr=Buffer.from(response.stderr??'');
       const retain=(kind,value)=>{const bytes=Buffer.from(canonical(value)+'\n');return receiptStore(journal,descriptor.operation.id,kind+'-'+sha256(bytes)+'.json',bytes);};

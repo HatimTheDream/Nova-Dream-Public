@@ -52,7 +52,7 @@ export async function assertConfiguration(input, actual, options = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  assert(process.argv.length === 2 || process.argv.length === 3 && process.argv[2] === '--hosted-schema-55-to-60');
+  assert(process.argv.length === 2 || process.argv.length === 3 && ['--hosted-schema-55-to-60', '--hosted-same-schema60'].includes(process.argv[2]));
   const hosted = process.argv.length === 3;
   const { after, ...input } = JSON.parse(readFileSync(0, 'utf8'));
   const result = await assertConfiguration(input, after, hosted ? { browserHeadless:true } : {});

@@ -39,4 +39,16 @@ class Identity(unittest.TestCase):
    with self.assertRaises(RuntimeError):m.validate_staged_qualification(operation,qualification,a,b)
   changed=copy.deepcopy(qualification);changed['proof']['qualificationBinding']['workspaceEpoch']=str(uuid.uuid4())
   with self.assertRaises(RuntimeError):m.validate_staged_qualification(operation,changed,pair_raw,projection_raw)
+ def test_same_schema_requester_is_exact_current_source_and_old39_remains_pinned(self):
+  current=m.sha((ROOT/'deploy/update-runner/request_install.py').read_bytes())
+  old={**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':55}}
+  new={**self.op,'schemaVersion':60,'applicationQualification':{'priorSchemaVersion':60}}
+  self.assertEqual(m.requester_reference(old),{'path':'/opt/nova-release-tools/'+m.REQUESTER_SHA+'/request_install.py','sha256':m.REQUESTER_SHA})
+  self.assertEqual(m.requester_reference(new),{'path':'/opt/nova-release-tools/'+current+'/request_install.py','sha256':current})
+  self.assertNotEqual(current,m.REQUESTER_SHA)
+  self.assertEqual(m.SAME_SCHEMA60_REQUESTER_SHA,current)
+  for operation,helper in [(old,m.requester_reference(new)),(new,m.requester_reference(old))]:
+   binding={'format':1,'operation':operation,'jobId':self.job['id'],'requester':helper,'runtime':{}}
+   with self.assertRaisesRegex(RuntimeError,'full-maintained-requester-required'):
+    m.original(binding,types.SimpleNamespace())
 if __name__=='__main__':unittest.main()

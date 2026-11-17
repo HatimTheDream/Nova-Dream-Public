@@ -1,6 +1,7 @@
 /** Additive early-phase records in ReleaseJournal's existing database.
  * Never dispatches, installs, snapshots or opens another journal. */
 import { randomUUID } from 'node:crypto';
+import {existingAssistantReplySchema,verifyExistingReplyAcceptance,existingReplyCoverage,EXISTING_REPLY_MODE} from './release-delivery-existing-reply.mjs';
 import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
@@ -14,12 +15,12 @@ const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).
 const source = z.object({ root: z.string().min(1).max(4096), repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), commit, baseCommit: commit, branch: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_/-]{0,99}$/) }).strict();
 export const DELIVERY_PHASES = Object.freeze(['private-source', 'public-source', 'private-ci', 'public-ci', 'artifacts', 'route', 'package', 'sign', 'capacity', 'recovery', 'publication', 'installation', 'assistant', 'browser']);
 export const PACKAGE_SUBSTEPS = Object.freeze(['dependency-stage', 'dependency-plan', 'dependency-intent', 'dependency-execute', 'dependency-retrieval', 'pair', 'bundle']);
-export const ASSISTANT_SUBSTEPS = Object.freeze(['session', 'create', 'draft', 'submit', 'saved-reply']);
+export const ASSISTANT_SUBSTEPS = Object.freeze(['session', 'create', 'draft', 'submit', 'saved-reply', 'existing-reply']);
 export const closedDeliveryState = state => ['reconciled-failed','reconciled-gap'].includes(state);
 const dispositionSchema = z.discriminatedUnion('kind',[failedDispositionSchema,capabilityDispositionSchema]);
 export const deliveryDescriptorSchema = z.object({ format: z.literal(1), operation: releaseOperationSchema,
   sources: z.object({ private: source, public: source }).strict(), target: reference, targetIdentity: hash,
-  timeline: releaseTimelineSchema, adapterIdentity: hash, predecessorRecovery:predecessorRecoverySchema.optional(), observationBudgetMs: z.number().int().min(60000).max(86400000).default(14400000) }).strict().superRefine((v, ctx) => {
+  timeline: releaseTimelineSchema, adapterIdentity: hash, predecessorRecovery:predecessorRecoverySchema.optional(), existingAssistantReply:existingAssistantReplySchema.optional(), observationBudgetMs: z.number().int().min(60000).max(86400000).default(14400000) }).strict().superRefine((v, ctx) => {
   if (v.sources.private.repository === v.sources.public.repository || v.sources.private.root === v.sources.public.root)
     ctx.addIssue({ code: 'custom', message: 'Independent source histories required.' });
   for (const side of ['private', 'public']) if (v.operation.sourceCommits[side] !== v.sources[side].commit)
@@ -344,7 +345,9 @@ export const deliveryJournalMethods = {
         need(parent && !['completed', 'failed'].includes(parent.state) && parent.validation?.state !== 'failed'
           && input.parentKey === parent.key && input.parentInputSha256 === parent.inputSha256
           && input.deadlineAtMs === parent.createdAtMs + 300000 && time(now) < input.deadlineAtMs, 'assistant-parent-intent-mismatch');
-        for (const name of ASSISTANT_SUBSTEPS.slice(0, ASSISTANT_SUBSTEPS.indexOf(assistantStep))) {
+        const existing=Boolean(this.loadDelivery(id).descriptor.existingAssistantReply);
+        need(existing === (assistantStep==='existing-reply'),'assistant-observation-mode-changed');
+        for (const name of existing?[]:ASSISTANT_SUBSTEPS.slice(0, ASSISTANT_SUBSTEPS.indexOf(assistantStep))) {
           const dependency = this.deliveryPhase(id, 'assistant/' + name);
           need(dependency?.state === 'completed' && dependency.validation?.state !== 'failed', 'assistant-substep-prerequisite-incomplete');
         }
@@ -420,13 +423,15 @@ export const deliveryJournalMethods = {
     if(browser?.state==='completed'&&coverage.acceptanceScope){need(recovery&&browser.current.receipt&&canonical(JSON.parse(readEvidenceFile(browser.current.receipt)))===canonical(browser.current.output)
       &&canonical(JSON.parse(readEvidenceFile(browser.current.output.authority)))===canonical(recovery.proof),'postinstall-status-authority-required');verifyScopedBrowserAcceptance(browser.current.output,browser.input);}
     need(!closedDeliveryState(d.state) || disposition, 'delivery-disposition-missing');
-    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, ...coverage, closed: closedDeliveryState(d.state), disposition,
+    const assistant=phases[DELIVERY_PHASES.indexOf('assistant')];
+    if(d.descriptor.existingAssistantReply&&assistant?.state==='completed')verifyExistingReplyAcceptance(assistant.current.output,assistant.input);
+    return { format: 1, kind: 'nova-release-delivery', operationId: id, complete, ...coverage, ...(d.descriptor.existingAssistantReply?{assistantAcceptanceMode:EXISTING_REPLY_MODE,...(assistant?.state==='completed'?existingReplyCoverage(assistant.current.output):{})}:{}), closed: closedDeliveryState(d.state), disposition,
       createdAtMs: d.created_at, elapsedMs: Math.max(0, now - d.created_at),
       originalEstimate: d.descriptor.timeline.original, originalDeadlineAtMs: d.descriptor.timeline.original.remainingMs === null ? null : d.descriptor.timeline.original.issuedAtMs + d.descriptor.timeline.original.remainingMs[1], eta: this.deliveryTimeline(id, now).eta,
       packageSubsteps: PACKAGE_SUBSTEPS.map(name => { const row = this.deliveryPhase(id, 'package/' + name); return { name,
         state: row?.validation?.state === 'failed' ? 'failed' : row?.state ?? 'pending', key: row?.key ?? null,
         externalId: row?.externalId ?? null, createdAtMs: row?.createdAtMs ?? null, observedAtMs: row?.current?.observedAtMs ?? null }; }),
-      assistantSubsteps: ASSISTANT_SUBSTEPS.map(name => { const row = this.deliveryPhase(id, 'assistant/' + name); return { name,
+      assistantSubsteps: (d.descriptor.existingAssistantReply?['existing-reply']:ASSISTANT_SUBSTEPS.filter(n=>n!=='existing-reply')).map(name => { const row = this.deliveryPhase(id, 'assistant/' + name); return { name,
         state: row?.validation?.state === 'failed' ? 'failed' : row?.state ?? 'pending', key: row?.key ?? null,
         externalId: row?.externalId ?? null, createdAtMs: row?.createdAtMs ?? null, observedAtMs: row?.current?.observedAtMs ?? null }; }),
       phases: DELIVERY_PHASES.map((phase, i) => ({ phase, state: phases[i]?.validation?.state === 'failed' ? 'failed' : phases[i]?.state ?? 'pending', key: phases[i]?.key ?? null,

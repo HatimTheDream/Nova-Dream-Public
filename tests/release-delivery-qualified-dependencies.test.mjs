@@ -35,3 +35,14 @@ test('fresh dependency admission binds the exact native archive and actual start
  assert.throws(()=>verifyQualifiedApplicationDependencies(f.refs,b,f.options),/startup-binding/);
  writeFileSync(f.refs.archive.path,'changed native content');assert.throws(()=>verifyQualifiedApplicationDependencies(f.refs,f.binding,f.options));
 });
+
+test('same schema60 dependencies require the exact separate startup marker and all archive proof bindings',t=>{
+ const f=fixture(t),b=structuredClone(f.binding);delete b.applicationTransition;
+ b.sameSchemaQualification={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
+ assert.equal(verifyQualifiedApplicationDependencies(f.refs,b,f.options).newNativeDependenciesQualified,true);
+ for(const change of [v=>delete v.sameSchemaQualification,v=>v.applicationTransition=f.binding.applicationTransition,
+  v=>v.sameSchemaQualification.schemaVersion=55,v=>v.sameSchemaQualification.apiVersion=2,v=>v.sameSchemaQualification.agentVersion='2026.9.9',
+  v=>v.sameSchemaQualification.passed=true,v=>v.applicationDependencies.packageLockSha256=sha256('wrong')]){
+  const x=structuredClone(b);change(x);assert.throws(()=>verifyQualifiedApplicationDependencies(f.refs,x,f.options));
+ }
+});

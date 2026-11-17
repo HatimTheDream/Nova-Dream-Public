@@ -21,6 +21,9 @@ SCOPE = 'retained-same-runtime-startup-restart-restoration'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
+SAME_SCHEMA_QUALIFICATION = {'format': 1, 'kind': 'schema-60-same-runtime', 'schemaVersion': 60, 'apiVersion': 1, 'agentVersion': '2026.9.8'}
+SAME_SCHEMA_BASELINE = 'verified-closed-schema60-target-retained'
+
 APPLICATION_TRANSITION = {'format': 1, 'kind': 'schema-55-to-60-same-runtime', 'fromSchemaVersion': 55, 'toSchemaVersion': 60, 'apiVersion': 1, 'fromAgentVersion': '2026.9.8', 'toAgentVersion': '2026.9.8'}
 
 
@@ -101,7 +104,7 @@ class ProtectedReader:
             need(file_identity(Path(path).lstat()) == original, 'startup-proof-closure-changed')
 
 
-def consume_home_capture(review, document, sources):
+def consume_home_capture(review, document, sources, same_schema=False):
     """Retain the original short capture and its closed worker; no live reads."""
     binding = review.get('homeCapture', {})
     need(set(binding) == {'result', 'closure'}, 'startup-proof-home-capture-required')
@@ -165,12 +168,14 @@ def consume_home_capture(review, document, sources):
                    'seedInventory': seed['inventory'], 'seedPhysical': result['seedPhysical'], 'seedMetadata': result['seedMetadata']}
     need(all(actual_refs[name]['path'] == str(capture_root / filename) for name, filename in names.items()),
          'startup-proof-home-capture-evidence-role-changed')
+    source_root = str(PurePosixPath(review['baseline']['workspace']).parent) if same_schema else '/var/lib/nova'
     roles = ['.bash_logout', '.bashrc', '.cache', '.codex', '.config', '.local', '.npm', '.profile']
     need(capture.get('format') == 1 and capture.get('kind') == 'complete-original-home-state-capture'
-         and capture.get('sourceRoot') == plan.get('sourceRoot') == '/var/lib/nova'
+         and capture.get('sourceRoot') == plan.get('sourceRoot') == source_root
          and capture.get('roles') == plan.get('roles') == roles
          and capture.get('excludedRoles') == plan.get('excludedRoles') == ['backups', 'install-stage', 'qa', 'recovery', 'workspace']
          and capture.get('sourceUnchanged') is True and capture.get('sourceUnchangedScope') == 'capture-interval-only'
+         and (not same_schema or capture.get('sourceAccessTimesPreserved') is True)
          and all(capture.get(key) is True for key in ('completeRoleCoverage', 'independentInodes', 'sparseVerified', 'flushed'))
          and capture.get('productionMutation') is False and capture.get('sourceSqliteOpened') is False
          and (capture.get('sourceUid'), capture.get('sourceGid'), capture.get('sourceMode')) == (999, 986, 0o700)
@@ -193,7 +198,8 @@ def consume_home_capture(review, document, sources):
              'startup-proof-home-member-path-invalid')
         for physical, metadata in ((source, maps['sourceMetadata']), (copied, maps['seedMetadata'])):
             row = metadata[name]; member = physical[name]
-            need(isinstance(row, list) and len(row) == 10 and all(type(v) is int for v in row)
+            need(isinstance(row, list) and len(row) == (11 if same_schema and physical is source else 10)
+                 and all(type(v) is int for v in row) and (len(row) != 11 or row[10] >= 0)
                  and row[:2] == [member['device'], member['inode']] and row[7] == member['allocated']
                  and stat.S_IMODE(row[2]) == item['mode'] and row[3:5] == [item['uid'], item['gid']]
                  and row[8] == item['mtime_ns'] and row[5] >= 1
@@ -208,7 +214,7 @@ def consume_home_capture(review, document, sources):
     need(original == capture.get('sourceRootAfter') == root_row[:5] + root_row[8:10]
          and authority == plan.get('authority', {}).get('sourceRootAuthority')
          and [authority.get(k) for k in ('device', 'inode', 'mode', 'uid', 'gid')] == original[:5]
-         and authority.get('path') == '/var/lib/nova' and type(authority.get('mountId')) is int
+         and authority.get('path') == source_root and type(authority.get('mountId')) is int
          and result.get('seedRootIdentity') == maps['seedMetadata']['.'][:5] + maps['seedMetadata']['.'][8:10],
          'startup-proof-home-root-identity-changed')
     observation = closed.get('observation', {}); properties = observation.get('properties', {}); cgroup = observation.get('cgroup', {})
@@ -232,7 +238,7 @@ def consume_home_capture(review, document, sources):
          'startup-proof-home-capture-worker-not-successfully-closed')
 
 
-def consume(request, read, sources):
+def consume(request, read, sources, same_schema_helpers=None):
     need(isinstance(sources, dict) and set(sources) == set(SOURCES)
          and all(isinstance(v, str) and HASH.fullmatch(v) and v != '0' * 64 for v in sources.values()),
          'reviewed-startup-producer-required')
@@ -308,7 +314,19 @@ def consume(request, read, sources):
     need(technical.get('status') == 'passed' and technical.get('sourceHashes') == sources
          and technical.get('callContractsReviewed') is True and technical.get('isolationReviewed') is True
          and technical.get('heldBootstrapReviewed') is True, 'startup-proof-independent-review-required')
-    consume_home_capture(review, document, sources)
+    binding = review.get('qualificationBinding')
+    same_schema = same_schema_helpers is not None
+    marker = binding.get('sameSchemaQualification') if isinstance(binding, dict) else None
+    need((marker is not None) == same_schema, 'startup-proof-same-schema-producer-required')
+    if same_schema:
+        need(type(marker) is dict and marker == SAME_SCHEMA_QUALIFICATION
+             and all(type(marker[k]) is int for k in ('format', 'schemaVersion', 'apiVersion'))
+             and 'applicationTransition' not in binding
+             and type(same_schema_helpers) is dict and set(same_schema_helpers) == set(HELPERS + APPLICATION_HELPERS)
+             and all(type(v) is str and HASH.fullmatch(v) for v in same_schema_helpers.values())
+             and binding.get('helpers') == same_schema_helpers,
+             'startup-proof-same-schema-contract-changed')
+    consume_home_capture(review, document, sources, same_schema)
     negatives = technical.get('negativeVerifierEvidence', {})
     need(set(negatives) == {'source', 'result'}, 'startup-proof-negative-verifier-evidence-required')
     document('negativeVerifierSource', negatives['source'], 2 * 1024**2, True)
@@ -329,19 +347,22 @@ def consume(request, read, sources):
     transition = binding.get('applicationTransition') if isinstance(binding, dict) else None
     if transition is not None:
         need(transition == APPLICATION_TRANSITION and all(type(transition[k]) is int for k in ('format','fromSchemaVersion','toSchemaVersion','apiVersion')), 'startup-proof-application-transition-changed')
+    application = transition is not None or same_schema
+    prior_schema = 60 if same_schema else 55
+    if application:
         prior_root = PurePosixPath(review['prior']['path'])
         prior_package_raw = read(str(prior_root / 'package.json'), 1024**2)
         prior_manifest_raw = read(str(prior_root / 'dist/candidate.json'), 2*1024**2)
         prior_package, prior_manifest = parse(prior_package_raw), parse(prior_manifest_raw)
         need(sha(prior_package_raw + prior_manifest_raw) == review['prior']['candidateId']
              and prior_package.get('version') == prior_manifest.get('version') == review['prior']['version']
-             and prior_package.get('edition3',{}).get('schemaVersion') == prior_manifest.get('schemaVersion') == 55
+             and prior_package.get('edition3',{}).get('schemaVersion') == prior_manifest.get('schemaVersion') == prior_schema
              and prior_package.get('edition3',{}).get('apiVersion') == prior_manifest.get('apiVersion') == 1, 'startup-proof-prior-schema-changed')
-    target_schema = 60 if transition is not None else 55
+    target_schema = 60 if application else 55
     dependencies = binding.get('applicationDependencies') if isinstance(binding,dict) else None
     if dependencies is not None:
         fields={'format','archiveBytes','archiveSha256','expandedBytes','fileCount','packageLockSha256','dependencyGraphSha256','platform','arch','nodeVersion','nodeAbi'}
-        need(transition is not None and type(dependencies) is dict and set(dependencies)==fields
+        need(application and type(dependencies) is dict and set(dependencies)==fields
              and type(dependencies['format']) is int and dependencies['format']==1
              and all(type(dependencies[k]) is int and 0<dependencies[k]<=limit for k,limit in [('archiveBytes',512*1024**2),('expandedBytes',2*1024**3),('fileCount',200000)])
              and all(HASH.fullmatch(dependencies[k]) for k in ('archiveSha256','packageLockSha256','dependencyGraphSha256'))
@@ -355,7 +376,7 @@ def consume(request, read, sources):
          and UUID.fullmatch(binding.get('workspaceEpoch', ''))
          and binding.get('runtime') == review.get('runtime') and binding['runtime'].get('agentVersion') == '2026.9.8'
          and binding.get('helpers') == plan.get('helperHashes') == review.get('helpers', {}).get('sha256')
-         and set(binding['helpers']) == set(HELPERS + (APPLICATION_HELPERS if transition is not None else ())), 'startup-proof-complete-binding-required')
+         and set(binding['helpers']) == set(HELPERS + (APPLICATION_HELPERS if application else ())), 'startup-proof-complete-binding-required')
     need(binding['prior'] == {k: review['prior'][k] for k in ('candidateId', 'version')}
          and binding['targets']['private']['candidateId'] == review['target']['candidateId']
          and binding['targets']['private']['version'] == review['target']['version']
@@ -383,7 +404,7 @@ def consume(request, read, sources):
     need(plan.get('scenarios') == list(SCENARIOS) and len(parent.get('scenarios', [])) == 3
          and [i.get('scenario') for i in parent['scenarios']] == list(SCENARIOS)
          and len(child.get('scenarios', [])) == 3, 'startup-proof-complete-scenarios-required')
-    capture_manifest = None
+    capture_manifest = consume_closed_schema_baseline(review, plan, parent, document) if same_schema else None
     if runner_sha in CAPTURE_REAPING_PRODUCERS:
         need(binding['helpers'].get('recovery.py') == '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
              and binding['helpers'].get('install.py') in {'941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59', 'f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a', '522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24'},
@@ -432,7 +453,7 @@ def consume(request, read, sources):
         held = ready.get('heldReadiness', {}); health = held.get('health', {})
         need(held.get('epoch') == binding['workspaceEpoch'] and isinstance(held.get('accounts'), list)
              and health.get('status') == 'ready' and health.get('candidateId') == app['candidateId']
-             and health.get('version') == app['version'] and health.get('schemaVersion') == (55 if scenario == 'pristine-prior-restoration' else target_schema) and health.get('apiVersion') == 1,
+             and health.get('version') == app['version'] and health.get('schemaVersion') == (prior_schema if scenario == 'pristine-prior-restoration' else target_schema) and health.get('apiVersion') == 1,
              'startup-proof-held-readiness-changed')
         native = ready.get('nativeProcess', {})
         need(native.get('namespaces') == namespaces and native.get('uid') == review['serviceUid']
@@ -464,10 +485,22 @@ def consume(request, read, sources):
              and guard.get('candidateId') == app['candidateId'] and guard.get('epoch') == binding['workspaceEpoch']
              and guard.get('heldFor') == started['leaseId'] and guard.get('maintenanceHeld') is True
              and guard.get('nativeSuspended') is True and guard.get('blockers') == [], 'startup-proof-held-bootstrap-required')
-        if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
+        if runner_sha in REPLICA_OBSERVATION_PRODUCERS or same_schema:
             first_start = summaries[0]['startedAtSeconds'] if index == 2 else started['startedAtSeconds']
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
-        if runner_sha in CAPTURE_PRODUCERS:
+        capture_key = None
+        if same_schema:
+            capture_key = 'captureObservation' if 'captureObservation' in preserved else 'captureRetirement'
+            need((('captureObservation' in preserved) + ('captureRetirement' in preserved)) == 1
+                 and (not summaries or capture_key in summaries[0]), 'startup-proof-single-capture-branch-required')
+            if capture_key == 'captureObservation':
+                capture = capture_observation_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
+                    index, summaries[0].get(capture_key) if summaries else None, capture_manifest, folder, scenario, document)
+            else:
+                capture = capture_retirement_summary(preserved[capture_key], plan, started['leaseId'], app['candidateId'],
+                    binding['workspaceEpoch'], index, [started['startedAtSeconds'], closed['closedAtSeconds']],
+                    summaries[0][capture_key]['roles'] if summaries else None, True, capture_manifest)
+        elif runner_sha in CAPTURE_PRODUCERS:
             need(review['baseline'].get('kind') == parent.get('baselineLineage') == CAPTURE_BASELINE,
                  'startup-proof-required-incident-source-lineage')
             capture = capture_retirement_summary(preserved.get('captureRetirement'), plan, started['leaseId'],
@@ -480,9 +513,11 @@ def consume(request, read, sources):
                  'bytes': refs[scenario + '/preservation']['bytes']}, 'startup-proof-child-canonical-receipt-changed')
         summaries.append({'scenario': scenario, 'candidateId': app['candidateId'], 'preservation': item['preservation'],
                           'startedAtSeconds': started['startedAtSeconds'], 'closedAtSeconds': closed['closedAtSeconds']})
-        if runner_sha in REPLICA_OBSERVATION_PRODUCERS:
+        if runner_sha in REPLICA_OBSERVATION_PRODUCERS or same_schema:
             summaries[-1]['replicaConfigObservation'] = preserved['replicaConfigObservation']
-        if runner_sha in CAPTURE_PRODUCERS:
+        if same_schema:
+            summaries[-1][capture_key] = capture
+        elif runner_sha in CAPTURE_PRODUCERS:
             summaries[-1]['captureRetirement'] = capture
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')
          and parent['restorationCompleted']['path'] == str(fixture / 'evidence/workspace-restoration-result.json')
@@ -515,7 +550,7 @@ def consume(request, read, sources):
          and package.get('version') == manifest.get('version') == qualified['version']
          and manifest.get('buildVersion') == qualified['buildVersion']
          and manifest.get('schemaVersion') == target_schema and manifest.get('apiVersion') == 1
-         and (transition is None or (package.get('edition3',{}).get('schemaVersion') == target_schema and package.get('edition3',{}).get('apiVersion') == 1)), 'startup-proof-tested-candidate-changed')
+         and (not application or (package.get('edition3',{}).get('schemaVersion') == target_schema and package.get('edition3',{}).get('apiVersion') == 1)), 'startup-proof-tested-candidate-changed')
     service_files = {}
     for item in manifest.get('artifacts', []):
         path = item.get('path', '')
@@ -532,7 +567,7 @@ def consume(request, read, sources):
     return {'format': 1, 'kind': 'actual-retained-startup-qualification-observation', 'readOnly': True, 'hostEffects': False,
             'request': request, 'requestSha256': sha(encoded(request)), 'sourceHashes': sources, 'qualificationOperationId': op,
             'scope': SCOPE, 'qualificationBinding': binding, 'scenarios': summaries, 'references': refs, 'workerIdentity': worker,
-            **({'baselineLineage': CAPTURE_BASELINE} if runner_sha in CAPTURE_PRODUCERS else {}),
+            **({'baselineLineage': SAME_SCHEMA_BASELINE} if same_schema else {'baselineLineage': CAPTURE_BASELINE} if runner_sha in CAPTURE_PRODUCERS else {}),
             'actualSettledQualification': True, 'independentOriginalRestored': True,
             'completeMaintainedSavedAndNativeState': True, 'heldBootstrapVerified': True,
             'productionAdmission': False, 'freshFullRehearsalStillRequired': True, 'liveAcceptanceStillRequired': True}
@@ -571,6 +606,113 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
 CAPTURE_BASELINE = 'verified-pre-swap-aborted-operator-snapshot'
 CAPTURE_TOKEN = 'f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
 CAPTURE_EMPTY = hashlib.sha256(b'').hexdigest()
+
+
+def consume_closed_schema_baseline(review, plan, parent, document):
+    """Join the complete closed-source inventory to its original qualified owner."""
+    fail = 'startup-proof-closed-schema-source-lineage-required'
+    baseline = review.get('baseline', {})
+    names = ('retainedParent', 'retainedRoles', 'retainedClosure', 'retainedSecondPreservation')
+    need(type(baseline) is dict and set(baseline) == {'kind', 'workspace', 'epoch', 'sourceApp', 'manifest', 'verified', *names}
+         and baseline.get('kind') == parent.get('baselineLineage') == SAME_SCHEMA_BASELINE
+         and baseline.get('sourceApp') == review['prior'] and baseline.get('epoch') == plan['workspaceEpoch'], fail)
+    workspace = PurePosixPath(baseline['workspace'])
+    need(workspace.is_absolute() and str(workspace) == baseline['workspace'] and '..' not in workspace.parts
+         and workspace.name == 'workspace', fail)
+    records = {}
+    for name, ref in {'baselineManifest': baseline['manifest'], 'baselineVerified': baseline['verified'],
+                      **{name: baseline[name] for name in names}}.items():
+        need(plan.get('inputHashes', {}).get(ref['path']) == ref['sha256'], fail)
+        records[name] = document(name, ref)
+    original, closed, preserved = (records[name] for name in ('retainedParent', 'retainedClosure', 'retainedSecondPreservation'))
+    need(original.get('kind') == 'actual-retained-startup-parent-verification' and original.get('passed') is True
+         and original.get('targetCandidateId') == review['prior']['candidateId']
+         and original.get('workspaceEpoch') == baseline['epoch']
+         and original.get('disposableRoles') == baseline['retainedRoles'] and original.get('outsideClosure') == baseline['retainedClosure']
+         and len(original.get('scenarios', [])) == 3
+         and original['scenarios'][1].get('preservation') == baseline['retainedSecondPreservation']
+         and original.get('originalSourceAndProtectedClosuresUnchanged') is True
+         and records['retainedRoles'].get('kind') == 'successful-qualification-disposable-role-inventory'
+         and closed.get('kind') == 'rich-held-outside-closure'
+         and closed.get('ownedProcessesAndNamespacesClosed') is True
+         and preserved.get('scenario') == 'target-restart' and preserved.get('candidateId') == review['prior']['candidateId']
+         and preserved.get('fullyStopped') is True and preserved.get('fullMaintainedNativeVerifier') is True
+         and type(preserved.get('savedStoreCount')) is int and preserved['savedStoreCount'] > 0, fail)
+    verified, manifest = records['baselineVerified'], records['baselineManifest']
+    need(verified.get('kind') == 'closed-schema60-retained-source-inventory'
+         and verified.get('sourceRoot') == str(workspace)
+         and verified.get('sourceRootIdentity') == plan['baselineRootIdentity'][:5]
+         and verified.get('manifestSha256') == baseline['manifest']['sha256']
+         and verified.get('sourceBeforeMetadataSha256') == verified.get('sourceAfterMetadataSha256')
+         and HASH.fullmatch(verified.get('sourceBeforeMetadataSha256', ''))
+         and verified.get('originalReferences') == {name: baseline[name] for name in names}
+         and verified.get('sourceOwnerClosure', {}).get('closed') is True
+         and verified.get('sourceSqliteOpened') is False and verified.get('sourceUnchanged') is True
+         and verified.get('currentLiveSnapshotQualified') is False and type(manifest) is dict and len(manifest) > 40000,
+         'startup-proof-complete-closed-source-inventory-required')
+    return manifest
+
+
+def capture_observation_summary(evidence, plan, candidate, epoch, attempt, first, source_manifest, folder, scenario, document):
+    """Consume raw no-staging records; absence of a retirement receipt proves nothing."""
+    fail = 'startup-proof-authentic-no-staging-capture-observation-required'
+    need(type(evidence) is dict and set(evidence) == {'before', 'closed', 'beforeSha256', 'closedSha256'}, fail)
+    expected = {'format', 'kind', 'phase', 'candidateId', 'attempt', 'workspaceEpoch', 'selectedRelative',
+                'physicalRoots', 'classification', 'inventory', 'classificationSha256', 'inventorySha256', 'stagingCount'}
+    records = []
+    for phase in ('before', 'closed'):
+        value = evidence[phase]
+        need(type(value) is dict and set(value) == expected
+             and type(value['format']) is int and value['format'] == 1
+             and value['kind'] == 'closed-9.8-no-staging-capture-observation' and value['phase'] == phase
+             and value['candidateId'] == candidate and value['workspaceEpoch'] == epoch
+             and type(value['attempt']) is int and value['attempt'] == attempt
+             and value['selectedRelative'] == plan['selectedRelative']
+             and type(value['stagingCount']) is int and value['stagingCount'] == 0
+             and sha(encoded(value)) == evidence[phase + 'Sha256'], fail)
+        raw = document(scenario + '/capture-' + phase, {'path': str(folder / ('capture-' + phase + '.json')),
+                                                       'sha256': evidence[phase + 'Sha256']})
+        need(raw == value, fail)
+        records.append(value)
+    before, closed = records
+    need({k: v for k, v in before.items() if k != 'phase'} == {k: v for k, v in closed.items() if k != 'phase'}, fail)
+    roots = before['physicalRoots']
+    need(type(roots) is list and len(roots) == 2
+         and all(type(row) is list and len(row) == 5 and all(type(v) is int and 0 <= v <= 2**53-1 for v in row)
+                 and row[0] > 0 and row[1] > 0 and stat.S_ISDIR(row[2]) and row[3:] == [999, 986] for row in roots)
+         and roots[0] == plan['baselineRootIdentity'][:5]
+         and roots[1][0] == plan['fixtureStorageAuthority']['device'] and roots[0][:2] != roots[1][:2], fail)
+    prefix = str(PurePosixPath(plan['selectedRelative']) / 'openclaw-runtime/state/tmp/plugin-captures')
+    inventory = {}
+    for name, row in source_manifest.items():
+        if name == prefix or name.startswith(prefix + '/'):
+            relative = '.' if name == prefix else name[len(prefix) + 1:]
+            copied = dict(row)
+            if 'hardlink_group' in copied:
+                need(copied['hardlink_group'].startswith(prefix + '/'), fail)
+                copied['hardlink_group'] = copied['hardlink_group'][len(prefix) + 1:]
+            inventory[relative] = copied
+    classification = []
+    for name, row in inventory.items():
+        if re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/owner[.]sqlite', name):
+            need(row.get('kind') == 'file' and not any(name + suffix in inventory for suffix in ('-journal', '-wal', '-shm')), fail)
+            classification.append(prefix + '/' + name)
+    classification.sort()
+    need(before['classification'] == {'baseline': classification, 'live': classification}
+         and before['inventory'] == {'baseline': inventory, 'live': inventory}
+         and before['classificationSha256'] == sha(encoded(before['classification']))
+         and before['inventorySha256'] == sha(encoded(before['inventory'])), fail)
+    if first is not None:
+        need(before['selectedRelative'] == first['selectedRelative'] and before['workspaceEpoch'] == first['workspaceEpoch']
+             and before['classificationSha256'] == first['classificationSha256'] and before['inventorySha256'] == first['inventorySha256']
+             and roots[0] == first['physicalRoots'][0]
+             and (attempt != 2 or roots[1] == first['physicalRoots'][1])
+             and (attempt != 3 or roots[1][:2] != first['physicalRoots'][1][:2]), fail)
+    return {'kind': 'closed-9.8-no-staging-captures', 'beforeSha256': evidence['beforeSha256'],
+            'closedSha256': evidence['closedSha256'], 'classificationSha256': before['classificationSha256'],
+            'inventorySha256': before['inventorySha256'], 'selectedRelative': before['selectedRelative'],
+            'workspaceEpoch': epoch, 'candidateId': candidate, 'attempt': attempt, 'physicalRoots': roots,
+            'stagingCount': 0, 'unchanged': True}
 
 
 def capture_receipt_sha(value):
@@ -774,10 +916,10 @@ def validate_replica_observation_receipt(proof, plan, startup_start):
                 'An unqualified configuration observation projection was requested.')
 
 
-def invoke(request, sources):
+def invoke(request, sources, same_schema_helpers=None):
     need(os.name == 'posix' and os.geteuid() == 0, 'root-linux-readonly-startup-proof-required')
     reader = ProtectedReader()
-    result = consume(request, reader, sources)
+    result = consume(request, reader, sources, same_schema_helpers)
     worker_closed(result['workerIdentity'])
     reader.unchanged()
     result['workerClosed'] = True

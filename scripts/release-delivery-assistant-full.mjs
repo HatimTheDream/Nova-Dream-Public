@@ -10,26 +10,30 @@ const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArr
 const encoded=v=>Buffer.from(canonical(v)+'\n');
 const source=()=>readFileSync(new URL('release-assistant-transport.py',import.meta.url));
 const full=()=>readFileSync(new URL('release-installed-identity.py',import.meta.url));
+const existing=()=>readFileSync(new URL('release-assistant-existing-reply.py',import.meta.url));
 const REQUESTER='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941';
+// Distinct reviewed requester for new same-schema60 installations.
+export const SAME_SCHEMA60_REQUESTER='a606724fc16e74ee135247ef7926d5442d9537824ee1c0fe59cf45528497840b';
 // Original accepted schema55 profiles retain their genuine requester identity.
 // It is not authority for a new schema60 application transition.
 const LEGACY_REQUESTER='15ae855d7025b9cc267b7a7529ac59c5fdcc1cf960e00104578ba79b3007dc06';
 const SUPPORT='8146ea044aaec3e06c29f663ddab5aabcab59a3b9e88c15bd7576ef1fc305d0d';
 const ref=v=>v&&Object.keys(v).sort().join(',')==='path,sha256'&&typeof v.path==='string'&&/^[a-f0-9]{64}$/.test(v.sha256);
-export const fullAssistantTransportIdentity=()=>sha256(Buffer.concat([source(),full(),readFileSync(new URL(import.meta.url))]));
+export const fullAssistantTransportIdentity=()=>sha256(Buffer.concat([source(),full(),existing(),readFileSync(new URL(import.meta.url))]));
 export function validateInstalledIdentityRequest(binding,{allowLegacyProfile=false}={}){
  need(binding&&Object.keys(binding).sort().join(',')==='format,jobId,operation,requester,runtime'&&binding.format===1,'full-original-identity-input-required');
  const {idempotencyKey,...spec}=binding.operation;releaseInstallSpecSchema.parse(spec);
  need(/^[a-f0-9-]{36}$/.test(idempotencyKey)&&/^[a-f0-9-]{36}$/.test(binding.jobId),'full-original-key-job-required');
- const allowed=[REQUESTER,...(allowLegacyProfile&&spec.schemaVersion===55&&!spec.applicationQualification?[LEGACY_REQUESTER]:[])];
+ const sameSchema=spec.schemaVersion===60&&spec.applicationQualification?.priorSchemaVersion===60;
+ const allowed=sameSchema?(SAME_SCHEMA60_REQUESTER===null?[]:[SAME_SCHEMA60_REQUESTER]):[REQUESTER,...(allowLegacyProfile&&spec.schemaVersion===55&&!spec.applicationQualification?[LEGACY_REQUESTER]:[])];
  need(allowed.some(sha256=>equal(binding.requester,{path:`/opt/nova-release-tools/${sha256}/request_install.py`,sha256})),'full-maintained-requester-required');
  need(Object.keys(binding.runtime).sort().join(',')==='hostConfig,startupReview'&&ref(binding.runtime.hostConfig)&&binding.runtime.hostConfig.path==='/etc/nova-update/config.json'&&ref(binding.runtime.startupReview)&&/^\/opt\/nova-release-tools\/[a-zA-Z0-9/_-]+\/startup-review\.json$/.test(binding.runtime.startupReview.path),'full-reviewed-runtime-inputs-required');
  return binding;
 }
 function program(value){
  const s=source(),f=full();need(sha256(s)===SUPPORT,'unchanged-reviewed-assistant-transport-required');
- const payload=Buffer.from(JSON.stringify({support:s.toString('base64'),supportSha:sha256(s),full:f.toString('base64'),fullSha:sha256(f),value})).toString('base64');
- return `import base64,hashlib,json,signal,types\nv=json.loads(base64.b64decode('${payload}',validate=True))\ns=base64.b64decode(v['support'],validate=True);f=base64.b64decode(v['full'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['supportSha'] and hashlib.sha256(f).hexdigest()==v['fullSha']\nn={'__name__':'fixed_assistant_host_transport'}\nexec(compile(s,'fixed-assistant-host-transport','exec'),n)\nm=n['load_module']('full_installed_identity','full-installed-identity',f)\nsupport=types.SimpleNamespace(**n)\nsignal.alarm(90)\nif v['value']['mode']=='identity':\n result=m.observe(v['value']['binding'],support)\n print(json.dumps({'ok':True,'value':result},separators=(',',':')))\nelse:\n def installation(binding):\n  proof,_=m.original(binding['fullRequest'],support)\n  n['need'](proof==binding['fullIdentity']['installationProof'],'assistant-original-full-installation-changed')\n  n['need'](support.process_identity()==binding['fullIdentity']['appProcess'],'assistant-original-full-process-changed')\n  return {'installationSha256':binding['input']['installationSha256'],'fullOriginalInstallation':proof}\n def root_for(binding):\n  return n['P']('/var/lib/nova-update/release-coordinator')/binding['operationId']/('assistant-'+binding['parentKey'])\n n['installation']=installation;n['root_for']=root_for\n print(json.dumps(n['invoke'](v['value']),separators=(',',':')))\n`;
+ const payload=Buffer.from(JSON.stringify({support:s.toString('base64'),supportSha:sha256(s),full:f.toString('base64'),fullSha:sha256(f),existing:existing().toString('base64'),existingSha:sha256(existing()),value})).toString('base64');
+ return `import base64,hashlib,json,signal,types\nv=json.loads(base64.b64decode('${payload}',validate=True))\ns=base64.b64decode(v['support'],validate=True);f=base64.b64decode(v['full'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['supportSha'] and hashlib.sha256(f).hexdigest()==v['fullSha']\nn={'__name__':'fixed_assistant_host_transport'}\nexec(compile(s,'fixed-assistant-host-transport','exec'),n)\nm=n['load_module']('full_installed_identity','full-installed-identity',f)\nsupport=types.SimpleNamespace(**n)\nsignal.alarm(90)\nif v['value']['mode']=='identity':\n result=m.observe(v['value']['binding'],support)\n print(json.dumps({'ok':True,'value':result},separators=(',',':')))\nelse:\n def installation(binding):\n  proof,_=m.original(binding['fullRequest'],support)\n  n['need'](proof==binding['fullIdentity']['installationProof'],'assistant-original-full-installation-changed')\n  n['need'](support.process_identity()==binding['fullIdentity']['appProcess'],'assistant-original-full-process-changed')\n  return {'installationSha256':binding['input']['installationSha256'],'fullOriginalInstallation':proof}\n def root_for(binding):\n  return n['P']('/var/lib/nova-update/release-coordinator')/binding['operationId']/('assistant-'+binding['parentKey'])\n n['installation']=installation;n['root_for']=root_for\n if v['value']['mode']=='existing-reply':\n  e=base64.b64decode(v['existing'],validate=True);assert hashlib.sha256(e).hexdigest()==v['existingSha']\n  exec(compile(e,'fixed-existing-reply-observation','exec'),n)\n print(json.dumps(n['invoke'](v['value']),separators=(',',':')))\n`;
 }
 export function buildInstalledIdentityProgram(binding){validateInstalledIdentityRequest(binding);return program({mode:'identity',binding});}
 export function fullAssistantBinding(context,startupReview,hostConfig){
@@ -51,6 +55,7 @@ export function createFullAssistantHostTransport({transport,startupReview,hostCo
  };
  const invoke=async(mode,common)=>{
   const saved=contexts.get(common.operationId+':'+common.parentKey);need(saved,'assistant-host-validation-required');const {binding,context,target}=saved;
+  need(Boolean(binding.input.existingAssistantReply)===(mode==='existing-reply'),'assistant-observation-mode-changed');
   need(['operationId','parentKey','inputSha256','input','deadlineAtMs'].every(k=>equal(common[k],binding[k])),'assistant-original-host-call-changed');
   const raw=await run(target,program({mode,binding,common}),{captureDiagnostics:true});let value;try{value=JSON.parse(raw.stdout);}catch{}
   if(raw.uncertain||raw.exitCode!==0||value?.ok!==true||!Object.hasOwn(value,'value')){
@@ -59,5 +64,5 @@ export function createFullAssistantHostTransport({transport,startupReview,hostCo
   }
   return value.value;
  };
- return {validate,session:c=>invoke('session',c),readReady:c=>invoke('ready',c),postExact:c=>invoke('post',c),readDraft:c=>invoke('draft',c),observeSubmit:c=>invoke('observe',c)};
+ return {validate,observeExisting:c=>invoke('existing-reply',c),session:c=>invoke('session',c),readReady:c=>invoke('ready',c),postExact:c=>invoke('post',c),readDraft:c=>invoke('draft',c),observeSubmit:c=>invoke('observe',c)};
 }

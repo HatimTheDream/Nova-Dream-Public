@@ -1,8 +1,8 @@
 import test, { after } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import ts from 'typescript';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, dirname, resolve } from 'node:path';
 import { deriveConfiguration, assertConfiguration } from '../deploy/update-runner/local-retained-configuration.mjs';
 
@@ -70,4 +70,41 @@ test('hosted schema transition derives headless policy without broadening local 
   const altered=structuredClone(expected);altered.browser.evaluateEnabled=true;
   await assert.rejects(assertConfiguration(input,altered,options),/Complete generated configuration differs/);
   await assert.rejects(deriveConfiguration(input,{browserHeadless:'true'}));
+});
+
+test('same-schema retained Direct configuration is reproduced by its builder and preserves permissions', async () => {
+  const legacy={gateway:{bind:'loopback',controlUi:{enabled:false}},agents:{defaults:{heartbeat:{every:'0m'}}},
+    plugins:{enabled:true,allow:['openai','codex'],entries:{openai:{enabled:true},codex:{enabled:true}}},
+    cron:{enabled:false},update:{checkOnStart:false,auto:{enabled:false}},models:{catalogRefresh:{enabled:false}},
+    browser:{enabled:true,defaultProfile:'nova-work',evaluateEnabled:false,ssrfPolicy:{dangerouslyAllowPrivateNetwork:true},
+      extraArgs:['--proxy-server=http://127.0.0.1:49121','--proxy-bypass-list=<-loopback>',
+        '--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+      profiles:{'nova-work':{cdpPort:49122,headless:true}}}};
+  const inputs={before:legacy,releaseRoot,epoch:'11111111-1111-4111-8111-111111111111',
+    nativeRoot:join(releaseRoot,'retained-same-schema-native'),
+    runtimeEntry:join(releaseRoot,'.tmp-qa','never-imported-openclaw.mjs'),
+    proxy:'http://127.0.0.1:49123',bridge:{url:'http://127.0.0.1:49124/workspace',token:'a'.repeat(64)},sessionBindings:[]};
+  mkdirSync(inputs.nativeRoot);
+  const maintained = await import(pathToFileURL(join(releaseRoot,'dist/service/apps/service/direct-agent-runtime-config.js')).href);
+  maintained.prepareDirectWorkspace(inputs.nativeRoot);
+  maintained.prepareGroupWorkspace(inputs.nativeRoot);
+  const options={browserHeadless:true}, prior=await deriveConfiguration(inputs,options);
+  const before=structuredClone(prior);
+  await assertConfiguration({...inputs,before},prior,options);
+  const currentInputs={...inputs,before,proxy:'http://127.0.0.1:49125',bridge:{...inputs.bridge,token:'b'.repeat(64)}};
+  const after=await deriveConfiguration(currentInputs,options);
+  await assertConfiguration(currentInputs,after,options);
+  assert.deepEqual(before,prior);
+  const marker=join(inputs.nativeRoot,'direct-workspace-v2.identity'), markerBytes=readFileSync(marker);
+  writeFileSync(marker,'changed');
+  await assert.rejects(assertConfiguration(currentInputs,after,options),/original empty direct-agent workspace changed/);
+  writeFileSync(marker,markerBytes);
+  const unexpected=join(inputs.nativeRoot,'direct-workspace-v2','unqualified-content');writeFileSync(unexpected,'keep on refusal');
+  await assert.rejects(assertConfiguration(currentInputs,after,options),/contains unqualified content/);
+  assert.equal(readFileSync(unexpected,'utf8'),'keep on refusal');rmSync(unexpected);
+  await assertConfiguration(currentInputs,after,options);
+  assert.deepEqual(after.plugins.allow,prior.plugins.allow);
+  assert.equal(after.plugins.entries['edition3-direct-agent'].enabled,prior.plugins.entries['edition3-direct-agent'].enabled);
+  const changed=structuredClone(after);changed.tools.deny=[];
+  await assert.rejects(assertConfiguration(currentInputs,changed,options),/Complete generated configuration differs/);
 });

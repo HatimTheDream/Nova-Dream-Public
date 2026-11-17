@@ -9,7 +9,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpat
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { applicationTransitionSchema, verifyStartupRetainedProjection } from './release-delivery-startup-retained.mjs';
+import { startupQualificationMarker, verifyStartupRetainedProjection } from './release-delivery-startup-retained.mjs';
 
 export const PHASES = Object.freeze(['private-ci', 'public-ci', 'package', 'capacity', 'recovery', 'publication', 'installation', 'acceptance']);
 export const RELEASE_PLAN_LIMITS = Object.freeze({ inputBytes: 256 * 1024, receiptBytes: 2 * 1024 ** 2, logBytes: 8 * 1024 ** 2, bundleBytes: 128 * 1024 ** 2, totalBytes: 160 * 1024 ** 2, freshMs: 5 * 60_000 });
@@ -129,14 +129,13 @@ function flags(value) { need(['savedWorkVerified', 'accountsVerified', 'recovery
  * projection inside the exact bundle, bound to both frozen sources and targets.
  * This remains planning evidence; live requester and installer verify it again. */
 export function qualifyApplicationPackage(pair, contents, operation) {
-  const migration = pair.applicationTransition;
-  if (migration === undefined) {
+  const migration = startupQualificationMarker(pair);
+  if (migration === null) {
     need(!pair.startupQualification && !contents.has('startup-qualification.json'), 'package-unexpected-startup-proof');
     same(Object.keys(operation.helperHashes).sort(), helperNames.slice().sort(), 'package-unqualified-helper-closure');
     same(pair.helpers, Object.fromEntries(packagedHelpers.filter(name => name !== 'install.py').map(name => [name, operation.helperHashes[name]])), 'package-pair-helpers-changed');
     return packagedHelpers;
   }
-  applicationTransitionSchema.parse(migration);
   const raw = contents.get('startup-qualification.json');
   need(raw && raw.length <= 512 * 1024 && pair.startupQualification?.projection?.path === 'startup-qualification.json'
     && pair.startupQualification.projection.sha256 === sha256(raw), 'package-startup-proof-required');
@@ -144,11 +143,11 @@ export function qualifyApplicationPackage(pair, contents, operation) {
   verifyStartupRetainedProjection(proof, proof.request);
   const binding = proof.qualificationBinding;
   same(binding, pair.startupQualification.binding, 'package-startup-binding-changed');
-  same(binding.applicationTransition, migration, 'package-startup-transition-changed');
+  same(startupQualificationMarker(binding), migration, 'package-startup-transition-changed');
   same(binding.sourceCommits, operation.sourceCommits, 'package-startup-sources-changed');
   same(binding.workspaceEpoch, operation.workspaceEpoch, 'package-startup-workspace-changed');
   same(binding.prior.candidateId, operation.priorCandidateId, 'package-startup-prior-changed');
-  need(operation.agentVersion === migration.toAgentVersion && operation.priorAgentVersion === migration.fromAgentVersion
+  need(operation.agentVersion === (migration.agentVersion??migration.toAgentVersion) && operation.priorAgentVersion === (migration.agentVersion??migration.fromAgentVersion)
     && binding.runtime.agentVersion === operation.agentVersion, 'package-startup-runtime-changed');
   same(Object.keys(operation.helperHashes).sort(), applicationHelperNames.slice().sort(), 'package-startup-helper-closure');
   same(binding.helpers, operation.helperHashes, 'package-startup-helpers-changed');

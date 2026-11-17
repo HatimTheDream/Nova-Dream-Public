@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import { assistantAcceptanceInput } from './release-delivery-assistant.mjs';
+import {verifyExistingReplyAcceptance,existingReplyCoverage} from './release-delivery-existing-reply.mjs';
 import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './release-delivery-browser-remote.mjs';
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
 import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
@@ -128,6 +129,8 @@ export function browserAcceptanceInput(context,options,transport) {
   const installed=assistantAcceptanceInput(context),assistant=context.prior.assistant;
   need(assistant?.kind==='nova-delivery-saved-assistant-reply'&&typeof assistant.key==='string'
     &&assistant.savedReplyAccepted===true&&assistant.browserUiVerified===false,'browser-saved-assistant-reply-required');
+  if(installed.existingAssistantReply)verifyExistingReplyAcceptance(assistant,installed);
+  else need(assistant.acceptanceMode===undefined,'browser-assistant-observation-mode-changed');
   const kept=original(context,options,transport);
   need(kept.record&&existsSync(join(kept.dir,'prepared.json')),'browser-pre-promotion-session-required');
   const prepared=read(join(kept.dir,'prepared.json'));
@@ -138,6 +141,11 @@ export function browserAcceptanceInput(context,options,transport) {
     original:proofReference(kept.dir,'original.json'),prepared:proofReference(kept.dir,'prepared.json')};
 }
 export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
+  if(input.installed.existingAssistantReply)verifyExistingReplyAcceptance(input.assistant,input.installed);
+  else need(input.assistant.acceptanceMode===undefined,'browser-assistant-observation-mode-changed');
+  need(isDeepStrictEqual(output?.assistantAcceptanceMode,existingReplyCoverage(input.assistant).assistantAcceptanceMode)&&isDeepStrictEqual(output?.nativeRunActivityCoverage,existingReplyCoverage(input.assistant).nativeRunActivityCoverage),'browser-assistant-coverage-changed');
+  if(input.installed.existingAssistantReply){const a=input.assistant,expected={connectionGeneration:a.observedConnectionGeneration,historicalConnectionGeneration:a.connectionGeneration,operationId:a.operationId,nativeRunId:a.nativeRunId,accountProfileId:a.observedAccountProfileId};need(isDeepStrictEqual(output.existingReplyObservation,{before:expected,after:expected}),'browser-existing-reply-observation-changed');}
+  else need(output.existingReplyObservation===undefined,'browser-unqualified-existing-reply-proof');
   const original=JSON.parse(readEvidenceFile(input.original)),prepared=JSON.parse(readEvidenceFile(input.prepared));
   verifyLinkedBrowserRecord(original);
   need(original.binding.operationId===input.operationId&&original.binding.route===input.installed.route

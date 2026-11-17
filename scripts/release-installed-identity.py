@@ -4,6 +4,7 @@ No staging, installation dispatch, session creation or saved-reply admission.
 import base64,hashlib,json,pathlib,re,time,uuid
 P=pathlib.Path
 REQUESTER_SHA='1b146d6d0b09738595bc6c86a27b4384f09e4b7f4491325c3d2750e1ee99d941'
+SAME_SCHEMA60_REQUESTER_SHA='a606724fc16e74ee135247ef7926d5442d9537824ee1c0fe59cf45528497840b'
 def need(v,r):
     if not v:raise RuntimeError(r)
 def enc(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
@@ -32,10 +33,15 @@ def validate_staged_qualification(operation,qualification,pair_raw,projection_ra
       and json.loads(pair_raw)==qualification['pair']
       and sha(projection_raw)==qualification['projectionSha256']==expected['projectionSha256']
       and json.loads(projection_raw)==qualification['proof'],'full-installed-startup-qualification-changed')
+def requester_reference(operation):
+    qualification=operation.get('applicationQualification')
+    same_schema=operation.get('schemaVersion')==60 and type(qualification) is dict and qualification.get('priorSchemaVersion')==60
+    digest=SAME_SCHEMA60_REQUESTER_SHA if same_schema else REQUESTER_SHA
+    return {'path':'/opt/nova-release-tools/'+digest+'/request_install.py','sha256':digest}
 def original(binding,s):
     need(set(binding)=={'format','operation','jobId','requester','runtime'} and binding['format']==1,'full-identity-binding-shape')
     op=binding['operation'];need(str(uuid.UUID(binding['jobId']))==binding['jobId'],'full-original-job-id')
-    helper=binding['requester'];need(helper=={'path':'/opt/nova-release-tools/'+REQUESTER_SHA+'/request_install.py','sha256':REQUESTER_SHA},'full-maintained-requester-required')
+    helper=binding['requester'];need(helper==requester_reference(op),'full-maintained-requester-required')
     client_module=s.load_module('full_identity_original_requester',helper['path'],s.ref(helper,262144,True))
     client_module.validate_operation(op)
     need(op['apiVersion']==1 and op['schemaVersion'] in (55,60),'full-supported-api-schema-required')

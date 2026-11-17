@@ -1,18 +1,27 @@
 /** Synthetic source bindings for pure checks; never actual qualification. */
 import {join} from 'node:path';
 import {readFileSync} from 'node:fs';
+import {inflateSync} from 'node:zlib';
 import {sha256} from '../scripts/release-plan.mjs';
 import {verifyCandidate} from '../scripts/candidate.mjs';
 import {dependencyFixture} from './dependency-transport-fixture.mjs';
-import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
+import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,startupHelperNames} from '../scripts/release-delivery-startup-retained.mjs';
 export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'plan', 'intent', 'sourceCapture', 'sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceMetadata', 'seedInventory', 'seedPhysical', 'seedMetadata', 'liveContext', 'effectiveUnit']);
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
+function historicalHelper(name){
+ const table=JSON.parse(readFileSync(new URL('./historical-startup-helpers.json',import.meta.url))),item=table.files[name];
+ const raw=inflateSync(Buffer.from(item.zlibBase64,'base64'),{maxOutputLength:512*1024});
+ if(raw.length!==item.bytes||sha256(raw)!==item.sha256)throw Error('historical-fixture-helper-changed');return raw;
+}
 export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchema60=false,newDependencyGraph=false}={}){
   sources??=Object.fromEntries(['qualified-startup.py','qualified-parent.py','produce-startup-inputs.py','contracts.py'].map(n=>[n,sha256(n)]));
-  const targetHelpers=sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']
-    ?Object.fromEntries(['recovery.py','install.py'].map(name=>[name,readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))])):{};
-  const f=dependencyFixture(t,{format:4,change:'startup',includeHost:true,targetHelpers,...(newDependencyGraph?{targetDependencyVersion:'2.0.0'}:{}),...(schemaMigration?{targetSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:sameSchema60?{targetSchema:60,priorSchema:60}:{})});
+  const sameSchemaMarker={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
+  const currentFamily=SAME_SCHEMA60_STARTUP_SOURCES!==null&&sources['qualified-startup.py']===SAME_SCHEMA60_STARTUP_SOURCES['qualified-startup.py'];
+  const targetHelpers=currentFamily?Object.fromEntries(startupHelperNames(sameSchemaMarker).map(name=>[name,readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))]))
+    :sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']
+    ?Object.fromEntries(['recovery.py','install.py'].map(name=>[name,historicalHelper(name)])):{};
+  const f=dependencyFixture(t,{format:4,change:'startup',includeHost:true,targetHelpers,...(newDependencyGraph?{targetDependencyVersion:'2.0.0'}:{}),...(schemaMigration?{targetSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:sameSchema60?{targetSchema:60,priorSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:{})});
   const producer={path:'/fixture/sources/qualified-startup.py',sha256:sources['qualified-startup.py']};
   const parent={path:'/fixture/evidence/parent-verified.json',sha256:'1'.repeat(64)};
   const options={format:1,parent,producer},request=startupRetainedRequest(options,sources);
@@ -29,8 +38,9 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
     prior:{candidateId:prior.id,version:prior.manifest.version},targets,
     serviceArtifacts:Object.fromEntries([...candidates.private.bytes].filter(([p])=>p.startsWith('dist/service/')).map(([p,b])=>[p,sha256(b)])),
     hostEntrypointSha256:sha256(host),dependencyGraphSha256:JSON.parse(readFileSync(f.options.selectedPair.path)).applicationDependencies.dependencyGraphSha256,
-    helpers:{...helperHashes,...(schemaMigration?{}:{'operator_rehearsal.py':sha256('synthetic operator')})},runtime:{agentVersion:'2026.9.8',agentNodeSha256:'2'.repeat(64)},workspaceEpoch:f.descriptor.operation.workspaceEpoch};
+    helpers:{...helperHashes,...((schemaMigration||sameSchema60)?{}:{'operator_rehearsal.py':sha256('synthetic operator')})},runtime:{agentVersion:'2026.9.8',agentNodeSha256:'2'.repeat(64)},workspaceEpoch:f.descriptor.operation.workspaceEpoch};
   if(schemaMigration)binding.applicationTransition={format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'};
+  if(sameSchema60)binding.sameSchemaQualification=sameSchemaMarker;
   const names=['producer','parent',...Object.keys(sources).map(n=>'source/'+n),'review','originalPlan','executionIntent','technicalReview','originalIntention','childResult','outsideClosure','restorationIntent','restorationCompleted','effectiveProfile','negativeVerifierSource','negativeVerifierResult',...HOME_CAPTURE_ROLES.map(n=>'homeCapture/'+n),...STARTUP_SCENARIOS.flatMap(n=>['started','process','ready','closed','preservation','bootstrap','clock-attribution'].map(r=>n+'/'+r))];
   const references=Object.fromEntries(names.map(n=>[n,{path:'/fixture/evidence/'+n+'.json',sha256:sha256(n),bytes:1}]));
   references.parent={...parent,bytes:1};references.producer={...producer,bytes:1};
@@ -60,6 +70,22 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
         remainingNamespaces:null,remainingCount:null,remainingSha256:null,sourceAdmissionsSha256:null,
         predecessorProofSha256:i===1?proof.scenarios[0].captureRetirement.roles[0].proofSha256:null,
         lastWindow:[scenario.startedAtSeconds,scenario.closedAtSeconds]});
+    }
+  }
+  if(currentFamily){
+    proof.baselineLineage='verified-closed-schema60-target-retained';
+    for(const role of ['baselineManifest','baselineVerified','retainedParent','retainedRoles','retainedClosure','retainedSecondPreservation'])
+      proof.references[role]={path:'/fixture/evidence/'+role+'.json',sha256:sha256('full closed39 '+role),bytes:123};
+    for(const [i,scenario]of proof.scenarios.entries()){
+      const before={path:'/fixture/evidence/'+scenario.scenario+'/capture-before.json',sha256:sha256('before capture'+i),bytes:123};
+      const closed={path:'/fixture/evidence/'+scenario.scenario+'/capture-closed.json',sha256:sha256('closed capture'+i),bytes:123};
+      proof.references[scenario.scenario+'/capture-before']=before;proof.references[scenario.scenario+'/capture-closed']=closed;
+      scenario.captureObservation={kind:'closed-9.8-no-staging-captures',beforeSha256:before.sha256,closedSha256:closed.sha256,
+        classificationSha256:sha256('complete retained owner-path classification'),inventorySha256:sha256('unchanged complete capture subtree'),
+        selectedRelative:'recovered-workspaces/11111111-1111-4111-8111-111111111111',workspaceEpoch:binding.workspaceEpoch,candidateId:scenario.candidateId,
+        attempt:i+1,physicalRoots:[[1,10,0o40700,999,986],[2,i===2?30:20,0o40700,999,986]],stagingCount:0,unchanged:true};
+      scenario.replicaConfigObservation={kind:'closed-selected-replica-config-observation',sourceDevice:1,replicaDevice:2,
+        observations:[{mode:'unchanged-original-record',changedFields:[]}],queueExpiry:{ordinaryAcknowledgements:0,authenticatedStartSeconds:i===1?100:100+i*100,retentionDays:30}};
     }
   }
   return{...f,sources,options,proof,candidates,prior,helperHashes,transportOptions:{...f.options,format:5,mode:'retained-startup-qualified-native-successor',startupQualification:options},

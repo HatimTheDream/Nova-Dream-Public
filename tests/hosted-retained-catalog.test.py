@@ -119,5 +119,56 @@ class CatalogAdmission(unittest.TestCase):
             catalog._normalize(pair, derived)
 
 
+def same_schema_fixture():
+    pair, _ = fixture()
+    pair[0]['plugins'].insert(len(catalog.APP_PLUGINS) - 1, record(catalog.DIRECT, 'a'))
+    for row in pair[1]['plugins']:
+        if row['pluginId'] in catalog.APP_PLUGINS:
+            row['startup'] = {'commands': ['before']}
+        elif row['pluginId'] == 'memory-core':
+            row['enabled'] = True
+    derived = {'format': 1, 'nativeVersion': '2026.9.8', 'sides': []}
+    for index in pair:
+        official = copy.deepcopy(index)
+        official['plugins'] = [row for row in official['plugins'] if row['pluginId'] in catalog.APP_PLUGINS]
+        derived['sides'].append({'index': official, 'policyHash': index['policyHash'], 'memoryEnabled': True})
+    return pair, derived
+
+
+class SameSchemaCatalogAdmission(unittest.TestCase):
+    def test_direct_retained_and_exact_physical_derivation_required(self):
+        pair, derived = same_schema_fixture(); original = copy.deepcopy((pair, derived))
+        old, new = catalog._normalize_same_schema(pair, derived)
+        self.assertEqual(old['plugins'], new['plugins'])
+        self.assertEqual(sum(row['pluginId'] == catalog.DIRECT for row in new['plugins']), 1)
+        self.assertEqual((pair, derived), original)
+
+    def test_officially_changed_permissions_are_still_refused(self):
+        pair, derived = same_schema_fixture()
+        for row in (pair[1]['plugins'][0], derived['sides'][1]['index']['plugins'][0]):
+            row['startup']['commands'].append('new-command')
+        with self.assertRaisesRegex(RuntimeError, 'permissions or behavior'):
+            catalog._normalize_same_schema(pair, derived)
+
+    def test_direct_removal_or_reorder_refused(self):
+        for mode in ('remove', 'reorder'):
+            pair, derived = same_schema_fixture()
+            if mode == 'remove':
+                pair[1]['plugins'] = [row for row in pair[1]['plugins'] if row['pluginId'] != catalog.DIRECT]
+            else:
+                pair[1]['plugins'][0:2] = pair[1]['plugins'][0:2][::-1]
+            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'membership or order'):
+                catalog._normalize_same_schema(pair, derived)
+
+    def test_forged_policy_and_memory_change_refused(self):
+        pair, derived = same_schema_fixture(); derived['sides'][1]['policyHash'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'policy hash'):
+            catalog._normalize_same_schema(pair, derived)
+        pair, derived = same_schema_fixture()
+        pair[1]['plugins'][-2]['enabled'] = False; derived['sides'][1]['memoryEnabled'] = False
+        with self.assertRaisesRegex(RuntimeError, 'memory plugin authority'):
+            catalog._normalize_same_schema(pair, derived)
+
+
 if __name__ == '__main__':
     unittest.main()

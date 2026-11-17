@@ -128,6 +128,17 @@ async function assertUi(page,suite) {
     await quick.fill(kept);need((await search.getAttribute('placeholder'))?.includes('/'),'browser-search-shortcut-hint-missing');
   }
 }
+export function verifyExistingReplyBrowserState(state,assistant) {
+  need(assistant.acceptanceMode==='existing-saved-reply-observation'&&state?.connection?.state==='ready'&&state.connection.modelAuthReady===true&&state.connection.generation===assistant.observedConnectionGeneration,'browser-existing-reply-current-generation-changed');
+  const operations=state.operations?.filter(o=>o.id===assistant.operationId),conversations=state.conversations?.filter(c=>c.id===assistant.conversationId);
+  need(operations?.length===1&&operations[0].state==='completed'&&operations[0].nativeId===assistant.nativeId&&operations[0].nativeRunId===assistant.nativeRunId&&operations[0].connectionGeneration===assistant.connectionGeneration&&operations[0].accountSelection?.profileId===assistant.observedAccountProfileId&&sha256(operations[0].text?.trim()??'')===assistant.replySha256,'browser-existing-reply-historical-run-changed');
+  need(conversations?.length===1&&conversations[0].nativeId===assistant.nativeId&&conversations[0].connectionGeneration===assistant.connectionGeneration&&conversations[0].accountSelection?.profileId===assistant.observedAccountProfileId&&!conversations[0].archived&&!conversations[0].deleted&&!conversations[0].pendingSettings,'browser-existing-reply-conversation-changed');
+  return {connectionGeneration:state.connection.generation,historicalConnectionGeneration:assistant.connectionGeneration,operationId:assistant.operationId,nativeRunId:assistant.nativeRunId,accountProfileId:assistant.observedAccountProfileId};
+}
+async function currentExistingReply(page,baseUrl,input) {
+  const response=await page.request.get(baseUrl+'/api/assistant/state',{headers:{'X-Edition3-Client':'1','X-Edition3-Candidate':input.installed.installedHealth.candidateId}});
+  try{need(response.ok(),'browser-existing-reply-state-unavailable');return verifyExistingReplyBrowserState(await response.json(),input.assistant);}finally{await response.dispose();}
+}
 export async function accept(context,oldPage,prepared,request,dir,original) {
   const input=request.input,options=original.binding.options,checks=[];
   need(input.operationId===original.binding.operationId&&input.prepared.sha256===sha256(readFileSync(join(dir,'prepared.json')))
@@ -168,14 +179,17 @@ export async function accept(context,oldPage,prepared,request,dir,original) {
     &&m.role==='assistant'&&m.text?.trim()===expectedReply),'browser-original-saved-message-missing');
   const message=newPage.getByRole('article',{name:'assistant message',exact:true}).filter({hasText:expectedReply});
   await message.waitFor({state:'visible',timeout:30000});need(await message.count()===1,'browser-original-reply-not-unique');check('saved-assistant-reply-visible');
+  const existingReplyBefore=input.assistant.acceptanceMode==='existing-saved-reply-observation'?await currentExistingReply(newPage,options.baseUrl,input):null;
   const screenshotPath=join(dir,'accepted-ui.png');await newPage.screenshot({path:screenshotPath,fullPage:false});
   await ownedDraftCleanup(oldPage,prepared.draft);check('owned-draft-cleaned');
   const healthFinal=await ready(oldPage,options.baseUrl);verifyBrowserHealth(healthFinal.health,expected,healthFinal.epoch,contract);
+  const existingReplyAfter=existingReplyBefore?await currentExistingReply(oldPage,options.baseUrl,input):null;
   return {format:1,kind:'nova-real-browser-acceptance',operationId:input.operationId,inputSha256:hash(input),
     accepted:true,browserUiVerified:true,gatewayCoverage:'not-tested-loopback-host-surface',
     startedAtMs:prepared.startedAtMs,completedAtMs:Date.now(),checks,loadedDocument:fresh.identity,originalDocument:prepared.document,
     ...(contract.route==='full'?{selectorDiagnostics:browserSelectorDiagnostics(healthFinal.health)}:{}),
     savedReplySha256:sha256(expectedReply),savedMessageId:input.assistant.savedMessageId,
+    ...(input.assistant.acceptanceMode==='existing-saved-reply-observation'?{assistantAcceptanceMode:input.assistant.acceptanceMode,...(input.assistant.nativeRunActivityCoverage===undefined?{}:{nativeRunActivityCoverage:input.assistant.nativeRunActivityCoverage}),existingReplyObservation:{before:existingReplyBefore,after:existingReplyAfter}}:{}),
     screenshot:{path:screenshotPath,sha256:sha256(readFileSync(screenshotPath))}};
 }
 export async function untilOriginalDeadline(operation,deadlineAtMs) {

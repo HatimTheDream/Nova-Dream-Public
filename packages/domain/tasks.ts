@@ -32,8 +32,17 @@ export const focusSchema = /* @__PURE__ */ (() => z.object({ requestId: z.string
 export type FocusCommand = z.infer<typeof focusSchema>;
 export const focusLeaseMs = 30_000;
 export function focusElapsed(focus: Focus, now: number): number { return focus.elapsedMs + (focus.running ? Math.max(0, Math.min(focusLeaseMs, now - focus.lastPulse)) : 0); }
+// Repeated task projections reuse the formatter, never a date result.
+const dayFormatters = new Map<string, Intl.DateTimeFormat>();
+const dayFormatterLimit = 32;
 export function dayInZone(timezone: string, now = Date.now()): string {
-  const parts = new Intl.DateTimeFormat('en', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  let formatter = dayFormatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    if (dayFormatters.size >= dayFormatterLimit) dayFormatters.delete(dayFormatters.keys().next().value!);
+    dayFormatters.set(timezone, formatter);
+  }
+  const parts = formatter.formatToParts(now);
   return ['year', 'month', 'day'].map(type => parts.find(p => p.type === type)!.value).join('-');
 }
 export function nextDay(day: string): string { return new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10); }

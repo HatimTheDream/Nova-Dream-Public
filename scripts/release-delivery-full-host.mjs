@@ -13,7 +13,7 @@ import { verifyRuntimeQualificationReference } from './release-delivery-runtime-
 import { runtimeTransition } from './release-runtime-artifact.mjs';
 import { verificationOnce } from './release-verification-pass.mjs';
 import { awaitObservationTime } from './release-observation-clock.mjs';
-import { assertStartupQualifiedCandidate, applicationTransitionSchema, verifyStartupRetainedProjection } from './release-delivery-startup-retained.mjs';
+import { assertStartupQualifiedCandidate, startupQualificationMarker, qualificationMarkerFields, verifyStartupRetainedProjection, SAME_SCHEMA60_STARTUP_HELPERS } from './release-delivery-startup-retained.mjs';
 import {verifyQualifiedApplicationDependencies} from './release-delivery-qualified-dependencies.mjs';
 import {frontendRegular} from './frontend-contract.mjs';
 
@@ -112,10 +112,17 @@ export const FULL_HELPERS=Object.freeze({
 
 // Reviewed application-transition helper bytes; actual startup qualification is still mandatory.
 export const FULL_APPLICATION_HELPERS=Object.freeze({"install.py":"522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24","recovery.py":"23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15","operator_rehearsal.py":"7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573","local-retained-configuration.mjs":"805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de","hosted_retained_catalog.py":"23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
-function reviewedHelpers(value){need(isDeepStrictEqual(value,FULL_HELPERS)||isDeepStrictEqual(value,FULL_APPLICATION_HELPERS),'full-helper-qualification-capability-required');return value;}
+// Filled only from the coherent reviewed same-schema helper source closure.
+export const FULL_SAME_SCHEMA60_HELPERS=SAME_SCHEMA60_STARTUP_HELPERS;
+function reviewedHelpers(value){need(isDeepStrictEqual(value,FULL_HELPERS)||isDeepStrictEqual(value,FULL_APPLICATION_HELPERS)||(FULL_SAME_SCHEMA60_HELPERS!==null&&isDeepStrictEqual(value,FULL_SAME_SCHEMA60_HELPERS)),'full-helper-qualification-capability-required');return value;}
 export const reviewedFullHelperHashes=reviewedHelpers;
-function transitionHelpers(transition=null){if(transition!==null)applicationTransitionSchema.parse(transition);return transition?FULL_APPLICATION_HELPERS:FULL_HELPERS;}
-function signedTransition(signed){return signed?.startupQualification?.binding?.applicationTransition??null;}
+export function fullHelpersForQualification(marker=null){
+ qualificationMarkerFields(marker);
+ if(marker?.kind==='schema-60-same-runtime'){need(FULL_SAME_SCHEMA60_HELPERS!==null,'full-same-schema60-helper-source-unavailable');return reviewedHelpers(FULL_SAME_SCHEMA60_HELPERS);}
+ return marker?FULL_APPLICATION_HELPERS:FULL_HELPERS;
+}
+const transitionHelpers=fullHelpersForQualification;
+function signedTransition(signed){return startupQualificationMarker(signed?.startupQualification?.binding??{});}
 const valueHelpers=value=>reviewedHelpers(value.stageResult?.helperHashes??FULL_HELPERS);
 const templates=['collect-facts.py','metadata-stage.py','launch-plan-template.py','observe-plan-template.py','launch-execute-template-r2.py','observe-execute-template.py','collect-completion-template.py','online-capacity.py'];
 const primitive=name=>{need(templates.includes(name),'full-host-fixed-program-required');return readFileSync(new URL('full-host-primitives/'+name,import.meta.url));};
@@ -137,7 +144,7 @@ export function fullFactsSpec(descriptor,options,key,runtime=null,applicationTra
   fullHostOptionsSchema.parse(options);const op=descriptor.operation;
   requireRuntimeCapability(op,runtime);
   need(op.changeClass==='application'||op.changeClass==='presentation'||(runtime&&op.changeClass==='runtime'),'full-changed-recovery-qualification-capability-required');
-  return {format:2,sourceCommit:descriptor.sources.private.commit,helperDirectory:options.helperDirectory,helperHashes:transitionHelpers(applicationTransition),...(applicationTransition?{applicationTransition}:{}),
+  return {format:2,sourceCommit:descriptor.sources.private.commit,helperDirectory:options.helperDirectory,helperHashes:transitionHelpers(applicationTransition),...qualificationMarkerFields(applicationTransition),
     hostConfiguration:options.hostConfiguration.path,hostConfigurationSha256:options.hostConfiguration.sha256,
     startupGuardFile:options.startupGuardFile,workspaceEpoch:op.workspaceEpoch,leaseId:fullHostIdentity(key,'lease'),
     acceptedInstallation:options.acceptedInstallation,base:{candidateId:op.priorCandidateId,priorVersion:options.priorVersion,
@@ -165,6 +172,7 @@ export function verifyFullFacts(value,spec,nowMs=Date.now(),fresh=true){
     &&r.agentVersion===spec.base.agentVersion&&r.workspaceEpoch===spec.workspaceEpoch&&isDeepStrictEqual(r.helperHashes,reviewedHelpers(spec.helperHashes))
     &&r.hostConfiguration===spec.hostConfiguration&&value.protectedHashes?.[spec.hostConfiguration]===spec.hostConfigurationSha256
     &&value.protectedHashes?.[spec.acceptedInstallation.path]===spec.acceptedInstallation.sha256,'full-host-current-binding-changed');
+  need(isDeepStrictEqual(startupQualificationMarker(r),startupQualificationMarker(spec)),'full-host-review-qualification-changed');
   need(value.historicalClosedLeaseRetained===true&&value.operatorStatus.held===false&&['released','cancelled'].includes(l?.phase)
     &&l.workspaceEpoch===spec.workspaceEpoch&&l.id!==spec.leaseId&&hash.safeParse(l.candidateId).success,'full-host-idle-lease-required');
   need(value.health?.status==='ready'&&value.health.candidateId===r.candidateId&&value.health.version===r.novaVersion
@@ -221,7 +229,7 @@ function hostInput(descriptor,prior,options){
   const compatibility=prior.sign.release?.compatibility;
   need(compatibility&&candidates.private.manifest.schemaVersion===candidates.public.manifest.schemaVersion
     &&compatibility.toSchemaVersion===candidates.private.manifest.schemaVersion,'full-schema-qualification-capability-required');
-  if(compatibility.fromSchemaVersion!==compatibility.toSchemaVersion){
+  if(compatibility.fromSchemaVersion!==compatibility.toSchemaVersion||compatibility.fromSchemaVersion===60){
     const qualification=prior.sign.startupQualification;
     need(qualification,'full-schema-startup-qualification-required');
     const proof=JSON.parse(readEvidenceFile(qualification.projection,{maximum:512*1024}));
@@ -231,7 +239,7 @@ function hostInput(descriptor,prior,options){
       candidates,artifacts:prior.artifacts.repositories,helpers:helperHashes,
       dependencyGraphSha256:JSON.parse(readEvidenceFile(prior.sign.dependencies.metadata)).dependencyGraphSha256,applicationDependencies:prior.sign.dependencies.description});
   }
-  need(compatibility.fromSchemaVersion===55,'full-same-schema60-route-unqualified');
+  need(compatibility.fromSchemaVersion===55||(compatibility.fromSchemaVersion===60&&signedTransition(prior.sign)?.kind==='schema-60-same-runtime'),'full-same-schema60-route-unqualified');
   need(prior.sign.candidateId===prior.route.targetCandidateId&&prior.sign.priorCandidateId===descriptor.operation.priorCandidateId,'full-host-signed-candidate-changed');
   return {format:1,operation:descriptor.operation,sourceCommit:descriptor.sources.private.commit,options,
     artifacts:prior.artifacts.repositories,signed:prior.sign,helperHashes,implementationSha256:fullHostImplementation()};
@@ -360,7 +368,7 @@ export function verifyFullPremaintenanceArtifacts(input,descriptor,nowMs=Date.no
    const proof=JSON.parse(readEvidenceFile(s.startupQualification.projection,{maximum:512*1024}));
    verifyStartupRetainedProjection(proof,proof.request);need(isDeepStrictEqual(proof.qualificationBinding,s.startupQualification.binding),'full-qualified-dependency-binding-changed');
    const b=proof.qualificationBinding,qualified=verifyQualifiedApplicationDependencies({archive:s.dependencies.archive,metadata:s.dependencies.metadata,execution:s.dependencies.execution},b,
-    {producerSha256:FULL_APPLICATION_HELPERS['app_dependencies.py'],packageSha256:b.targets.private.packageSha256,packageLockSha256:b.targets.private.packageLockSha256});
+    {producerSha256:transitionHelpers(signedTransition(s))['app_dependencies.py'],packageSha256:b.targets.private.packageSha256,packageLockSha256:b.targets.private.packageLockSha256});
    need(isDeepStrictEqual(qualified,s.dependencies),'full-qualified-dependency-record-changed');
   }else{
   need(s.dependencies.unchangedNativeDependencies===true&&s.dependencies.qualification&&s.dependencies.nativeQualification,'full-native-qualification-producer-required');
@@ -382,7 +390,7 @@ export function verifyFullPremaintenanceArtifacts(input,descriptor,nowMs=Date.no
     &&raw.equals(readEvidenceFile(s.startupQualification.projection,{maximum:512*1024})),'full-signed-startup-proof-changed');
    const pairRow=files.find(f=>f.name==='reviewed-pair.json'),pairRaw=Buffer.from(pairRow.data,'base64');
    need(pairRaw.toString('base64')===pairRow.data&&sha256(pairRaw)===pairRow.sha256,'full-signed-pair-changed');
-   const pair=JSON.parse(pairRaw);need(isDeepStrictEqual(pair.applicationTransition,signedTransition(s))&&isDeepStrictEqual(pair.startupQualification,{projection:{path:'startup-qualification.json',sha256:row.sha256},binding:s.startupQualification.binding})
+   const pair=JSON.parse(pairRaw);need(isDeepStrictEqual(startupQualificationMarker(pair),signedTransition(s))&&isDeepStrictEqual(pair.startupQualification,{projection:{path:'startup-qualification.json',sha256:row.sha256},binding:s.startupQualification.binding})
     &&isDeepStrictEqual(pair.applicationDependencies,description),'full-signed-application-transition-changed');
   }
   return {createdAt:manifest.createdAt,expiresAt:manifest.expiresAt,bytes:{bundle:bundle.length,dependencies:archive.length,manifest:feedRaw.length},review:{format:1,kind:'automated-full-premaintenance-check',operationId:op.id,candidateId:s.candidateId,priorCandidateId:s.priorCandidateId,

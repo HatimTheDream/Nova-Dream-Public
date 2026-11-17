@@ -360,5 +360,71 @@ class ApplicationMigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(M.Refusal,'intent-exists'): client.execute()
 
 
+class SameSchemaIO(MigrationIO):
+    def __init__(self):
+        super().__init__()
+        marker = {'format':1,'kind':'schema-60-same-runtime','schemaVersion':60,'apiVersion':1,'agentVersion':'2026.9.8'}
+        del self.pair['applicationTransition']
+        del self.startup['qualificationBinding']['applicationTransition']
+        self.pair['sameSchemaQualification'] = copy.deepcopy(marker)
+        self.startup['qualificationBinding']['sameSchemaQualification'] = copy.deepcopy(marker)
+        self.health['schemaVersion'] = 60
+        self.bind_sidecars()
+
+    def bind_sidecars(self):
+        super().bind_sidecars()
+        self.operation['applicationQualification']['priorSchemaVersion'] = 60
+
+    def make_job(self):
+        job = super().make_job()
+        job['release']['compatibility']['fromSchemaVersion'] = 60
+        return job
+
+
+class ApplicationSameSchemaTests(unittest.TestCase):
+    def test_exact_same_schema_pair_dispatches_once_and_observes_original(self):
+        io = SameSchemaIO(); client = io.client()
+        self.assertEqual(client.execute()['state'], 'checking')
+        self.assertEqual(M.prior_schema(io.operation), 60)
+        self.assertEqual(client.application_qualification()['pair'], io.pair)
+        io.journal['jobs'][0].update(state='completed', hold=False)
+        io.view['job']['state'] = 'completed'; io.view['holdFor'] = None
+        io.calls.clear()
+        self.assertEqual(io.client().observe()['state'], 'completed')
+        self.assertEqual([action for action, _ in io.calls], ['status'])
+        with self.assertRaisesRegex(M.Refusal, 'intent-exists'): client.execute()
+
+    def test_lost_same_schema_response_never_creates_second_install(self):
+        io = SameSchemaIO(); io.install_mode = 'lost-record'; client = io.client()
+        self.assertEqual(client.execute()['state'], 'checking')
+        self.assertEqual(client.observe()['state'], 'checking')
+        self.assertEqual(sum(action == 'install' for action, _ in io.calls), 1)
+        io.journal['jobs'][0]['release']['compatibility']['fromSchemaVersion'] = 55
+        self.assertEqual(client.observe()['reason'], 'original-request-identity-mismatch')
+
+    def test_marker_and_complete_proof_must_match_even_after_sidecar_rehash(self):
+        changes = (
+            lambda io: io.pair.pop('sameSchemaQualification'),
+            lambda io: io.pair.update(applicationTransition={}),
+            lambda io: io.pair['sameSchemaQualification'].update(schemaVersion=55),
+            lambda io: io.pair['sameSchemaQualification'].update(format=True),
+            lambda io: io.pair['sameSchemaQualification'].update(extra=True),
+            lambda io: io.startup['qualificationBinding']['sameSchemaQualification'].update(agentVersion='2026.9.9'),
+            lambda io: io.startup['qualificationBinding'].update(applicationTransition={}),
+            lambda io: io.startup.update(completeMaintainedSavedAndNativeState=False),
+            lambda io: io.startup['scenarios'].pop(),
+            lambda io: io.startup['qualificationBinding'].update(workspaceEpoch=UUIDS[0]),
+        )
+        for change in changes:
+            io = SameSchemaIO(); change(io); io.bind_sidecars()
+            with self.assertRaises(M.Refusal): io.client().execute()
+            self.assertFalse(any(action == 'install' for action, _ in io.calls))
+        for change in (lambda io: io.operation['applicationQualification'].update(priorSchemaVersion=55),
+                       lambda io: io.health.update(schemaVersion=55)):
+            io = SameSchemaIO(); change(io)
+            with self.assertRaises(M.Refusal): io.client().execute()
+            self.assertFalse(any(action == 'install' for action, _ in io.calls))
+
+
 if __name__ == '__main__':
     unittest.main()

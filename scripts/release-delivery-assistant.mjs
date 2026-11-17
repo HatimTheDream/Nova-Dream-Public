@@ -4,6 +4,7 @@
  * A dispatched submit is observed only, even if no response was received. */
 import { isDeepStrictEqual } from 'node:util';
 import { readEvidenceFile, sha256 } from './release-plan.mjs';
+import {existingAssistantReplySchema,existingReplyOriginal,existingReplyOutput} from './release-delivery-existing-reply.mjs';
 
 const need = (value, reason) => { if (!value) throw Error(reason); };
 const canonical = value => JSON.stringify(value, (_k, v) => v && typeof v === 'object' && !Array.isArray(v)
@@ -45,7 +46,7 @@ export function assistantAcceptanceInput({ descriptor, prior }) {
   need(hash(health?.candidateId) && uuid(health?.epoch) && uuid(health?.processIdentity), 'assistant-installed-health-required');
   return { format: 1, route: prior.route.route, operationId: descriptor.operation.id,
     installedHealth: health, installationSha256: digest(prior.installation), budgetMs: 300000,
-    browserUiVerified: false };
+    browserUiVerified: false, ...(descriptor.existingAssistantReply?{existingAssistantReply:existingAssistantReplySchema.parse(descriptor.existingAssistantReply)}:{}) };
 }
 
 export const oldUnknowns = state => Object.fromEntries(state.operations.filter(op => op.state === 'unknown').map(op => [op.id, digest(op)]));
@@ -159,8 +160,33 @@ export function createAssistantAcceptanceAdapter({ transport = null, storeReceip
     if (row.current?.receipt) need(isDeepStrictEqual(JSON.parse(readEvidenceFile(row.current.receipt)), row.current.output), 'assistant-child-receipt-changed');
     return row;
   };
+  const observeExisting = async (context, inspectOnly) => {
+    const input=context.intent.input,original=existingReplyOriginal(input.existingAssistantReply);
+    need(input.route==='full'&&typeof transport?.validate==='function'&&typeof transport?.observeExisting==='function','existing-reply-full-observer-required');
+    let row=retained(context,'existing-reply',{});
+    if(row?.state==='failed')return result('failed',row.current.reason,context);
+    if(row?.state!=='completed'){
+      if(inspectOnly)return result('uncertain','existing-reply-observation-incomplete',context);
+      within(context);await transport.validate({...context,input});
+      if(!row){need(typeof context.beforeNewEffect==='function','assistant-fresh-effect-gate-required');await context.beforeNewEffect();parent(context);within(context);
+        row=reserve(context,'existing-reply',{original:input.existingAssistantReply},{}).intent;}
+      need(isDeepStrictEqual(row.input.payload,{original:input.existingAssistantReply}),'existing-reply-reservation-changed');
+      try{
+        const evidence=await transport.observeExisting({operationId:input.operationId,parentKey:context.intent.key,inputSha256:context.intent.inputSha256,input,deadlineAtMs:deadline(context),observationKey:row.key,original});
+        within(context);
+        // Verify before recording completion; failures never fall back to sending.
+        existingReplyOutput(evidence,input,{path:'unwritten',sha256:'0'.repeat(64)},{parentKey:context.intent.key,observationKey:row.key,startedAtMs:parent(context).createdAtMs,deadlineAtMs:deadline(context)});
+        record(context,row,'completed','assistant-existing-reply-observed',evidence);
+      }catch(error){const reason=safeReason(error),state=!rejected(error)&&reason==='assistant-original-host-response-unavailable'?'uncertain':'failed';record(context,row,state,reason);return result(state,reason,context);}
+      row=retained(context,'existing-reply',{});
+    }
+    const output=existingReplyOutput(row.current.output,input,row.current.receipt,{parentKey:context.intent.key,observationKey:row.key,startedAtMs:parent(context).createdAtMs,deadlineAtMs:deadline(context)});
+    const receipt=storeReceipt(context.journal,context.intent.key,'assistant-existing-reply-acceptance.json',Buffer.from(canonical(output)+'\n'));
+    return result('completed','assistant-existing-saved-reply-accepted',context,output,receipt);
+  };
   const run = async (context, inspectOnly = false) => {
     parent(context);
+    if(context.intent.input.existingAssistantReply)return observeExisting(context,inspectOnly);
     if (!transport) return result('gap', 'assistant-fixed-host-transport-not-integrated', context);
     need(['validate', 'session', 'readReady', 'postExact', 'readDraft', 'observeSubmit'].every(key => typeof transport[key] === 'function'), 'assistant-host-capability-incomplete');
     await transport.validate({ ...context, input: context.intent.input });

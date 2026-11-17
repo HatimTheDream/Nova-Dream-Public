@@ -86,7 +86,7 @@ def validate_operation(value):
     qualification = value.get('applicationQualification')
     if qualification is not None:
         require(type(qualification) is dict and set(qualification) == {'priorSchemaVersion', 'reviewedPairSha256', 'projectionSha256'}
-                and type(qualification['priorSchemaVersion']) is int and qualification['priorSchemaVersion'] == 55
+                and type(qualification['priorSchemaVersion']) is int and qualification['priorSchemaVersion'] in (55, 60)
                 and value['schemaVersion'] == 60 and value['apiVersion'] == 1
                 and value['priorAgentVersion'] == value['agentVersion'] == '2026.9.8'
                 and is_hash(qualification['reviewedPairSha256']) and is_hash(qualification['projectionSha256']),
@@ -173,6 +173,20 @@ def _validate_application_transition(value):
     return dict(expected)
 
 
+def _application_marker(value):
+    _qualification_require(type(value) is dict and not ('applicationTransition' in value and 'sameSchemaQualification' in value),
+            'The qualification markers conflict.')
+    if 'sameSchemaQualification' not in value:
+        return 'applicationTransition', _validate_application_transition(value.get('applicationTransition'))
+    marker = value['sameSchemaQualification']
+    expected = {'format': 1, 'kind': 'schema-60-same-runtime', 'schemaVersion': 60,
+                'apiVersion': 1, 'agentVersion': '2026.9.8'}
+    _qualification_require(type(marker) is dict and marker == expected
+            and all(type(marker[key]) is type(item) for key, item in expected.items()),
+            'The same-schema qualification is outside its reviewed exact pair.')
+    return 'sameSchemaQualification', dict(expected)
+
+
 def _validate_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
     """Consume the fixed collector's original, hash-bound settled projection.
 
@@ -180,7 +194,7 @@ def _validate_application_qualification(pair, proof, *, prior_id, target_id, wor
     byte before calling. A synthetic migration or qualification plan is not a
     completed proof and cannot satisfy this contract.
     """
-    transition = _validate_application_transition(pair.get('applicationTransition'))
+    marker_field, transition = _application_marker(pair)
     qualification = pair.get('startupQualification')
     _qualification_require(type(qualification) is dict and set(qualification) == {'projection', 'binding'}
             and type(qualification['projection']) is dict
@@ -191,7 +205,7 @@ def _validate_application_qualification(pair, proof, *, prior_id, target_id, wor
     binding = qualification['binding']
     _qualification_require(type(binding) is dict and binding.get('format') == 1
             and binding.get('kind') == 'same-runtime-startup-candidate-binding'
-            and binding.get('applicationTransition') == transition
+            and _application_marker(binding) == (marker_field, transition)
             and binding.get('workspaceEpoch') == workspace_epoch
             and binding.get('prior', {}).get('candidateId') == prior_id
             and binding.get('targets', {}).get('private', {}).get('candidateId') == target_id
@@ -444,8 +458,10 @@ class InstallRequest:
             'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs'}
         require(type(helpers) is dict and set(helpers) == names and all(is_hash(v) for v in helpers.values()),
                 'application-qualification-helper-closure')
-        _validate_application_qualification(pair, proof, prior_id=o['priorCandidateId'], target_id=o['candidateId'],
+        marker = _validate_application_qualification(pair, proof, prior_id=o['priorCandidateId'], target_id=o['candidateId'],
             workspace_epoch=o['workspaceEpoch'], helper_hashes=helpers)
+        require(marker.get('fromSchemaVersion', marker.get('schemaVersion')) == selected['priorSchemaVersion'],
+                'application-qualification-prior-schema-changed')
         binding = qualification['binding']; target = binding['targets']['private']
         require(binding['prior'].get('version') == o['priorVersion'] and target.get('version') == o['version']
                 and target.get('buildVersion') == o['buildVersion'], 'application-qualification-version-changed')

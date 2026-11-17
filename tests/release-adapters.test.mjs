@@ -100,7 +100,7 @@ test('application migration is an exact optional55-to60 contract, never a widene
   const migration={...spec,schemaVersion:60,priorAgentVersion:'2026.9.8',applicationQualification:{priorSchemaVersion:55,
     reviewedPairSha256:digest('e'),projectionSha256:digest('f')}};
   assert.deepEqual(releaseInstallSpecSchema.parse(migration),migration);
-  for(const change of [s=>delete s.applicationQualification,s=>s.applicationQualification.priorSchemaVersion=60,
+  for(const change of [s=>delete s.applicationQualification,s=>s.applicationQualification.priorSchemaVersion=59,
     s=>s.schemaVersion=55,s=>s.apiVersion=2,s=>s.priorAgentVersion='2026.9.6',
     s=>s.applicationQualification.path='/untrusted/path',s=>s.applicationQualification=null]){
     const changed=structuredClone(migration);change(changed);assert.throws(()=>releaseInstallSpecSchema.parse(changed));
@@ -108,8 +108,8 @@ test('application migration is an exact optional55-to60 contract, never a widene
 });
 
 test('migration bootstrap binds original bounded sidecars outside compact operation for execute and observe', t => {
-  const f=fixture(), pair=Buffer.from(JSON.stringify({synthetic:true,padding:'x'.repeat(300000)})),
-    projection=Buffer.from(JSON.stringify({synthetic:true,padding:'y'.repeat(280000)}));
+  const f=fixture(), pair=Buffer.from(JSON.stringify({synthetic:true,applicationTransition:{format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'},padding:'x'.repeat(300000)})),
+    projection=Buffer.from(JSON.stringify({synthetic:true,qualificationBinding:{applicationTransition:{format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'}},padding:'y'.repeat(280000)}));
   const spec={...f.spec,schemaVersion:60,priorAgentVersion:'2026.9.8',applicationQualification:{priorSchemaVersion:55,
     reviewedPairSha256:sha256(pair),projectionSha256:sha256(projection)}};
   const input={helper:Buffer.from('# synthetic helper\n'),spec,idempotencyKey:f.intent.idempotencyKey,applicationEvidence:{pair,projection}};
@@ -140,8 +140,8 @@ test('Linux protected bootstrap stages once and observes immutable sidecars with
   t.after(()=>rmSync(root,{recursive:true,force:true}));
   const state=join(root,'state'),config=join(root,'config.json'),tools=join(root,'tools');
   mkdirSync(state,{mode:0o700});writeFileSync(config,JSON.stringify({stateDirectory:state}),{mode:0o600});
-  const f=fixture(),pair=Buffer.from(JSON.stringify({synthetic:true,padding:'x'.repeat(300000)})),
-    projection=Buffer.from(JSON.stringify({synthetic:true,padding:'y'.repeat(280000)}));
+  const f=fixture(),pair=Buffer.from(JSON.stringify({synthetic:true,applicationTransition:{format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'},padding:'x'.repeat(300000)})),
+    projection=Buffer.from(JSON.stringify({synthetic:true,qualificationBinding:{applicationTransition:{format:1,kind:'schema-55-to-60-same-runtime',fromSchemaVersion:55,toSchemaVersion:60,apiVersion:1,fromAgentVersion:'2026.9.8',toAgentVersion:'2026.9.8'}},padding:'y'.repeat(280000)}));
   const spec={...f.spec,schemaVersion:60,priorAgentVersion:'2026.9.8',applicationQualification:{priorSchemaVersion:55,
     reviewedPairSha256:sha256(pair),projectionSha256:sha256(projection)}};
   const input={helper:Buffer.from('# synthetic requester, never executed\n'),spec,idempotencyKey:f.intent.idempotencyKey,applicationEvidence:{pair,projection}};
@@ -172,4 +172,18 @@ exec(compile(ast.fix_missing_locations(FixturePaths().visit(tree)),'generated-pr
   assert.equal(run('execute').status,2);assert.equal(run('observe').status,2);assert.equal(readFileSync(pairPath).length,pair.length+1);
   writeFileSync(pairPath,pair);unlinkSync(proofPath);
   assert.equal(run('observe').status,2);assert.throws(()=>readFileSync(proofPath),{code:'ENOENT'});
+});
+
+test('same schema60 install wire requires matching exact marker in both immutable sidecars',()=>{
+ const f=fixture(),marker={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
+ const make=(p,q)=>{const pair=Buffer.from(JSON.stringify(p)),projection=Buffer.from(JSON.stringify(q));return{helper:Buffer.from('# fixture'),mode:'observe',idempotencyKey:f.intent.idempotencyKey,
+  spec:{...f.spec,schemaVersion:60,priorAgentVersion:'2026.9.8',applicationQualification:{priorSchemaVersion:60,reviewedPairSha256:sha256(pair),projectionSha256:sha256(projection)}},applicationEvidence:{pair,projection}};};
+ const pair={sameSchemaQualification:marker},proof={qualificationBinding:{sameSchemaQualification:marker}};
+ const valid=make(pair,proof);assert.doesNotThrow(()=>buildInstallTransportProgram(valid));
+ for(const change of [p=>delete p.sameSchemaQualification,p=>p.sameSchemaQualification.schemaVersion=59,p=>p.applicationTransition={},p=>p.sameSchemaQualification.extra=true]){
+  const p=structuredClone(pair);change(p);assert.throws(()=>buildInstallTransportProgram(make(p,proof)),/qualification-marker/);
+ }
+ const changed=structuredClone(proof);changed.qualificationBinding.sameSchemaQualification.agentVersion='2026.9.9';
+ assert.throws(()=>buildInstallTransportProgram(make(pair,changed)),/qualification-marker/);
+ assert.throws(()=>buildInstallTransportProgram({...valid,spec:{...valid.spec,applicationQualification:{...valid.spec.applicationQualification,priorSchemaVersion:55}}}),/qualification-marker/);
 });

@@ -26,7 +26,7 @@ from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, pro
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
-from recovery import APPLICATION_TRANSITION_HELPERS, validate_application_transition
+from recovery import APPLICATION_TRANSITION_HELPERS, validate_application_transition, validate_same_schema_qualification
 from workspace_key import read_workspace_key
 
 OPERATOR_SOCKET = '/run/nova-update/operator.sock'
@@ -35,6 +35,11 @@ HELPERS = {'operator_rehearsal.py', 'install.py', 'recovery.py', 'codex_log_rete
 
 
 def helper_names(review):
+    require(not ('applicationTransition' in review and 'sameSchemaQualification' in review),
+            'Mixed rehearsal qualification markers are refused.')
+    if 'sameSchemaQualification' in review:
+        validate_same_schema_qualification(review['sameSchemaQualification'])
+        return APPLICATION_TRANSITION_HELPERS
     if 'applicationTransition' not in review:
         return frozenset(HELPERS)
     validate_application_transition(review['applicationTransition'])
@@ -240,7 +245,7 @@ class Rehearsal(Driver):
                   'hostConfiguration', 'baselineDirectory', 'baselineManifestSha256', 'labParent',
                   'startupGuardFile', 'startupGuardSha256', 'startupBarrier', 'helperHashes', 'nodeSha256',
                   'sourceDependencies', 'sourceHostHashes'}
-        require(set(review) in (fields, fields | {'applicationTransition'})
+        require(set(review) in (fields, fields | {'applicationTransition'}, fields | {'sameSchemaQualification'})
                 and review['format'] == 1 and review['kind'] == 'operator-rehearsal-review',
                 'Unexpected operator rehearsal review.')
         self.job_id = fixed_uuid(review['leaseId'])
@@ -261,7 +266,11 @@ class Rehearsal(Driver):
                 'All rehearsal and verifier helpers must be pinned.')
         # This is the unchanged PRIOR rehearsal, even when it shares the new
         # helper closure. Only the separate target qualification may migrate.
-        self.from_schema = self.to_schema = 55
+        self.same_schema_qualification = (validate_same_schema_qualification(review['sameSchemaQualification'])
+                                          if 'sameSchemaQualification' in review else None)
+        require(self.same_schema_qualification is None or self.active_engine == '2026.9.8',
+                'Same-schema rehearsal requires the exact unchanged native runtime.')
+        self.from_schema = self.to_schema = 60 if self.same_schema_qualification is not None else 55
         self.application_transition = None
         for name, expected in review['helperHashes'].items():
             protected(self.bundle / name, private=True)
@@ -599,9 +608,11 @@ class Rehearsal(Driver):
                 self.verify_configuration(); self.proof('unchanged', accepted)
                 return
             with verification_scratch(self.recovery_root):
-                saved_state(self.recovery / 'workspace', self.data, restored=True)
-                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine,
-                                   catalog_runtime_root=self.prior_agent)
+                with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
+                    saved_state(self.recovery / 'workspace', self.data, restored=True)
+                    native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine,
+                                       catalog_runtime_root=self.prior_agent)
+                self.bind_same_schema_source(self.require_stopped)
                 self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
                 for index, path in enumerate(self.config_files):
                     target = self.recovery / ('protected-' + str(index))
@@ -613,9 +624,10 @@ class Rehearsal(Driver):
                 self.verify_configuration(); self.record('snapshot-verified')
                 self.mark('restore')
                 prepare_independent(self.recovery / 'workspace', self.restore, self.data, self.require_stopped)
-                saved_state(self.recovery / 'workspace', self.restore, restored=True)
-                native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine,
-                                   logical_workspace_root=self.data, catalog_runtime_root=self.prior_agent)
+                with self.application_comparison(self.recovery / 'workspace', self.restore, restored=True):
+                    saved_state(self.recovery / 'workspace', self.restore, restored=True)
+                    native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine,
+                                       logical_workspace_root=self.data, catalog_runtime_root=self.prior_agent)
                 self.trial_root = root_identity(self.restore)
                 require(shutil.disk_usage(self.recovery_root).free >= RESERVE + 2 * ALLOWANCE + self.startup_growth,
                         'Reserve and explicit startup growth must fit before any workspace swap.')
@@ -626,7 +638,9 @@ class Rehearsal(Driver):
                 self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)
                 self.mark('checking'); self.record('trial-ready')
                 self.stop_for_retention(restored_prior=True); self.require_stopped()
-                saved_state(self.recovery / 'workspace', self.data, restored=True); self.retained_native(); self.verify_configuration()
+                with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
+                    saved_state(self.recovery / 'workspace', self.data, restored=True)
+                self.retained_native(); self.verify_configuration()
                 require(inventory(self.original)[0] == read_json(self.recovery / 'snapshot-manifest.json', 64*1024**2),
                         'The preserved original changed while the trial ran.')
                 self.record('trial-retention-verified')
@@ -636,7 +650,9 @@ class Rehearsal(Driver):
                         'The returned original is not the preserved source.')
                 self.service('start'); self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)
                 self.stop_for_retention(restored_prior=True); self.require_stopped()
-                saved_state(self.recovery / 'workspace', self.data, restored=True); self.retained_native(); self.verify_configuration()
+                with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
+                    saved_state(self.recovery / 'workspace', self.data, restored=True)
+                self.retained_native(); self.verify_configuration()
                 self.record('returned-original-retention-verified')
                 self.service('start')
                 accepted = self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)

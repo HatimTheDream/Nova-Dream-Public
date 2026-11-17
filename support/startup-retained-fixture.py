@@ -15,13 +15,14 @@ def sha(value):
 
 
 # Synthetic complete capture graph; no real source paths, records or credentials.
-def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
+def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64, *, baseline=None, same_schema=False):
+    source_root = '/retained/home' if same_schema else '/var/lib/nova'
     operation = '33333333-3333-4333-8333-333333333333'
     root = PurePosixPath('/opt/nova-release-tools/qualified-startup-inputs-' + op)
     destination = root / ('home-capture-' + operation); seed = destination / 'home-seed'
     source_sha = source_files['produce-startup-inputs.py']['sha256']
     base = {'operationId': op, 'inputParent': str(root), 'sourceFiles': source_files,
-            'technicalReview': technical, 'baseline': {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
+            'technicalReview': technical, 'baseline': baseline or {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
             'buildReceipt': {'path': '/build/result.json', 'sha256': '5' * 64},
             'installedIdentity': {'path': '/installed/result.json', 'sha256': '6' * 64}}
     value = {'format': 1, 'kind': 'coherent-home-capture-input', 'operationId': operation, 'startupInput': base}
@@ -38,10 +39,12 @@ def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
                        999, 986, 1, entries[name].get('size', 4096), 4096, entries[name]['mtime_ns'], 12]
                 for name, v in values.items()}
     source_metadata, seed_metadata = metadata(physical), metadata(copied)
+    if same_schema:
+        for row in source_metadata.values(): row.append(13)
     root_before = source_metadata['.'][:5] + source_metadata['.'][8:10]
     root_seed = seed_metadata['.'][:5] + seed_metadata['.'][8:10]
     authority = dict(zip(('device', 'inode', 'mode', 'uid', 'gid'), root_before[:5]))
-    authority.update(path='/var/lib/nova', mountId=45)
+    authority.update(path=source_root, mountId=45)
     unit = 'nova-qa-home-capture-' + operation + '.service'
     properties = {'Id': unit, 'InvocationID': '1' * 32, 'LoadState': 'loaded', 'Type': 'exec',
                   'ActiveState': 'active', 'SubState': 'exited', 'Result': 'success', 'ExecMainStatus': '0', 'ExecMainCode': '1',
@@ -62,7 +65,7 @@ def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
                'selectedApp': '/apps/prior'}
     plan = {'format': 1, 'kind': 'coherent-home-capture-plan', 'operationId': operation, 'startupOperationId': op,
             'inputSha256': input_ref['sha256'], 'producerSha256': source_sha, 'startupInputSha256': sha(encoded(base)),
-            'destination': str(destination), 'authority': context, 'sourceRoot': '/var/lib/nova',
+            'destination': str(destination), 'authority': context, 'sourceRoot': source_root,
             'roles': roles, 'excludedRoles': excluded, 'contentIdentityChosenAtCapture': True,
             'requiresLiveHomeUnchangedAfterCapture': False, 'maximumCaptureSeconds': 120, 'workerSeconds': 180, 'workerStopSeconds': 30}
     plan_ref = put('homeCapture/plan', str(plan_path), plan)
@@ -70,7 +73,7 @@ def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
               'planSha256': plan_ref['sha256'], 'inputSha256': input_ref['sha256'], 'producerSha256': source_sha}
     intent_ref = put('homeCapture/intent', str(intent_path), intent)
     refmap = {str(input_path): input_ref, str(plan_path): plan_ref, str(intent_path): intent_ref}
-    ns = {'str': str, 'sum': sum, 'len': len, 'HOME': PurePosixPath('/var/lib/nova'), 'HOME_ROLES': roles, 'HOME_EXCLUDED': excluded,
+    ns = {'str': str, 'sum': sum, 'len': len, 'HOME': PurePosixPath(source_root), 'HOME_ROLES': roles, 'HOME_EXCLUDED': excluded,
           'root_before': root_before, 'root_after': root_before, 'started': 1_000_000_000, 'ended': 2_000_000_000,
           'input_path': input_path, 'plan_path': plan_path, 'intent_path': intent_path, 'payload': {'.cache/item': b'x'},
           'ref': lambda p, maximum=None: refmap[str(p)], 'value': value, 'plan': plan, 'worker': worker, 'seed': seed,
@@ -82,6 +85,7 @@ def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
         ('seed_metadata', 'seedMetadata', 'home-seed-metadata.json', seed_metadata)):
         ns[variable] = put('homeCapture/' + role, str(destination / filename), data)
     ns['capture'] = {'format': 1, 'kind': 'complete-original-home-state-capture', 'sourceRoot': str(ns['HOME']), 'roles': ns['HOME_ROLES'], 'excludedRoles': ns['HOME_EXCLUDED'], 'sourceBefore': ns['logical_before'], 'sourceAfter': ns['logical_after'], 'sourceBeforeSha256': ns['logical_before']['sha256'], 'sourceAfterSha256': ns['logical_after']['sha256'], 'seedInventorySha256': ns['inventory']['sha256'], 'sourcePhysicalSha256': ns['physical']['sha256'], 'sourcePhysical': ns['physical'], 'sourceFullMetadata': ns['full_metadata'], 'sourceUid': 999, 'sourceGid': 986, 'sourceMode': 448, 'sourceUnchanged': True, 'sourceUnchangedScope': 'capture-interval-only', 'captureStartedAtNs': ns['started'], 'captureEndedAtNs': ns['ended'], 'sourceRootBefore': ns['root_before'], 'sourceRootAfter': ns['root_after'], 'completeRoleCoverage': True, 'productionMutation': False, 'sourceSqliteOpened': False, 'independentInodes': True, 'sparseVerified': True, 'flushed': True, 'boundedCapturedBytes': sum((len(item) for item in ns['payload'].values())), 'copyWorkerProcesses': 0, 'captureInput': ns['ref'](ns['input_path'], 1024 * 1024), 'capturePlan': ns['ref'](ns['plan_path'], 4 * 1024 * 1024), 'captureIntent': ns['ref'](ns['intent_path'], 1024 * 1024)}
+    if same_schema: ns['capture']['sourceAccessTimesPreserved'] = True
     ns['capture_ref'] = put('homeCapture/sourceCapture', str(destination / 'home-source-capture.json'), ns['capture'])
     result = {'format': 1, 'kind': 'coherent-original-home-capture-result', 'operationId': ns['value']['operationId'], 'startupOperationId': ns['value']['startupInput']['operationId'], 'startupInputSha256': ns['plan']['startupInputSha256'], 'producerSha256': ns['plan']['producerSha256'], 'completed': True, 'captureInput': ns['capture']['captureInput'], 'capturePlan': ns['capture']['capturePlan'], 'captureIntent': ns['capture']['captureIntent'], 'homeSeed': {'path': str(ns['seed']), 'inventory': ns['inventory'], 'sourceCapture': ns['capture_ref']}, 'seedPhysical': ns['seed_physical'], 'seedMetadata': ns['seed_metadata'], 'seedRootIdentity': ns['identity'](ns['seed']), 'sourceRootAuthority': ns['plan']['authority']['sourceRootAuthority'], 'captureAllocationBound': ns['actual_bound'], 'worker': ns['worker'], 'sourceUnchangedScope': 'capture-interval-only', 'productionMutation': False, 'sourceSqliteOpened': False, 'actualStartupQualified': False}
     result_ref = put('homeCapture/result', str(destination / 'result.json'), result)
@@ -93,8 +97,9 @@ def emitted_capture(put, source_files, technical, op, epoch, prior_id='a'*64):
             'liveContext': live_ref, 'effectiveUnit': unit_ref, 'hostConfiguration': host_config}
 
 
-def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
+def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False, same_schema=False):
     changes = changes or {}; files = {}; roles = {}
+    application = schema_migration or same_schema
     op = '11111111-1111-4111-8111-111111111111'; epoch = '22222222-2222-4222-8222-222222222222'
     root = fixture_parent + '/' + op; evidence = root + '/evidence'; target = '/apps/target'; prior = '/apps/prior'
     scope = 'retained-same-runtime-startup-restart-restoration'
@@ -110,19 +115,19 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
                     ('qualified-startup.py', 'qualified-parent.py', 'produce-startup-inputs.py', 'contracts.py')}
     sources = {n: r['sha256'] for n, r in source_files.items()}; roles['producer'] = source_files['qualified-startup.py']
     runner = sources['qualified-startup.py']
-    if schema_migration:
+    if application:
         helpers.update({n:sha(n.encode()) for n in ('hosted_retained_configuration.py','local-retained-configuration.mjs','hosted_retained_catalog.py','hosted-retained-catalog.mjs')})
-    package = put('package', target + '/package.json', {'version': '2.8.2', **({'edition3':{'schemaVersion':60,'apiVersion':1}} if schema_migration else {})})
+    package = put('package', target + '/package.json', {'version': '2.8.2', **({'edition3':{'schemaVersion':60,'apiVersion':1}} if application else {})})
     lock = put('lock', target + '/package-lock.json', {'version': '2.8.2'})
     host = put('host', target + '/scripts/host.mjs', b'// synthetic host')
     service = {p: put(p, target + '/' + p, ('// ' + p).encode())['sha256'] for p in
         ['dist/service/apps/service/' + n for n in ('main.js', 'gateway.js', 'http.js', 'runtime.js', 'software-updates.js', 'store.js', 'update-maintenance.js', 'update-native-idle.js', 'update-native-startup.js')]}
-    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.2', 'buildVersion': '1.0.313', 'schemaVersion': 60 if schema_migration else 55, 'apiVersion': 1,
+    manifest = put('manifest', target + '/dist/candidate.json', {'version': '2.8.2', 'buildVersion': '1.0.313', 'schemaVersion': 60 if application else 55, 'apiVersion': 1,
         'artifacts': [{'path': p, 'sha256': v} for p, v in service.items()]})
     target_id = sha(files[package['path']] + files[manifest['path']]); prior_id = 'a' * 64
-    if schema_migration:
-        old_package=put('prior-package',prior+'/package.json',{'version':'2.7.11','edition3':{'schemaVersion':55,'apiVersion':1}})
-        old_manifest=put('prior-manifest',prior+'/dist/candidate.json',{'version':'2.7.11','schemaVersion':55,'apiVersion':1})
+    if application:
+        old_package=put('prior-package',prior+'/package.json',{'version':'2.7.11','edition3':{'schemaVersion':60 if same_schema else 55,'apiVersion':1}})
+        old_manifest=put('prior-manifest',prior+'/dist/candidate.json',{'version':'2.7.11','schemaVersion':60 if same_schema else 55,'apiVersion':1})
         prior_id=sha(files[old_package['path']]+files[old_manifest['path']])
     runtime = {'agentVersion': '2026.9.8', 'agent': '/runtime/openclaw', 'agentNodeSha256': 'b' * 64}
     target_binding = {'candidateId': target_id, 'version': '2.8.2', 'buildVersion': '1.0.313', 'archiveSha256': 'c' * 64,
@@ -132,16 +137,41 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
         'prior': {'candidateId': prior_id, 'version': '2.7.11'}, 'targets': {'private': target_binding, 'public': {**target_binding, 'candidateId': 'e' * 64}},
         'serviceArtifacts': service, 'hostEntrypointSha256': host['sha256'], 'dependencyGraphSha256': 'f' * 64,
         'helpers': helpers, 'runtime': runtime, 'workspaceEpoch': epoch}
-    if schema_migration:binding['applicationTransition']={'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
+    if same_schema:binding['sameSchemaQualification']={'format':1,'kind':'schema-60-same-runtime','schemaVersion':60,'apiVersion':1,'agentVersion':'2026.9.8'}
+    elif schema_migration:binding['applicationTransition']={'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
     if 'binding' in changes: changes['binding'](binding)
     negative_source = put('negativeVerifierSource', '/sources/negative-verifier.py', b'# synthetic negative fixture')
     negative_result = put('negativeVerifierResult', '/sources/negative-verifier.log', b'Synthetic test result; not production qualification')
     technical = put('technical', '/sources/independent-review.json', {'status': 'passed', 'sourceHashes': sources,
         'callContractsReviewed': True, 'isolationReviewed': True, 'heldBootstrapReviewed': True,
         'negativeVerifierEvidence': {'source': negative_source, 'result': negative_result}})
-    coherent = emitted_capture(put, source_files, technical, op, epoch, prior_id)
+    baseline = {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}}
+    baseline_rows = None
+    if same_schema:
+        capture_prefix = 'recovered-workspaces/' + epoch + '/openclaw-runtime/state/tmp/plugin-captures'
+        owner = capture_prefix + '/44444444-4444-4444-8444-444444444444/owner.sqlite'
+        row = {'kind':'directory','uid':999,'gid':986,'mode':448,'mtime_ns':10,'xattrs':{}}
+        baseline_rows = {'member-' + str(i):dict(row) for i in range(40001)}
+        baseline_rows.update({capture_prefix:dict(row), str(PurePosixPath(owner).parent):dict(row),
+                             owner:{'kind':'file','uid':999,'gid':986,'mode':384,'mtime_ns':10,'xattrs':{},'size':0,'sha256':sha(b'')}})
+        manifest_ref = put('baselineManifest', '/baseline/manifest.json', baseline_rows)
+        retained_roles = put('retainedRoles', '/retained/roles.json', {'kind':'successful-qualification-disposable-role-inventory'})
+        retained_closed = put('retainedClosure', '/retained/closed.json', {'kind':'rich-held-outside-closure','ownedProcessesAndNamespacesClosed':True})
+        retained_second = put('retainedSecondPreservation', '/retained/second.json', {'scenario':'target-restart','candidateId':prior_id,
+            'fullyStopped':True,'fullMaintainedNativeVerifier':True,'savedStoreCount':2})
+        retained_parent = put('retainedParent', '/retained/parent.json', {'kind':'actual-retained-startup-parent-verification','passed':True,
+            'targetCandidateId':prior_id,'workspaceEpoch':epoch,'disposableRoles':retained_roles,'outsideClosure':retained_closed,
+            'originalSourceAndProtectedClosuresUnchanged':True,'scenarios':[{}, {'preservation':retained_second}, {}]})
+        retained_refs = dict(retainedParent=retained_parent, retainedRoles=retained_roles, retainedClosure=retained_closed, retainedSecondPreservation=retained_second)
+        verified = put('baselineVerified', '/baseline/verified.json', {'kind':'closed-schema60-retained-source-inventory',
+            'sourceRoot':'/retained/home/workspace','sourceRootIdentity':[1,10,16832,999,986],'manifestSha256':manifest_ref['sha256'],
+            'sourceBeforeMetadataSha256':'5'*64,'sourceAfterMetadataSha256':'5'*64,'originalReferences':retained_refs,
+            'sourceOwnerClosure':{'closed':True},'sourceSqliteOpened':False,'sourceUnchanged':True,'currentLiveSnapshotQualified':False})
+        baseline = {'kind':'verified-closed-schema60-target-retained','workspace':'/retained/home/workspace','epoch':epoch,
+            'sourceApp':{'path':prior,'candidateId':prior_id,'version':'2.7.11'},'manifest':manifest_ref,'verified':verified,**retained_refs}
+    coherent = emitted_capture(put, source_files, technical, op, epoch, prior_id, baseline=baseline, same_schema=same_schema)
     review = put('review', root + '/review.json', {'format': 1, 'kind': 'actual-retained-startup-qualification', 'operationId': op,
-        'reviewReceipt': technical, 'qualificationBinding': binding, 'baseline': {'epoch': epoch, 'manifest': {'path': '/baseline/manifest.json', 'sha256': '3' * 64}},
+        'reviewReceipt': technical, 'qualificationBinding': binding, 'baseline': baseline,
         **coherent, 'runtime': runtime,
         'helpers': {'sha256': helpers}, 'prior': {'path': prior, 'candidateId': prior_id, 'version': '2.7.11'},
         'target': {'path': target, 'candidateId': target_id, 'version': '2.8.2'}, 'serviceUid': 999})
@@ -152,7 +182,9 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
     plan = put('plan', root + '/plan.json', {'format': 1, 'kind': 'actual-retained-startup-plan', 'operationId': op,
         'reviewSha256': review['sha256'], 'adapterSha256': runner, 'qualificationBinding': binding, 'workspaceEpoch': epoch,
         'helperHashes': helpers, 'nodeSha256': '9' * 64, 'fixtureDirectory': root, 'requiredFreeBytes': 100, 'observedFreeBytes': 200,
-        'scenarios': names, 'parentNamespaces': parent_ns, 'selectedRelative': selected})
+        'scenarios': names, 'parentNamespaces': parent_ns, 'selectedRelative': selected,
+        **({'baselineRootIdentity':[1,10,16832,999,986], 'fixtureStorageAuthority':{'device':2},
+            'inputHashes':{ref['path']:ref['sha256'] for ref in baseline.values() if type(ref) is dict and 'sha256' in ref}} if same_schema else {})})
     intent = put('intent', root + '/intent.json', {'format': 1, 'kind': 'execute-actual-retained-startup', 'operationId': op,
         'adapterSha256': runner, 'reviewSha256': review['sha256'], 'plan': plan, 'reviewReceiptSha256': technical['sha256'], 'fixtureDirectory': root})
     intention = put('intention', root + '/intention.json', {'intent': doc('intent'), 'plan': doc('plan'),
@@ -167,12 +199,29 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
             'cwd': app['path'], 'uid': 999, 'nodeSha256': '9' * 64, 'namespaces': child_ns})
         ready = put(name + '/ready', folder + '/ready.json', {'candidateId': app['candidateId'], 'epoch': epoch,
             'startedSha256': started['sha256'], 'processSha256': process['sha256'], 'process': doc(name + '/process'), 'readyAtSeconds': i * 100 + 20,
-            'heldReadiness': {'epoch': epoch, 'accounts': [], 'health': {'status': 'ready', 'candidateId': app['candidateId'], 'version': app['version'], 'schemaVersion': 60 if schema_migration and i!=3 else 55, 'apiVersion': 1}},
+            'heldReadiness': {'epoch': epoch, 'accounts': [], 'health': {'status': 'ready', 'candidateId': app['candidateId'], 'version': app['version'], 'schemaVersion': 60 if same_schema or schema_migration and i!=3 else 55, 'apiVersion': 1}},
             'nativeProcess': {'pid': 20 + i, 'startTicks': 2000 + i, 'uid': 999, 'namespaces': child_ns,
                 'cwd': '/var/lib/nova/workspace/' + selected + '/openclaw-runtime', 'nodeSha256': runtime['agentNodeSha256']}})
         closed = put(name + '/closed', folder + '/closed.json', {'readySha256': ready['sha256'], 'owningServiceFullyStopped': True, 'closedAtSeconds': i * 100 + 30})
+        capture_fields = {}
+        if same_schema:
+            prefix = selected + '/openclaw-runtime/state/tmp/plugin-captures'
+            inventory = {'.' if p==prefix else p[len(prefix)+1:]:dict(row) for p,row in baseline_rows.items() if p==prefix or p.startswith(prefix+'/')}
+            owner_paths = sorted(p for p in baseline_rows if p.startswith(prefix+'/') and p.endswith('/owner.sqlite'))
+            classification = {'baseline':owner_paths,'live':owner_paths}; inventories = {'baseline':inventory,'live':inventory}
+            capture_records = {}
+            for phase in ('before','closed'):
+                record = {'format':1,'kind':'closed-9.8-no-staging-capture-observation','phase':phase,'candidateId':app['candidateId'],
+                    'attempt':i,'workspaceEpoch':epoch,'selectedRelative':selected,'physicalRoots':[[1,10,16832,999,986],[2,30 if i==3 else 20,16832,999,986]],
+                    'classification':classification,'inventory':inventories,'classificationSha256':sha(encoded(classification)),
+                    'inventorySha256':sha(encoded(inventories)),'stagingCount':0}
+                ref = put(name+'/capture-'+phase, folder+'/capture-'+phase+'.json', record)
+                capture_records[phase] = doc(name+'/capture-'+phase); capture_records[phase+'Sha256'] = ref['sha256']
+            capture_fields = {'captureObservation':capture_records,'replicaConfigObservation':{'kind':'closed-selected-replica-config-observation',
+                'sourceDevice':1,'replicaDevice':2,'observations':[{'mode':'unchanged-original-record','changedFields':[]}],
+                'queueExpiry':{'ordinaryAcknowledgements':0,'authenticatedStartSeconds':100 if i==2 else i*100,'retentionDays':30}}}
         preservation = put(name + '/preservation', folder + '/preservation.json', {'scenario': name, 'candidateId': app['candidateId'],
-            'fullyStopped': True, 'fullMaintainedNativeVerifier': True, 'closedReceiptSha256': closed['sha256'], 'savedStoreCount': 2})
+            'fullyStopped': True, 'fullMaintainedNativeVerifier': True, 'closedReceiptSha256': closed['sha256'], 'savedStoreCount': 2, **capture_fields})
         controller = {'held': True, 'freshHeartbeat': True, 'lease': {'id': lease, 'phase': 'checking', 'candidateId': app['candidateId'], 'workspaceEpoch': epoch, 'stopMarked': True}}
         before = {**controller, 'held': False, 'freshHeartbeat': False}
         bootstrap = put(name + '/bootstrap', folder + '/bootstrap.json', {'format': 1, 'kind': 'actual-held-bootstrap-observation', 'operationId': op,
@@ -189,11 +238,11 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
                            'sha256': preservation['sha256'], 'bytes': len(files[preservation['path']])})
     restore_intent = put('restorationIntent', evidence + '/workspace-restoration-intent.json', {'operationId': op,
         'kind': 'restore-independent-pristine-private-state', 'independentOriginalRequired': True, 'productionMutation': False,
-        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256']})
+        'sourceManifestSha256': baseline['manifest']['sha256'], 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256']})
     restored = put('restorationCompleted', evidence + '/workspace-restoration-result.json', {'operationId': op,
         'kind': 'independent-pristine-private-restoration-completed', 'passed': True, 'intentSha256': restore_intent['sha256'],
         'targetMutatedStateRetained': True, 'independentlyRestoredPristine': True, 'productionMutation': False,
-        'sourceManifestSha256': '3' * 64, 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256'], 'independentOriginalRestored': True,
+        'sourceManifestSha256': baseline['manifest']['sha256'], 'sourceHomeInventorySha256': coherent['homeSeed']['inventory']['sha256'], 'independentOriginalRestored': True,
         'independentHomeRestored': True, 'fullPreStartSavedAndNativeEquality': True, 'workspaceInodesDisjoint': True, 'homeInodesDisjoint': True,
         'originalInventorySha256': '1' * 64, 'restoredInventorySha256': '1' * 64, 'originalHomeInventorySha256': '2' * 64, 'restoredHomeInventorySha256': '2' * 64})
     child = put('child', evidence + '/child-result.json', {'format': 1, 'kind': 'actual-retained-startup-result', 'operationId': op,
@@ -214,7 +263,8 @@ def fixture(changes=None, *, fixture_parent='/fixture', schema_migration=False):
         'qualificationBinding': binding, 'sourceFiles': source_files, 'review': review, 'reviewSha256': review['sha256'], 'originalPlan': plan,
         'executionIntent': intent, 'technicalReview': technical, 'originalIntention': intention, 'childResult': child, 'childResultSha256': child['sha256'],
         'outsideClosure': closure, 'restorationIntent': restore_intent, 'restorationCompleted': restored, 'scenarios': scenario_refs,
-        'workerIdentity': worker, 'effectiveProfile': profile})
+        'workerIdentity': worker, 'effectiveProfile': profile,
+        **({'baselineLineage':'verified-closed-schema60-target-retained'} if same_schema else {})})
     def read(path, maximum):
         raw = files[path]
         if len(raw) > maximum: raise RuntimeError('synthetic-read-bound')

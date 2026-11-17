@@ -18,6 +18,7 @@ import {materializeRetainedFeedDependencies,retainedAcceptedFeedDependencies,ret
 import {verifyInstalledIdentity} from './release-delivery-installed-identity.mjs';
 import {validateInstalledIdentityRequest} from './release-delivery-assistant-full.mjs';
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
+import {existingAssistantReplySchema,existingReplyOriginal,verifyExistingReplyAcceptance,existingReplyCoverage,EXISTING_REPLY_MODE} from './release-delivery-existing-reply.mjs';
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import { postinstallCoverageSchema, postinstallCoverage, currentPostinstallRecovery, verifyScopedBrowserAcceptance, verifyPostinstallAuthority } from './release-delivery-postinstall-recovery.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
@@ -31,15 +32,16 @@ const ref=z.object({path,sha256:hash}).strict();
 const source=z.object({root:path,repository:z.string(),branch:z.literal('main')}).strict();
 export const deliveryStartInputSchema=z.object({format:z.literal(1),operationId:z.uuid(),profile:ref,
  sourceCommits:z.object({private:commit,public:commit}).strict(),outputRoot:path,timeline:releaseTimelineSchema,
- predecessorRecovery:predecessorRecoverySchema.optional(),observationBudgetMs:z.number().int().min(60000).max(86400000)}).strict();
+ predecessorRecovery:predecessorRecoverySchema.optional(),existingAssistantReply:existingAssistantReplySchema.optional(),observationBudgetMs:z.number().int().min(60000).max(86400000)}).strict();
 export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targetIdentity:hash,
  sources:z.object({private:source,public:source}).strict(),
  accepted:z.object({identity:ref,result:ref,pair:ref,bundle:ref,feedDependencies:z.object({archive:ref,metadata:ref}).strict().optional()}).strict(),
  qualificationEvidence:z.array(ref).max(32).default([]),
   operatorProvenance:ref.optional(),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
-  sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional(),
+  sourceCandidates:z.object({private:ref,public:ref}).strict(),assistantAcceptanceMode:z.literal(EXISTING_REPLY_MODE).optional(),nativeRunActivityCoverage:z.literal('unverified-retained-history').optional(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional(),
   acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional(),mailActivityPolicy:postinstallCoverageSchema.shape.mailActivityPolicy,mailFunctionalityCoverage:postinstallCoverageSchema.shape.mailFunctionalityCoverage}).strict()
+  .refine(value=>value.nativeRunActivityCoverage===undefined||value.assistantAcceptanceMode===EXISTING_REPLY_MODE,'Retained history activity coverage requires existing reply mode.')
   .refine(value=>value.acceptanceScope ? value.browserAccepted&&postinstallCoverageSchema.safeParse({acceptanceScope:value.acceptanceScope,originalTransitionCoverage:value.originalTransitionCoverage,transitionCoverageGaps:value.transitionCoverageGaps,...(value.mailActivityPolicy===undefined?{}:{mailActivityPolicy:value.mailActivityPolicy}),...(value.mailFunctionalityCoverage===undefined?{}:{mailFunctionalityCoverage:value.mailFunctionalityCoverage})}).success : value.originalTransitionCoverage===undefined&&value.transitionCoverageGaps===undefined&&value.mailFunctionalityCoverage===undefined&&value.mailActivityPolicy===undefined,'Explicit browser recovery coverage required.')
   .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
     'Accepted browser evidence must be complete and separate from saved Assistant evidence.').optional()}).strict();
@@ -92,6 +94,11 @@ export function validateAcceptedProfile(profile,target,{candidate=verifyCandidat
  if(target.full?.host)need(same(target.full.host.hostConfiguration,request.runtime.hostConfig),'accepted-host-configuration-changed');
  for(const r of profile.qualificationEvidence)readEvidenceFile(r,{maximum:2*1024**2});
  if(profile.previousDelivery)for(const r of [profile.previousDelivery.assistantReceipt,profile.previousDelivery.publicationReceipt,...Object.values(profile.previousDelivery.sourceCandidates)])readEvidenceFile(r,{maximum:2*1024**2});
+ if(profile.previousDelivery){
+  const assistant=json(profile.previousDelivery.assistantReceipt),coverage=existingReplyCoverage(assistant);
+  need(same(profile.previousDelivery.assistantAcceptanceMode,coverage.assistantAcceptanceMode)&&same(profile.previousDelivery.nativeRunActivityCoverage,coverage.nativeRunActivityCoverage),'accepted-assistant-mode-changed');
+  if(coverage.assistantAcceptanceMode){need(assistant.deliveryOperationId===profile.previousDelivery.operationId&&same(assistant.observationInput.installedHealth,identity.health),'accepted-existing-reply-installation-changed');verifyExistingReplyAcceptance(assistant,assistant.observationInput);}
+ }
  if(profile.previousDelivery?.browserAccepted){
   const prior=profile.previousDelivery,input=json(prior.browserInput),output=json(prior.browserReceipt);
   need(input.operationId===prior.operationId&&same(input.assistant,json(prior.assistantReceipt)),'accepted-browser-original-delivery-changed');
@@ -206,6 +213,7 @@ export async function deriveDeliveryConfiguration(input,profile,{command=fixedCo
 export async function initializeDeliveryInput(inputPath,{clock=Date.now,protect=validateJournalDirectory,derive=deriveDeliveryConfiguration,afterWrite=()=>{}}={}){
  const raw=readReleaseInputFile(resolve(inputPath)),input=deliveryStartInputSchema.parse(JSON.parse(raw)),inputSha256=sha256(encoded(input));
  const profile=deliveryProfileSchema.parse(json(input.profile,256*1024));
+ if(input.existingAssistantReply)existingReplyOriginal(input.existingAssistantReply,{profile});
  for(const source of Object.values(profile.sources)){
   const nested=relative(resolve(source.root),resolve(input.outputRoot));
   need(nested!==''&&(nested.startsWith('..'+posix.sep)||nested.startsWith('..\\')||isAbsolute(nested)),'private-output-overlaps-source-checkout');
@@ -223,7 +231,7 @@ export async function initializeDeliveryInput(inputPath,{clock=Date.now,protect=
   const prepared=await derive(input,profile,{clock});assessTimeline(input.timeline,{nowMs:clock()});
   const targetRaw=encoded(prepared.target),target=reference(join(directory,'target.json'),targetRaw);
   if(input.predecessorRecovery)await verifyRecoveryPredecessor(input.predecessorRecovery,prepared.operation,{targetIdentity:prepared.targetIdentity});
-  const descriptor=deliveryDescriptorSchema.parse({format:1,operation:prepared.operation,sources:prepared.sources,target,targetIdentity:prepared.targetIdentity,adapterIdentity:prepared.adapterIdentity,timeline:input.timeline,observationBudgetMs:input.observationBudgetMs,...(input.predecessorRecovery?{predecessorRecovery:input.predecessorRecovery}:{})});
+  const descriptor=deliveryDescriptorSchema.parse({format:1,operation:prepared.operation,sources:prepared.sources,target,targetIdentity:prepared.targetIdentity,adapterIdentity:prepared.adapterIdentity,timeline:input.timeline,observationBudgetMs:input.observationBudgetMs,...(input.predecessorRecovery?{predecessorRecovery:input.predecessorRecovery}:{}),...(input.existingAssistantReply?{existingAssistantReply:input.existingAssistantReply}:{})});
   record={format:1,kind:'nova-delivery-initialization',input,inputSha256,profile:input.profile,adapterIdentity:prepared.adapterIdentity,directory,journalDirectory,
    target:{reference:target,value:prepared.target},descriptor:{reference:reference(join(directory,'descriptor.json'),encoded(descriptor)),value:descriptor}};
   exactFile(recordPath,encoded(record));afterWrite('initialization');
@@ -233,6 +241,7 @@ export async function initializeDeliveryInput(inputPath,{clock=Date.now,protect=
   &&same(parsed.target,record.target.reference)&&record.target.reference.path===join(directory,'target.json')&&record.descriptor.reference.path===join(directory,'descriptor.json')
   &&sha256(encoded(record.target.value))===record.target.reference.sha256&&sha256(encoded(parsed))===record.descriptor.reference.sha256,'original-initialization-record-changed');
  need(same(parsed.predecessorRecovery,input.predecessorRecovery),'original-predecessor-lineage-changed');
+ need(same(parsed.existingAssistantReply,input.existingAssistantReply),'original-existing-reply-input-changed');
  if(input.predecessorRecovery)await verifyRecoveryPredecessor(input.predecessorRecovery,parsed.operation,{targetIdentity:parsed.targetIdentity});
  exactFile(record.target.reference.path,encoded(record.target.value));afterWrite('target');
  need(deliveryTargetIdentity(parsed)===parsed.targetIdentity&&parsed.targetIdentity===profile.targetIdentity,'configured-target-identity-changed');
@@ -246,6 +255,12 @@ function retainedSavedReply(journal,descriptor,parent,prior){
  const id=descriptor.operation.id,input=assistantAcceptanceInput({descriptor,prior});
  need(parent.current.externalId===id&&same(parent.input,input)&&parent.inputSha256===sha256(canonical(input))
   &&Number.isSafeInteger(parent.createdAtMs),'successor-assistant-parent-changed');
+ if(input.existingAssistantReply){
+  const child=journal.deliveryPhase(id,'assistant/existing-reply');
+  need(child?.state==='completed'&&child.validation?.state!=='failed'&&child.current.externalId===child.key&&child.input.parentKey===parent.key&&child.input.parentInputSha256===parent.inputSha256&&child.input.deadlineAtMs===parent.createdAtMs+300000&&child.input.priorResultsSha256===sha256(canonical({}))&&same(child.input.payload,{original:input.existingAssistantReply})&&same(json(child.current.receipt),child.current.output),'successor-existing-reply-child-changed');
+  need(parent.current.output.observationKey===parent.key&&parent.current.output.observationChildKey===child.key&&parent.current.output.observationStartedAtMs===parent.createdAtMs&&same(parent.current.output.observationReceipt,child.current.receipt),'successor-existing-reply-parent-changed');
+  verifyExistingReplyAcceptance(parent.current.output,input);return;
+ }
  const children={};
  for(const name of ['session','create','draft','submit','saved-reply']){
   const child=journal.deliveryPhase(id,'assistant/'+name);
@@ -353,7 +368,7 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
    browserReceipt:normalizedRef(browser.current.receipt),...coverage};
  }
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
-  publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...browserEvidence};
+  publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...existingReplyCoverage(accepted.current.output),...browserEvidence};
  const operatorGrant=journal.deliveryOperatorContinuation?.(id);
  const postinstall=currentPostinstallRecovery(journal,id);
  if(postinstall){verifyPostinstallAuthority(journal,id);}
@@ -365,7 +380,7 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.
  const output=persistSuccessorProfile(directory,profile,postinstall,browserEvidence);
- return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
+ return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...existingReplyCoverage(accepted.current.output),...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
 }
 
 /** Immutable write tail only. The caller completes all accepted-profile and authority validation first. */

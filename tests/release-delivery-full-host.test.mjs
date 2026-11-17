@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fullHostIdentity,fullHostOptionsSchema,fullFactsSpec,verifyFullFacts,verifyFullCompletion,verifyFullPremaintenance,collectFullOnlineCapacity,createFullCapacityAdapter,buildFullHostProgram,FULL_HELPERS} from '../scripts/release-delivery-full-host.mjs';
+import {fullHostIdentity,fullHostOptionsSchema,fullFactsSpec,verifyFullFacts,verifyFullCompletion,verifyFullPremaintenance,collectFullOnlineCapacity,createFullCapacityAdapter,buildFullHostProgram,FULL_HELPERS,FULL_APPLICATION_HELPERS,FULL_SAME_SCHEMA60_HELPERS,fullHelpersForQualification} from '../scripts/release-delivery-full-host.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
 const copy=v=>structuredClone(v);
 const {facts,values,completed,key,options,descriptor}=fullHostFixture();
@@ -57,4 +57,19 @@ test('changed raw saved-work proof and unsupported programs fail closed',()=>{
   assert.ok(program.includes('hashlib.sha256(s).hexdigest()'));assert.ok(program.includes('signal.alarm(110)'));
   assert.ok(program.indexOf('hashlib.sha256(s).hexdigest()')<program.indexOf('exec(compile'));
   assert.equal(Object.keys(FULL_HELPERS).length,7);
+});
+
+test('same schema60 facts use the distinct reviewed closure and bind the current review marker',()=>{
+ const marker={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
+ const spec=fullFactsSpec(descriptor,options,key,null,marker),v=copy(facts);
+ assert.deepEqual(spec.sameSchemaQualification,marker);assert.equal(Object.hasOwn(spec,'applicationTransition'),false);
+ assert.deepEqual(spec.helperHashes,FULL_SAME_SCHEMA60_HELPERS);assert.notDeepEqual(spec.helperHashes,FULL_APPLICATION_HELPERS);
+ v.base=spec.base;v.review.leaseId=spec.leaseId;v.review.helperHashes=copy(spec.helperHashes);v.review.sameSchemaQualification=marker;
+ assert.equal(verifyFullFacts(v,spec,v.observedAtMilliseconds).candidateId,spec.base.candidateId);
+ for(const change of [x=>delete x.review.sameSchemaQualification,x=>x.review.sameSchemaQualification={...marker,schemaVersion:55},
+  x=>x.review.applicationTransition={},x=>x.review.helperHashes=copy(FULL_APPLICATION_HELPERS),x=>x.operatorStatus.held=true]){
+  const bad=copy(v);change(bad);assert.throws(()=>verifyFullFacts(bad,spec,v.observedAtMilliseconds));
+ }
+ for(const bad of [{...marker,apiVersion:2},{...marker,agentVersion:'2026.9.9'},{...marker,passed:true}])assert.throws(()=>fullHelpersForQualification(bad));
+ assert.deepEqual(fullHelpersForQualification(),FULL_HELPERS);
 });

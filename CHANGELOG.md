@@ -1,3 +1,9 @@
+## [2.28.40] - 2026-11-17
+
+- Reuse a bounded set of timezone formatters when viewing and editing Tasks, preserving dates, daylight-saving behavior and saved task history.
+- Let release checks observe a verified saved Assistant reply without submitting another model request, while checking current app, account and browser identity.
+- Verify saved work, restart and rollback when updating an installation already on the current database version.
+
 ## [2.28.39] - 2026-11-13
 
 - Run Windows release permission checks as readable, fixed PowerShell commands while preserving the existing access restrictions.

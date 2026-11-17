@@ -11,6 +11,16 @@ const identity=z.object({platform:z.literal('linux'),arch:z.literal('x64'),nodeV
 export const applicationTransitionSchema=z.object({format:z.literal(1),kind:z.literal('schema-55-to-60-same-runtime'),
   fromSchemaVersion:z.literal(55),toSchemaVersion:z.literal(60),apiVersion:z.literal(1),
   fromAgentVersion:z.literal('2026.9.8'),toAgentVersion:z.literal('2026.9.8')}).strict();
+export const sameSchemaQualificationSchema=z.object({format:z.literal(1),kind:z.literal('schema-60-same-runtime'),
+ schemaVersion:z.literal(60),apiVersion:z.literal(1),agentVersion:z.literal('2026.9.8')}).strict();
+/** Exact discriminator only; every consumer still requires the original startup proof. */
+export function startupQualificationMarker(binding){
+ const transition=Object.hasOwn(binding,'applicationTransition'),sameSchema=Object.hasOwn(binding,'sameSchemaQualification');
+ if(transition&&sameSchema)throw Error('startup-qualification-marker-conflict');
+ return transition?applicationTransitionSchema.parse(binding.applicationTransition):sameSchema?sameSchemaQualificationSchema.parse(binding.sameSchemaQualification):null;
+}
+export const qualificationMarkerFields=marker=>marker===null?{}:marker.kind==='schema-60-same-runtime'
+ ?{sameSchemaQualification:sameSchemaQualificationSchema.parse(marker)}:{applicationTransition:applicationTransitionSchema.parse(marker)};
 export const applicationDependencyDescriptionSchema=z.object({format:z.literal(1),archiveBytes:z.number().int().positive().max(512*1024**2),archiveSha256:hash,
  expandedBytes:z.number().int().positive().max(2*1024**3),fileCount:z.number().int().positive().max(200000),packageLockSha256:hash,dependencyGraphSha256:hash,
  platform:z.literal('linux'),arch:z.literal('x64'),nodeVersion:z.literal('22.23.2'),nodeAbi:z.literal(127)}).strict();
@@ -23,12 +33,12 @@ const receiptSchema=z.object({format:z.literal(1),kind:z.literal('qualified-appl
  execution:z.object({probeSha256:z.literal(DEPENDENCY_PACK_PROBE_SHA),identity,exitCode:z.literal(0)}).strict(),planRef:hostRef,intentRef:hostRef,closureRef:hostRef}).strict();
 const need=(v,r)=>{if(!v)throw Error(r);};
 export function verifyQualifiedApplicationDependencies(input,binding,{producerSha256,packageSha256,packageLockSha256}){
- applicationTransitionSchema.parse(binding.applicationTransition);
+ const marker=startupQualificationMarker(binding);need(marker,'qualified-dependencies-startup-binding-changed');
  const refs=qualifiedDependenciesSchema.parse(input),raw=frontendRegular(refs.archive.path,512*1024**2);
  need(sha256(raw)===refs.archive.sha256,'qualified-dependency-archive-hash-changed');
  const metadataRaw=readEvidenceFile(refs.metadata,{maximum:65536}),description=applicationDependencyDescriptionSchema.parse(JSON.parse(metadataRaw));
  const receipt=receiptSchema.parse(JSON.parse(readEvidenceFile(refs.execution,{maximum:1024**2})));
- need(binding.applicationTransition?.kind==='schema-55-to-60-same-runtime'&&same(binding.applicationDependencies,description)
+ need(same(binding.applicationDependencies,description)
   &&binding.dependencyGraphSha256===description.dependencyGraphSha256,'qualified-dependencies-startup-binding-changed');
  need(description.archiveSha256===refs.archive.sha256&&description.archiveBytes===raw.length
   &&same(receipt.description,description)&&receipt.archive.sha256===refs.archive.sha256&&receipt.archive.bytes===raw.length

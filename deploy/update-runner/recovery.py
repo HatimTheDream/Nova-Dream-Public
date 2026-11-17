@@ -32,6 +32,7 @@ SESSION_BINDINGS_VERIFIER_SHA256 = '1d51c2af378f27f21c9580a367779ab9192c159c600f
 _VERIFICATION_SCRATCH = ContextVar('nova_verification_scratch', default=None)
 _LOCAL_WINDOWS = ContextVar('nova_local_windows_retained', default=None)
 _APPLICATION_TRANSITION = ContextVar('nova_hosted_application_transition', default=None)
+_SAME_SCHEMA_QUALIFICATION = ContextVar('nova_hosted_same_schema_qualification', default=None)
 APPLICATION_TRANSITION_HELPERS = frozenset({'install.py', 'recovery.py', 'operator_rehearsal.py',
     'app_dependencies.py', 'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs',
     'hosted_retained_configuration.py', 'local-retained-configuration.mjs',
@@ -55,14 +56,66 @@ def current_application_transition():
     return None if scope is None else {**scope, 'transition': dict(scope['transition'])}
 
 
-def validate_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
-    """Consume the fixed collector's original, hash-bound settled projection.
+def validate_same_schema_qualification(value):
+    """One non-migration schema60 contract; shape alone grants no authority."""
+    expected = {'format': 1, 'kind': 'schema-60-same-runtime', 'schemaVersion': 60,
+                'apiVersion': 1, 'agentVersion': '2026.9.8'}
+    require(type(value) is dict and value == expected
+            and all(type(value[key]) is type(item) for key, item in expected.items()),
+            'The same-schema qualification is outside its reviewed exact contract.')
+    return dict(expected)
 
-    The caller authenticates the protected projection file and every helper
-    byte before calling. A synthetic migration or qualification plan is not a
-    completed proof and cannot satisfy this contract.
-    """
-    transition = validate_application_transition(pair.get('applicationTransition'))
+
+def current_same_schema_qualification():
+    scope = _SAME_SCHEMA_QUALIFICATION.get()
+    return None if scope is None else {**scope, 'sameSchemaQualification': dict(scope['sameSchemaQualification'])}
+
+
+def current_hosted_application_comparison():
+    """Detached exact-root scope shared by the complete retained-state verifier."""
+    require(not (_APPLICATION_TRANSITION.get() is not None and _SAME_SCHEMA_QUALIFICATION.get() is not None),
+            'Mixed application comparison authority is refused.')
+    return current_application_transition() or current_same_schema_qualification()
+
+
+@contextlib.contextmanager
+def hosted_same_schema_qualification(value, before_root, after_root, *, restored=False):
+    qualification = validate_same_schema_qualification(value)
+    require(_SAME_SCHEMA_QUALIFICATION.get() is None and _APPLICATION_TRANSITION.get() is None
+            and _LOCAL_WINDOWS.get() is None and type(restored) is bool,
+            'Nested or mixed same-schema qualification authority is refused.')
+    before, after = pathlib.Path(before_root), pathlib.Path(after_root)
+    require(all(path.is_absolute() and path.resolve(strict=True) == path and path.is_dir()
+                and not path.is_symlink() for path in (before, after))
+            and before != after and not before.is_relative_to(after) and not after.is_relative_to(before),
+            'Same-schema comparison requires independent canonical roots.')
+    scope = {'sameSchemaQualification': qualification, 'beforeRoot': before, 'afterRoot': after,
+             'fromSchemaVersion': 60, 'toSchemaVersion': 60, 'restored': restored}
+    token = _SAME_SCHEMA_QUALIFICATION.set(scope)
+    try:
+        yield current_same_schema_qualification()
+    finally:
+        _SAME_SCHEMA_QUALIFICATION.reset(token)
+
+
+def validate_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
+    """Legacy migration qualification retains its exact proof checks."""
+    require('sameSchemaQualification' not in pair, 'Mixed application qualification markers are refused.')
+    return _validate_application_qualification(pair, proof, marker_name='applicationTransition',
+        transition=validate_application_transition(pair.get('applicationTransition')),
+        prior_id=prior_id, target_id=target_id, workspace_epoch=workspace_epoch, helper_hashes=helper_hashes)
+
+
+def validate_same_schema_application_qualification(pair, proof, *, prior_id, target_id, workspace_epoch, helper_hashes):
+    """The non-migration marker requires the same complete settled projection."""
+    require('applicationTransition' not in pair, 'Mixed application qualification markers are refused.')
+    return _validate_application_qualification(pair, proof, marker_name='sameSchemaQualification',
+        transition=validate_same_schema_qualification(pair.get('sameSchemaQualification')),
+        prior_id=prior_id, target_id=target_id, workspace_epoch=workspace_epoch, helper_hashes=helper_hashes)
+
+
+def _validate_application_qualification(pair, proof, *, marker_name, transition, prior_id, target_id, workspace_epoch, helper_hashes):
+    """Caller authenticates the fixed projection and all helper bytes first."""
     qualification = pair.get('startupQualification')
     require(type(qualification) is dict and set(qualification) == {'projection', 'binding'}
             and type(qualification['projection']) is dict
@@ -73,7 +126,8 @@ def validate_application_qualification(pair, proof, *, prior_id, target_id, work
     binding = qualification['binding']
     require(type(binding) is dict and binding.get('format') == 1
             and binding.get('kind') == 'same-runtime-startup-candidate-binding'
-            and binding.get('applicationTransition') == transition
+            and binding.get(marker_name) == transition
+            and ('sameSchemaQualification' if marker_name == 'applicationTransition' else 'applicationTransition') not in binding
             and binding.get('workspaceEpoch') == workspace_epoch
             and binding.get('prior', {}).get('candidateId') == prior_id
             and binding.get('targets', {}).get('private', {}).get('candidateId') == target_id
@@ -137,7 +191,7 @@ def hosted_application_transition(value, before_root, after_root, *, restored=Fa
     context itself grants no process, migration, or filesystem mutation rights.
     """
     transition = validate_application_transition(value)
-    require(_APPLICATION_TRANSITION.get() is None and _LOCAL_WINDOWS.get() is None
+    require(_APPLICATION_TRANSITION.get() is None and _SAME_SCHEMA_QUALIFICATION.get() is None and _LOCAL_WINDOWS.get() is None
             and type(restored) is bool, 'Nested or mixed application transition authority is refused.')
     before, after = pathlib.Path(before_root), pathlib.Path(after_root)
     require(all(path.is_absolute() and path.resolve(strict=True) == path and path.is_dir()
@@ -155,7 +209,7 @@ def hosted_application_transition(value, before_root, after_root, *, restored=Fa
 
 
 def application_schema(root):
-    scope = _APPLICATION_TRANSITION.get()
+    scope = current_hosted_application_comparison()
     if scope is None:
         return 60 if _LOCAL_WINDOWS.get() is not None else 55
     root = pathlib.Path(root)
@@ -932,7 +986,7 @@ def saved_state(snapshot, live, restored=False):
     before_paths = paths(snapshot)
     require(before_paths and before_paths == paths(live), 'The saved database set changed.')
     reports = []
-    scope = _APPLICATION_TRANSITION.get()
+    scope = current_hosted_application_comparison()
     selected_relative = None
     if scope is not None:
         require(pathlib.Path(snapshot) == scope['beforeRoot'] and pathlib.Path(live) == scope['afterRoot']
@@ -947,7 +1001,8 @@ def saved_state(snapshot, live, restored=False):
         with contextlib.closing(database(old, True)) as before, contextlib.closing(database(current, True)) as after:
             require(before.execute('pragma quick_check').fetchone()[0] == after.execute('pragma quick_check').fetchone()[0] == 'ok', 'Saved database integrity failed.')
             old_schema, new_schema = before.execute('pragma user_version').fetchone()[0], after.execute('pragma user_version').fetchone()[0]
-            allowed = {60} if _LOCAL_WINDOWS.get() is not None else {53, 55}
+            allowed = ({60} if _LOCAL_WINDOWS.get() is not None else
+                       {53, 55, 60} if _SAME_SCHEMA_QUALIFICATION.get() is not None else {53, 55})
             expected_schema = scope['toSchemaVersion'] if scope is not None and relative == selected_relative else old_schema
             require(old_schema in allowed and new_schema == expected_schema,
                     'An app-only update changed an unqualified saved database schema.')
@@ -1283,7 +1338,7 @@ def begin_capture_retention(snapshot, live, epoch, runtime_root, owner, previous
     native_capture_owner_paths(snapshot, selected, '2026.9.8', staged=staged)
     if not staged:
         return None
-    require(confirmed == epoch and set(schemas) in ({55}, {55, 60}), 'Unknown capture application binding.')
+    require(confirmed == epoch and set(schemas) in ({55}, {55, 60}, {60}), 'Unknown capture application binding.')
     capture_live_selection(snapshot, live, selected, epoch, schemas)
     attest_native_writer_sources(runtime_root, _CAPTURE_RETIREMENT_SOURCES)
     native_capture_owner_paths(live, selected, '2026.9.8')
@@ -1926,6 +1981,17 @@ def native_runtime_configuration(snapshot, live, selected, from_version='2026.9.
     local = _LOCAL_WINDOWS.get()
     if local is not None:
         return local.configuration(selected)
+    same = current_same_schema_qualification()
+    if same is not None and hosted_configuration_authority is not None:
+        require(from_version == to_version == '2026.9.8' and logical_workspace_root is None,
+                'Same-schema configuration derivation needs the exact hosted runtime.')
+        from hosted_retained_configuration import derive_same_schema_configuration
+        return derive_same_schema_configuration(snapshot, live, selected, node=session_binding_node,
+            app_releases=app_releases, session_binding_key=session_binding_key,
+            startup_window=startup_window, catalog_runtime_root=catalog_runtime_root,
+            authority=hosted_configuration_authority)
+    # Before any startup, the same-schema context changes schema admission only;
+    # absent derivation authority retains the existing strict configuration comparison.
     application = _APPLICATION_TRANSITION.get()
     if application is not None and not application['restored']:
         require(from_version == to_version == '2026.9.8' and logical_workspace_root is None
@@ -3076,8 +3142,10 @@ def retained_plugin_index(before, after, node, after_path, from_version='2026.9.
             and old_index['warning'] == new_index['warning'], 'Native plugin index authority changed.')
     if from_version == to_version:
         require(new_index['generatedAtMs'] >= old_index['generatedAtMs'], 'Native plugin index generation moved backwards.')
-        application = current_application_transition()
-        if application is not None and not application['restored']:
+        application = current_hosted_application_comparison()
+        settled_same = (current_same_schema_qualification() is not None
+                        and configuration is not None and configuration.get('sameSchemaDerivation') is True)
+        if application is not None and (settled_same or ('transition' in application and not application['restored'])):
             require(from_version == '2026.9.8' and configuration is not None and startup_window is not None,
                     'The application catalog transition needs its exact settled native inputs.')
             from hosted_retained_catalog import qualify_application_catalog
@@ -3654,7 +3722,7 @@ def retained_queue_acknowledgements(before, after, relative, selected, runtime_r
     old, current = rows(before, table), rows(after, table)
     if old <= current:
         return 0
-    scope = current_application_transition()
+    scope = current_hosted_application_comparison()
     require(scope is not None and _LOCAL_WINDOWS.get() is None and os.name == 'posix'
             and pathlib.Path(relative) == pathlib.Path(selected) / 'openclaw-runtime/state/state/openclaw.sqlite'
             and isinstance(before, CopiedDatabase) and isinstance(after, CopiedDatabase)
