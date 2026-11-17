@@ -19,7 +19,7 @@ import {verifyInstalledIdentity} from './release-delivery-installed-identity.mjs
 import {validateInstalledIdentityRequest} from './release-delivery-assistant-full.mjs';
 import {assistantAcceptanceInput,verifySavedAssistantReply} from './release-delivery-assistant.mjs';
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
-import { postinstallCoverageSchema, postinstallCoverage, verifyScopedBrowserAcceptance, verifyPostinstallAuthority } from './release-delivery-postinstall-recovery.mjs';
+import { postinstallCoverageSchema, postinstallCoverage, currentPostinstallRecovery, verifyScopedBrowserAcceptance, verifyPostinstallAuthority } from './release-delivery-postinstall-recovery.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
 import {FULL_HELPERS,priorFailedInstallationAuthority} from './release-delivery-full-host.mjs';
 import {pairedFullPublicationReceipt} from './release-delivery-full-publication.mjs';
@@ -39,8 +39,8 @@ export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targ
   operatorProvenance:ref.optional(),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
   sourceCandidates:z.object({private:ref,public:ref}).strict(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional(),
-  acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional()}).strict()
-  .refine(value=>value.acceptanceScope ? value.browserAccepted&&postinstallCoverageSchema.safeParse({acceptanceScope:value.acceptanceScope,originalTransitionCoverage:value.originalTransitionCoverage,transitionCoverageGaps:value.transitionCoverageGaps}).success : value.originalTransitionCoverage===undefined&&value.transitionCoverageGaps===undefined,'Explicit browser recovery coverage required.')
+  acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional(),mailActivityPolicy:postinstallCoverageSchema.shape.mailActivityPolicy,mailFunctionalityCoverage:postinstallCoverageSchema.shape.mailFunctionalityCoverage}).strict()
+  .refine(value=>value.acceptanceScope ? value.browserAccepted&&postinstallCoverageSchema.safeParse({acceptanceScope:value.acceptanceScope,originalTransitionCoverage:value.originalTransitionCoverage,transitionCoverageGaps:value.transitionCoverageGaps,...(value.mailActivityPolicy===undefined?{}:{mailActivityPolicy:value.mailActivityPolicy}),...(value.mailFunctionalityCoverage===undefined?{}:{mailFunctionalityCoverage:value.mailFunctionalityCoverage})}).success : value.originalTransitionCoverage===undefined&&value.transitionCoverageGaps===undefined&&value.mailFunctionalityCoverage===undefined&&value.mailActivityPolicy===undefined,'Explicit browser recovery coverage required.')
   .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
     'Accepted browser evidence must be complete and separate from saved Assistant evidence.').optional()}).strict();
 const need=(v,r)=>{if(!v)throw Error(r);};
@@ -355,8 +355,8 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
   publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...browserEvidence};
  const operatorGrant=journal.deliveryOperatorContinuation?.(id);
- const postinstall=journal.deliveryPostinstallRecovery?.(id);
- if(postinstall){verifyPostinstallAuthority(journal,id);profile.operatorProvenance=exactFile(join(directory,'accepted-operator-postinstall-recovery.json'),encoded(postinstall));}
+ const postinstall=currentPostinstallRecovery(journal,id);
+ if(postinstall){verifyPostinstallAuthority(journal,id);}
  else if(operatorGrant){
   await operatorAuthority({journal,operationId:id});
   profile.operatorProvenance=exactFile(join(directory,'accepted-operator-continuation.json'),encoded(operatorGrant));
@@ -364,6 +364,15 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  profile.target=exactFile(join(directory,'successor-target.json'),encoded(deliveryTargetSchema.parse(target)));
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.
- const output=exactFile(join(directory,browserEvidence.acceptanceScope?'successor-profile-browser-recovery-accepted.json':browserEvidence.browserAccepted?'successor-profile-browser-accepted.json':'successor-profile.json'),encoded(deliveryProfileSchema.parse(profile)));
+ const output=persistSuccessorProfile(directory,profile,postinstall,browserEvidence);
  return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
+}
+
+/** Immutable write tail only. The caller completes all accepted-profile and authority validation first. */
+export function persistSuccessorProfile(directory,profile,postinstall,browserEvidence){
+ need(!postinstall?.correction||(browserEvidence.browserAccepted===true&&profile.previousDelivery?.browserAccepted===true&&browserEvidence.acceptanceScope===postinstall.proof.acceptanceScope&&browserEvidence.acceptanceScope==='current-installed-browser-crash-recovery'&&browserEvidence.mailActivityPolicy==='blocked'&&browserEvidence.mailFunctionalityCoverage==='unverified'&&same(postinstallCoverage(browserEvidence),postinstallCoverage(profile.previousDelivery))),'postinstall-correction-export-requires-accepted-browser');
+ const value={...profile};
+ if(postinstall)value.operatorProvenance=exactFile(join(directory,postinstall.correction?'accepted-operator-postinstall-correction.json':'accepted-operator-postinstall-recovery.json'),encoded(postinstall));
+ const name=postinstall?.correction?'successor-profile-browser-mail-excluded-accepted.json':browserEvidence.acceptanceScope?'successor-profile-browser-recovery-accepted.json':browserEvidence.browserAccepted?'successor-profile-browser-accepted.json':'successor-profile.json';
+ return exactFile(join(directory,name),encoded(deliveryProfileSchema.parse(value)));
 }

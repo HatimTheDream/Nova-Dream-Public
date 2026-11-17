@@ -6,10 +6,11 @@ import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {runInstallTransport,releaseTransportSchema} from './release-adapters.mjs';
 import {canonicalBrowser,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
 import {verifyDocumentIdentity} from './release-delivery-browser-checks.mjs';
-import {RECOVERY_CHECKS,RECOVERY_GAPS,RECOVERY_READ_SEMANTICS} from './release-delivery-postinstall-browser-worker.mjs';
+import {RECOVERY_CHECKS,RECOVERY_GAPS,RECOVERY_READ_SEMANTICS,recoveryMailPolicy} from './release-delivery-postinstall-browser-worker.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},hash=v=>sha256(canonicalBrowser(v)),read=r=>JSON.parse(readEvidenceFile(r,{maximum:8*1024**2}));
 const ref=p=>({path:p,sha256:sha256(readFileSync(p))});
 const normalized=request=>{const {admission,...base}=request;return base;};
+function requestMailPolicy(request){if(!request.correction)return {};need(request.correction.kind==='nova-postinstall-connected-mail-correction','postinstall-browser-mail-correction-required');const policy=recoveryMailPolicy(request.correction);need(policy.mailActivityPolicy==='blocked','postinstall-browser-mail-policy-required');return policy;}
 function save(context,name,value){const dir=join(context.journal.directory,'browser-current-recovery',context.request.sessionId);mkdirSync(dir,{recursive:true,mode:0o700});const p=join(dir,name+'-'+hash(value)+'.json');writeBrowserOnce(p,value);return ref(p);}
 function inputs(context){
  const {browserInput:input,descriptor,request}=context,original=read(input.original),prepared=read(input.prepared),target=read(descriptor.target),options=original.binding.options;
@@ -34,6 +35,7 @@ async function invoke(context,data,{run=runInstallTransport,clock=Date.now}={}){
 }
 export function verifyPostinstallReadiness(value,context,now=Date.now()){
  const {input,original,base}=inputs(context),r=value.resources;
+ need(same(recoveryMailPolicy(value),requestMailPolicy(context.request)),'postinstall-browser-readiness-mail-policy-changed');
  need(value.kind==='nova-postinstall-browser-readiness'&&value.operationId===input.operationId&&value.sessionId===context.request.sessionId&&value.inputSha256===hash(input)&&value.requestSha256===base.requestSha256&&value.originalClosed===true&&value.remoteRecoveryAbsent===true&&value.hostWrites===false,'postinstall-browser-readiness-changed');
  need(Number.isSafeInteger(value.observedAtMs)&&value.observedAtMs<=now+30000&&now-value.observedAtMs<=120000,'postinstall-browser-readiness-stale');
  need(value.profile.path===original.binding.options.directoryRoot+'/'+original.binding.sessionId+'/profile'&&/^[a-f0-9]{64}$/.test(value.profile.inventorySha256)&&value.profile.entryCount>0&&value.profile.entryCount<=20000,'postinstall-browser-profile-changed');
@@ -41,14 +43,16 @@ export function verifyPostinstallReadiness(value,context,now=Date.now()){
  need(same(value.health,input.installed.installedHealth)&&value.sessionDatabase?.readOnly===true&&value.sessionDatabase.queryOnly===true&&Array.isArray(value.sessions)&&value.sessions.length>0&&value.sessions.length<=256,'postinstall-browser-current-session-map-invalid');return value;
 }
 export async function planPostinstallBrowserRecovery(context,options={}){
- const {base}=inputs(context),{output}=await invoke(context,{...base,mode:'plan'},options);verifyPostinstallReadiness(output,context,(options.clock??Date.now)());return save(context,'readiness',output);
+ const {base}=inputs(context),policy=requestMailPolicy(context.request),observed=await invoke(context,{...base,mode:'plan'},options),output={...observed.output,...policy};verifyPostinstallReadiness(output,context,(options.clock??Date.now)());return save(context,'readiness',output);
 }
 export async function verifyPostinstallBrowserRecoveryPlan(reference,context,options={}){
  const retained=read(reference),old=verifyPostinstallReadiness(retained,context,retained.observedAtMs);const fresh=await planPostinstallBrowserRecovery(context,options),current=read(fresh);
  for(const key of ['profile','sessions','sessionDatabase','health','inputSha256','requestSha256'])need(same(current[key],old[key]),'postinstall-browser-readiness-binding-changed');return fresh;
 }
 export function verifyPostinstallBrowserRecovery(output,input){
- const authority=read(output.authority),plan=read(authority.browserReadiness);
+ const authority=read(output.authority),plan=read(authority.browserReadiness),policy=recoveryMailPolicy(authority);
+ need(same(recoveryMailPolicy(output),policy)&&same(recoveryMailPolicy(plan),policy),'postinstall-browser-mail-coverage-changed');
+ if(policy.mailActivityPolicy)need(same(requestMailPolicy(read(authority.request)),policy),'postinstall-browser-mail-authority-changed');
  need(authority.kind==='nova-postinstall-browser-observation-authority'&&authority.operationId===input.operationId&&authority.browserInputSha256===hash(input)&&authority.installationPermitted===false&&authority.assistantDispatchPermitted===false&&authority.automaticRenewal===false,'postinstall-browser-authority-changed');
  need(output.accepted===true&&output.browserUiVerified===true&&output.kind==='nova-postinstall-browser-recovery-acceptance'&&output.acceptanceScope==='current-installed-browser-crash-recovery'&&output.originalTransitionCoverage==='unverified'&&same(output.transitionCoverageGaps,RECOVERY_GAPS)&&authority.acceptanceScope===output.acceptanceScope&&authority.originalTransitionCoverage==='unverified'&&same(authority.transitionCoverageGaps,RECOVERY_GAPS),'postinstall-browser-coverage-changed');
  need(output.operationId===input.operationId&&output.inputSha256===hash(input)&&output.sessionId===authority.sessionId&&output.startedAtMs===authority.startedAtMs&&Number.isSafeInteger(output.completedAtMs)&&output.completedAtMs>=output.startedAtMs&&output.completedAtMs<=authority.deadlineAtMs&&authority.deadlineAtMs-authority.startedAtMs<=1800000,'postinstall-browser-fixed-window-changed');
@@ -59,13 +63,22 @@ export function verifyPostinstallBrowserRecovery(output,input){
  for(const name of ['copied-draft-before-edit','copied-draft-after-reload','copied-draft-after-client-reload'])need(check(name).draftSha256===draftHash,'postinstall-browser-draft-check-changed');
  need(same(check('existing-saved-reply-visible'),{conversationId:input.assistant.conversationId,nativeId:input.assistant.nativeId,savedMessageId:input.assistant.savedMessageId,replySha256:input.assistant.replySha256}),'postinstall-browser-saved-reply-check-changed');
  need(same(check('current-stale-client-get-rejected'),{status:409,code:'client_update',priorCandidateId:original.binding.priorCandidateId,currentCandidateId:input.installed.installedHealth.candidateId})&&check('current-ui-reload-reaction').realServerResponse===true,'postinstall-browser-stale-client-check-changed');
- const session=output.checks[0].detail;need(session.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&session.connectedMailReadAccounts===0,'postinstall-browser-startup-read-scope-changed');need(plan.sessions.some(r=>r.digest===session.sessionDigest&&r.deviceId===session.deviceId&&r.expiresAtMs===session.expiresAtMs&&r.expiresAtMs>authority.deadlineAtMs+30000),'postinstall-browser-session-authority-changed');
+ const session=output.checks[0].detail,accountCount=n=>Number.isSafeInteger(n)&&n>=0&&n<=256;need(session.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&same(recoveryMailPolicy(session),policy)&&(policy.mailActivityPolicy?accountCount(session.connectedMailReadAccounts):session.connectedMailReadAccounts===0),'postinstall-browser-startup-read-scope-changed');need(plan.sessions.some(r=>r.digest===session.sessionDigest&&r.deviceId===session.deviceId&&r.expiresAtMs===session.expiresAtMs&&r.expiresAtMs>authority.deadlineAtMs+30000),'postinstall-browser-session-authority-changed');
  verifyDocumentIdentity(output.loadedDocument,input.installed.installedHealth,{route:'full'});readEvidenceFile(output.screenshot,{maximum:16*1024**2});readEvidenceFile(output.draftScreenshot,{maximum:16*1024**2});need(output.checks[2].detail.screenshotSha256===output.draftScreenshot.sha256,'postinstall-browser-draft-screenshot-changed');
  const closed=read(output.closed),unit=read(output.unitCloseout),copy=read(output.profileCopy),memory=read(output.memory);
  need(closed.operationId===input.operationId&&closed.sessionId===authority.sessionId&&closed.browserClosed===true&&unit.operationId===input.operationId&&unit.sessionId===authority.sessionId&&unit.originalProfileUnchanged===true&&unit.ownedPids?.length===0&&/ActiveState=(inactive|failed)\n/.test(unit.unitState)&&unit.unitState.includes('MainPID=0\n'),'postinstall-browser-process-closeout-incomplete');
  need(copy.sourceUnchanged===true&&same(copy.source,plan.profile)&&output.sourceProfileInventorySha256===plan.profile.inventorySha256&&copy.excludedSingletonLinks.every(n=>['SingletonLock','SingletonCookie','SingletonSocket'].includes(n)),'postinstall-browser-source-profile-changed');
  need(memory.maxBytes===2147483648&&Number.isSafeInteger(memory.peakBytes)&&memory.peakBytes<=Math.floor(2147483648*0.8)&&!/^oom(?:_kill|_group_kill)? [1-9]/m.test(memory.events),'postinstall-browser-memory-proof-changed');
- const fence=output.fence;need(fence.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&fence.connectedMailReadAccounts===0&&fence.failure===null&&fence.onlyExistingSessionPost===true&&Number.isSafeInteger(fence.sessionPosts)&&fence.sessionPosts>=1&&fence.sessionPosts<=5&&fence.sessionAttempts===fence.sessionPosts&&fence.mutatingRequestsForwarded===fence.sessionPosts&&fence.webSocketsForwarded===0&&fence.serviceWorkers==='block'&&fence.sessionDigest===session.sessionDigest&&fence.deviceId===session.deviceId,'postinstall-browser-request-fence-changed');return output;
+ const fence=output.fence;need(same(recoveryMailPolicy(fence),policy)&&(policy.mailActivityPolicy?accountCount(fence.connectedMailReadAccounts)&&Number.isSafeInteger(fence.mailRequestsBlocked)&&fence.mailRequestsBlocked>=0&&fence.mailRequestsForwarded===0:fence.connectedMailReadAccounts===0),'postinstall-browser-mail-fence-changed');need(fence.backendObservationSemantics===RECOVERY_READ_SEMANTICS&&fence.failure===null&&fence.onlyExistingSessionPost===true&&Number.isSafeInteger(fence.sessionPosts)&&fence.sessionPosts>=1&&fence.sessionPosts<=5&&fence.sessionAttempts===fence.sessionPosts&&fence.mutatingRequestsForwarded===fence.sessionPosts&&fence.webSocketsForwarded===0&&fence.serviceWorkers==='block'&&fence.sessionDigest===session.sessionDigest&&fence.deviceId===session.deviceId,'postinstall-browser-request-fence-changed');return output;
+}
+export async function observePostinstallRecoveryPredecessor(context,options={}){
+ const {authority,authorityRef}=context,{base,input}=inputs(context);
+ need(authority&&authorityRef&&same(read(authorityRef),authority)&&authority.operationId===input.operationId&&authority.sessionId===context.request.sessionId&&authority.browserInputSha256===hash(input)&&same(read(authority.request),context.request)&&!authority.mailActivityPolicy&&!authority.mailFunctionalityCoverage&&!context.request.correction,'postinstall-browser-predecessor-binding-changed');
+ const intentPath=join(context.journal.directory,'browser-current-recovery',authority.sessionId,'launch-intent.json');
+ need(existsSync(intentPath)&&same(JSON.parse(readFileSync(intentPath)),{authority:authorityRef,inputSha256:hash(input)}),'postinstall-browser-predecessor-intent-changed');
+ const {output:status,receipt:transportReceipt}=await invoke(context,{...base,authority,authorityRef,plan:read(authority.browserReadiness),mode:'status'},options);
+ need(status.state==='observed'&&status.operationId===input.operationId&&status.sessionId===authority.sessionId&&status.hostWrites===false,'postinstall-browser-predecessor-status-changed');
+ return {status,statusRef:save(context,'predecessor-status',status),transportReceipt};
 }
 export async function observePostinstallBrowserRecovery(context,options={}){
  const {authority,authorityRef}=context,{base,input}=inputs(context),clock=options.clock??Date.now;

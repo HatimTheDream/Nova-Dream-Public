@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {mkdtempSync,writeFileSync,rmSync,readFileSync,mkdirSync} from 'node:fs';
+import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {sha256} from '../scripts/release-plan.mjs';
 import {canonicalBrowser} from '../scripts/release-delivery-browser-primitives.mjs';
-import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,prepareSingleRecoveryPage,recoveryRequestDiagnostic,recoveryFailureDiagnostics,RECOVERY_GAPS} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
-import {verifyPostinstallBrowserRecovery} from '../scripts/release-delivery-postinstall-browser.mjs';
+import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,prepareSingleRecoveryPage,recoveryRequestDiagnostic,recoveryFailureDiagnostics,RECOVERY_GAPS,RECOVERY_MAIL_POLICY,recoveryMailPolicy} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
+import {verifyPostinstallBrowserRecovery,observePostinstallRecoveryPredecessor} from '../scripts/release-delivery-postinstall-browser.mjs';
 import {postinstallReadinessFixture,postinstallAcceptanceFixture} from '../support/postinstall-browser-fixture.mjs';
 const now=1000000,origin='http://127.0.0.1:4383',candidate='a'.repeat(64),device='00000000-0000-4000-8000-000000000001',token='existing-fixture-token',cookie={name:'e3_session_'+'b'.repeat(32),value:token,domain:'127.0.0.1',path:'/'};
 const session={digest:sha256(token),deviceId:device,expiresAtMs:now+86400000},authority={startedAtMs:now,deadlineAtMs:now+600000};
@@ -20,7 +20,7 @@ function rig({cookieList=[cookie],healthValue=health,snapshot={epoch:'epoch',dev
  const route=(method='POST',pathname='/api/session',body='{}',owner=page)=>({request:()=>({url:()=>origin+pathname,method:()=>method,postData:()=>body,headers:()=>({'content-type':'application/json'}),isNavigationRequest:()=>false,frame:()=>({page:()=>owner})}),abort:async()=>{},fulfill:async()=>{}});
  return{page,other,context,api,calls,records,route,invoke:(...args)=>handler(route(...args))};
 }
-async function fence(r){return installRecoveryFence(r.context,r.api,input,authority,[session],(name,detail)=>r.records.push({name,detail}),{clock:()=>now,priorCandidateId:'0'.repeat(64)});}
+async function fence(r,grant=authority){return installRecoveryFence(r.context,r.api,input,grant,[session],(name,detail)=>r.records.push({name,detail}),{clock:()=>now,priorCandidateId:'0'.repeat(64)});}
 test('recovery allowlist excludes installation, Assistant dispatch, foreign origins and changed bootstrap body',()=>{
  assert.equal(allowedRecoveryRequest('POST',origin+'/api/session','{}',input.assistant.conversationId),true);
  for(const [method,url,body]of [['POST',origin+'/api/session','{"renew":true}'],['POST',origin+'/api/assistant/request','{}'],['POST',origin+'/api/software-update/install','{}'],['GET','http://example.invalid/',''],['POST',origin+'/api/session?x=1','{}'],['GET',origin+'/api/assistant/history/other','']])assert.equal(allowedRecoveryRequest(method,url,body,input.assistant.conversationId),false);
@@ -99,4 +99,49 @@ test('failure query diagnostics expose only bounded calendar fields and hashes',
 test('failure screenshot and DOM collection refusal stays secondary to the original error',async()=>{
  const original=Error('original-tasks-click-failure'),before=original.message;const diagnostics=await recoveryFailureDiagnostics({isClosed:()=>false,evaluate:async()=>{throw Error('context closed');},screenshot:async()=>{throw Error('screenshot unavailable');}},'/unused');
  assert.deepEqual(diagnostics,{pageAvailable:true,stateUnavailable:true,screenshotUnavailable:true});assert.equal(original.message,before);assert.deepEqual(await recoveryFailureDiagnostics({isClosed:()=>true},'/unused'),{pageAvailable:false});
+});
+
+
+test('Mail exclusion accepts truthful connected accounts only under the explicit correction policy',async()=>{
+ const accounts=[{provider:'google',state:'connected',capabilities:{mailRead:true}},{provider:'microsoft',state:'refreshing',capabilities:{mailRead:true}},{provider:'google',state:'disconnected',capabilities:{mailRead:true}}],accountsState={accounts},before=JSON.stringify(accountsState),r=rig({accountsState}),f=await fence(r,{...authority,...RECOVERY_MAIL_POLICY});
+ assert.equal(f.summary().connectedMailReadAccounts,2);assert.equal(r.records[0].detail.connectedMailReadAccounts,2);assert.equal(r.records[0].detail.mailFunctionalityCoverage,'unverified');assert.equal(JSON.stringify(accountsState),before);f.arm(r.page);await r.invoke();assert.equal(r.calls.length,1);assert.equal(r.calls[0].url,origin+'/api/session');
+ for(const policy of [{mailActivityPolicy:'blocked'},{mailFunctionalityCoverage:'unverified'},{mailActivityPolicy:'forward',mailFunctionalityCoverage:'unverified'}])await assert.rejects(fence(rig(),{...authority,...policy}),/mail-policy-invalid/);
+ assert.deepEqual(recoveryMailPolicy(authority),{});
+});
+test('Mail-excluded account observations reject malformed or unbounded projections',async()=>{
+ const valid={provider:'google',state:'connected',capabilities:{mailRead:true}};
+ for(const accounts of [null,Array(257).fill(valid),[null],[{...valid,provider:'other'}],[{...valid,state:'unknown'}],[{...valid,capabilities:{mailRead:'true'}}]]){const r=rig({accountsState:{accounts}});await assert.rejects(fence(r,{...authority,...RECOVERY_MAIL_POLICY}),/account-projection-invalid/);assert.equal(r.calls.length,0);}
+});
+test('all Mail methods remain denied and counters survive bounded trace saturation',async()=>{
+ const r=rig({accountsState:{accounts:[{provider:'google',state:'connected',capabilities:{mailRead:true}}]}}),f=await fence(r,{...authority,...RECOVERY_MAIL_POLICY});f.arm(r.page);
+ for(let i=0;i<80;i++)await r.invoke('GET','/api/not-allowed','');
+ const paths=['/api/mail','/api/mail/index/read','/api/mail/index/command','/api/mail/read','/api/mail/images'];
+ for(const path of paths)for(const method of ['GET','HEAD','POST','PUT','DELETE']){assert.equal(allowedRecoveryRequest(method,origin+path,'{}',input.assistant.conversationId),false);await r.invoke(method,path,'{}');}
+ assert.equal(r.calls.length,0);assert.equal(f.summary().blocked.length,64);assert.equal(f.summary().mailRequestsBlocked,paths.length*5);assert.equal(f.summary().mailRequestsForwarded,0);
+});
+test('Mail-excluded durable proof cannot lose its limitation or admit Mail forwarding',()=>{
+ const directory=mkdtempSync(join(tmpdir(),'nova-mail-excluded-proof-'));const save=(name,value)=>{const bytes=Buffer.isBuffer(value)?value:Buffer.from(JSON.stringify(value)+'\n'),path=join(directory,name);writeFileSync(path,bytes);return{path,sha256:sha256(bytes)};};
+ try{
+  const originalInput={...input,prepared:save('prepared.json',{draft:'original retained draft'}),original:save('original.json',{binding:{priorCandidateId:'0'.repeat(64)}})},request=save('request.json',{correction:{kind:'nova-postinstall-connected-mail-correction',...RECOVERY_MAIL_POLICY}});
+  const readiness=save('readiness.json',postinstallReadinessFixture(originalInput,{sessionId:'00000000-0000-4000-8000-000000000007',now,requestSha256:'e'.repeat(64),mailPolicy:RECOVERY_MAIL_POLICY}));
+  const grant={...authority,...RECOVERY_MAIL_POLICY,kind:'nova-postinstall-browser-observation-authority',operationId:input.operationId,sessionId:'00000000-0000-4000-8000-000000000007',browserInputSha256:sha256(canonicalBrowser(originalInput)),browserReadiness:readiness,request,installationPermitted:false,assistantDispatchPermitted:false,automaticRenewal:false,acceptanceScope:'current-installed-browser-crash-recovery',originalTransitionCoverage:'unverified',transitionCoverageGaps:[...RECOVERY_GAPS]},grantRef=save('authority.json',grant),output=postinstallAcceptanceFixture(save,originalInput,grant,grantRef);
+  assert.equal(verifyPostinstallBrowserRecovery(output,originalInput),output);assert.equal(output.checks[0].detail.connectedMailReadAccounts,2);
+  for(const changed of [{...output,mailFunctionalityCoverage:'verified'},{...output,mailFunctionalityCoverage:undefined},{...output,mailActivityPolicy:'forward'},{...output,fence:{...output.fence,mailRequestsForwarded:1}},{...output,fence:{...output.fence,mailRequestsBlocked:undefined}},{...output,fence:{...output.fence,connectedMailReadAccounts:-1}}])assert.throws(()=>verifyPostinstallBrowserRecovery(changed,originalInput));
+  for(const count of [-1,257,'2']){const altered=structuredClone(output);altered.checks[0].detail.connectedMailReadAccounts=count;altered.checkReceipts[0]=save('count-'+String(count)+'.json',altered.checks[0]);assert.throws(()=>verifyPostinstallBrowserRecovery(altered,originalInput));}
+  const stripped=structuredClone(output);delete stripped.checks[0].detail.mailFunctionalityCoverage;stripped.checkReceipts[0]=save('stripped-check.json',stripped.checks[0]);assert.throws(()=>verifyPostinstallBrowserRecovery(stripped,originalInput));
+ }finally{rmSync(directory,{recursive:true,force:true});}
+});
+test('predecessor observer uses only original status even after its deadline',async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'nova-predecessor-status-'));const save=(name,value)=>{const path=join(directory,name);mkdirSync(dirname(path),{recursive:true});const bytes=Buffer.isBuffer(value)?value:Buffer.from(JSON.stringify(value)+'\n');writeFileSync(path,bytes);return{path,sha256:sha256(bytes)};};
+ try{
+  const transport=save('transport.json',{format:1,hostAlias:'isolated',sshConfig:save('ssh-config',Buffer.from('synthetic read-only transport'))}),options={mode:'remote',baseUrl:origin,playwright:save('closure.json',{}),directoryRoot:'/opt/browser-tests'},binding={operationId:input.operationId,sessionId:'00000000-0000-4000-8000-000000000003',route:'full',epoch:'epoch',options,transport,fullTarget:input.fullTarget};
+  const browserInput={...input,original:save('original.json',{binding}),prepared:save('prepared.json',{bindingSha256:sha256(canonicalBrowser(binding)),draft:'retained'}),installed:{...input.installed,route:'full'},assistant:{...input.assistant,savedReplyAccepted:true,browserUiVerified:false}};
+  const request={operationId:input.operationId,sessionId:'00000000-0000-4000-8000-000000000004',durationMs:600000,capacity:{diskReserveBytes:2147483648,workingAllowanceBytes:536870912},failure:{failed:save('failed-original.json',{operationId:input.operationId,reason:'browser-dom-or-transport-check-failed'}),closed:save('closed-original.json',{operationId:input.operationId,browserClosed:true,tunnelClosed:true}),memory:save('memory-original.json',{events:'oom_kill 1\n'})}};
+  const grant={...authority,operationId:input.operationId,sessionId:request.sessionId,browserInputSha256:sha256(canonicalBrowser(browserInput)),request:save('predecessor-request.json',request),browserReadiness:save('readiness.json',{sessions:[]})},authorityRef=save('authority.json',grant),context={journal:{directory},descriptor:{operation:{id:input.operationId},target:save('target.json',{browserTools:options,transport,full:{host:{hostConfiguration:save('host.json',{})}}})},request,browserInput,authority:grant,authorityRef};
+  const intentPath=save('browser-current-recovery/'+request.sessionId+'/launch-intent.json',{authority:authorityRef,inputSha256:grant.browserInputSha256}).path,status={state:'observed',operationId:input.operationId,sessionId:request.sessionId,files:{failed:{reason:'browser-recovery-connected-mail-not-admitted',completedChecks:[],diagnostics:{pageAvailable:false}},closed:{browserClosed:true}},checks:[],unitState:'ActiveState=inactive\nMainPID=0\n',ownedPids:[],originalProfileUnchanged:null,hostWrites:false};let calls=0;
+  const run=async(_config,program)=>{calls++;const encoded=program.match(/DATA=json.loads\(base64.b64decode\('([^']+)'/);assert.ok(encoded);const data=JSON.parse(Buffer.from(encoded[1],'base64'));assert.equal(data.mode,'status');assert.deepEqual(data.authority,grant);assert.deepEqual(data.authorityRef,authorityRef);return{exitCode:0,stdout:JSON.stringify(status),stderr:'',uncertain:false,diagnosticsTruncated:false};};
+  const observed=await observePostinstallRecoveryPredecessor(context,{run,clock:()=>grant.deadlineAtMs+1000});assert.deepEqual(observed.status,status);assert.deepEqual(JSON.parse(readFileSync(observed.statusRef.path)),status);assert.equal(JSON.parse(readFileSync(observed.transportReceipt.path)).mode,'status');assert.equal(calls,1);
+  await assert.rejects(observePostinstallRecoveryPredecessor({...context,request:{...request,durationMs:request.durationMs+1}},{run}),/predecessor-binding-changed/);assert.equal(calls,1);
+  writeFileSync(intentPath,'{}');await assert.rejects(observePostinstallRecoveryPredecessor(context,{run}),/predecessor-intent-changed/);assert.equal(calls,1);
+ }finally{rmSync(directory,{recursive:true,force:true});}
 });

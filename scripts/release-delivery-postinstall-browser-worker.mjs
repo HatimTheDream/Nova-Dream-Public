@@ -6,6 +6,12 @@ import {canonicalBrowser,sha256,writeBrowserOnce,verifyBrowserTool} from './rele
 import {verifyPlaywrightClosure,documentIdentity,verifyBrowserHealth,verifyDocumentIdentity,tasks,draft,ownedDraftCleanup} from './release-delivery-browser-checks.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},read=p=>JSON.parse(readFileSync(p,'utf8')),hash=v=>sha256(canonicalBrowser(v));
 export const RECOVERY_READ_SEMANTICS='maintained-get-projections-with-existing-housekeeping';
+export const RECOVERY_MAIL_POLICY=Object.freeze({mailActivityPolicy:'blocked',mailFunctionalityCoverage:'unverified'});
+export function recoveryMailPolicy(value){
+ if(value.mailActivityPolicy===undefined&&value.mailFunctionalityCoverage===undefined)return {};
+ need(value.mailActivityPolicy===RECOVERY_MAIL_POLICY.mailActivityPolicy&&value.mailFunctionalityCoverage===RECOVERY_MAIL_POLICY.mailFunctionalityCoverage,'browser-recovery-mail-policy-invalid');return {...RECOVERY_MAIL_POLICY};
+}
+const isMailPath=path=>path==='/api/mail'||path.startsWith('/api/mail/');
 export const RECOVERY_GAPS=Object.freeze(['old-document-retained','original-old-client-fence','actual-transition-observation']);
 export const RECOVERY_CHECKS=Object.freeze(['existing-session-authenticated','current-document-identity','copied-draft-before-edit','copied-draft-after-reload','current-stale-client-get-rejected','current-ui-reload-reaction','copied-draft-after-client-reload','current-ui-behavior','existing-saved-reply-visible','owned-copy-draft-cleaned']);
 export function selectExistingRecoverySession(cookies,sessions,deadlineAtMs,origin='http://127.0.0.1:4383'){
@@ -42,18 +48,22 @@ export async function recoveryFailureDiagnostics(page,directory){
  try{const path=join(directory,'failure-ui.png');await page.screenshot({path,fullPage:false,timeout:2000});result.screenshot={path,sha256:sha256(readFileSync(path))};}catch{result.screenshotUnavailable=true;}
  return result;
 }
-function verifyRecoveryAccounts(value){need(Array.isArray(value.accounts)&&!value.accounts.some(a=>['connected','refreshing'].includes(a.state)&&a.capabilities?.mailRead),'browser-recovery-connected-mail-not-admitted');}
+function recoveryAccountsCount(value,policy){
+ if(!policy.mailActivityPolicy){need(Array.isArray(value.accounts)&&!value.accounts.some(a=>['connected','refreshing'].includes(a.state)&&a.capabilities?.mailRead),'browser-recovery-connected-mail-not-admitted');return 0;}
+ need(Array.isArray(value.accounts)&&value.accounts.length<=256&&value.accounts.every(a=>a&&['google','microsoft'].includes(a.provider)&&['connected','refreshing','reconnect','disconnected'].includes(a.state)&&typeof a.capabilities?.mailRead==='boolean'),'browser-recovery-account-projection-invalid');
+ return value.accounts.filter(a=>['connected','refreshing'].includes(a.state)&&a.capabilities.mailRead).length;
+}
 export async function installRecoveryFence(context,api,input,authority,sessions,record,{clock=Date.now,priorCandidateId,origin='http://127.0.0.1:4383'}={}){
  need(/^http:\/\/127\.0\.0\.1:\d+$/.test(origin),'browser-recovery-origin-invalid');
- const selected=selectExistingRecoverySession(await context.cookies(origin),sessions,authority.deadlineAtMs),expected=input.installed.installedHealth;
+ const mailPolicy=recoveryMailPolicy(authority),selected=selectExistingRecoverySession(await context.cookies(origin),sessions,authority.deadlineAtMs),expected=input.installed.installedHealth;
  const cookie=selected.cookie.name+'='+selected.cookie.value,headers={'cookie':cookie,'origin':origin,'x-edition3-client':'1','x-edition3-candidate':expected.candidateId};
- let staleArmed=false,staleObserved=false,sessionPosts=0,sessionAttempts=0,forwardedPosts=0,failure=null,designatedPage=null;const blocked=[];const blockedRecord=value=>{if(blocked.length<64)blocked.push({...value,path:value.path.slice(0,192)});};
+ let staleArmed=false,staleObserved=false,sessionPosts=0,sessionAttempts=0,forwardedPosts=0,connectedMailReadAccounts=0,mailRequestsBlocked=0,mailRequestsForwarded=0,failure=null,designatedPage=null;const blocked=[];const blockedRecord=value=>{if(isMailPath(value.path))mailRequestsBlocked++;if(blocked.length<64)blocked.push({...value,path:value.path.slice(0,192)});};
  const current=()=>{need(!failure,failure??'browser-recovery-fence-failed');need(clock()>=authority.startedAtMs&&clock()<authority.deadlineAtMs,'browser-recovery-deadline-exhausted');};
  const guard=async()=>{
   current();const health=await api.get(origin+'/api/health',{headers,maxRedirects:0,timeout:15000});need(health.status()===200,'browser-recovery-health-unavailable');
   const h=await health.json();verifyBrowserHealth(h,expected,expected.epoch,{route:'full',target:input.fullTarget});
   const snapshot=await api.get(origin+'/api/snapshot',{headers,maxRedirects:0,timeout:15000});need(snapshot.status()===200&&!snapshot.headers()['set-cookie'],'browser-recovery-existing-session-unavailable');
-  const s=await snapshot.json();await health.dispose();await snapshot.dispose();need(s.epoch===expected.epoch&&s.deviceId===selected.row.deviceId,'browser-recovery-session-workspace-changed');const accounts=await api.get(origin+'/api/accounts',{headers,maxRedirects:0,timeout:15000});need(accounts.status()===200&&!accounts.headers()['set-cookie'],'browser-recovery-accounts-unavailable');const accountState=await accounts.json();await accounts.dispose();verifyRecoveryAccounts(accountState);current();return{backendObservationSemantics:RECOVERY_READ_SEMANTICS,connectedMailReadAccounts:0,candidateId:h.candidateId,processIdentity:h.processIdentity,epoch:s.epoch,deviceId:s.deviceId,sessionDigest:selected.row.digest,expiresAtMs:selected.row.expiresAtMs,health:h};
+  const s=await snapshot.json();await health.dispose();await snapshot.dispose();need(s.epoch===expected.epoch&&s.deviceId===selected.row.deviceId,'browser-recovery-session-workspace-changed');const accounts=await api.get(origin+'/api/accounts',{headers,maxRedirects:0,timeout:15000});need(accounts.status()===200&&!accounts.headers()['set-cookie'],'browser-recovery-accounts-unavailable');const accountState=await accounts.json();await accounts.dispose();connectedMailReadAccounts=recoveryAccountsCount(accountState,mailPolicy);current();return{backendObservationSemantics:RECOVERY_READ_SEMANTICS,...mailPolicy,connectedMailReadAccounts,candidateId:h.candidateId,processIdentity:h.processIdentity,epoch:s.epoch,deviceId:s.deviceId,sessionDigest:selected.row.digest,expiresAtMs:selected.row.expiresAtMs,health:h};
  };
  const initial=await guard();record('existing-session-authenticated',initial);
  need(typeof context.routeWebSocket==='function','browser-recovery-websocket-fence-unavailable');
@@ -74,16 +84,16 @@ export async function installRecoveryFence(context,api,input,authority,sessions,
    const forwarded={...request.headers(),...headers};delete forwarded['host'];delete forwarded['content-length'];delete forwarded['if-none-match'];
    const stale=staleArmed&&!staleObserved&&method==='GET'&&pathname==='/api/snapshot';
    if(stale){forwarded['x-edition3-candidate']=priorCandidateId;need(/^[a-f0-9]{64}$/.test(forwarded['x-edition3-candidate']??''),'browser-recovery-prior-candidate-required');}
-   if(method==='POST')forwardedPosts++;
+   if(method==='POST')forwardedPosts++;if(isMailPath(pathname))mailRequestsForwarded++;
    const response=await api.fetch(url,{method,headers:forwarded,...(method==='POST'?{data:body}:{}),maxRedirects:0,timeout:15000});
    need(response.status()<300||response.status()>=400,'browser-recovery-redirect-refused');need(!response.headers()['set-cookie'],'browser-recovery-token-created-or-rotated');
-   if(pathname==='/api/accounts')verifyRecoveryAccounts(await response.json());
+   if(pathname==='/api/accounts')connectedMailReadAccounts=recoveryAccountsCount(await response.json(),mailPolicy);
    if(method==='POST'){const value=await response.json();need(response.status()===200&&value.deviceId===selected.row.deviceId&&value.apiVersion===1,'browser-recovery-session-response-changed');sessionPosts++;}
    if(stale){const value=await response.json();need(response.status()===409&&value.code==='client_update','browser-recovery-stale-client-not-rejected');staleObserved=true;record('current-stale-client-get-rejected',{status:409,code:value.code,priorCandidateId:forwarded['x-edition3-candidate'],currentCandidateId:expected.candidateId});}
    await route.fulfill({response});await response.dispose();
   }catch(error){blockedRecord({method,...recoveryRequestDiagnostic(url),reason:error.message});failure=/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-fence-failed';await route.abort('blockedbyclient').catch(()=>{});}
  });
- return{guard,arm:page=>{need(!designatedPage&&context.pages().length===1&&context.pages()[0]===page,'browser-recovery-single-page-required');designatedPage=page;},armStale:()=>{staleArmed=true;},staleObserved:()=>staleObserved,summary:()=>({backendObservationSemantics:RECOVERY_READ_SEMANTICS,connectedMailReadAccounts:0,sessionDigest:selected.row.digest,deviceId:selected.row.deviceId,sessionPosts,sessionAttempts,blocked,mutatingRequestsForwarded:forwardedPosts,onlyExistingSessionPost:true,failure,webSocketsForwarded:0,serviceWorkers:'block'})};
+ return{guard,arm:page=>{need(!designatedPage&&context.pages().length===1&&context.pages()[0]===page,'browser-recovery-single-page-required');designatedPage=page;},armStale:()=>{staleArmed=true;},staleObserved:()=>staleObserved,summary:()=>({backendObservationSemantics:RECOVERY_READ_SEMANTICS,...mailPolicy,connectedMailReadAccounts,mailRequestsBlocked,mailRequestsForwarded,sessionDigest:selected.row.digest,deviceId:selected.row.deviceId,sessionPosts,sessionAttempts,blocked,mutatingRequestsForwarded:forwardedPosts,onlyExistingSessionPost:true,failure,webSocketsForwarded:0,serviceWorkers:'block'})};
 }
 /** A persistent Chromium window must remain alive while its blank replacement is created. */
 export async function prepareSingleRecoveryPage(context,fence){
@@ -130,6 +140,6 @@ export async function currentBrowserWorker(requestPath){
   result=await runCurrentBrowserChecks(context,page,request,record,fence);const peak=memory('accepted');need(peak.peakBytes<=Math.floor(2147483648*0.8),'browser-recovery-memory-headroom-insufficient');
  }catch(error){let diagnostics;try{diagnostics=await recoveryFailureDiagnostics(page,directory);}catch{diagnostics={unavailable:true};}writeBrowserOnce(join(directory,'failed.json'),{diagnostics,operationId:input.operationId,reason:/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-ui-check-failed',detail:String(error.message).slice(0,2000),atMs:Date.now(),completedChecks:checks.map(c=>c.name),fence:fence?.summary()??null});}
  finally{clearTimeout(timer);if(context)await context.close().catch(()=>{});if(api)await api.dispose().catch(()=>{});const closed={operationId:input.operationId,sessionId:authority.sessionId,browserClosed:!context||context.pages().length===0,atMs:Date.now()};writeBrowserOnce(join(directory,'closed.json'),closed);memory('closed');}
- if(result&&!existsSync(join(directory,'failed.json')))writeBrowserOnce(join(directory,'result.json'),{format:1,kind:'nova-postinstall-browser-recovery-acceptance',accepted:true,browserUiVerified:true,acceptanceScope:'current-installed-browser-crash-recovery',operationId:input.operationId,authority:request.authorityRef,inputSha256:hash(input),sessionId:authority.sessionId,startedAtMs:authority.startedAtMs,completedAtMs:Date.now(),originalTransitionCoverage:'unverified',transitionCoverageGaps:[...RECOVERY_GAPS],checks,...result,savedMessageId:input.assistant.savedMessageId,savedReplySha256:input.assistant.replySha256,newAssistantMessages:0,installationDispatched:false,sourceProfileInventorySha256:request.plan.profile.inventorySha256});
+ if(result&&!existsSync(join(directory,'failed.json')))writeBrowserOnce(join(directory,'result.json'),{format:1,kind:'nova-postinstall-browser-recovery-acceptance',accepted:true,browserUiVerified:true,acceptanceScope:'current-installed-browser-crash-recovery',...recoveryMailPolicy(authority),operationId:input.operationId,authority:request.authorityRef,inputSha256:hash(input),sessionId:authority.sessionId,startedAtMs:authority.startedAtMs,completedAtMs:Date.now(),originalTransitionCoverage:'unverified',transitionCoverageGaps:[...RECOVERY_GAPS],checks,...result,savedMessageId:input.assistant.savedMessageId,savedReplySha256:input.assistant.replySha256,newAssistantMessages:0,installationDispatched:false,sourceProfileInventorySha256:request.plan.profile.inventorySha256});
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)currentBrowserWorker(process.argv[2]).catch(()=>{process.exitCode=1;});

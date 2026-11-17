@@ -7,7 +7,7 @@ import { deriveFailedDisposition, failedDispositionSchema } from './release-deli
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
 import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
-import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
+import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallCorrectionSchema, postinstallCorrectionSnapshot, verifyPostinstallCorrectionEvidence, currentPostinstallRecovery, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), commit = z.string().regex(/^[a-f0-9]{40}$/);
 const reference = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict();
@@ -277,6 +277,32 @@ export const deliveryJournalMethods = {
       return this.deliveryPostinstallRecovery(id);
     });
   },
+  deliveryPostinstallCorrection(id) {
+    if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_postinstall_corrections'").get())return null;
+    const row=this.db.prepare('SELECT * FROM delivery_postinstall_corrections WHERE operation_id=?').get(id);if(!row)return null;
+    const correction=postinstallCorrectionSchema.parse(decoded(row.proof_json,row.proof_hash));need(correction.operationId===id,'postinstall-correction-stored-operation-changed');
+    return {proof:correction.proof,correction,sha256:row.proof_hash,recordedAtMs:row.at_ms};
+  },
+  recordPostinstallCorrection(id,raw,now=Date.now(),{assertAbsent}={}) {
+    need(!this.readOnly,'postinstall-readonly-journal');const correction=postinstallCorrectionSchema.parse(raw),proof=correction.proof;
+    return this.transaction(()=>{const old=this.deliveryPostinstallCorrection(id);if(old){need(canonical(old.correction)===canonical(correction),'postinstall-second-or-conflicting-correction');return old;}
+      const original=this.deliveryPostinstallRecovery(id),request=postinstallRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      need(original&&correction.operationId===id&&correction.predecessorSha256===original.sha256&&canonical(JSON.parse(readEvidenceFile(correction.predecessorAuthority)))===canonical(original.proof)
+        &&canonical(request.correction?.predecessorAuthority)===canonical(correction.predecessorAuthority),'postinstall-correction-predecessor-changed');
+      need(proof.operationId===id&&now>=proof.startedAtMs&&now-proof.startedAtMs<=60000&&proof.sessionId===request.sessionId&&proof.deadlineAtMs-proof.startedAtMs===request.durationMs
+        &&proof.mailActivityPolicy==='blocked'&&proof.mailFunctionalityCoverage==='unverified'&&canonical(proof.plan)===canonical(request.admission?.plan),'postinstall-correction-reservation-binding-changed');
+      const snapshot=postinstallCorrectionSnapshot(this,id,request,{now,assertAbsent});
+      need(canonical(snapshot)===canonical(proof.snapshot)&&proof.browserKey===snapshot.browserKey&&proof.browserInputSha256===snapshot.browserInputSha256,'postinstall-snapshot-changed-before-reservation');
+      verifyPostinstallAdmission(request,JSON.parse(readEvidenceFile(request.admission.plan)),snapshot,proof.operator,now);
+      verifyPostinstallCorrectionEvidence(this,id,request,correction.predecessorStatus,correction.predecessorTransport,proof.browserReadiness,now);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS delivery_postinstall_corrections(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id),at_ms INTEGER NOT NULL,proof_json TEXT NOT NULL,proof_hash TEXT NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS postinstall_correction_no_update BEFORE UPDATE ON delivery_postinstall_corrections BEGIN SELECT RAISE(ABORT,'immutable-postinstall-correction'); END;
+        CREATE TRIGGER IF NOT EXISTS postinstall_correction_no_delete BEFORE DELETE ON delivery_postinstall_corrections BEGIN SELECT RAISE(ABORT,'immutable-postinstall-correction'); END;`);
+      const v=encoded(correction);this.db.prepare('INSERT INTO delivery_postinstall_corrections VALUES(?,?,?,?)').run(id,now,v.text,v.hash);
+      event(this,id,'postinstall-browser-mail-exclusion-correction-reserved',{correctionSha256:v.hash,predecessorSha256:original.sha256,sessionId:proof.sessionId,startedAtMs:proof.startedAtMs,deadlineAtMs:proof.deadlineAtMs,originalHistoryPreserved:true},now);
+      return this.deliveryPostinstallCorrection(id);
+    });
+  },
   deliveryPhase(id, phase) {
     const row = this.db.prepare('SELECT * FROM delivery_phases WHERE operation_id=? AND phase=?').get(id, phase); if (!row) return null;
     const observations = this.db.prepare('SELECT * FROM delivery_observations WHERE operation_id=? AND phase=? ORDER BY id').all(id, phase);
@@ -390,7 +416,7 @@ export const deliveryJournalMethods = {
     const d = this.loadDelivery(id), phases = DELIVERY_PHASES.map(phase => this.deliveryPhase(id, phase));
     const complete = phases.every(p => p?.state === 'completed' && p.validation?.state !== 'failed');
     const disposition = this.deliveryDisposition(id);
-    const browser=phases.at(-1),recovery=this.deliveryPostinstallRecovery(id),coverage=browser?.state==='completed'?postinstallCoverage(browser.current.output):recovery?postinstallCoverage(recovery.proof):{};
+    const browser=phases.at(-1),recovery=currentPostinstallRecovery(this,id),coverage=browser?.state==='completed'?postinstallCoverage(browser.current.output):recovery?postinstallCoverage(recovery.proof):{};
     if(browser?.state==='completed'&&coverage.acceptanceScope){need(recovery&&browser.current.receipt&&canonical(JSON.parse(readEvidenceFile(browser.current.receipt)))===canonical(browser.current.output)
       &&canonical(JSON.parse(readEvidenceFile(browser.current.output.authority)))===canonical(recovery.proof),'postinstall-status-authority-required');verifyScopedBrowserAcceptance(browser.current.output,browser.input);}
     need(!closedDeliveryState(d.state) || disposition, 'delivery-disposition-missing');
