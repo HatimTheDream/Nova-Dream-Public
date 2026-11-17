@@ -1,5 +1,5 @@
 """One scoped post-install browser observation; no application or Assistant dispatch."""
-import base64,hashlib,json,os,pathlib,pwd,re,signal,sqlite3,stat,subprocess,time,urllib.request,urllib.parse
+import base64,hashlib,json,os,pathlib,pwd,re,signal,sqlite3,stat,subprocess,time,urllib.request,urllib.parse,uuid
 P=pathlib.Path
 MEMORY_MAX=2147483648
 HOST_RESERVE=2147483648
@@ -63,27 +63,93 @@ def old_status(data):
     for key,ref in data['failure'].items():
         name='memory-browser-closed' if key=='memory' else key;need(sha(enc(status['files'][name])+b'\n')==ref['sha256'],'postinstall-failure-evidence-changed')
     need(not status['files']['acceptance'],'postinstall-unexpected-original-acceptance');return status
+def authority_bytes(path,maximum):
+    before=path.lstat();need(path.is_absolute() and path.resolve(strict=True)==path and stat.S_ISREG(before.st_mode)
+        and not stat.S_ISLNK(before.st_mode) and before.st_nlink==1 and before.st_size<=maximum,'postinstall-workspace-authority-file')
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NOATIME)
+    try:
+        need(meta(os.fstat(fd))==meta(before),'postinstall-workspace-authority-raced')
+        raw=os.read(fd,maximum+1);need(meta(os.fstat(fd))==meta(before),'postinstall-workspace-authority-changed')
+    finally:os.close(fd)
+    need(len(raw)==before.st_size and meta(path.lstat())==meta(before),'postinstall-workspace-authority-changed')
+    return raw
+
+def selected_workspace(root):
+    """The maintained workspace-host/recovery selection contract, without opening a Store."""
+    need(root.is_absolute() and root.resolve(strict=True)==root and root.is_dir(),'postinstall-workspace-root-scope')
+    selected=root;selection=root/'workspace-selection.json';proof=None;records={};directories=[root]
+    if selection.exists() or selection.is_symlink():
+        raw=authority_bytes(selection,1024);value=json.loads(raw)
+        need(type(value) is dict and set(value)=={'format','recoveryId'} and type(value['format']) is int and value['format']==1
+             and isinstance(value['recoveryId'],str) and str(uuid.UUID(value['recoveryId']))==value['recoveryId'],
+             'postinstall-workspace-selection-invalid')
+        selected=root/'recovered-workspaces'/value['recoveryId'];directories.extend([selected.parent,selected])
+        for directory in directories:
+            info=directory.lstat();need(directory.resolve(strict=True)==directory and stat.S_ISDIR(info.st_mode)
+                and not stat.S_ISLNK(info.st_mode),'postinstall-workspace-selection-redirected')
+        records[selection]=(raw,1024);proof=selected/'recovery-complete.json';raw=authority_bytes(proof,65536);value_proof=json.loads(raw)
+        need(type(value_proof) is dict and value_proof.get('jobId')==value['recoveryId']
+             and isinstance(value_proof.get('sourceHash'),str) and re.fullmatch('[a-f0-9]{64}',value_proof['sourceHash']),
+             'postinstall-workspace-recovery-proof-invalid');records[proof]=(raw,65536)
+    identity=selected/'edition3.identity';raw=authority_bytes(identity,1024)
+    need(raw==b'private.novadream.edition3.preview\n','postinstall-workspace-identity-invalid');records[identity]=(raw,1024)
+    file_ids={file:meta(file.lstat()) for file in records}
+    directory_ids={directory:(directory.lstat().st_dev,directory.lstat().st_ino) for directory in directories}
+    binding={'root':str(root),'selected':str(selected),'selection':{'path':str(selection),'sha256':sha(records[selection][0])} if selection in records else None,
+        'recoveryProof':{'path':str(proof),'sha256':sha(records[proof][0])} if proof else None,
+        'identity':{'path':str(identity),'sha256':sha(raw)}}
+    def recheck():
+        need((selection.exists() or selection.is_symlink())==(selection in records),'postinstall-workspace-selection-changed')
+        for directory,expected in directory_ids.items():
+            info=directory.lstat();need(directory.resolve(strict=True)==directory and stat.S_ISDIR(info.st_mode)
+                and not stat.S_ISLNK(info.st_mode) and (info.st_dev,info.st_ino)==expected,'postinstall-workspace-selection-changed')
+        for file,(expected,maximum) in records.items():
+            need(authority_bytes(file,maximum)==expected and meta(file.lstat())==file_ids[file],'postinstall-workspace-authority-changed')
+    return selected,binding,recheck
+
+def selected_sessions(root,expected,after_read=lambda:None):
+    selected,binding,recheck=selected_workspace(root);db=selected/'workspace.sqlite'
+    need(db.resolve(strict=True)==db,'postinstall-session-database-path');before=db.lstat()
+    need(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and before.st_nlink==1,'postinstall-session-database-path')
+    connection=sqlite3.connect('file:'+urllib.parse.quote(str(db))+'?mode=ro',uri=True,timeout=5)
+    try:
+        connection.execute('PRAGMA query_only=ON');need(connection.execute('PRAGMA query_only').fetchone()==(1,),'postinstall-session-query-only-required');connection.execute('BEGIN')
+        schema=connection.execute('PRAGMA user_version').fetchone()[0]
+        epoch=connection.execute("SELECT value,typeof(value) FROM meta WHERE key='epoch'").fetchone()
+        need(type(schema) is int and schema==expected['schemaVersion'] and epoch is not None and epoch[1]=='text'
+             and isinstance(epoch[0],str) and str(uuid.UUID(epoch[0]))==epoch[0] and epoch[0]==expected['epoch'],
+             'postinstall-session-workspace-identity-changed')
+        rows=connection.execute('SELECT digest,device_id,expires FROM sessions WHERE expires>? ORDER BY digest LIMIT 257',(int(time.time()*1000),)).fetchall()
+        connection.rollback()
+    finally:connection.close()
+    after_read()
+    need(db.resolve(strict=True)==db and not db.is_symlink() and (db.lstat().st_dev,db.lstat().st_ino)==(before.st_dev,before.st_ino)
+         and len(rows)<=256,'postinstall-session-database-changed-or-unbounded');recheck()
+    sessions=[{'digest':digest,'deviceId':device,'expiresAtMs':expires} for digest,device,expires in rows]
+    need(all(isinstance(r['digest'],str) and re.fullmatch('[a-f0-9]{64}',r['digest']) and isinstance(r['deviceId'],str)
+         and re.fullmatch('[a-f0-9-]{36}',r['deviceId']) and type(r['expiresAtMs'])==int for r in sessions),'postinstall-session-row-invalid')
+    return sessions,{'path':str(db),'device':before.st_dev,'inode':before.st_ino,'readOnly':True,'queryOnly':True,
+        'workspace':binding,'schemaVersion':schema,'epoch':epoch[0]}
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):raise RuntimeError('postinstall-redirect-refused')
 def live(data):
     ref=data['hostConfig'];need(ref['path']=='/etc/nova-update/config.json','postinstall-host-config-scope');config=json.loads(verified(ref,65536))
     for p in (P(ref['path']),*P(ref['path']).parents):need(p.lstat().st_uid==0 and not p.is_symlink() and p.lstat().st_mode&0o022==0,'postinstall-host-config-unprotected')
-    workspace=P(config['workspaceDirectory']);db=workspace/'workspace.sqlite';need(db.resolve()==db and db.is_file() and not db.is_symlink(),'postinstall-session-database-path')
+    workspace=P(config['workspaceDirectory'])
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
     def get(path):
         with opener.open('http://127.0.0.1:4383'+path,timeout=15) as response:
             need(response.status==200,'postinstall-health-unavailable');b=response.read(131073);need(len(b)<=131072,'postinstall-health-bound');return json.loads(b)
-    h=get('/api/health');access=get('/api/access/context');expected=data['input']['installed']['installedHealth']
-    for key in ('candidateId','processIdentity','serviceInputsSha256','apiVersion','schemaVersion','frontend'):need(h.get(key)==expected.get(key),'postinstall-current-health-changed')
-    need(h.get('status')=='ready' and access.get('workspaceEpoch')==expected['epoch'] and not access.get('recovery') and not access.get('recoveryLocal'),'postinstall-current-workspace-changed')
-    before=db.stat();connection=sqlite3.connect('file:'+urllib.parse.quote(str(db))+'?mode=ro',uri=True,timeout=5)
-    try:
-        connection.execute('PRAGMA query_only=ON');rows=connection.execute('SELECT digest,device_id,expires FROM sessions WHERE expires>? ORDER BY digest LIMIT 257',(int(time.time()*1000),)).fetchall()
-    finally:connection.close()
-    need((db.stat().st_dev,db.stat().st_ino)==(before.st_dev,before.st_ino) and len(rows)<=256,'postinstall-session-database-changed-or-unbounded')
-    sessions=[{'digest':digest,'deviceId':device,'expiresAtMs':expires} for digest,device,expires in rows]
-    need(all(re.fullmatch('[a-f0-9]{64}',r['digest']) and re.fullmatch('[a-f0-9-]{36}',r['deviceId']) and type(r['expiresAtMs'])==int for r in sessions),'postinstall-session-row-invalid')
-    return {'health':{k:h[k] for k in expected if k!='epoch'}|{'epoch':expected['epoch']},'sessions':sessions,'sessionDatabase':{'path':str(db),'device':before.st_dev,'inode':before.st_ino,'readOnly':True,'queryOnly':True}}
+    expected=data['input']['installed']['installedHealth']
+    def current():
+        h=get('/api/health');access=get('/api/access/context')
+        for key in ('candidateId','processIdentity','serviceInputsSha256','apiVersion','schemaVersion','frontend'):need(h.get(key)==expected.get(key),'postinstall-current-health-changed')
+        need(h.get('status')=='ready' and access.get('workspaceEpoch')==expected['epoch'] and not access.get('recovery') and not access.get('recoveryLocal'),'postinstall-current-workspace-changed')
+        return h
+    h=current();sessions,session_database=selected_sessions(workspace,expected,after_read=current)
+    return {'health':{k:h[k] for k in expected if k!='epoch'}|{'epoch':expected['epoch']},'sessions':sessions,'sessionDatabase':session_database}
+
 def unit_status(unit):
     result=subprocess.run(['/usr/bin/systemctl','show',unit,'--property=ActiveState,SubState,MainPID,ExecMainStatus'],capture_output=True,text=True,timeout=10)
     owned=[]

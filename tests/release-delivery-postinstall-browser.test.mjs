@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {sha256} from '../scripts/release-plan.mjs';
 import {canonicalBrowser} from '../scripts/release-delivery-browser-primitives.mjs';
-import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,RECOVERY_GAPS} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
+import {allowedRecoveryRequest,selectExistingRecoverySession,installRecoveryFence,prepareSingleRecoveryPage,RECOVERY_GAPS} from '../scripts/release-delivery-postinstall-browser-worker.mjs';
 import {verifyPostinstallBrowserRecovery} from '../scripts/release-delivery-postinstall-browser.mjs';
 import {postinstallReadinessFixture,postinstallAcceptanceFixture} from '../support/postinstall-browser-fixture.mjs';
 const now=1000000,origin='http://127.0.0.1:4383',candidate='a'.repeat(64),device='00000000-0000-4000-8000-000000000001',token='existing-fixture-token',cookie={name:'e3_session_'+'b'.repeat(32),value:token,domain:'127.0.0.1',path:'/'};
@@ -76,4 +76,15 @@ test('actual startup and Assistant read producers fit the complete narrow contra
  assert.deepEqual([...new Set(paths)].sort(),['accounts','agents/hub?archived=false','assistant/models','assistant/outputs','assistant/state','calendar/state?from=2026-10-25&to=2026-12-06&timezone=America%2FLos_Angeles','profile/progress'].sort());
  for(const p of paths){assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),true,p);assert.equal(allowedRecoveryRequest('POST',origin+'/api/'+p,'{}',input.assistant.conversationId),false,p);assert.equal(allowedRecoveryRequest('GET','http://127.0.0.1:4384/api/'+p,'',input.assistant.conversationId),false,p);}
  for(const p of ['accounts?extra=1','profile/progress?extra=1','agents/hub?archived=true','agents/hub?archived=false&before=x','calendar/state?from=2026-10-25&to=2026-12-06&timezone=UTC&extra=1','calendar/state?from=2026-02-30&to=2026-04-13&timezone=UTC','calendar/state?from=2026-10-25&to=2026-12-07&timezone=UTC','assistant/outputs?extra=1','assistant/conversations','mail/read','mail/index'])assert.equal(allowedRecoveryRequest('GET',origin+'/api/'+p,'',input.assistant.conversationId),false,p);
+});
+
+
+test('persistent recovery creates its replacement before closing old pages and arms only the sole survivor',async()=>{
+ const events=[],pages=[];const make=name=>({closed:false,isClosed(){return this.closed;},async close(){events.push('close:'+name);this.closed=true;pages.splice(pages.indexOf(this),1);}});const first=make('first'),second=make('second'),replacement=make('replacement');pages.push(first,second);
+ const context={pages:()=>pages,async newPage(){events.push('create');assert.equal(first.isClosed(),false);assert.equal(second.isClosed(),false);pages.push(replacement);return replacement;}};
+ const page=await prepareSingleRecoveryPage(context,{arm:p=>{events.push('arm');assert.equal(p,replacement);assert.deepEqual(pages,[replacement]);}});assert.equal(page,replacement);assert.deepEqual(events,['create','close:first','close:second','arm']);
+});
+test('unexpected new page, failed replacement or failed old-page closure never arms recovery',async()=>{
+ for(const fault of ['create','close','extra']){const old={isClosed:()=>false,close:async()=>{if(fault==='close')throw Error('close failed');pages.splice(pages.indexOf(old),1);}},replacement={isClosed:()=>false},pages=[old];let armed=false;const context={pages:()=>pages,async newPage(){if(fault==='create')throw Error('create failed');pages.push(replacement);if(fault==='extra')pages.push({isClosed:()=>false});return replacement;}};await assert.rejects(prepareSingleRecoveryPage(context,{arm:()=>{armed=true;}}));assert.equal(armed,false);if(fault==='create')assert.deepEqual(pages,[old]);}
+ let created=false;await assert.rejects(prepareSingleRecoveryPage({pages:()=>[],newPage:async()=>{created=true;}},{arm:()=>assert.fail('must not arm')}),/original-window-required/);assert.equal(created,false);
 });

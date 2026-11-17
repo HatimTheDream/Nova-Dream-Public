@@ -74,6 +74,14 @@ export async function installRecoveryFence(context,api,input,authority,sessions,
  });
  return{guard,arm:page=>{need(!designatedPage&&context.pages().length===1&&context.pages()[0]===page,'browser-recovery-single-page-required');designatedPage=page;},armStale:()=>{staleArmed=true;},staleObserved:()=>staleObserved,summary:()=>({backendObservationSemantics:RECOVERY_READ_SEMANTICS,connectedMailReadAccounts:0,sessionDigest:selected.row.digest,deviceId:selected.row.deviceId,sessionPosts,sessionAttempts,blocked,mutatingRequestsForwarded:forwardedPosts,onlyExistingSessionPost:true,failure,webSocketsForwarded:0,serviceWorkers:'block'})};
 }
+/** A persistent Chromium window must remain alive while its blank replacement is created. */
+export async function prepareSingleRecoveryPage(context,fence){
+ const previous=[...context.pages()];need(previous.length>0,'browser-recovery-original-window-required');
+ const page=await context.newPage();need(!page.isClosed()&&previous.every(old=>!old.isClosed()),'browser-recovery-replacement-window-unavailable');
+ for(const old of previous)await old.close();
+ need(context.pages().length===1&&context.pages()[0]===page&&!page.isClosed(),'browser-recovery-single-page-required');
+ fence.arm(page);return page;
+}
 async function nav(page,label){const rail=page.locator('#main-navigation');if(!await rail.isVisible()){const b=page.getByRole('button',{name:'Show main navigation',exact:true});if(await b.isVisible())await b.click();}await page.locator('#main-navigation').getByRole('button',{name:label,exact:true}).click();}
 async function checkUi(page){await tasks(page);const search=page.getByRole('textbox',{name:'Search tasks',exact:true});await search.fill('Nova acceptance search');await search.press('Escape');need(await search.inputValue()===''&&await search.evaluate(e=>document.activeElement===e),'browser-recovery-search-escape-failed');await search.fill('Nova acceptance search');await page.getByRole('button',{name:'Clear task search',exact:true}).click();need(await search.inputValue()===''&&await search.evaluate(e=>document.activeElement===e),'browser-recovery-search-clear-failed');await page.locator('.breadcrumb').click();await page.keyboard.press('/');need(await search.evaluate(e=>document.activeElement===e),'browser-recovery-search-shortcut-failed');}
 export async function runCurrentBrowserChecks(context,page,request,record,fence){
@@ -106,7 +114,7 @@ export async function currentBrowserWorker(requestPath){
   memory('before-launch');const playwright=await import(pathToFileURL(entry).href);api=await playwright.request.newContext({baseURL:'http://127.0.0.1:4383',ignoreHTTPSErrors:false,timeout:15000});
   context=await playwright.chromium.launchPersistentContext(join(directory,'profile'),{executablePath:options.executable.path,headless:true,chromiumSandbox:true,serviceWorkers:'block',viewport:{width:1280,height:800},acceptDownloads:false,timeout:30000,args:['--proxy-server=http://nova-browser-recovery-deny.invalid:9','--proxy-bypass-list=<-loopback>','--host-resolver-rules=MAP nova-browser-recovery-deny.invalid ~NOTFOUND']});context.setDefaultTimeout(20000);
   fence=await installRecoveryFence(context,api,input,authority,request.sessions,record,{priorCandidateId:request.original.binding.priorCandidateId});
-  for(const page of context.pages())await page.close();const page=await context.newPage();need(context.pages().length===1,'browser-recovery-single-page-required');fence.arm(page);
+  const page=await prepareSingleRecoveryPage(context,fence);
   timer=setTimeout(()=>context.close().catch(()=>{}),Math.max(1,authority.deadlineAtMs-Date.now()));
   result=await runCurrentBrowserChecks(context,page,request,record,fence);const peak=memory('accepted');need(peak.peakBytes<=Math.floor(2147483648*0.8),'browser-recovery-memory-headroom-insufficient');
  }catch(error){writeBrowserOnce(join(directory,'failed.json'),{operationId:input.operationId,reason:/^[a-z][a-z0-9-]{0,99}$/.test(error.message)?error.message:'browser-recovery-ui-check-failed',detail:String(error.message).slice(0,2000),atMs:Date.now(),completedChecks:checks.map(c=>c.name),fence:fence?.summary()??null});}
