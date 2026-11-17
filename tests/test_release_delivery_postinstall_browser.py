@@ -1,12 +1,33 @@
+import ast
 import base64
 import importlib.util
 import json
 import os
 import pathlib
+import re
 import tempfile
 import types
 import unittest
+import warnings
 from unittest.mock import patch
+
+class PostinstallSourceTests(unittest.TestCase):
+    def test_embedded_host_worker_compiles_without_warnings(self):
+        source = pathlib.Path(__file__).parents[1] / 'scripts' / 'release-delivery-postinstall-browser.py'
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            compile(source.read_text(encoding='utf-8'), str(source), 'exec', dont_inherit=True)
+    def test_worker_name_pattern_retains_exact_value_and_matching(self):
+        source = pathlib.Path(__file__).parents[1] / 'scripts' / 'release-delivery-postinstall-browser.py'
+        values = [node.args[0].value for node in ast.walk(ast.parse(source.read_text(encoding='utf-8')))
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'fullmatch'
+                  and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                  and node.args[0].value.startswith('release-delivery-')]
+        self.assertEqual(values, [r'release-delivery-[a-z-]+\.mjs'])
+        for name in ('release-delivery-postinstall-browser-worker.mjs', 'release-delivery-browser-worker.mjs'):
+            self.assertIsNotNone(re.fullmatch(values[0], name))
+        for name in ('release-delivery-browser-workerXmjs', '../release-delivery-browser-worker.mjs'):
+            self.assertIsNone(re.fullmatch(values[0], name))
 
 browser = None
 if os.name == 'posix':

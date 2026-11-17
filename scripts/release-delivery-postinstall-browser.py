@@ -203,7 +203,7 @@ def main(data):
         need(inventory(source,who.pw_uid)['inventorySha256']==fresh['profile']['inventorySha256'],'postinstall-original-profile-changed')
         exact(directory/'profile-copy.json',{'source':fresh['profile'],'copiedRegularFiles':sum(r['kind']=='file' for r in info['rows']),'excludedSingletonLinks':[r['path'] for r in info['rows'] if r['kind']=='singleton-link'],'sourceUnchanged':True},gid=who.pw_gid)
         for name,value in data['sources'].items():
-            need(re.fullmatch('release-delivery-[a-z-]+\.mjs',name),'postinstall-worker-name-invalid');raw=base64.b64decode(value['base64']);need(sha(raw)==value['sha256'],'postinstall-worker-source-changed');p=directory/name;fd=os.open(p,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o640)
+            need(re.fullmatch(r'release-delivery-[a-z-]+\.mjs',name),'postinstall-worker-name-invalid');raw=base64.b64decode(value['base64']);need(sha(raw)==value['sha256'],'postinstall-worker-source-changed');p=directory/name;fd=os.open(p,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o640)
             try:os.fchown(fd,0,who.pw_gid);os.write(fd,raw);os.fsync(fd)
             finally:os.close(fd)
         closure=base64.b64decode(data['legacy']['closure']);need(sha(closure)==options['playwright']['sha256'],'postinstall-playwright-closure-changed');(directory/'playwright-closure.json').write_bytes(closure);os.chown(directory/'playwright-closure.json',0,who.pw_gid);os.chmod(directory/'playwright-closure.json',0o640)

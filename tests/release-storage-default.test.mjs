@@ -272,3 +272,40 @@ test('only the recorded first continuation session may reenter after its admissi
     [null,null,admission,session,dispatch]
   ])assert.equal(continuationSessionAuthorityMatches(saved,authority,record,sr,dr),false);
 });
+
+test('failed configured plan routes preserve bounded child reasons before reading any plan reference', async t => {
+  for (const mode of ['plan-browser-recovery', 'plan-publication-continuation']) {
+    const f = fixture(t); delete f.env.NOVA_RELEASE_STORAGE_SESSION;
+    f.config.postinstallBrowserRecovery = mode === 'plan-browser-recovery'; f.put('config.json', f.config);
+    const request = f.put('plan-request.json', { operationId: f.id, browserWindowRecovery: true });
+    const args = [mode, f.journalDirectory, f.id, request.path];
+    const fallback = mode === 'plan-browser-recovery' ? 'storage-postinstall-plan-result-invalid' : 'storage-browser-window-plan-result-invalid';
+    for (const reason of ['reconciliation-plan-unavailable-observe-original', 'postinstall-browser-response-unavailable', undefined, {}, 'UPPERCASE', 'bad reason', 'x'.repeat(161)]) {
+      let planReads = 0;
+      const value = { state: 'stopped', reason, automaticNewOperationPermitted: false,
+        get plan() { planReads++; throw Error('failed-plan-reference-must-not-be-read'); } };
+      await assert.rejects(routeStorageDelivery(args, entry, { env: f.env, launch: async (executable, argv) => {
+        assert.equal(executable, process.execPath); assert.equal(argv[argv.indexOf('--mode') + 1], mode);
+        assert.deepEqual(argv.slice(-6), ['--journal', f.journalDirectory, '--operation', f.id, '--reconciliation-request', request.path]);
+        return { code: 2, value };
+      } }), { message: typeof reason === 'string' && /^[a-z][a-z0-9-]{0,159}$/.test(reason) ? reason : fallback });
+      assert.equal(planReads, 0); assert.equal(existsSync(f.journalDirectory), false);
+    }
+  }
+});
+test('configured plan routes still require zero exit and exact successful read-only plan evidence', async t => {
+  for (const mode of ['plan-browser-recovery', 'plan-publication-continuation']) {
+    const f = fixture(t); delete f.env.NOVA_RELEASE_STORAGE_SESSION;
+    f.config.postinstallBrowserRecovery = mode === 'plan-browser-recovery'; f.put('config.json', f.config);
+    const request = f.put('plan-request.json', { operationId: f.id, browserWindowRecovery: true }), args = [mode, f.journalDirectory, f.id, request.path];
+    const plan = { kind: mode === 'plan-browser-recovery' ? 'nova-postinstall-browser-recovery-plan' : 'nova-publication-continuation-plan', operationId: f.id, readOnly: true, hostEffects: false, journalWrites: false };
+    const value = { plan: f.put('actual-plan.json', plan), value: plan };
+    const result = await routeStorageDelivery(args, entry, { env: f.env, launch: async () => ({ code: 0, value }) });
+    assert.equal(result.handled, true); assert.deepEqual(result.result, value);
+    await assert.rejects(routeStorageDelivery(args, entry, { env: f.env, launch: async () => ({ code: 2, value: { ...value, reason: 'nonzero-with-valid-plan' } }) }), { message: 'nonzero-with-valid-plan' });
+    await assert.rejects(routeStorageDelivery(args, entry, { env: f.env, launch: async () => ({ code: 0, value: { reason: 'cannot-replace-plan' } }) }), /storage-reference-required/);
+    const changed = { ...plan, hostEffects: true }, changedValue = { plan: f.put('effectful-plan.json', changed), value: changed };
+    await assert.rejects(routeStorageDelivery(args, entry, { env: f.env, launch: async () => ({ code: 0, value: changedValue }) }), /storage-(postinstall|browser-window)-plan-result-invalid/);
+    assert.equal(existsSync(f.journalDirectory), false);
+  }
+});

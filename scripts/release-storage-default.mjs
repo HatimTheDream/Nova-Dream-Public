@@ -350,6 +350,9 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     if(reconcile)argv.push('--reconciliation-request',absolute(resolve(args[3])));
   }
   const { code, value } = await launch(config.python.path, argv);
+  if (['plan-browser-recovery', 'plan-publication-continuation'].includes(mode) && code !== 0)
+    throw Error(typeof value?.reason === 'string' && /^[a-z][a-z0-9-]{0,159}$/.test(value.reason) ? value.reason
+      : mode === 'plan-browser-recovery' ? 'storage-postinstall-plan-result-invalid' : 'storage-browser-window-plan-result-invalid');
   if(mode==='plan-browser-recovery'){const p=document(reference(value?.plan));need(code===0&&same(p,value.value)&&p.kind==='nova-postinstall-browser-recovery-plan'&&p.operationId===args[2]&&p.readOnly===true&&p.hostEffects===false&&p.journalWrites===false,'storage-postinstall-plan-result-invalid');return {handled:true,result:value};}
   if(mode==='reconcile-browser-recovery'){
     const {postinstallCoverage}=await import('./release-delivery-postinstall-recovery.mjs');
