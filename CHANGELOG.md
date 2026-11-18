@@ -1,3 +1,7 @@
+## [2.28.43] - 2026-11-17
+
+- Wait for complete process-readiness markers in release cancellation checks, avoiding false failures while preserving child-process cleanup checks.
+
 ## [2.28.42] - 2026-11-17
 
 - Match update-staging checks to the exact current or historical helper family while retaining capacity and recovery protections.

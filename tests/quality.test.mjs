@@ -16,6 +16,23 @@ const marker = (name, value = 'done') => `writeFileSync(${JSON.stringify(name)},
 const waitFor = name => `await new Promise((ok,no)=>{const end=Date.now()+8000;const timer=setInterval(()=>{if(existsSync(${JSON.stringify(name)})){clearInterval(timer);ok();}else if(Date.now()>end){clearInterval(timer);no(Error('peer did not start'));}},10);});`;
 const fsImport = "import {writeFileSync,existsSync} from 'node:fs';";
 
+function readyPids(root, names) {
+  const pids = [];
+  for (const name of names) {
+    let text;
+    try { text = readFileSync(join(root, name), 'utf8'); } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+    // A file can exist before writeFileSync finishes writing its PID.
+    if (!/^[1-9][0-9]*\n$/.test(text)) return null;
+    const pid = Number(text);
+    if (!Number.isSafeInteger(pid)) return null;
+    pids.push({ name, pid });
+  }
+  return pids;
+}
+
 function processState(pid) {
   try { process.kill(pid, 0); } catch (error) {
     if (error.code === 'ESRCH') return 'terminated';
@@ -128,21 +145,35 @@ test('arguments containing spaces and shell syntax remain literal', async t => {
   assert.equal(result.passed, true); assert.deepEqual(JSON.parse(readFileSync(join(root, 'args.json'))), [literal]);
 });
 
+test('complete PID markers gate cancellation fixture readiness', t => {
+  const root = fixture(t), names = ['parent.pid', 'grandchild.pid'];
+  assert.equal(readyPids(root, names), null);
+  writeFileSync(join(root, names[0]), '1234\n');
+  for (const incomplete of ['', '56', '0\n', '-1\n', '1.5\n', '9007199254740992\n']) {
+    writeFileSync(join(root, names[1]), incomplete);
+    assert.equal(readyPids(root, names), null, JSON.stringify(incomplete));
+  }
+  writeFileSync(join(root, names[1]), '5678\n');
+  assert.deepEqual(readyPids(root, names), [{ name: names[0], pid: 1234 }, { name: names[1], pid: 5678 }]);
+  writeFileSync(join(root, names[0]), '12');
+  assert.equal(readyPids(root, names), null, 'both markers must be complete');
+});
+
 test('explicit cancellation ends the owned child and its descendant and blocks later commands', async t => {
   const root = fixture(t), controller = new AbortController();
-  const grandchild = "import {writeFileSync} from 'node:fs';writeFileSync('grandchild.pid',String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);";
+  const grandchild = "import {writeFileSync} from 'node:fs';writeFileSync('grandchild.pid',String(process.pid)+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},1000);";
   const parent = fsImport + "import {spawn} from 'node:child_process';" +
     `spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(grandchild)}],{stdio:'inherit',shell:false,windowsHide:true});` +
-    "writeFileSync('parent.pid',String(process.pid));setInterval(()=>{},1000);";
+    "writeFileSync('parent.pid',String(process.pid)+'\\n');setInterval(()=>{},1000);";
   const running = runQualityPlan([[command('parent', parent), command('later', fsImport + marker('unexpected-later'))]], { cwd: root, signal: controller.signal });
   const pids = [];
   let result;
   try {
     const deadline = Date.now() + 8000;
-    while (!existsSync(join(root, 'grandchild.pid')) && Date.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
-    for (const name of ['parent.pid', 'grandchild.pid']) {
-      assert.equal(existsSync(join(root, name)), true);
-      const pid = Number(readFileSync(join(root, name), 'utf8'));
+    let ready;
+    while (!(ready = readyPids(root, ['parent.pid', 'grandchild.pid'])) && Date.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
+    assert.ok(ready, 'both complete PID markers must be ready before cancellation');
+    for (const { name, pid } of ready) {
       assert.ok(Number.isSafeInteger(pid) && pid > 0);
       assert.notEqual(processState(pid), 'terminated', `${name} must be alive before cancellation`);
       pids.push({ name, pid });
