@@ -1,3 +1,8 @@
+## [2.28.42] - 2026-11-17
+
+- Match update-staging checks to the exact current or historical helper family while retaining capacity and recovery protections.
+- Reuse an authenticated saved-work inventory across candidate preparation while preserving fresh source-identity and worker-closure checks.
+
 ## [2.28.41] - 2026-11-17
 
 - Recognize the server’s verified copy-tool link while preserving exact executable, ownership and saved-work checks.

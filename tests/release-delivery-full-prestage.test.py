@@ -168,44 +168,91 @@ class MetadataStageTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   source=HERE/'full-host-primitives/metadata-stage.py';tree=ast.parse(source.read_bytes())
-  functions={'need','sha','metadata_capacity'};assignments={'FROZEN_HELPERS','FROZEN_APPLICATION_HELPERS','HELPERS','NAMES'}
+  functions={'need','sha','enc','helper_family','checked_payload','metadata_capacity'}
+  assignments={'FROZEN_HELPERS','FROZEN_APPLICATION_HELPERS','FROZEN_SAME_SCHEMA60_HELPERS'}
   nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in functions) or
    (isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id in assignments)]
-  cls.scope={'ast':ast,'hashlib':hashlib}
-  # Execute only the actual pure capacity function and literal helper bindings;
-  # the remote entrypoint, signal alarm, file writes and operator calls are absent.
+  cls.scope={'ast':ast,'hashlib':hashlib,'json':json,'base64':__import__('base64'),'re':re,'P':pathlib.PurePosixPath}
+  # Only actual pure admission/capacity definitions; no remote entrypoint or effects.
   exec(compile(ast.Module(body=nodes,type_ignores=[]),str(source),'exec'),cls.scope)
   module=(HERE/'release-delivery-full-host.mjs').read_text(encoding='utf-8')
   cls.legacy_helpers=ast.literal_eval(re.search(r'export const FULL_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
-  cls.helpers=ast.literal_eval(re.search(r'export const FULL_APPLICATION_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
+  cls.historical_helpers=ast.literal_eval(re.search(r'export const FULL_APPLICATION_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
+  startup=(HERE/'release-delivery-startup-retained.mjs').read_text(encoding='utf-8')
+  cls.helpers=json.loads(re.search(r'export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze\((\{[^\n]*\})\);',startup).group(1))
+  cls.marker=dict(format=1,kind='schema-60-same-runtime',schemaVersion=60,apiVersion=1,agentVersion='2026.9.8')
+  cls.transition=dict(format=1,kind='schema-55-to-60-same-runtime',fromSchemaVersion=55,toSchemaVersion=60,apiVersion=1,fromAgentVersion='2026.9.8',toAgentVersion='2026.9.8')
+  cls.review=dict(helperHashes=cls.helpers,sameSchemaQualification=cls.marker,leaseId='12942d2f-d9df-4fdf-a617-7833a21cfde7')
   cls.payload={name:(HERE.parent/'deploy/update-runner'/name).read_bytes() for name in cls.helpers}
-  cls.payload['operator-review.json']=b'{}\n'
- def test_every_static_primitive_helper_map_matches_qualified_source_bytes(self):
+  cls.payload['operator-review.json']=cls.scope['enc'](cls.review)
+ def request(self,payload=None,review=None):
+  payload=dict(self.payload if payload is None else payload)
+  review=json.loads(payload['operator-review.json']) if review is None else review
+  payload['operator-review.json']=self.scope['enc'](review)
+  root='/opt/nova-release-tools/test/rehearsal-'+self.review['leaseId']
+  packet=dict(format=2,capacityScope='metadata-stage-only',root=root,stageParent='/opt/nova-release-tools/test',
+   leaseId=self.review['leaseId'],sourceCommit='a'*40,runnerSha256='b'*64,
+   files={n:dict(path=root+'/'+n,bytes=len(b),sha256=hashlib.sha256(b).hexdigest()) for n,b in payload.items()},
+   facts=dict(review=review,sourceCommit='a'*40))
+  return dict(packet=packet,packetSha256=self.scope['sha'](self.scope['enc'](packet)),runnerSha256='b'*64,
+   files={n:__import__('base64').b64encode(b).decode() for n,b in payload.items()})
+ def test_every_static_primitive_helper_map_matches_its_qualified_family(self):
   actual={name:hashlib.sha256(self.payload[name]).hexdigest() for name in self.helpers}
   self.assertEqual(self.helpers,actual);self.assertEqual(len(actual),11);self.assertEqual(len(self.legacy_helpers),7)
-  maps=[]
+  self.assertNotEqual(self.helpers,self.historical_helpers)
+  expected={'FROZEN_HELPERS':self.legacy_helpers,'FROZEN_APPLICATION_HELPERS':self.historical_helpers,'FROZEN_SAME_SCHEMA60_HELPERS':self.helpers};maps=[]
   for path in sorted((HERE/'full-host-primitives').glob('*.py')):
    for node in ast.walk(ast.parse(path.read_bytes())):
     if not isinstance(node,ast.Assign):continue
     try:value=ast.literal_eval(node.value)
     except (ValueError,TypeError,SyntaxError):continue
     if isinstance(value,dict) and any(name in actual and isinstance(pin,str) and re.fullmatch('[a-f0-9]{64}',pin) for name,pin in value.items()):
-     maps.append((path.name,ast.unparse(node.targets[0])));self.assertIn(value,(actual,self.legacy_helpers),str(path))
-  self.assertIn(('metadata-stage.py','FROZEN_HELPERS'),maps);self.assertIn(('metadata-stage.py','FROZEN_APPLICATION_HELPERS'),maps)
+     name=ast.unparse(node.targets[0]);maps.append((path.name,name));self.assertIn(value,expected.values(),str(path))
+     if path.name=='metadata-stage.py':self.assertEqual(value,expected[name])
+  for name in expected:self.assertIn(('metadata-stage.py',name),maps)
+ def test_exact_legacy_historical_and_current_marker_map_matrix(self):
+  select=self.scope['helper_family']
+  rows=[({},self.legacy_helpers),({'applicationTransition':self.transition},self.historical_helpers),({'sameSchemaQualification':self.marker},self.helpers)]
+  for markers,helpers in rows:
+   self.assertEqual(select(dict(helperHashes=helpers,**markers),helpers),helpers)
+   for wrong in (self.legacy_helpers,self.historical_helpers,self.helpers):
+    if wrong!=helpers:
+     with self.subTest(markers=markers,wrong=wrong),self.assertRaisesRegex(RuntimeError,'exact-helper-family-required'):
+      select(dict(helperHashes=wrong,**markers),wrong)
+ def test_malformed_or_conflicting_markers_never_relabel_a_family(self):
+  changes=[dict(self.marker,format=True),dict(self.marker,schemaVersion=55),dict(self.marker,apiVersion=2),dict(self.marker,agentVersion='2026.9.9'),dict(self.marker,passed=True),None]
+  for marker in changes:
+   with self.subTest(marker=marker),self.assertRaises(RuntimeError):self.scope['helper_family'](dict(helperHashes=self.helpers,sameSchemaQualification=marker),self.helpers)
+  with self.assertRaisesRegex(RuntimeError,'marker-conflict'):
+   self.scope['helper_family'](dict(self.review,applicationTransition=self.transition),self.helpers)
+  with self.assertRaises(RuntimeError):self.scope['helper_family'](dict(helperHashes=self.historical_helpers,applicationTransition=dict(self.transition,toSchemaVersion=61)),self.historical_helpers)
  def test_actual_helper_payload_keeps_metadata_only_operating_reserve(self):
+  self.assertEqual(self.scope['checked_payload'](self.request()),self.payload)
   result=self.scope['metadata_capacity'](self.payload,4096,2**40)
   self.assertEqual(result['operatingFloorBytes'],1879048192)
   self.assertEqual(result['requiredFreeBytes'],1879048192+result['incrementalAllocatedBytesMaximum'])
   self.assertEqual(result['futureReclaimCreditBytes'],0)
   self.assertFalse(result['fullRehearsalCapacityAdmitted']);self.assertTrue(result['fullMaintainedPlanStillRequired'])
- def test_migration_payload_cannot_drop_any_imported_helper(self):
-  for name in self.helpers:
-   with self.subTest(name=name),self.assertRaises(RuntimeError):
-    self.scope['metadata_capacity']({n:v for n,v in self.payload.items() if n!=name},4096,2**40)
- def test_changed_recovery_payload_is_rejected_before_capacity_admission(self):
-  changed={**self.payload,'recovery.py':self.payload['recovery.py']+b'\n# changed fixture\n'}
-  with self.assertRaisesRegex(RuntimeError,'unchanged-maintained-recovery-reserve'):
-   self.scope['metadata_capacity'](changed,4096,2**40)
+ def test_current_payload_cannot_drop_add_or_mix_any_imported_helper(self):
+  variants=[{n:v for n,v in self.payload.items() if n!=name} for name in self.helpers]
+  variants += [dict(self.payload,unexpected=b'extra')]
+  variants += [{**self.payload,name:self.payload[name]+b'\n# changed fixture\n'} for name in self.helpers]
+  for changed in variants:
+   with self.subTest(names=list(changed)),self.assertRaises(RuntimeError):self.scope['metadata_capacity'](changed,4096,2**40)
+   with self.assertRaises(RuntimeError):self.scope['checked_payload'](self.request(changed))
+ def test_rehashed_packet_with_wrong_review_marker_or_map_is_rejected(self):
+  reviews=[{k:v for k,v in self.review.items() if k!='sameSchemaQualification'},dict(self.review,helperHashes=self.historical_helpers),dict(self.review,applicationTransition=self.transition),dict(self.review,sameSchemaQualification=dict(self.marker,format=True))]
+  for review in reviews:
+   with self.subTest(review=review),self.assertRaises(RuntimeError):self.scope['checked_payload'](self.request(review=review))
+ def test_packet_hash_bytes_and_review_lineage_still_bind_admission(self):
+  for mutation in ('packet','bytes','facts'):
+   request=self.request()
+   if mutation=='packet':request['packet']['sourceCommit']='c'*40
+   elif mutation=='bytes':request['files']['install.py']=__import__('base64').b64encode(b'changed').decode()
+   else:
+    request['packet']['facts']['sourceCommit']='c'*40
+    request['packetSha256']=self.scope['sha'](self.scope['enc'](request['packet']))
+   with self.subTest(mutation=mutation),self.assertRaises(RuntimeError):self.scope['checked_payload'](request)
  def test_actual_payload_one_byte_below_operating_floor_and_increment_fails(self):
   capacity=self.scope['metadata_capacity'](self.payload,4096,2**40)
   self.assertEqual(self.scope['metadata_capacity'](self.payload,4096,capacity['requiredFreeBytes']),capacity)

@@ -29,6 +29,7 @@ def put(p,b):
 import http.client,socket,subprocess
 FROZEN_HELPERS={'app_dependencies.py': 'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290', 'codex_log_retention.py': 'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4', 'install.py': 'd417d652163cb134583b1d766c650ad0a8597084bfa25ee876d7cf5155f013c4', 'operator_rehearsal.py': 'cec0f65413550a5872c2e97c0835434647a7aeadccd73e8c812ecda0fe251c3c', 'recovery.py': '520c337ceb9deb252bdeaaa7d5a4a7ca1e6c4fc09c8d001f91e2e8ad9b3946bf', 'verify-session-bindings.mjs': '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0', 'workspace_key.py': 'e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2'}
 FROZEN_APPLICATION_HELPERS={'install.py': '522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24', 'recovery.py': '23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15', 'operator_rehearsal.py': '7d06b092c82f7c7c541a02f5193a050a2458a7871ae68cae0c717ba6e0f7ce6d', 'app_dependencies.py': 'e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290', 'codex_log_retention.py': 'bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4', 'workspace_key.py': 'e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2', 'verify-session-bindings.mjs': '1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0', 'hosted_retained_configuration.py': '0d1bee70be1094f26f2d5ad1f68cd878b12433f0388938bf78152ca725878573', 'local-retained-configuration.mjs': '805deb9d388e97fc813fc8305461989e40228a6376a5e7293f454bd0e41391de', 'hosted_retained_catalog.py': '23fd07da83338b67dfc4905dc74952295fb79432fd6b3db23a4a22f8e2b6854b', 'hosted-retained-catalog.mjs': '431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db'}
+FROZEN_SAME_SCHEMA60_HELPERS={"install.py":"54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef","recovery.py":"113f2c937e40eac597ec056fcc8042e69392505fa5f5f96dd44a1ea9441e3b11","operator_rehearsal.py":"8fe10fd13b924b78e8eccbe01334ce627e09c46961e5750062c57dcfe957a8d2","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"}
 HELPERS=FROZEN_HELPERS
 NAMES=('app_dependencies.py', 'codex_log_retention.py', 'install.py', 'operator_rehearsal.py', 'recovery.py', 'verify-session-bindings.mjs', 'workspace_key.py', 'operator-review.json')
 def sync(path):
@@ -70,10 +71,45 @@ def operator_status():
     finally:
         client.close()
 
+
+def helper_family(review, hashes):
+    need(type(review) is dict and type(hashes) is dict, 'exact-helper-family-required')
+    transition = 'applicationTransition' in review
+    same_schema = 'sameSchemaQualification' in review
+    need(not (transition and same_schema), 'helper-qualification-marker-conflict')
+    if same_schema:
+        marker = {'format':1,'kind':'schema-60-same-runtime','schemaVersion':60,'apiVersion':1,'agentVersion':'2026.9.8'}
+        need(enc(review['sameSchemaQualification']) == enc(marker), 'exact-helper-qualification-marker')
+        expected = FROZEN_SAME_SCHEMA60_HELPERS
+    elif transition:
+        marker = {'format':1,'kind':'schema-55-to-60-same-runtime','fromSchemaVersion':55,'toSchemaVersion':60,'apiVersion':1,'fromAgentVersion':'2026.9.8','toAgentVersion':'2026.9.8'}
+        need(enc(review['applicationTransition']) == enc(marker), 'exact-helper-qualification-marker')
+        expected = FROZEN_APPLICATION_HELPERS
+    else:
+        expected = FROZEN_HELPERS
+    need(hashes == expected and review.get('helperHashes') == expected, 'exact-helper-family-required')
+    return expected
+
+def checked_payload(v):
+    packet = v['packet']; root = P(packet['root'])
+    need(packet['format'] == 2 and packet['capacityScope'] == 'metadata-stage-only', 'explicit-stage-only-packet')
+    need(sha(enc(packet)) == v['packetSha256'] and packet['runnerSha256'] == v['runnerSha256'], 'frozen-rehearsal-stage-packet')
+    names = set(packet['files'])
+    need(names == set(v['files']) and names in (set(FROZEN_HELPERS)|{'operator-review.json'}, set(FROZEN_APPLICATION_HELPERS)|{'operator-review.json'}), 'exact-fixed-helper-allowlist')
+    payload = {}
+    for name, r in packet['files'].items():
+        b = base64.b64decode(v['files'][name], validate=True)
+        need(0 < len(b) <= 2*1024**2 and len(b) == r['bytes'] and sha(b) == r['sha256'] and r['path'] == str(root/name), 'frozen-fixed-helper-bytes')
+        payload[name] = b
+    need(sum(map(len, payload.values())) <= 4*1024**2, 'bounded-fixed-helper-payload')
+    facts = packet['facts']; review = json.loads(payload['operator-review.json'])
+    need(review == facts['review'] and review['leaseId'] == packet['leaseId'] and facts['sourceCommit'] == packet['sourceCommit'] and re.fullmatch('[a-f0-9]{40}', packet['sourceCommit']), 'actual-current-review-lineage')
+    helper_family(review, {name:sha(b) for name,b in payload.items() if name != 'operator-review.json'})
+    return payload
+
 def metadata_capacity(payload, fragment, free):
-    helper_map = FROZEN_APPLICATION_HELPERS if set(payload)-{'operator-review.json'} == set(FROZEN_APPLICATION_HELPERS) else FROZEN_HELPERS
-    names = set(helper_map)|{'operator-review.json'}
-    need(set(payload) == names and all((isinstance(b, bytes) and 0 < len(b) <= 2 * 1024 ** 2 for b in payload.values())) and (sum(map(len, payload.values())) <= 4 * 1024 ** 2), 'bounded-exact-fixed-helper-capacity')
+    need(type(payload) is dict and 'operator-review.json' in payload and all((isinstance(b, bytes) and 0 < len(b) <= 2 * 1024 ** 2 for b in payload.values())) and (sum(map(len, payload.values())) <= 4 * 1024 ** 2), 'bounded-exact-fixed-helper-capacity')
+    helper_map = helper_family(json.loads(payload['operator-review.json']), {name:sha(b) for name,b in payload.items() if name != 'operator-review.json'})
     need(type(fragment) is int and 512 <= fragment <= 65536 and (fragment & fragment - 1 == 0) and (type(free) is int) and (free >= 0), 'actual-capacity-observation')
     need(sha(payload['recovery.py']) == helper_map['recovery.py'], 'unchanged-maintained-recovery-reserve')
     tree = ast.parse(payload['recovery.py'])
@@ -90,20 +126,10 @@ def metadata_capacity(payload, fragment, free):
     need(free >= floor + increment, 'metadata-stage-plus-maintained-operating-reserve')
     return {'format': 1, 'kind': 'fixed-helper-metadata-stage-capacity', 'scope': 'metadata-stage-only', 'reserveBytes': reserve, 'allowanceBytes': 2 * allowance, 'operatingFloorBytes': floor, 'allocationFragmentBytes': fragment, 'incrementalAllocatedBytesMaximum': increment, 'recordEnvelopeBytes': 2 * 1024 ** 2, 'directoryAllocationAllowanceBytes': 4 * fragment, 'requiredFreeBytes': floor + increment, 'futureReclaimCreditBytes': 0, 'fullRehearsalCapacityAdmitted': False, 'fullMaintainedPlanStillRequired': True}
 
-v=REQUEST;packet=v['packet'];root=P(packet['root']);stage_parent=P(packet['stageParent'])
-need(packet['format']==2 and packet['capacityScope']=='metadata-stage-only','explicit-stage-only-packet')
-need(sha(enc(packet))==v['packetSha256'] and packet['runnerSha256']==v['runnerSha256'],'frozen-rehearsal-stage-packet')
+v=REQUEST;packet=v['packet'];payload=checked_payload(v);root=P(packet['root']);stage_parent=P(packet['stageParent'])
 need(stage_parent.is_absolute() and stage_parent.is_relative_to(P('/opt/nova-release-tools')) and stage_parent!=P('/opt/nova-release-tools') and not any(x in ('.','..') for x in packet['stageParent'].split('/')),'configured-private-stage-parent')
 need(root.parent==stage_parent and root.name=='rehearsal-'+packet['leaseId'],'exact-new-rehearsal-child');protected(root.parent,True)
-selected_names=set(packet['files'])-{'operator-review.json'}
-selected_helpers=FROZEN_APPLICATION_HELPERS if selected_names==set(FROZEN_APPLICATION_HELPERS) else FROZEN_HELPERS
-names=set(selected_helpers)|{'operator-review.json'}
-need(set(packet['files'])==set(v['files'])==names,'exact-fixed-helper-allowlist');payload={}
-for n,r in packet['files'].items():
- b=base64.b64decode(v['files'][n],validate=True);need(0<len(b)<=2*1024**2 and len(b)==r['bytes'] and sha(b)==r['sha256'] and r['path']==str(root/n),'frozen-fixed-helper-bytes');payload[n]=b
-need(sum(map(len,payload.values()))<=4*1024**2,'bounded-fixed-helper-payload')
-facts=packet['facts'];review=json.loads(payload['operator-review.json']);need(review==facts['review'] and review['leaseId']==packet['leaseId'] and facts['sourceCommit']==packet['sourceCommit'] and re.fullmatch('[a-f0-9]{40}',packet['sourceCommit']),'actual-current-review-lineage')
-need(review['helperHashes']==selected_helpers=={n:sha(b) for n,b in payload.items() if n!='operator-review.json'},'all-current-helper-bytes')
+facts=packet['facts'];review=json.loads(payload['operator-review.json'])
 def result_identity(result):
  need(result['format']==1 and result['staged']==str(root) and result['leaseId']==packet['leaseId'] and result['sourceCommit']==packet['sourceCommit'] and result['reviewSha256']==sha(payload['operator-review.json']) and result['helperHashes']==review['helperHashes'],'original-fixed-helper-result')
  need(result.get('capacityScope')=='metadata-stage-only' and result.get('fullRehearsalCapacityAdmitted') is False and result.get('fullMaintainedPlanStillRequired') is True,'metadata-is-not-rehearsal-admission')
