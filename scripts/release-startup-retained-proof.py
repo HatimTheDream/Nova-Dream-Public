@@ -18,6 +18,8 @@ UUID = re.compile(r'^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 SOURCES = ('qualified-startup.py', 'qualified-parent.py', 'produce-startup-inputs.py', 'contracts.py')
 SCENARIOS = ('target-first-start', 'target-restart', 'pristine-prior-restoration')
 SCOPE = 'retained-same-runtime-startup-restart-restoration'
+# The fixed JS source-family selector authenticates this exact parent before consume.
+LIFECYCLE_PARENT = '81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
@@ -296,10 +298,11 @@ def consume(request, read, sources, same_schema_helpers=None):
          'startup-proof-original-worker-identity-required')
     profile = document('effectiveProfile', parent['effectiveProfile'])
     properties = profile.get('properties', {})
+    runtime = ('7800000000', '2h 10min', '2h10min') if sources['qualified-parent.py'] == LIFECYCLE_PARENT else ('4200000000', '1h 10min', '1h10min')
     need(profile.get('unit') == 'nova-qa-qualified-' + op + '.service'
          and properties.get('MainPID') == str(worker['pid']) and properties.get('ControlGroup') == worker['controlGroup']
          and properties.get('Type') == 'exec' and properties.get('Restart') == 'no' and properties.get('KillMode') == 'control-group'
-         and properties.get('RuntimeMaxUSec') in ('4200000000', '1h 10min', '1h10min')
+         and properties.get('RuntimeMaxUSec') in runtime
          and properties.get('TimeoutStopUSec') in ('60000000', '1min', '60s'), 'startup-proof-finite-worker-profile-required')
     need(all(v.get('format') == 1 for v in (review, plan, intent, child))
          and review.get('kind') == 'actual-retained-startup-qualification'

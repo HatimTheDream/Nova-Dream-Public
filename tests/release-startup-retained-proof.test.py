@@ -20,6 +20,46 @@ fixture = fixture_module.fixture
 
 
 class Checks(unittest.TestCase):
+    def consume_outer_profile(self, runtime, *, current, changes=None):
+        # Bind the existing synthetic source-byte boundary to the registered parent.
+        original_sha = fixture_module.sha
+        def source_identity(raw):
+            if current and raw == b'# synthetic qualified-parent.py':
+                return subject.LIFECYCLE_PARENT
+            return original_sha(raw)
+        def profile(value):
+            value['properties']['RuntimeMaxUSec'] = runtime
+            if changes:
+                value['properties'].update(changes)
+        with patch.object(fixture_module, 'sha', source_identity), patch.object(subject, 'sha', source_identity):
+            f = fixture({'effectiveProfile': profile}, same_schema=True)
+            review = subject.parse(f['files'][f['roles']['review']['path']])
+            return subject.consume(f['request'], f['read'], f['sources'], review['qualificationBinding']['helpers'])
+
+    def test_exact_outer_profile_keeps_all_three_original_scenarios(self):
+        for current, values in ((False, ('4200000000', '1h 10min', '1h10min')),
+                                (True, ('7800000000', '2h 10min', '2h10min'))):
+            for runtime in values:
+                with self.subTest(current=current, runtime=runtime):
+                    result = self.consume_outer_profile(runtime, current=current)
+                    self.assertEqual([row['scenario'] for row in result['scenarios']], list(subject.SCENARIOS))
+                    self.assertEqual(len(result['references']), 66)
+                    self.assertFalse(result['productionAdmission'])
+
+    def test_outer_profile_rejects_crossed_unbound_and_nonexact_caps(self):
+        cases = [(False, '7800000000'), (True, '4200000000'), (True, '7200000000'),
+                 (True, '7800000001'), (True, '8000000000'), (True, 'infinity'), (True, None)]
+        for current, runtime in cases:
+            with self.subTest(current=current, runtime=runtime), self.assertRaisesRegex(RuntimeError, 'finite-worker-profile'):
+                self.consume_outer_profile(runtime, current=current)
+
+    def test_outer_profile_preserves_original_shutdown_and_worker_guards(self):
+        for key, value in (('TimeoutStopUSec', '120000000'), ('Restart', 'always'),
+                           ('KillMode', 'process'), ('Type', 'forking'), ('MainPID', '56'),
+                           ('ControlGroup', '/system.slice/other.service')):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'finite-worker-profile'):
+                self.consume_outer_profile('7800000000', current=True, changes={key:value})
+
     def test_capture_proof_binds_physical_owner_first_clock_and_independent_restoration(self):
         import copy
         path='selected/openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111111/owner.sqlite'

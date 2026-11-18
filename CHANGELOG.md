@@ -1,3 +1,8 @@
+## [2.28.44] - 2026-11-17
+
+- Bind the previous version’s verified dependency information during hosted startup and restoration checks, preventing a controller failure after a healthy startup.
+- Give saved-work qualification a finite time budget for its complete lifecycle while preserving startup, resource and recovery limits.
+
 ## [2.28.43] - 2026-11-17
 
 - Wait for complete process-readiness markers in release cancellation checks, avoiding false failures while preserving child-process cleanup checks.
