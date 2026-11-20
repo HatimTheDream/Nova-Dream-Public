@@ -525,6 +525,18 @@ class Rehearsal(Driver):
                     'startupGrowthDisclosure': 'Initial fit estimates held-to-closed growth plus 128 MiB. Each actual restart uses its own stopped allocation and free-space budget, preserving the reserve and two allowances; observed samples are not an absolute future bound.'}
         if outcome == 'rehearsed':
             evidence['snapshotManifestSha256'] = digest(self.recovery / 'snapshot-manifest.json')
+            if self.observes_prior_capture():
+                ready, _ = self.ready_startup_record()
+                require(ready['attempt'] == 3 and self.startup_process_binding() == ready['processBinding'],
+                        'The returned source changed before rehearsal acceptance.')
+                source = folder / 'native-capture-source.json'
+                from recovery import capture_physical_root
+                origin = getattr(self, 'held_capture_origin', None)
+                original = {'path': str(origin[0]), 'sha256': origin[1]} if origin is not None else None
+                write_json(source, {'format': 1, 'leaseId': self.job_id, 'candidateId': self.prior_id,
+                                    'epoch': self.before['epoch'], 'output': str(self.output),
+                                    'originalSource': original, 'returnedRoot': list(capture_physical_root(self.data))})
+                evidence['nativeCaptureSourceSha256'] = digest(source)
         else:
             require(not self.workspace_mutated and root_identity(self.data) == self.source_root, 'Unchanged cannot describe a workspace rename or replacement.')
         write_json(folder / 'prior-acceptance.json', self.before)
@@ -582,6 +594,8 @@ class Rehearsal(Driver):
         self.source_root = root_identity(self.data)
         self.record('preflight-passed')
         try:
+            if self.observes_prior_capture():
+                self.prior_capture_lease_before_enter = self.prior_capture_lease()
             self.wait_for_fresh_admission()
             self.operator('enter', {'leaseId': self.job_id, **self.expected_prior})
             self.leased = True
@@ -592,6 +606,7 @@ class Rehearsal(Driver):
             self.held_allocated = allocated_metadata(self.data)
             self.record('held', priorAcceptanceSha256=digest(prior_acceptance),
                         acceptanceProvenance='actual-held-before-first-stop', sourceProcess=self.source_process)
+            self.observe_prior_capture()
             self.mark('stopping'); self.record('stopping-intent')
             self.stop_attempted = True
             self.service('stop'); self.require_stopped(); self.mark('stopped')

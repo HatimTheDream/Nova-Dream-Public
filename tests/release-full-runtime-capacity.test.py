@@ -12,11 +12,13 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
+from full_host_metadata_fixture import frozen_host_metadata
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 source=ROOT/'deploy/update-runner/install.py'
 raw=source.read_bytes()
-assert hashlib.sha256(raw).hexdigest()=='b4cf0ee98ebb80723dba69425f55409adecf7f3d7427d42b53c037251f4b6200'
+_, current_helpers = frozen_host_metadata(ROOT)
+assert hashlib.sha256(raw).hexdigest() == current_helpers['install.py']
 tree=ast.parse(raw)
 names={'MANAGED_COMPANION_98','RUNTIME_MAXIMUM','RUNTIME_EXPANDED_MAXIMUM','RUNTIME_PROFILES'}
 nodes=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in names for t in n.targets)]

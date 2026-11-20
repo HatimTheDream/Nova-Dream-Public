@@ -260,5 +260,6 @@ export function createMaintainedDependencyTransport({options:rawOptions,base,sto
   await ensureQualification(context);
   return check(context).candidates.private.manifest.schemaVersion;
  };
- return{validate,qualification:()=>startupProof?startupQualificationMarker(startupProof.qualificationBinding):null,steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};
+ return{validate,qualification:()=>startupProof?startupQualificationMarker(startupProof.qualificationBinding):null,
+  qualificationBinding:()=>startupProof?.qualificationBinding,steps,normalizePair:async(value,c)=>{const actual=observePair(c);need(same(value,actual),'normalized-dependency-pair-changed');return actual;},verifyPair:async(value,c)=>need(same(value,observePair(c)),'verified-dependency-pair-changed')};
 }

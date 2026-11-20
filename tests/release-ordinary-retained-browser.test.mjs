@@ -71,18 +71,23 @@ test('normal package admission and signed browser consume one exact candidate-bo
   assert.equal(f.bind().windowPolicy,undefined);
 });
 
-test('recovery update requires its own measured Tasks window and exact build', t => {
-  const f = fixture(t, '2.28.47', '1.0.420');
-  const binding = f.bind();
-  assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
-  f.descriptor.operation.buildVersion = '1.0.419';
-  assert.throws(f.bind, /ordinary-window-qualification-required/);
-  f.descriptor.operation.buildVersion = '1.0.420';
-  f.plan.apps.target.version = '2.28.46';
-  f.plan.apps.target.buildVersion = '1.0.419';
-  f.freeze();
-  assert.throws(f.bind, /browser-qualification-plan-changed/);
-});
+for (const [version, build, previousVersion, previousBuild] of [
+  ['2.28.47', '1.0.420', '2.28.46', '1.0.419'],
+  ['2.28.48', '1.0.421', '2.28.47', '1.0.420']
+]) {
+  test(`recovery update ${version} requires its own measured Tasks window and exact build`, t => {
+    const f = fixture(t, version, build);
+    const binding = f.bind();
+    assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
+    f.descriptor.operation.buildVersion = previousBuild;
+    assert.throws(f.bind, /ordinary-window-qualification-required/);
+    f.descriptor.operation.buildVersion = build;
+    f.plan.apps.target.version = previousVersion;
+    f.plan.apps.target.buildVersion = previousBuild;
+    f.freeze();
+    assert.throws(f.bind, /browser-qualification-plan-changed/);
+  });
+}
 
 test('normal release rejects changed evidence, wrong candidates, bad geometry, over-budget workers and open units',t=>{
   const f=fixture(t);

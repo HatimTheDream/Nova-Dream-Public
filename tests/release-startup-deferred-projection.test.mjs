@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {DEFERRED_CAPTURE_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_HELPERS,
+  COMPLETE_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_HELPERS,PARKED_CAPTURE_STARTUP_HELPERS,
   verifyStartupRetainedProjection} from '../scripts/release-delivery-startup-retained.mjs';
 import {startupCommandFixture} from '../support/startup-command-fixture.mjs';
 
@@ -80,4 +82,82 @@ test('a pristine restore can use its original retired-only evidence after a meas
   assert.equal(verifyStartupRetainedProjection(proof,proof.request),proof);
   outcome.physicalRoots=proof.scenarios[0].captureDeferred.physicalRoots;
   assert.throws(()=>verifyStartupRetainedProjection(proof,proof.request));
+});
+
+// All identities, retained documents and timestamps below belong to the synthetic fixture.
+function heldProjection(t){
+  const {proof}=startupCommandFixture(t,{sameSchema60:true,sources:COMPLETE_CAPTURE_STARTUP_SOURCES});
+  const binding=proof.qualificationBinding;
+  assert.deepEqual(binding.helpers,COMPLETE_CAPTURE_STARTUP_HELPERS);
+  const origin='/fixture/evidence/';
+  const job='11111111-1111-4111-8111-111111111110';
+  const selected=proof.scenarios[0].captureObservation.selectedRelative;
+  const role=selected+'/openclaw-runtime/state/tmp/plugin-captures/11111111-1111-4111-8111-111111111112/owner.sqlite';
+  proof.references.warmSource=ref(origin+'warm-source.json');
+  proof.references['warm-source/workspaceManifest']=ref(origin+'warm-source-workspace-manifest.json');
+  for(const item of ['started','process','ready','bootstrap','startup-0-capture-writer',
+    'held-prior-native-capture','prior-stop','stopped-source','closed']){
+    proof.references['warm-source/'+item]=ref(origin+'warm-origin/'+item+'.json');
+  }
+  proof.deferredCaptureHistory={kind:'held-prior-capture-origin',jobId:job,priorCandidateId:binding.prior.candidateId,
+    epoch:binding.workspaceEpoch,selectedRole:role,sourceStatus:'stage',windows:{[role]:[10,20]},
+    sourceManifestSha256:proof.references['warm-source/workspaceManifest'].sha256,
+    sourceEvidenceSha256:proof.references['warm-source/held-prior-native-capture'].sha256,
+    sourceRolesSha256:sha256('role'),sourceRosterSha256:sha256('original roster'),priorEvidenceSha256:sha256('prior proof')};
+  const after=['all-retired','staging-present','released-present'];
+  for(const [i,scenario] of proof.scenarios.entries()){
+    const attempt=i+1,physicalRoots=scenario.captureObservation.physicalRoots;
+    delete scenario.captureObservation;
+    const docs={};
+    for(const item of i===0?['before','closed']:['before','closed','writer']){
+      const file=ref(origin+'attempt-'+attempt+'/startup-'+attempt+'-capture-'+item+'.json');
+      proof.references[scenario.scenario+'/deferred/'+item]=file;
+      docs[item]=file.sha256;
+    }
+    const previous=i===1?proof.scenarios[0].captureDeferred:null;
+    scenario.captureDeferred={kind:'closed-native-deferred-capture',attempt,jobId:job,candidateId:scenario.candidateId,
+      workspaceEpoch:binding.workspaceEpoch,physicalRoots,ordinaryWindow:[scenario.startedAtSeconds,scenario.closedAtSeconds],
+      baselineSha256:sha256('baseline'),beforeRosterSha256:previous?.afterRosterSha256??sha256('original roster'),
+      afterRosterSha256:sha256('after '+attempt),beforeSha256:docs.before,closedSha256:docs.closed,
+      writerFileSha256:docs.writer??null,addedCount:1,removedCount:1,historySha256:digest(proof.deferredCaptureHistory),
+      partitionSha256:sha256('partition'),admissionsSha256:sha256('admissions'),closedCatalogSha256:sha256('catalog'),
+      predecessorSha256:previous?.closedSha256??null,beforeDisposition:previous?.closedDisposition??'staging-present',
+      closedDisposition:after[i],addedRetiredCount:Number(i===0),addedStageCount:Number(i===1),
+      addedReleasedCount:Number(i===2),addedBuildRoleCount:0};
+  }
+  return proof;
+}
+
+test('complete capture binds each held prior and retired, staged, or released closure to its original evidence',t=>{
+  const initial=heldProjection(t);
+  const verify=p=>verifyStartupRetainedProjection(p,p.request);
+  for(const [source,disposition] of Object.entries({stage:'staging-present',released:'released-present',retired:'all-retired'})){
+    const proof=structuredClone(initial);
+    proof.deferredCaptureHistory.sourceStatus=source;
+    for(const [i,s] of proof.scenarios.entries()){
+      s.captureDeferred.historySha256=digest(proof.deferredCaptureHistory);
+      if(i!==1)s.captureDeferred.beforeDisposition=disposition;
+    }
+    assert.equal(verify(proof),proof);
+    for(const change of [
+      p=>delete p.references['warm-source/stopped-source'],
+      p=>p.qualificationBinding.helpers['operator_rehearsal.py']=DEFERRED_CAPTURE_STARTUP_HELPERS['operator_rehearsal.py'],
+      p=>p.scenarios[1].captureDeferred.jobId='22222222-2222-4222-8222-222222222222',
+      p=>p.scenarios[1].captureDeferred.writerFileSha256=null,
+      p=>p.scenarios[2].captureDeferred.writerFileSha256=null,
+      p=>p.scenarios[0].captureDeferred.addedBuildRoleCount=1,
+      p=>p.scenarios[0].captureTransition={},
+      p=>p.scenarios[2].captureDeferred.predecessorSha256=sha256('replayed')]){
+      const changed=structuredClone(proof);change(changed);
+      assert.throws(()=>verify(changed));
+    }
+  }
+});
+
+test('the current parked producer uses the exact shipping helper bytes',()=>{
+  for(const [name,expected] of Object.entries(PARKED_CAPTURE_STARTUP_HELPERS)){
+    const file=new URL('../deploy/update-runner/'+name,import.meta.url);
+    assert.equal(sha256(readFileSync(file)),expected,name);
+  }
+  assert.notEqual(PARKED_CAPTURE_STARTUP_HELPERS['recovery.py'],COMPLETE_CAPTURE_STARTUP_HELPERS['recovery.py']);
 });

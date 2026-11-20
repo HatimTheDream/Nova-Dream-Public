@@ -1,3 +1,4 @@
+import {inflateSync} from 'node:zlib';
 /** Read-only collection of exact-candidate, settled same-runtime qualification.
  * Configured receipts select original evidence; only the fixed collector derives
  * a proof. Collection is neither a new qualification nor production admission. */
@@ -13,7 +14,158 @@ import {applicationDependencyDescriptionSchema,applicationTransitionSchema,sameS
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/);
 const hostPath=z.string().regex(/^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/).refine(p=>!p.split('/').some(x=>x==='.'||x==='..'));
 const hostRef=z.object({path:hostPath,sha256:hash}).strict();
-export const startupQualificationOptionsSchema=z.object({format:z.literal(1),parent:hostRef,producer:hostRef}).strict();
+const SPLIT_OBSERVER_SOURCES=Object.freeze({"compose_reader.py":"e7c2c430549ce2027629fb565b3223a85be35652e6f9d1c384eab8a3a1f46f7c","consume_split.mjs":"7df7df4041ea67ac536fd630ee31b3285fb79237fdd4fdf49145fc48381fd79f","original.py":"de1cec465f2303c6e52452811d5b7479eb756f9b7a2704e7bf6af00b7f07d48c","prepare_observer.py":"619b4fa86a13564116a4f061fdd7c9c913e70163dcebb7a16bd5ed3b61b1d0f6","split_native.inc":"565c0448e413f71375c95752bc3cfd4f056289daf72d43336e4843ab70d4359d","verify_split.mjs":"2ab78e5a9deb1e39eb0d4da27da3b3322072689eb609a4ab26f544b03fcaa880"});
+const warmPrivateFile=z.object({path:z.string().min(1),sha256:hash}).strict();
+function splitOriginalObservation(call,limit=128*1024){
+  const envelope=JSON.parse(call.response.stdout);
+  need(envelope.encoding==='zlib-base64'&&Number.isSafeInteger(envelope.bytes)&&envelope.bytes>0&&envelope.bytes<=limit
+    &&typeof envelope.data==='string'&&envelope.data.length<=192*1024,'invalid-original-transport-envelope');
+  const packed=Buffer.from(envelope.data,'base64');
+  need(packed.toString('base64')===envelope.data,'noncanonical-original-wire');
+  const data=inflateSync(packed,{maxOutputLength:limit});
+  need(data.length===envelope.bytes&&sha256(data)===envelope.sha256,'original-transport-envelope-changed');
+  return JSON.parse(data);
+}
+const warmEvidenceSchema=z.object({format:z.literal(2),donorSeal:warmPrivateFile}).strict();
+const warmAuthoritySchema=z.object({format:z.literal(2),kind:z.literal('verified-supplemental-warm-antecedent'),
+  operationId:z.uuid(),continuationOperationId:z.uuid(),originalInvocation:z.string().regex(/^[0-9a-f]{32}$/),
+  successorInvocation:z.string().regex(/^[0-9a-f]{32}$/),jobId:z.uuid(),priorCandidateId:hash,epoch:z.uuid(),baselineSha256:hash,
+  parent:hostRef,producer:hostRef,warmSource:hostRef,disposableRoles:hostRef,seedReplicas:hostRef,
+  chain:hostRef,outsideClosure:hostRef,originalFailedStderr:hostRef,protectedCustody:hostRef,terminal:hostRef,
+  nativeOutputSha256:hash,projectionSha256:hash,consumptionSha256:hash,independentReviewSha256:hash}).strict();
+function digestRef(row){return {path:row.path,sha256:row.sha256};}
+function verifiedFirstStoppedFile(observed,sealed){
+  return Number.isSafeInteger(observed?.bytes)&&observed.bytes>0
+    &&Object.keys(observed).sort().join(',')==='bytes,path,sha256'&&same(observed,sealed);
+}
+function verifyCombinedPriorBuilders(proof,binding,continuation){
+  for(const [index,row] of proof.scenarios.entries()){
+    const builder=row.retainedConfigurationBuilder;
+    const bytes=proof.references[row.scenario+'/retained-prior-source'];
+    need(builder.candidateId===binding.prior.candidateId
+      &&builder.path==='/opt/nova/releases/'+binding.prior.version+'-'+binding.prior.candidateId.slice(0,12)
+      &&builder.warmProcessSha256===proof.references['warm-source/process'].sha256
+      &&builder.source.path==='/mnt/nova-data/qualified-startup-continuation-'+continuation+'/evidence/attempt-'+(index+1)+'/same-schema-prior-source.json'
+      &&same(builder.source,digestRef(bytes))&&Number.isSafeInteger(bytes.bytes)&&bytes.bytes>0,
+      'different-producer-for-retained-configuration');
+  }
+}
+export function readParkedWarmAuthority(evidence){
+  const {donorSeal}=warmEvidenceSchema.parse(evidence);
+  const read=(r,maximum=2*1024**2)=>JSON.parse(readEvidenceFile(warmPrivateFile.parse(r),{maximum}));
+  const seal=read(donorSeal),accepted=read(seal.consumption),raw=read(seal.rawResponse),projection=read(seal.projection);
+  const review=read(seal.independentReview),failed=read(seal.originalFailedTerminal),ended=read(seal.successorTerminal);
+  const launched=read(seal.successorLaunch),opening=read(seal.start),source=read(accepted.sourceInputs);
+  const op=seal.originalSeedOperationId,cont=seal.continuationOperationId,oldInv=seal.originalInvocation,newInv=seal.successorInvocation;
+  const completeResponse=r=>r&&r.exitCode===0&&!r.uncertain&&!r.stderr&&r.diagnosticsTruncated===false;
+  need(seal.format===1&&seal.kind==='verified-warm-qualification-across-closed-invocations'
+    &&seal.originalInvocationPassed===false&&seal.compositeQualificationPassed===true&&seal.productionAdmission===false
+    &&z.uuid().safeParse(op).success&&z.uuid().safeParse(cont).success&&op!==cont&&oldInv!==newInv
+    &&review.format===1&&review.status==='passed'&&review.independentReview===true
+    &&review.operationId===cont&&review.originalOperationId===op&&same(review.consumption,seal.consumption)
+    &&same(review.projection,seal.projection)&&same(review.rawResponse,seal.rawResponse)
+    &&accepted.kind==='verified-private-supplemental-warm-qualification'&&accepted.originalInvocationPassed===false
+    &&accepted.passed===true&&accepted.productionAdmission===false&&accepted.operationId===cont&&accepted.originalOperationId===op
+    &&accepted.originalOutcome==='failed-preserved'&&accepted.originalInvocation===oldInv&&accepted.successorInvocation===newInv
+    &&same(accepted.launch,seal.successorLaunch)&&same(accepted.terminal,seal.successorTerminal)
+    &&same(accepted.rawResponse,seal.rawResponse)&&same(accepted.projection,seal.projection)&&same(accepted.start,seal.start)
+    &&same(raw.launch,seal.successorLaunch)&&same(raw.terminal,seal.successorTerminal)&&same(raw.input,accepted.sourceInputs)
+    &&Object.values(accepted.originalLocalRefs).some(r=>same(r,seal.originalFailedTerminal))
+    &&completeResponse(failed.response)&&same(failed.observation,splitOriginalObservation(failed))
+    &&failed.observation.state==='failed'&&failed.observation.completed===false&&failed.observation.originalEvidencePreserved===true
+    &&failed.observation.unit==='nova-qa-qualified-'+op+'.service'
+    &&[ended,launched].every(r=>completeResponse(r.response)&&r.operationId===cont&&same(r.observed,JSON.parse(r.response.stdout))&&
+      same(r.input,accepted.sourceInputs)&&r.observed.unit==='nova-qa-warm-continuation-'+cont+'.service'&&r.observed.invocationId===newInv)
+    &&ended.observed.state==='closed'&&launched.observed.state==='launched'&&completeResponse(raw.result)
+    &&source.operationId===cont&&same(raw.request,opening.request)&&same(raw.sources,accepted.sources)&&same(raw.sources,opening.sources)
+    &&same(Object.fromEntries(Object.entries(raw.sources).map(([k,r])=>[k,r.sha256])),SPLIT_OBSERVER_SOURCES)
+    &&same(raw.programSha256,opening.programSha256)&&same(raw.route,opening.route),'required-distinct-closed-invocations-changed');
+  const parsed=splitOriginalObservation({response:raw.result},512*1024),v=parsed.value,request=raw.request;
+  need(parsed.ok===true&&v?.format===1&&v?.kind==='private-warm-continuation-observation'
+    &&v.operationId===cont&&v.originalOperationId===op&&v.originalOutcome==='failed-preserved'&&v.originalInvocation===oldInv
+    &&v.successorInvocation===newInv&&request.origin.operationId===op&&request.origin.invocationId===oldInv
+    &&request.successorInvocation===newInv&&v.requestSha256===raw.requestSha256&&v.requestSha256===sha256(Buffer.from(canonical(request)+'\n'))
+    &&v.workerClosed===true&&v.independentOriginalRestored===true&&v.sourceWorkspacesPreserved===true
+    &&v.productionAdmission===false&&v.freshFullRehearsalStillRequired===true&&v.liveAcceptanceStillRequired===true
+    &&same(v.origins,seal.originalScope)&&same(accepted.origins,v.origins)
+    &&same(v.origins,{originalOutcome:'failed-preserved',originalWarmAndAttemptOneLifecycle:true,successorStoppedPreservation:[1],
+      successorServiceLaunches:[2,3],originalOperationId:op,successorOperationId:cont,originalInvocation:oldInv,successorInvocation:newInv}),
+    'separate-native-qualification-origin-required');
+  const {observedAtMilliseconds,...stable}=v;
+  need(Number.isSafeInteger(observedAtMilliseconds)&&observedAtMilliseconds>=opening.startedAtMs-30000&&
+    observedAtMilliseconds<=raw.receivedAtMs+30000&&observedAtMilliseconds===accepted.observedAtMilliseconds&&same(stable,projection),
+    'split-observation-was-not-verified');
+  const old=startupQualificationBindingSchema.parse(v.originalQualificationBinding);
+  const b=startupQualificationBindingSchema.parse(v.qualificationBinding), s=seal.actualSources, history=v.deferredCaptureHistory;
+  const failures=v.priorFailedContinuations;
+  need(same(failures,request.origin.interveningFailures)
+    &&same(Object.keys(failures).sort(),['configurationObserver','continuation','firstObserver'])
+    &&Object.values(failures).every(row=>row.passed===false&&z.uuid().safeParse(row.operationId).success)
+    &&new Set([op,cont,...Object.values(failures).map(row=>row.operationId)]).size===5
+    &&s.protectedCustody.path==='/opt/nova-release-tools/qualified-startup-continuation-custody-'+failures.continuation.operationId+'/result.json',
+    'different-intervening-qualification-or-custody');
+  need(b.sameSchemaQualification&&b.prior.version==='2.28.39'&&Object.values(b.targets).every(t=>t.version==='2.28.46')
+    &&b.prior.candidateId===seal.priorCandidateId&&b.targets.private.candidateId===seal.testedCandidateId
+    &&b.workspaceEpoch===seal.workspaceEpoch&&seal.parkedSourceManifestSha256===v.references.baselineManifest.sha256
+    &&same(old.helpers,COMPLETE_CAPTURE_STARTUP_HELPERS)&&same(b.helpers,PARKED_CAPTURE_STARTUP_HELPERS)
+    &&same({...old,helpers:b.helpers},b)&&same(accepted.scenarios,STARTUP_SCENARIOS)
+    &&same(v.scenarios.map(row=>row.scenario),STARTUP_SCENARIOS)&&history.kind==='held-prior-capture-origin'
+    &&same(history,seal.originalWarmHistory)&&seal.jobId===history.jobId&&accepted.actualPrior===b.prior.candidateId
+    &&accepted.actualTarget===b.targets.private.candidateId,'different-antecedent-application-or-workspace');
+  verifyDeferredCaptureHistory(v,b,true);verifyDeferredCaptureScenarios(v,b,true);
+  verifyCombinedPriorBuilders(v,b,cont);
+  const roles={parent:'successor/parent',chain:'successor/chain',warmSource:'warmSource',outsideClosure:'successor/outsideClosure',
+    disposableRoles:'successor/disposableRoles',seedReplicas:'original/seedReplicas',producer:'successor/source/continue.py',
+    terminal:'control/terminal',protectedCustody:'custody',originalFailedStderr:'original/failed/stderr'};
+  need(Object.keys(s).length===Object.keys(roles).length&&Object.entries(roles).every(([k,role])=>same(digestRef(v.references[role]),s[k]))
+    &&same(s.parent,request.parent)&&same(s.chain,request.chain)&&same(s.warmSource,request.origin.warmSource)
+    &&same(s.originalFailedStderr,failed.observation.files.stderr)&&same(s.protectedCustody,request.origin.protectedCustody)
+    &&same(s.parent,digestRef(ended.observed.result))&&same(s.chain,digestRef(ended.observed.chain))
+    &&same(s.terminal,digestRef(ended.observed.terminal))&&same(request.controlRefs.launch,digestRef(launched.observed.launch))
+    &&same(accepted.stageSources,request.sourceFiles)&&Object.entries(source.files).every(([k,r])=>request.sourceFiles[k]?.sha256===r.sha256)
+    &&Object.entries(request.sourceFiles).every(([k,r])=>v.sourceHashes[k]===r.sha256)&&same(s.producer,request.sourceFiles['continue.py'])
+    &&verifiedFirstStoppedFile(v.references['target-first-start/preservation'],seal.firstStoppedVerification),
+    'split-native-source-refs-changed');
+  for(const [key,r] of Object.entries(request.origin.firstLifecycleRoles)){
+    const scenarioRole=key.startsWith('startup-1-capture-')?'deferred/'+key.slice('startup-1-capture-'.length):key;
+    need(same(digestRef(v.references['original/first/'+key]),r)&&v.references['target-first-start/'+scenarioRole].sha256===r.sha256,
+      'split-first-lifecycle-changed');
+  }
+  return warmAuthoritySchema.parse({format:2,kind:'verified-supplemental-warm-antecedent',operationId:op,continuationOperationId:cont,
+    originalInvocation:oldInv,successorInvocation:newInv,jobId:seal.jobId,priorCandidateId:seal.priorCandidateId,epoch:seal.workspaceEpoch,
+    baselineSha256:seal.parkedSourceManifestSha256,...s,nativeOutputSha256:seal.rawResponse.sha256,projectionSha256:seal.projection.sha256,
+    consumptionSha256:seal.consumption.sha256,independentReviewSha256:seal.independentReview.sha256});
+}
+
+function verifyParkedLoan(proof,request,binding){
+  const a=warmAuthoritySchema.parse(request.warmAntecedent), l=proof.parkedSeedAntecedent;
+  const root='/mnt/nova-data/qualified-startup-inputs-'+a.operationId;
+  const seed=proof.references['parkedLoan/seedReplicas'];
+  const formal=proof.references['parkedLoan/formalSeedReplicas'];
+  need(formal?.path==='/mnt/nova-data/qualified-startup-inputs-'+proof.qualificationOperationId+'/replica-verified.json'
+    &&hostRef.safeParse(digestRef(formal)).success&&Number.isSafeInteger(formal.bytes)&&formal.bytes>0&&formal.bytes<=64*1024**2
+    &&hash.safeParse(l?.loanSha256).success,'formal-parked-seed-receipt-required');
+  need(seed?.path===root+'/replica-verified.json'&&hostRef.safeParse(digestRef(seed)).success
+    &&Number.isSafeInteger(seed.bytes)&&seed.bytes>0&&seed.bytes<=64*1024**2,'parked-original-seed-receipt-required');
+  const expected={kind:'verified-parked-seed-antecedent',operationId:a.operationId,continuationOperationId:a.continuationOperationId,workspace:root+'/seeds/workspace',
+    sourceManifestSha256:a.baselineSha256,warmJobId:a.jobId,nativeOutputSha256:a.nativeOutputSha256,
+    projectionSha256:a.projectionSha256,seedReceiptSha256:seed.sha256,formalSeedReceiptSha256:formal.sha256,loanSha256:l.loanSha256};
+  need(same(l,expected)&&new Set([a.operationId,a.continuationOperationId,proof.qualificationOperationId]).size===3&&a.priorCandidateId===binding.prior.candidateId
+    &&binding.prior.version==='2.28.39'&&Object.values(binding.targets).every(t=>t.version==='2.28.48')
+    &&a.epoch===binding.workspaceEpoch&&a.baselineSha256===proof.deferredCaptureHistory.sourceManifestSha256
+    &&proof.deferredCaptureHistory.kind==='signed-prior-capture-windows'
+    &&properOriginalCaptureRefs(proof,a),'parked-seed-formal-antecedent-mismatch');
+}
+function properOriginalCaptureRefs(proof,a){
+  return ['parent','warmSource','disposableRoles','outsideClosure','chain','originalFailedStderr','protectedCustody','terminal','producer'].every(k=>{
+    const v=proof.references['parkedLoan/'+k];
+    return v&&same(digestRef(v),a[k])&&Number.isSafeInteger(v.bytes)&&v.bytes>0&&v.bytes<=8*1024**2;
+  })&&same(proof.scenarios.map(s=>s.scenario),STARTUP_SCENARIOS)
+    &&proof.scenarios.every(s=>z.uuid().safeParse(s.captureDeferred?.jobId).success
+      &&s.captureDeferred.jobId===proof.scenarios[0].captureDeferred.jobId&&s.captureDeferred.jobId!==a.jobId);
+}
+
+export const startupQualificationOptionsSchema=z.object({format:z.literal(1),parent:hostRef,producer:hostRef,warmEvidence:warmEvidenceSchema.optional()}).strict();
 // Reviewed producer bytes identify the only accepted evidence implementation.
 // Source review alone never replaces its actual settled qualification result.
 export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
@@ -29,7 +181,15 @@ export const RETIRED_RECAPTURE_STARTUP_SOURCES=Object.freeze({"qualified-startup
 export const REHEARSAL_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"12d59c2b45e9a6791cba66cec1d9cf0c077ebce3e6cc12392b6090a3e6a0c580","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
 export const DEFERRED_CAPTURE_STARTUP_SOURCES=Object.freeze({...REHEARSAL_SCHEMA60_STARTUP_SOURCES,
   'qualified-startup.py':'50f964d0b766a3795d6f819e555da511b58bde3ad3a066f489663067b92971f0'});
-const sameSchemaSources=sources=>[SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].some(v=>v!==null&&same(sources,v));
+// Verified shutdown, restart and rollback for the warmed retained workspace.
+export const COMPLETE_CAPTURE_STARTUP_SOURCES=Object.freeze({...DEFERRED_CAPTURE_STARTUP_SOURCES,
+  'qualified-startup.py':'3cd8a8699d79011c826ce4e3cbd934fa9611742f418bf614cb917a1d84db63a8',
+  'produce-startup-inputs.py':'4cf7e44d800c1c0032f5c4f770d2f6e68f2609c205462e083277597a27fdd68d',
+  'qualified-parent.py':'87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66'});
+export const PARKED_CAPTURE_STARTUP_SOURCES=Object.freeze({"contracts.py":"013ea5762fee279ddc614d90e201744b332484f2eb11768c8e4212663da2be4a","produce-startup-inputs.py":"0032c2633b1119a2b15a069e61b357d01bbe83fbbead1d3ea66d2c0e78f96f5a","qualified-parent.py":"87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66","qualified-startup.py":"7e36af529fb353224722c6db2a2d9c2ea068f490913e2d4bef3c2ae487734e69"});
+const WARM_ANTECEDENT_SOURCES=Object.freeze({"qualified-startup.py":"993ec3498edbadeb6f730012f709bb63638b607aeb82b2145da0683384d98e18","qualified-parent.py":"87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66","produce-startup-inputs.py":"4cf7e44d800c1c0032f5c4f770d2f6e68f2609c205462e083277597a27fdd68d","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
+const sameSchemaSourceFamilies=[PARKED_CAPTURE_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_SOURCES];
+const sameSchemaSources=sources=>sameSchemaSourceFamilies.some(v=>v!==null&&same(sources,v));
 export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"b4cf0ee98ebb80723dba69425f55409adecf7f3d7427d42b53c037251f4b6200","recovery.py":"b4c59da8ee92a1ddf2bbaef4139635494123eab2b299e7e6ea5e627629652ee4","operator_rehearsal.py":"081d4f928b6800ff05dd5a0dbfc3416031425a0c892c5186d994533ca42b1b21","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 export const HISTORICAL_SCHEMA60_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
   'install.py':'54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef',
@@ -39,16 +199,26 @@ export const HISTORICAL_SCHEMA60_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP
 export const DEFERRED_CAPTURE_STARTUP_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
   'install.py':'d44cba1bddb9c39703cc8714e4fe3d5af4704429e746f47efe7a29a533b6b572',
   'recovery.py':'6081a0364c912442a4ff41eecaf99121b35d619ff6a31f0d6aa1310da5b489ee'});
+export const COMPLETE_CAPTURE_STARTUP_HELPERS=Object.freeze({...DEFERRED_CAPTURE_STARTUP_HELPERS,
+  'install.py':'5199f95f11be155cdd280fec9d315e087ea6951d71bc3020b2cf6678f3d49d8d',
+  'recovery.py':'4d6696f7ae03863a66a5e28e1e0aa25dbdc673c7fb97ce401894e0cd7182e787',
+  'operator_rehearsal.py':'013dee562963009ab812c5d7d8d1c327783be522b9d95a1e31a966ed46e0d93f'});
+export const PARKED_CAPTURE_STARTUP_HELPERS=Object.freeze({...COMPLETE_CAPTURE_STARTUP_HELPERS,'recovery.py':"c316469b114f6beb232cd3fb784b733d7bc13b0696c33523d0ec6cba6ae37c1f"});
 function helpersForStartupSources(sources){
+  if(same(sources,PARKED_CAPTURE_STARTUP_SOURCES))return PARKED_CAPTURE_STARTUP_HELPERS;
+  if(same(sources,COMPLETE_CAPTURE_STARTUP_SOURCES)||same(sources,WARM_ANTECEDENT_SOURCES))return COMPLETE_CAPTURE_STARTUP_HELPERS;
   if(same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES))return DEFERRED_CAPTURE_STARTUP_HELPERS;
   return same(sources,REHEARSAL_SCHEMA60_STARTUP_SOURCES) ? SAME_SCHEMA60_STARTUP_HELPERS : HISTORICAL_SCHEMA60_HELPERS;
 }
+export function reviewedSameSchemaHelperFamilies(){
+ return [...new Set(sameSchemaSourceFamilies.filter(Boolean).map(helpersForStartupSources))];
+}
 export function reviewedStartupSources(producer){
- const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
+ const sources=[QUALIFIED_STARTUP_SOURCES,...sameSchemaSourceFamilies].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
  need(sources,'reviewed-startup-producer-required');return sources;
 }
 // Exact source capability only; it grants no candidate or runtime acceptance.
-const retiredRecaptureProducers=new Set([RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].map(family=>family['qualified-startup.py']));
+const retiredRecaptureProducers=new Set([RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_SOURCES].map(family=>family['qualified-startup.py']));
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
 const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
@@ -95,19 +265,47 @@ export function startupRetainedRequest(options,sources=undefined){
   const v=startupQualificationOptionsSchema.parse(options);sources??=reviewedStartupSources(v.producer);sourcesReviewed(sources);
   need(v.producer.sha256===sources['qualified-startup.py']&&v.producer.path.endsWith('/qualified-startup.py')
     &&v.parent.path.endsWith('/evidence/parent-verified.json'),'reviewed-startup-producer-required');
-  return{format:1,kind:'collect-actual-retained-startup-proof',parent:v.parent,producer:v.producer};
+  need(!same(sources,WARM_ANTECEDENT_SOURCES),'warm-test-cannot-be-a-release-proof');
+  const parked=same(sources,PARKED_CAPTURE_STARTUP_SOURCES);
+  need(parked===Object.hasOwn(v,'warmEvidence'),'parked-original-warm-evidence-required');
+  return{format:1,kind:'collect-actual-retained-startup-proof',parent:v.parent,producer:v.producer,...(parked?{warmAntecedent:readParkedWarmAuthority(v.warmEvidence)}:{})};
 }
 export function buildStartupRetainedProgram(request){
-  startupRetainedRequest({format:1,parent:request.parent,producer:request.producer});
   const sources=reviewedStartupSources(request.producer);
+  if(same(sources,PARKED_CAPTURE_STARTUP_SOURCES)){
+    need(same(Object.keys(request).sort(),['format','kind','parent','producer','warmAntecedent'])&&request.format===1&&request.kind==='collect-actual-retained-startup-proof'
+      &&hostRef.parse(request.parent).path.endsWith('/evidence/parent-verified.json')&&hostRef.parse(request.producer).path.endsWith('/qualified-startup.py'),'parked-request-original-paths-required');
+    warmAuthoritySchema.parse(request.warmAntecedent);
+  }else need(same(request,startupRetainedRequest({format:1,parent:request.parent,producer:request.producer})),'startup-collector-request-changed');
   const source=readFileSync(new URL('./release-startup-retained-proof.py',import.meta.url));
   const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources,...(sameSchemaSources(sources)?{sameSchemaHelpers:helpersForStartupSources(sources)}:{})}).toString('base64');
   return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'))},separators=(',',':')))\n`;
 }
 
-function verifyDeferredCaptureHistory(proof,binding){
+function verifyDeferredCaptureHistory(proof,binding,complete=false){
   const timestamp=z.number().int().positive();
   const window=z.tuple([timestamp,timestamp]).refine(([a,b])=>a<=b&&b-a<=3600);
+  if(complete){
+    const role=z.string().regex(/^recovered-workspaces\/[a-f0-9-]{36}\/openclaw-runtime\/state\/tmp\/plugin-captures\/[a-f0-9-]{36}\/owner\.sqlite$/);
+    const history=z.object({kind:z.literal('held-prior-capture-origin'),jobId:z.uuid(),priorCandidateId:hash,epoch:z.uuid(),
+      sourceManifestSha256:hash,sourceEvidenceSha256:hash,sourceRolesSha256:hash,sourceRosterSha256:hash,
+      priorEvidenceSha256:hash,selectedRole:role,sourceStatus:z.enum(['stage','released','retired']),windows:z.record(role,window)}).strict().parse(proof.deferredCaptureHistory);
+    need(history.priorCandidateId===binding.prior.candidateId&&history.epoch===binding.workspaceEpoch
+      &&history.sourceManifestSha256===proof.references?.['warm-source/workspaceManifest']?.sha256
+      &&history.sourceEvidenceSha256===proof.references?.['warm-source/held-prior-native-capture']?.sha256
+      &&Object.hasOwn(history.windows,history.selectedRole)&&Object.keys(history.windows).length<=2,
+      'held-prior-capture-source-changed');
+    const dir=proof.kind==='private-warm-continuation-observation'?proof.references.warmSource.path.slice(0,-'warm-source.json'.length):proof.references.parent.path.slice(0,-'parent-verified.json'.length);
+    for(const key of ['warmSource','warm-source/workspaceManifest',...['started','process','ready','bootstrap',
+      'startup-0-capture-writer','held-prior-native-capture','prior-stop','stopped-source','closed'].map(k=>'warm-source/'+k)]){
+      const ref=proof.references[key];
+      const file=key==='warmSource'?'warm-source.json':key==='warm-source/workspaceManifest'?
+        'warm-source-workspace-manifest.json':'warm-origin/'+key.split('/')[1]+'.json';
+      need(hostRef.safeParse({path:ref?.path,sha256:ref?.sha256}).success&&ref.path===dir+file
+        &&Number.isSafeInteger(ref.bytes)&&ref.bytes>0&&ref.bytes<=32*1024**2,'actual-warm-source-reference-required');
+    }
+    return;
+  }
   const history=z.object({kind:z.literal('signed-prior-capture-windows'),priorCandidateId:hash,epoch:z.uuid(),
     sourceManifestSha256:hash,sourceEvidenceSha256:hash,sourceRolesSha256:hash,
     windows:z.object({'target-first-start':window,'target-restart':window}).strict()}).strict().parse(proof.deferredCaptureHistory);
@@ -130,14 +328,17 @@ function verifyDeferredCaptureHistory(proof,binding){
   }
 }
 
-function verifyDeferredCaptureScenarios(proof,binding){
+function verifyDeferredCaptureScenarios(proof,binding,complete=false){
   const integer=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
   const root=z.tuple([integer.positive(),integer.positive(),integer.refine(v=>(v&0o170000)===0o040000),integer,integer]);
+  const disposition=z.enum(['all-retired','staging-present','released-present']);
   const shape=z.object({kind:z.literal('closed-native-deferred-capture'),attempt:z.number().int().min(1).max(3),
     candidateId:hash,workspaceEpoch:z.uuid(),ordinaryWindow:z.tuple([integer,integer]),physicalRoots:z.tuple([root,root]),
     baselineSha256:hash,beforeRosterSha256:hash,afterRosterSha256:hash,beforeSha256:hash,closedSha256:hash,
     writerFileSha256:hash.nullable(),addedCount:integer.max(1),removedCount:integer.max(1),historySha256:hash,
-    partitionSha256:hash,admissionsSha256:hash,closedCatalogSha256:hash,predecessorSha256:hash.nullable()}).strict();
+    partitionSha256:hash,admissionsSha256:hash,closedCatalogSha256:hash,predecessorSha256:hash.nullable(),
+    ...(complete?{beforeDisposition:disposition,closedDisposition:disposition,jobId:z.uuid(),
+      addedRetiredCount:integer.max(1),addedStageCount:integer.max(1),addedReleasedCount:integer.max(1),addedBuildRoleCount:integer.max(1)}:{})}).strict();
   const first=proof.scenarios[0].captureDeferred??proof.scenarios[0].captureTransition;
   const historyHash=sha256(Buffer.from(canonical(proof.deferredCaptureHistory)));
   for(const [index,scenario] of proof.scenarios.entries()){
@@ -148,7 +349,19 @@ function verifyDeferredCaptureScenarios(proof,binding){
       &&same(row.physicalRoots[0],first.physicalRoots[0])&&!same(row.physicalRoots[0].slice(0,2),row.physicalRoots[1].slice(0,2))
       &&row.physicalRoots[0][0]===scenario.replicaConfigObservation?.sourceDevice
       &&row.physicalRoots[1][0]===scenario.replicaConfigObservation?.replicaDevice
-      &&(row.addedCount===0||row.writerFileSha256!==null),'deferred-scenario-native-binding-changed');
+      &&(complete||row.addedCount===0||row.writerFileSha256!==null),'deferred-scenario-native-binding-changed');
+    if(complete){
+      const sourceKind=proof.deferredCaptureHistory.kind;
+      need(row.jobId===first.jobId&&(proof.parkedSeedAntecedent?row.jobId!==proof.parkedSeedAntecedent.warmJobId:row.jobId===proof.deferredCaptureHistory.jobId)&&row.addedCount===row.addedRetiredCount+row.addedReleasedCount+row.addedStageCount
+        &&(row.addedStageCount===0||row.closedDisposition==='staging-present'&&row.writerFileSha256!==null)
+        &&(row.addedReleasedCount===0||row.closedDisposition==='released-present'&&row.writerFileSha256!==null)
+        &&row.addedBuildRoleCount<=row.addedCount&&(row.addedBuildRoleCount===0||row.writerFileSha256!==null)
+        &&(index===1?row.beforeDisposition===prior?.closedDisposition:row.beforeDisposition===(proof.parkedSeedAntecedent?'all-retired':({stage:'staging-present',released:'released-present',retired:'all-retired'})[proof.deferredCaptureHistory.sourceStatus]))
+        &&(sourceKind==='signed-prior-capture-windows'&&row.beforeDisposition==='all-retired'&&row.closedDisposition==='all-retired')===Object.hasOwn(scenario,'captureTransition'),
+        'complete-native-scenario-coverage-changed');
+      if(scenario.captureTransition)need(same(row.physicalRoots,scenario.captureTransition.physicalRoots)
+        &&same(row.ordinaryWindow,scenario.captureTransition.ordinaryWindow),'supplementary-retired-scope-changed');
+    }
     if(index===1){
       need(same(row.physicalRoots,first.physicalRoots)&&(prior?
         row.predecessorSha256===prior.closedSha256&&row.beforeRosterSha256===prior.afterRosterSha256&&row.baselineSha256===prior.baselineSha256:
@@ -182,7 +395,7 @@ function verifyCaptureTransition(proof,binding,mixed=false){
     predicateSha256:z.literal('df724c3ab3fcbfa53da4ec611603ababe0839c5a41900b606583ffe8a54b27a0'),
     ...Object.fromEntries(hashes.map(k=>[k,hash])),predecessorProofSha256:hash.nullable(),
     unchangedCatalogEarlyReturn:z.boolean(),canonicalFunctionObserved:z.boolean(),canonicalReportCount:integer.max(1)}).strict();
-  const rows=proof.scenarios.map(s=>mixed&&s.captureDeferred?null:shape.parse(s.captureTransition));
+  const rows=proof.scenarios.map(s=>mixed&&!s.captureTransition?null:shape.parse(s.captureTransition));
   const first=rows.find(Boolean),initialRoot=proof.scenarios[0].captureDeferred?.physicalRoots??first?.physicalRoots;
   for(const [i,row]of rows.entries()){
     if(row===null)continue;
@@ -197,7 +410,7 @@ function verifyCaptureTransition(proof,binding,mixed=false){
     need(row.unchangedCatalogEarlyReturn===(row.canonicalReportCount===0)&&row.canonicalFunctionObserved===(row.canonicalReportCount===1),
       'same-schema-capture-transition-callback-claim-changed');
     if(i===1){
-      need(row.predecessorProofSha256===prior.proofSha256&&same(row.physicalRoots,prior.physicalRoots)
+      need(prior&&row.predecessorProofSha256===prior.proofSha256&&same(row.physicalRoots,prior.physicalRoots)
         &&row.beforeLiveInventorySha256===prior.closedLiveInventorySha256&&row.beforeLiveClassificationSha256===prior.closedLiveClassificationSha256
         &&row.beforePartitionSha256===prior.closedPartitionSha256,'same-schema-capture-transition-predecessor-changed');
     }else{
@@ -301,6 +514,9 @@ function verifyNoStagingCaptures(proof,binding){
 }
 /** Validate every persisted projection again; never trust its passed flags alone. */
 export function verifyStartupRetainedProjection(v,request,sources=undefined){
+  return verifyRetainedProjection(v,request,sources,false);
+}
+function verifyRetainedProjection(v,request,sources,antecedentOnly){
   sources??=reviewedStartupSources(request?.producer);sourcesReviewed(sources);
   need(v?.format===1&&v.kind==='actual-retained-startup-qualification-observation'&&v.readOnly===true&&v.hostEffects===false
     &&same(v.request,request)&&v.requestSha256===sha256(encoded(request))&&same(v.sourceHashes,sources)
@@ -309,11 +525,12 @@ export function verifyStartupRetainedProjection(v,request,sources=undefined){
     &&v.workerClosed===true
     &&v.productionAdmission===false&&v.freshFullRehearsalStillRequired===true&&v.liveAcceptanceStillRequired===true,
     'actual-startup-retained-projection-required');
+  need(antecedentOnly===same(sources,WARM_ANTECEDENT_SOURCES),'warm-test-cannot-be-a-release-proof');
   z.uuid().parse(v.qualificationOperationId);
   need(Number.isSafeInteger(v.workerIdentity?.pid)&&v.workerIdentity.pid>1&&Number.isSafeInteger(v.workerIdentity.startTicks)&&v.workerIdentity.startTicks>0
     &&v.workerIdentity.controlGroup==='/system.slice/nova-qa-qualified-'+v.qualificationOperationId+'.service','startup-proof-original-worker-identity-required');
   const binding=startupQualificationBindingSchema.parse(v.qualificationBinding);
-  if(binding.sameSchemaQualification)need(sameSchemaSources(sources),'same-schema-startup-producer-required');
+  if(binding.sameSchemaQualification)need(antecedentOnly||sameSchemaSources(sources),'same-schema-startup-producer-required');
   else need(!sameSchemaSources(sources),'same-schema-startup-marker-required');
   need(binding.prior.candidateId!==binding.targets.private.candidateId&&binding.runtime.agentVersion==='2026.9.8'
     &&same(Object.keys(binding.helpers).sort(),startupHelperNames(startupQualificationMarker(binding)).sort())
@@ -372,17 +589,23 @@ export function verifyStartupRetainedProjection(v,request,sources=undefined){
   const noStaging=binding.sameSchemaQualification&&captureOnly('captureObservation');
   const continuity=binding.sameSchemaQualification&&captureOnly('captureContinuity');
   const transition=binding.sameSchemaQualification&&captureOnly('captureTransition');
-  const newFamily=same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES);
+  const parked=same(sources,PARKED_CAPTURE_STARTUP_SOURCES);
+  const complete=antecedentOnly||parked||same(sources,COMPLETE_CAPTURE_STARTUP_SOURCES);
+  const newFamily=complete||same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES);
   const deferred=newFamily&&v.scenarios.some(s=>Object.hasOwn(s,'captureDeferred'));
   need(newFamily===Object.hasOwn(v,'deferredCaptureHistory'),'deferred-capture-history-source-changed');
-  if(newFamily)verifyDeferredCaptureHistory(v,binding);
+  if(newFamily)verifyDeferredCaptureHistory(v,binding,complete&&!parked);
+  need(parked===Object.hasOwn(v,'parkedSeedAntecedent')&&parked===Object.hasOwn(request,'warmAntecedent'),'parked-antecedent-binding-required');
+  if(parked)verifyParkedLoan(v,request,binding);
   if(binding.sameSchemaQualification){
     need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,helpersForStartupSources(sources)),'same-schema-capture-source-required');
     need(noStaging||continuity||transition||captureOnly('captureRetirement')||deferred,'same-schema-capture-branch-changed');
+    if(complete)need(deferred,'complete-native-capture-checkpoints-required');
     if(deferred){
-      need(v.scenarios.every(s=>['captureDeferred','captureTransition'].includes(captureKeys(s).join(','))),
+      const allowed=complete?['captureDeferred','captureTransition,captureDeferred']:['captureDeferred','captureTransition'];
+      need(v.scenarios.every(s=>allowed.includes(captureKeys(s).join(','))),
         'deferred-scenario-needs-one-original-capture-branch');
-      verifyDeferredCaptureScenarios(v,binding);
+      verifyDeferredCaptureScenarios(v,binding,complete);
       verifyCaptureTransition(v,binding,true);
     }
     if(noStaging)verifyNoStagingCaptures(v,binding);

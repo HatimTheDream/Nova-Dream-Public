@@ -274,7 +274,7 @@ def _capture_reserved_lock(fd, owner_stat, native_pid):
 
 def observe_capture_writer(data_root, selected_relative, owner, epoch, app_pid, native_pid, node_path, service_uid, native_root):
     """Observe a real native writer before the ordinary stop, without opening SQLite."""
-    from recovery import capture_lease_identity, native_capture_owner_paths, is_header_only_capture_journal
+    from recovery import capture_lease_identity, native_capture_owner_paths, is_header_only_capture_journal, observe_capture_builds
     require(not selected_relative.is_absolute() and '..' not in selected_relative.parts and
             data_root.resolve(strict=True) == data_root and native_root == data_root / selected_relative / 'openclaw-runtime',
             'Invalid selected native capture workspace.')
@@ -299,13 +299,14 @@ def observe_capture_writer(data_root, selected_relative, owner, epoch, app_pid, 
             data = side.read(513)
             require(is_header_only_capture_journal(data),
                     'Unrecognized SQLite capture journal.')
+            builds = observe_capture_builds(path.parent)
             require(_capture_reserved_lock(main.fileno(), main_stat, native_pid) == lock
                     and list(capture_lease_identity(path.lstat())) == main_id
                     and list(capture_lease_identity(journal.lstat())) == journal_id
                     and list(capture_lease_identity(path.parent.lstat())[:5]) == directory,
                     'Native capture family changed while measuring its writer.')
             roles[str(role)] = {'owner': main_id, 'journal': journal_id, 'journalSha256': hashlib.sha256(data).hexdigest(),
-                                'captureDirectory': directory, 'lock': lock}
+                                'captureDirectory': directory, 'lock': lock, 'buildDirectories': builds}
     node_hash = digest(node_path) if roles else None
     require(_capture_process(app_pid, native_pid, node_path, service_uid, native_root) == identity,
             'The observed native process changed.')
@@ -340,6 +341,67 @@ def protected(path, directory=False, private=False):
     info = path.lstat()
     require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode), 'Unexpected update path type.')
     require(not private or not stat.S_IMODE(info.st_mode) & 0o077, 'Private update evidence is not private.')
+
+
+def prior_capture_lifetimes(directory, job_id, candidate_id, epoch, service, current_binding, final_attempt):
+    """Reconcile the accepted controller's closed starts and its still-running final start."""
+    protected(directory, directory=True, private=True)
+    require(final_attempt in (2, 3) and str(uuid.UUID(job_id)) == job_id,
+            'Unexpected prior startup sequence.')
+    references = {}
+    intervals = []
+    previous_end = 0
+
+    def evidence(name):
+        path = directory / name
+        protected(path, private=True)
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NOATIME), 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            require(info.st_nlink == 1 and info.st_size <= 131072, 'Unexpected prior startup document.')
+            data = handle.read(131073)
+            require(info.st_size == len(data) and path.lstat() == info,
+                    'Prior startup document changed while reading.')
+        references[name] = {'path': str(path), 'sha256': hashlib.sha256(data).hexdigest()}
+        return json.loads(data)
+
+    for attempt in range(1, final_attempt + 1):
+        prefix = 'startup-' + str(attempt) + '-'
+        start = evidence(prefix + 'started.json')
+        fork = evidence(prefix + 'fork-observed.json')
+        process = evidence(prefix + 'process.json')
+        ready = evidence(prefix + 'ready.json')
+        identity = {'format': 1, 'jobId': job_id, 'attempt': attempt}
+        require(all(start.get(k) == value and fork.get(k) == value for k, value in identity.items())
+                and start.get('candidateId') == candidate_id and start.get('epoch') == epoch
+                and start.get('service') == service and start.get('agentVersion') == '2026.9.8',
+                'Prior startup identity differs from the installed application.')
+        binding = {'process': fork['process'], 'invocationId': fork['invocationId']}
+        require(set(binding['process']) == {'pid','startTicks'} and binding['process']['pid'] > 1
+                and re.fullmatch('[0-9a-f]{32}', binding['invocationId'])
+                and fork['startedReceiptSha256'] == references[prefix + 'started.json']['sha256']
+                and binding['process']['startTicks'] >= start['notBeforeTicks'],
+                'Prior fork is detached from its original start.')
+        expected = {**start, 'processBinding': binding, 'bindingReceiptSha256': references[prefix + 'fork-observed.json']['sha256'],
+                    'process': binding['process'], 'processObservedAtSeconds': process['processObservedAtSeconds']}
+        require(process == expected and ready == {**process, 'processReceiptSha256': references[prefix + 'process.json']['sha256'],
+                                                  'readyAtSeconds': ready['readyAtSeconds']},
+                'Prior process or readiness is detached from its original operation.')
+        first, last = start['startedAtSeconds'], ready['readyAtSeconds']
+        require(previous_end <= first <= fork['observedAtSeconds'] <= process['processObservedAtSeconds'] <= last
+                and 0 <= last - first <= MAX_STARTUP_WINDOW_SECONDS, 'Prior startup interval changed.')
+        if attempt < final_attempt:
+            closed = evidence(prefix + 'closed.json')
+            require(closed == {**ready, 'readyReceiptSha256': references[prefix + 'ready.json']['sha256'],
+                               'owningServiceFullyStopped': True, 'closedAtSeconds': closed['closedAtSeconds']}
+                    and last <= closed['closedAtSeconds'] <= first + MAX_STARTUP_WINDOW_SECONDS,
+                    'Prior shutdown is detached from its original readiness.')
+            last = closed['closedAtSeconds']
+        else:
+            require(binding == current_binding and not os.path.lexists(directory / (prefix + 'closed.json')),
+                    'The running service was replaced after its original startup.')
+        intervals.append([first,last])
+        previous_end = last
+    return intervals, references
 
 
 def protected_configuration_files(values, workspace, releases):
@@ -1206,6 +1268,167 @@ class Driver:
             require(inventory(self.application_dependency_target)[0] == self.target_dependency_identity,
                     'The immutable staged application dependencies changed.')
 
+    def prior_capture_lease(self):
+        operator = pathlib.Path(self.host['stateDirectory']) / 'operator-maintenance' / 'current.json'
+        protected(operator, private=True)
+        return read_json(operator, 8192)
+
+    def prior_capture_route(self):
+        """Resolve the existing accepted installation or the returned source of a completed rehearsal."""
+        state = pathlib.Path(self.host['stateDirectory'])
+        lease = getattr(self, 'prior_capture_lease_before_enter', None)
+        if lease is None:
+            lease = self.prior_capture_lease()
+        if lease.get('phase') == 'released' and lease.get('candidateId') == self.prior_id:
+            job = lease['id']
+            require(str(uuid.UUID(job)) == job and lease.get('workspaceEpoch') == self.expected_prior['workspaceEpoch'],
+                    'The returned rehearsal belongs to another workspace.')
+            folder = state / 'operator-maintenance' / job
+            evidence_path = folder / 'acceptance.json'
+            protected(evidence_path, private=True)
+            acceptance = read_json(evidence_path, 65536)
+            require(acceptance['candidateId'] == self.prior_id and acceptance['workspaceEpoch'] == self.expected_prior['workspaceEpoch']
+                    and acceptance['leaseId'] == job, 'The released rehearsal acceptance changed.')
+            if acceptance['outcome'] == 'rehearsed':
+                native = folder / 'native-capture-source.json'
+                protected(native, private=True)
+                document = read_json(native, 65536)
+                require(document['leaseId'] == job and document['candidateId'] == self.prior_id
+                        and document['epoch'] == self.expected_prior['workspaceEpoch'] and document['format'] == 1
+                        and acceptance.get('kind') == 'operator-maintenance-acceptance'
+                        and all(acceptance.get(k) is True for k in ('savedWorkVerified','recoveryVerified','healthVerified','accountsVerified')),
+                        'The returned source has no verified native startup.')
+                evidence = folder / 'rehearsal.json'
+                protected(evidence, private=True)
+                require(digest(evidence) == acceptance['evidenceSha256']
+                        and read_json(evidence)['nativeCaptureSourceSha256'] == digest(native),
+                        'Returned source startup is detached from its rehearsal.')
+                output = pathlib.Path(document['output'])
+                require(output.name == 'rehearsal-' + job,
+                        'The returned source startup output belongs to another operation.')
+                returned_path = folder / 'returned-acceptance.json'
+                protected(returned_path, private=True)
+                returned = read_json(returned_path)
+                require(digest(returned_path) == acceptance['returnedAcceptanceSha256']
+                        and returned['epoch'] == self.expected_prior['workspaceEpoch'] and returned['health']['candidateId'] == self.prior_id,
+                        'The rehearsal did not return the selected application.')
+                from recovery import capture_physical_root
+                require(document['returnedRoot'] == list(capture_physical_root(self.data))
+                        and returned['process'] == self.startup_process_identity(),
+                        'The returned workspace or its accepted process was replaced.')
+                return job, output, 3, {'type': 'returned-rehearsal', 'path': str(native), 'sha256': digest(native),
+                                        'originalSource': document['originalSource']}
+        latest = self.recovery_root / 'latest-update.json'
+        protected(latest, private=True)
+        pointer = read_json(latest, 4096)
+        previous = pathlib.Path(pointer['directory'])
+        job = previous.name.removeprefix('update-')
+        require(pointer['candidateId'] == self.prior_id and pointer['agentVersion'] == self.from_engine
+                and str(uuid.UUID(job)) == job and previous == self.recovery_root / ('update-' + job),
+                'The accepted installation pointer is detached from the prior application.')
+        journal_path = state / 'jobs' / 'journal.json'
+        protected(journal_path, private=True)
+        jobs = [record for record in read_json(journal_path,16*1024**2)['jobs'] if record['id'] == job]
+        require(len(jobs) == 1 and jobs[0]['candidateId'] == self.prior_id and jobs[0].get('epoch') == self.expected_prior['workspaceEpoch']
+                and jobs[0].get('state') == 'completed' and jobs[0].get('prepared') is True
+                and jobs[0].get('started') is True and jobs[0].get('hold') is False
+                and re.fullmatch('[a-f0-9]{64}', jobs[0]['releaseId']),
+                'The accepted installation has no unique original job.')
+        output = state / 'staging' / jobs[0]['releaseId'] / 'attempts' / job
+        receipt = output / 'result.json'
+        protected(receipt, private=True)
+        result = read_json(receipt,65536)
+        require(result.get('format') == 1 and result.get('jobId') == job and result.get('candidateId') == self.prior_id
+                and result.get('outcome') == 'completed'
+                and all(result.get(flag) is True for flag in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')),
+                'The original candidate installation was not accepted.')
+        return job, output, 2, {'type': 'accepted-installation', 'path': str(receipt), 'sha256': digest(receipt)}
+
+    def observes_prior_capture(self):
+        return (getattr(self, 'same_schema_qualification', None) is not None and self.active_engine == '2026.9.8'
+                and self.release['compatibility']['fromNovaVersion'] == '2.28.39')
+
+    def write_held_capture_origin(self, selected, writer, owner, process_started_at, windows, prior_evidence):
+        from recovery import capture_physical_root, selected_capture_registry
+        with verification_scratch(self.recovery_root):
+            selected_role, plugin = selected_capture_registry(self.data, self.data, selected)
+        require(set(writer['roles']) == {str(selected_role)} and writer['owner'] == list(owner)
+                and writer['epoch'] == self.before['epoch'], 'The current writer does not own the selected native catalog.')
+        registry_hash = hashlib.sha256(json.dumps(plugin, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        observation = {'format': 1, 'kind': 'held-prior-native-capture', 'owner': list(owner), 'epoch': self.before['epoch'],
+                       'selectedRelative': str(selected), 'physicalRoot': list(capture_physical_root(self.data)),
+                       'selectedRole': str(selected_role), 'writer': writer, 'windows': windows,
+                       'processStartedAtSeconds': process_started_at,
+                       'priorEvidence': {**prior_evidence, 'selectedCatalogSha256': registry_hash}}
+        path = self.output / 'held-prior-native-capture.json'
+        write_json(path, observation)
+        self.held_capture_origin = (path, digest(path))
+        return self.held_capture_origin
+
+    def observe_prior_capture(self):
+        if not self.observes_prior_capture():
+            return
+        from recovery import capture_lease_identity, capture_physical_root, selected_workspace_directory
+        selected = selected_workspace_directory(self.data).relative_to(self.data)
+        self.controller_hold()
+        process = self.startup_process_identity()
+        binding = self.startup_process_binding()
+        require(binding['process'] == process and self.current.resolve(strict=True) == self.prior,
+                'The prior process changed before its native capture.')
+        owner = (self.job_id, self.prior_id, 0)
+        writer = self.native_capture_writer(selected, owner, self.before['epoch'], process)
+        if writer is None:
+            return
+        job, directory, attempt, source = self.prior_capture_route()
+        intervals, evidence = prior_capture_lifetimes(directory,job,self.prior_id,self.before['epoch'],
+                                                     self.settings['serviceName'],binding,attempt)
+        role = pathlib.Path(next(iter(writer['roles'])))
+        root = self.data / role.parent.parent
+        flags = os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY | os.O_NOATIME
+        fd = os.open(root, flags)
+        try:
+            children = os.listdir(fd)
+        finally:
+            os.close(fd)
+        require(len(children) <= 1000, 'The prior capture inventory exceeds its bound.')
+        # Rehearsal startup 1 belongs to a different physical trial tree.
+        original_intervals = intervals[1:] if source['type'] == 'returned-rehearsal' else intervals
+        inherited = {}
+        if source.get('originalSource') is not None:
+            previous = source['originalSource']
+            path = directory / 'held-prior-native-capture.json'
+            protected(path, private=True)
+            require(set(previous) == {'path','sha256'} and path == pathlib.Path(previous['path'])
+                    and digest(path) == previous['sha256'], 'The rehearsed original source receipt changed.')
+            previous_doc = read_json(path)
+            require(previous_doc['epoch'] == self.before['epoch'] and previous_doc['owner'] == [job,self.prior_id,0]
+                    and previous_doc['physicalRoot'] == list(capture_physical_root(self.data)),
+                    'Prior capture windows belong to another original workspace.')
+            inherited = {name: (window, previous_doc['priorEvidence']['markerIdentities'][name])
+                         for name, window in previous_doc['windows'].items()}
+        windows, markers = {}, {}
+        for child in children:
+            if not re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',child):
+                continue
+            path = root / child / 'owner.sqlite'
+            if not os.path.lexists(path):
+                continue
+            require(path.resolve(strict=True) == path and path.is_file(), 'Prior capture marker was redirected.')
+            marker = list(capture_lease_identity(path.lstat()))
+            name = str(path.relative_to(self.data))
+            stamps = [window for window in original_intervals if window[0]*10**9 <= marker[7] <= window[1]*10**9]
+            prior = inherited.get(name)
+            if prior is not None and prior[1] == marker and prior[0] not in stamps:
+                stamps.append(prior[0])
+            if len(stamps) == 1:
+                windows[name], markers[name] = stamps[0], marker
+        self.write_held_capture_origin(selected, writer, owner, intervals[-1][0], windows,
+                                       {'accepted': source, 'startups': evidence, 'processBinding': binding,
+                                        'markerIdentities': markers})
+        require(self.startup_process_binding() == binding and self.current.resolve(strict=True) == self.prior,
+                'Prior process changed during its native capture.')
+        self.controller_hold()
+
     def capture_before_start(self, candidate, attempt):
         """Observe the exact stopped physical copy. Direct native comparisons retain strict equality."""
         self.capture_retirement_start = None
@@ -1429,13 +1652,11 @@ class Driver:
         require(record == {'format': 1, 'jobId': self.job_id, **launch}, 'Recorded startup window changed.')
         return record, digest(path)
 
-    def observe_ready_capture(self, ready):
-        capture = getattr(self, 'capture_retirement_start', None)
-        if capture is None or 'deferredBefore' not in capture:
-            return
+    def native_capture_writer(self, selected, owner, epoch, process):
+        """Observe the unique gateway belonging to this exact running application."""
         import pwd
-        app_pid = ready['process']['pid']
-        native_root = self.data / capture['selected'] / 'openclaw-runtime'
+        app_pid = process['pid']
+        native_root = self.data / selected / 'openclaw-runtime'
         children = set()
         for task in (pathlib.Path('/proc') / str(app_pid) / 'task').iterdir():
             try:
@@ -1453,14 +1674,22 @@ class Driver:
             except FileNotFoundError:
                 continue
         require(len(gateways) == 1, 'A unique settled gateway is required for native writer observation.')
-        document = observe_capture_writer(self.data, capture['selected'], capture['owner'], capture['epoch'],
+        document = observe_capture_writer(self.data, selected, owner, epoch,
                                           app_pid, gateways[0], self.prior_agent_node,
                                           pwd.getpwnam(self.settings['serviceUser']).pw_uid, native_root)
+        if document is not None:
+            require(document['process']['nodeSha256'] == self.agent_node_hash
+                    and document['process']['appStartTicks'] == process['startTicks'],
+                    'The native writer differs from the reviewed Node and ready application.')
+        return document
+
+    def observe_ready_capture(self, ready):
+        capture = getattr(self, 'capture_retirement_start', None)
+        if capture is None or 'deferredBefore' not in capture:
+            return
+        document = self.native_capture_writer(capture['selected'], capture['owner'], capture['epoch'], ready['process'])
         if document is None:
             return
-        require(document['process']['nodeSha256'] == self.agent_node_hash
-                and document['process']['appStartTicks'] == ready['process']['startTicks'],
-                'The native writer differs from the reviewed Node and ready application.')
         path = self.output / ('startup-' + str(ready['attempt']) + '-capture-writer.json')
         write_json(path, document)
         capture['writerReceipt'] = (path, digest(path))
@@ -1742,6 +1971,15 @@ class Driver:
             'manifestSha256': manifest_hash,
             'configuration': file_reference(selected / 'openclaw-runtime/openclaw.json'),
             'logicalNativeRoot': str(self.data / relative / 'openclaw-runtime'), 'sourceClosed': True}
+        origin = getattr(self, 'held_capture_origin', None)
+        if origin is not None:
+            from recovery import bind_held_capture_origin
+            held = read_json(origin[0])
+            require_closed_capture_writer(held['writer'])
+            self.deferred_capture_history = bind_held_capture_origin(
+                snapshot, self.data, relative, self.prior_agent, owner=(self.job_id,self.prior_id,0), epoch=epoch,
+                source_manifest_sha256=hashlib.sha256(manifest_bytes + b'\n').hexdigest(),
+                held_ref=origin, windows=held['windows'])
         if getattr(self, 'deferred_capture_history', None) is not None:
             # The retained producer stored its compact inventory as a JSON line.
             self.deferred_source_manifest = (manifest_hash, hashlib.sha256(manifest_bytes + b'\n').hexdigest())
@@ -1961,6 +2199,7 @@ class Driver:
             require(not self.recovery.exists() and not self.restore.exists() and not self.restore.is_symlink(), 'A previous recovery attempt must be retained.')
             self.wait_acceptance(self.prior_id, self.release['compatibility']['fromNovaVersion'])
             self.verify_configuration()
+            self.observe_prior_capture()
             # A failed stop is an uncertain mutation, so it can never produce unchanged.
             self.stop_attempted = True
             self.service('stop')

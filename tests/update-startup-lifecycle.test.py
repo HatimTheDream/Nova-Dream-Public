@@ -186,5 +186,130 @@ class StartupLifecycleTests(unittest.TestCase):
                 self.assertFalse((output / 'result.json').exists())
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'Requires no-follow Linux file descriptors.')
+class PriorCaptureOriginTests(unittest.TestCase):
+    def test_prior_lifetime_chain_survives_restart_and_rejects_changed_receipts(self):
+        job = '006a596d-7c05-4b6e-be6b-e0b906bfd250'
+        epoch = '7d527435-d0ed-4788-bd6f-a1519a9788d1'
+        candidate = 'a' * 64
+        service = 'fixture-nova.service'
+        for count in (2, 3):
+            with self.subTest(starts=count), tempfile.TemporaryDirectory() as temp:
+                directory = pathlib.Path(temp)
+                for attempt in range(1,count+1):
+                    first = attempt * 100
+                    prefix = 'startup-' + str(attempt) + '-'
+                    def save(suffix, record):
+                        path = directory / (prefix + suffix + '.json')
+                        recovery.write_json(path, record)
+                        return recovery.digest(path)
+                    identity = {'format': 1, 'jobId': job, 'attempt': attempt}
+                    start = {**identity, 'startedAtSeconds': first, 'notBeforeTicks': first * 100, 'candidateId': candidate,
+                             'epoch': epoch, 'service': service, 'agentVersion': '2026.9.8'}
+                    start_hash = save('started',start)
+                    binding = {'process': {'pid': first+15, 'startTicks': first*100+1}, 'invocationId': format(attempt,'032x')}
+                    fork_hash = save('fork-observed',{**identity, **binding, 'observedAtSeconds': first+1, 'startedReceiptSha256': start_hash})
+                    process = {**start, 'processBinding': binding, 'bindingReceiptSha256': fork_hash,
+                               'process': binding['process'], 'processObservedAtSeconds': first+2}
+                    process_hash = save('process',process)
+                    ready = {**process, 'processReceiptSha256': process_hash, 'readyAtSeconds': first+4}
+                    ready_hash = save('ready',ready)
+                    if attempt < count:
+                        save('closed',{**ready, 'owningServiceFullyStopped': True,
+                                       'closedAtSeconds': first+6, 'readyReceiptSha256': ready_hash})
+                # Temporary directories belong to the test account. The real private-path
+                # protection is checked separately by the Linux protected-fixture suite.
+                with patch.object(driver, 'protected'):
+                    def verify(bound=binding):
+                        return driver.prior_capture_lifetimes(directory, job, candidate, epoch, service, bound, count)
+                    intervals, refs = verify()
+                    self.assertEqual(intervals,[[n*100,n*100+(6 if n<count else 4)] for n in range(1,count+1)])
+                    self.assertEqual(len(refs), count*5-1)
+                    with self.assertRaisesRegex(RuntimeError,'replaced'):
+                        verify({**binding, 'invocationId': 'f'*32})
+                    final_ready = directory / ('startup-' + str(count) + '-ready.json')
+                    original = final_ready.read_bytes()
+                    edited = json.loads(original)
+                    edited['processReceiptSha256'] = '0' * 64
+                    final_ready.write_text(json.dumps(edited))
+                    with self.assertRaisesRegex(RuntimeError,'detached'):
+                        verify()
+                    final_ready.write_bytes(original)
+                    (directory / ('startup-' + str(count) + '-closed.json')).write_text('{}')
+                    with self.assertRaisesRegex(RuntimeError,'replaced'):
+                        verify()
+
+    def test_prior_route_uses_completed_job_or_the_verified_returned_source(self):
+        job = '006a596d-7c05-4b6e-be6b-e0b906bfd250'
+        resumed = '2ba2f854-e55a-46f5-8cac-5ab305d14ac4'
+        epoch = '7d527435-d0ed-4788-bd6f-a1519a9788d1'
+        candidate, release = 'a'*64, 'b'*64
+        with tempfile.TemporaryDirectory() as tmp, patch.object(driver,'protected'):
+            base = pathlib.Path(tmp).resolve()
+            app = object.__new__(driver.Driver)
+            app.data = base / 'workspace'
+            app.data.mkdir()
+            app.host = {'stateDirectory': str(base)}
+            app.expected_prior = {'workspaceEpoch':epoch}
+            app.prior_id, app.from_engine, app.recovery_root = candidate, '2026.9.8', base / 'recovery'
+            process = {'pid':1234,'startTicks':234567}
+            app.startup_process_identity = lambda: process
+            def save(path, obj):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                recovery.write_json(path,obj)
+                return recovery.digest(path)
+            save(app.recovery_root/'latest-update.json',{'candidateId':candidate,'agentVersion':app.from_engine,
+                                                         'directory':str(app.recovery_root/('update-'+job))})
+            operator = base/'operator-maintenance'
+            save(operator/'current.json',{'phase':'entered','id':resumed,'candidateId':candidate,'workspaceEpoch':epoch})
+            entry = {'id':job,'candidateId':candidate,'releaseId':release,'epoch':epoch,
+                     'state':'completed','prepared':True,'started':True,'hold':False}
+            save(base/'jobs/journal.json',{'currentId':resumed,'jobs':[entry,{'id':resumed}]})
+            output = base/'staging'/release/'attempts'/job
+            flags = dict.fromkeys(('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified'),True)
+            save(output/'result.json',{'format':1, 'jobId':job,'candidateId':candidate,'outcome':'completed',**flags})
+            self.assertEqual(app.prior_capture_route()[:3], (job,output,2))
+            folder = operator/resumed
+            returned_output = base/'lab'/('rehearsal-'+resumed)
+            source = {'format':1,'candidateId':candidate,'leaseId':resumed,'epoch':epoch,'output':str(returned_output),
+                      'returnedRoot':list(recovery.capture_physical_root(app.data)),'originalSource':None}
+            source_sha = save(folder/'native-capture-source.json',source)
+            rehearsal = save(folder/'rehearsal.json',{'nativeCaptureSourceSha256':source_sha})
+            returned = save(folder/'returned-acceptance.json',{'epoch':epoch,'health':{'candidateId':candidate},'process':process})
+            save(folder/'acceptance.json',{'kind':'operator-maintenance-acceptance','candidateId':candidate,'workspaceEpoch':epoch,
+                                           'leaseId':resumed,'outcome':'rehearsed','evidenceSha256':rehearsal,
+                                           'returnedAcceptanceSha256':returned,**flags})
+            app.prior_capture_lease_before_enter = {'phase':'released','id':resumed,'candidateId':candidate,'workspaceEpoch':epoch}
+            self.assertEqual(app.prior_capture_route()[:3], (resumed,returned_output,3))
+            app.startup_process_identity = lambda: {**process,'startTicks':process['startTicks']+1}
+            with self.assertRaisesRegex(RuntimeError,'replaced'):
+                app.prior_capture_route()
+            app.startup_process_identity = lambda: process
+            (folder/'native-capture-source.json').write_text(json.dumps({**source,'output':str(base/'other')}))
+            with self.assertRaisesRegex(RuntimeError,'detached'):
+                app.prior_capture_route()
+
+    def test_held_registry_refuses_a_different_writer_before_issuing_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp).resolve()
+            driver_instance = object.__new__(driver.Driver)
+            driver_instance.data = driver_instance.recovery_root = driver_instance.output = root
+            driver_instance.before = {'epoch': 'source-epoch'}
+            owner = ('job','candidate',0)
+            role = pathlib.Path('state/tmp/plugin-captures/family/owner.sqlite')
+            writer = {'roles': {str(role): {}}, 'owner': list(owner), 'epoch': 'source-epoch'}
+            plugin = {'pluginId': 'codex', 'sourceAdmissions': {}}
+            with patch.object(recovery, 'selected_capture_registry', return_value=(role,plugin)):
+                wrong = {**writer, 'roles': {'some-other-owner': {}}}
+                with self.assertRaisesRegex(RuntimeError,'current writer'):
+                    driver_instance.write_held_capture_origin(pathlib.Path('.'), wrong, owner, 100, {}, {'ready':'example'})
+                path, sha = driver_instance.write_held_capture_origin(pathlib.Path('.'), writer, owner, 100, {}, {'ready':'example'})
+            self.assertEqual(recovery.digest(path),sha)
+            recorded = json.loads(path.read_bytes())
+            self.assertEqual(recorded['physicalRoot'],list(recovery.capture_physical_root(root)))
+            self.assertEqual(recorded['selectedRole'],str(role))
+            self.assertEqual(recorded['priorEvidence']['selectedCatalogSha256'],recovery.deferred_digest(plugin))
+
+
 if __name__ == '__main__':
     unittest.main()

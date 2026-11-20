@@ -25,6 +25,7 @@ LIFECYCLE_PARENT = '81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa
 RETIRED_RECAPTURE_PRODUCER = 'f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092'
 RETIRED_RECAPTURE_PRODUCERS = {RETIRED_RECAPTURE_PRODUCER, '0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6'}
 DEFERRED_CAPTURE_PRODUCER = '50f964d0b766a3795d6f819e555da511b58bde3ad3a066f489663067b92971f0'
+COMPLETE_CAPTURE_PRODUCER = '3cd8a8699d79011c826ce4e3cbd934fa9611742f418bf614cb917a1d84db63a8'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
@@ -245,11 +246,157 @@ def consume_home_capture(review, document, sources, same_schema=False):
          'startup-proof-home-capture-worker-not-successfully-closed')
 
 
+PARKED_CAPTURE_PRODUCER = '7e36af529fb353224722c6db2a2d9c2ea068f490913e2d4bef3c2ae487734e69'
+
+def read_split_warm_donor(authority,loan,plan,review,history,document):
+    keys={'format','kind','operationId','continuationOperationId','originalInvocation','successorInvocation',
+          'jobId','priorCandidateId','epoch','baselineSha256','parent','producer','warmSource','disposableRoles',
+          'seedReplicas','chain','outsideClosure','originalFailedStderr','protectedCustody','terminal',
+          'nativeOutputSha256','projectionSha256','consumptionSha256','independentReviewSha256'}
+    need(set(authority)==keys and authority['format']==2 and authority['kind']=='verified-supplemental-warm-antecedent' and
+         all(HASH.fullmatch(authority[k]) for k in keys if k.endswith('Sha256')),'incorrect-split-warm-authority')
+    op=authority['operationId']; cont=authority['continuationOperationId']; formal=plan['operationId']
+    need(all(UUID.fullmatch(x) for x in (op,cont,formal,authority['jobId'])) and len({op,cont,formal})==3 and
+         op==loan['donorOperationId'] and all(re.fullmatch('[a-f0-9]{32}',authority[k]) for k in ('originalInvocation','successorInvocation')) and
+         authority['originalInvocation']!=authority['successorInvocation'] and authority['priorCandidateId']==history['priorCandidateId']==review['prior']['candidateId'] and
+         authority['epoch']==history['epoch']==review['baseline']['epoch'] and history['kind']=='signed-prior-capture-windows' and
+         authority['baselineSha256']==history['sourceManifestSha256']==loan['sourceManifestSha256'],'unrelated-seed-or-continuation-owner')
+    original='/mnt/nova-data/qualified-startup-inputs-'+op
+    old_c='/opt/nova-release-tools/qualified-startup-inputs-'+op
+    old_e=original+'/fixtures/'+op+'/evidence/'
+    new_e='/mnt/nova-data/qualified-startup-continuation-'+cont+'/evidence/'
+    new_c='/opt/nova-release-tools/qualified-startup-continuation-'+cont
+    custody_root=PurePosixPath(reference(authority['protectedCustody'])['path']).parent
+    custody_owner=custody_root.name.removeprefix('qualified-startup-continuation-custody-')
+    need(UUID.fullmatch(custody_owner) and len({op,cont,formal,custody_owner})==4,
+         'distinct-original-custody-owner-required')
+    paths={'parent':new_e+'continuation-parent.json','chain':new_e+'continuation-chain.json',
+           'outsideClosure':new_e+'outside-closure.json','disposableRoles':new_e+'disposable-roles.json',
+           'warmSource':old_e+'warm-source.json','seedReplicas':original+'/replica-verified.json',
+           'originalFailedStderr':old_c+'/qualified-worker.stderr','terminal':new_c+'/continue-closed.json',
+           'protectedCustody':'/opt/nova-release-tools/qualified-startup-continuation-custody-'+custody_owner+'/result.json',
+           'producer':new_c+'/continue.py'}
+    for k,p in paths.items():
+        need(set(authority[k])=={'path','sha256'} and reference(authority[k])['path']==p and
+             (k not in loan or loan[k]==authority[k]),'supplemental-warm-original-reference-changed')
+    source=document('parkedLoan/producer',authority['producer'],2*1024**2,opaque=True)
+    loss=document('parkedLoan/originalFailedStderr',authority['originalFailedStderr'],2*1024**2,opaque=True)
+    need(source and b'isolated-child-failed-evidence-retained-no-replay' in loss,'wrong-original-failed-stop')
+    v={k:document('parkedLoan/'+k,authority[k],64*1024**2 if k=='seedReplicas' else 8*1024**2)
+       for k in ('parent','chain','outsideClosure','disposableRoles','warmSource','seedReplicas','terminal','protectedCustody')}
+    parent,chain,closed,roles,warm,seeds,terminal,custody=(v[k] for k in
+        ('parent','chain','outsideClosure','disposableRoles','warmSource','seedReplicas','terminal','protectedCustody'))
+    original_binding=parent['originalQualificationBinding']
+    effective=parent['qualificationBinding']
+    intervening=chain['priorFailedContinuations']
+    need(parent['priorFailedContinuations']==intervening and set(intervening)=={'continuation','firstObserver','configurationObserver'}
+         and intervening['continuation']['operationId']==custody_owner and all(v['passed'] is False for v in intervening.values())
+         and parent['stationaryFirstCompared'] is chain['stationaryFirstCompared'] is True
+         and parent['newServiceAttempts']==chain['newServiceAttempts']==[2,3]
+         and parent['firstPreservation']==chain['firstPreservation']==parent['scenarios'][0]['preservation'],
+         'combined-first-check-or-retained-failure-changed')
+    need(effective['helpers']==plan['qualificationBinding']['helpers']
+         and original_binding['helpers']==parent['originalNativeHelpers']['sha256']
+         and parent['effectiveNativeHelpers']['sha256']==effective['helpers']
+         and chain['originalNativeHelpers']==parent['originalNativeHelpers']
+         and chain['effectiveNativeHelpers']==parent['effectiveNativeHelpers']
+         and len(original_binding['helpers'])==len(effective['helpers'])==11
+         and {**original_binding['helpers'],'recovery.py':effective['helpers']['recovery.py']}==effective['helpers']
+         and original_binding['helpers']['recovery.py']!=effective['helpers']['recovery.py']
+         and {**original_binding,'helpers':effective['helpers']}==effective,'unrelated-or-unchanged-combined-helper')
+    need(parent['kind']=='qualified-startup-continuation-parent' and parent['operationId']==chain['operationId']==op and
+         parent['continuationOperationId']==chain['continuationOperationId']==cont and parent['passed'] is True and
+         parent['originalInvocationPassed'] is chain['originalInvocationPassed'] is False and parent['originalAttemptOneReused'] is True and
+         parent['originalSourceAndProtectedClosuresUnchanged'] is True and parent['independentOriginalRestored'] is True and
+         parent['productionMutation'] is False and parent['deliveryQualification'] is False and
+         parent['chain']==authority['chain'] and parent['outsideClosure']==chain['outsideClosure']==roles['outsideClosure']==authority['outsideClosure'] and
+         parent['disposableRoles']==authority['disposableRoles'] and parent['warmSource']==roles['warmSource']==authority['warmSource'] and
+         parent['custody']==chain['custody']==roles['custody']==authority['protectedCustody'] and
+         parent['source']==chain['source']==authority['producer'] and chain['originalFailure']==authority['originalFailedStderr'],
+         'original-private-continuation-ownership-changed')
+    need(chain['kind']=='qualified-startup-continuation-chain' and chain['originalInvocationId']==terminal['originalInvocationId']==authority['originalInvocation'] and
+         chain['newInvocationId']==terminal['invocationId']==authority['successorInvocation'] and
+         terminal['kind']=='closed-retained-checkpoint-continuation' and terminal['operationId']==cont and terminal['originalOperationId']==op and
+         terminal['result']==authority['parent'] and terminal['chain']==authority['chain'] and terminal['cgroupClosed'] is True and
+         terminal['unit']=='nova-qa-warm-continuation-'+cont+'.service' and
+         all(terminal['properties'][k]==w for k,w in {'MainPID':'0','ControlPID':'0','ExecMainStatus':'0','Result':'success','Job':''}.items()),
+         'supplemental-warm-worker-was-not-closed')
+    need(custody['kind']=='verified-closed-qualification-custody' and custody['originalOperationId']==op and
+         custody['continuationOperationId']==custody_owner and custody['failedInvocationId']==authority['originalInvocation'] and
+         all(custody[k] is True for k in ('sourceClosureChecked','sourceMetadataUnchanged','sourceReadOnlyView')) and
+         custody['copy']['passed'] and custody['copy']['independentInodes'] and custody['copy']['source']['device']!=custody['copy']['destination']['device'] and
+         closed['kind']=='two-invocation-outside-closure' and closed['operationId']==op and closed['continuationOperationId']==cont and
+         closed['sourceClosureUnchanged'] is True and all(set(closed[k])=={'activeOwnedPids','activeNamespaceOwners','activeFixtureOwners'} and
+         all(v==[] for v in closed[k].values()) for k in ('originalOwners','continuationOwners')) and
+         roles['kind']=='continued-qualification-workspace-role-inventory' and roles['operationId']==op and roles['continuationOperationId']==cont and
+         roles['originalInvocationPassed'] is False and roles['seedReplicas']==authority['seedReplicas'] and
+         roles['productionMutation'] is False and roles['separatePlanIntentAndReferenceClosureRequired'] is True and
+         [(r['path'],r['role'],r['createdByOperationId'],r['retainedByContinuationOperationId']) for r in roles['roles']]==[
+           (original+'/fixtures/'+op+'/var-lib/nova','independent-pristine-prior',cont,cont),
+           (original+'/fixtures/'+op+'/var-lib/nova-qualified-target-retained','continued-then-parked-target',op,cont)],
+         'split-warm-physical-custody-changed')
+    need(seeds['kind']=='verified-original-linked-qualification-seed-replicas' and seeds['plan']['operationId']==op and
+         warm['operationId']==op and warm['kind']=='settled-isolated-held-prior-origin' and warm['history']['jobId']==authority['jobId'] and
+         warm['history']['priorCandidateId']==parent['priorCandidateId']==authority['priorCandidateId'] and
+         warm['history']['epoch']==parent['workspaceEpoch']==authority['epoch'] and
+         warm['snapshot']['originalWorkspaceManifestSha256']==loan['sourceManifestSha256'] and
+         parent['purpose']=='pre-freeze-recovery-verifier-on-existing-2.28.46-application','wrong-original-source-seed')
+    return parent,roles,warm,seeds
+
+
+def parked_seed_antecedent(parent, plan, review, child, history, authority, document):
+    """Join the independently observed warm trial to this operation's borrowed read-only seed."""
+    loan = parent['parkedSeedLoan']
+    fields = {'format', 'kind', 'donorOperationId', 'sourceManifestSha256', 'parent', 'warmSource',
+              'disposableRoles', 'seedReplicas', 'workspace', 'workspacePlan', 'workspaceResult'}
+    need(set(loan) == fields and loan['format'] == 1 and loan['kind'] == 'borrowed-original-parked-workspace'
+         and 'parkedSeedLoan' not in plan and 'parkedSeedLoanSha256' not in parent
+         and sha(encoded(loan)) == plan['parkedSeedLoanSha256'], 'parked-seed-original-binding-changed')
+    donor,roles,warm,seeds=read_split_warm_donor(authority,loan,plan,review,history,document)
+    op=authority['operationId']
+    root='/mnt/nova-data/qualified-startup-inputs-'+op
+    formal_ref = review['seedReplicas']
+    need(formal_ref == plan['seedReplicaReceipt'] and formal_ref['path'] ==
+         '/mnt/nova-data/qualified-startup-inputs-'+plan['operationId']+'/replica-verified.json'
+         and plan['inputHashes'].get(formal_ref['path']) == formal_ref['sha256'], 'formal-parked-seed-reference-changed')
+    formal = document('parkedLoan/formalSeedReplicas', formal_ref, 64*1024**2)
+    need(formal['passed'] is True and formal['originalAuthorityRetained'] is True
+         and formal['plan']['operationId'] == plan['operationId'] and formal['plan']['kind'] == 'formal-parked-seed-replica-plan'
+         and formal['parkedSeedLoan'] == loan and formal['plan']['parkedSeedLoanSha256'] == plan['parkedSeedLoanSha256']
+         and formal['plan']['roles']['workspace'] == loan['workspacePlan']
+         and formal['results']['workspace'] == loan['workspaceResult'], 'formal-parked-seed-receipt-changed')
+    workspace = root+'/seeds/workspace'
+    row = seeds['plan']['roles']['workspace']
+    selected = seeds['results']['workspace']
+    source_inode, seed_inode, copy = row['sourceRootIdentity'], selected['replicaRootIdentity'], selected['copy']
+    need(workspace == loan['workspace'] == row['destination'] and workspace in roles['protectedOriginals']
+         and seeds['passed'] is True and seeds['partialCopiesDisposable'] is False
+         and seeds['sourceProcessReferencesClosed'] is True
+         and loan['workspacePlan'] == row and loan['workspaceResult'] == selected
+         and row['source'] == review['baseline']['workspace']
+         and row['inventorySha256'] == selected['inventorySha256'] == loan['sourceManifestSha256']
+         and source_inode[0] == seed_inode[0] == seeds['plan']['authority']['device'] and source_inode[1] != seed_inode[1]
+         and source_inode[3:5] == seed_inode[3:5] and stat.S_ISDIR(source_inode[2]) and stat.S_ISDIR(seed_inode[2])
+         and copy['kind'] == 'maintained-same-device-independent-copy' and copy['source'] == row['sourcePin']
+         and copy['source']['inode'] == source_inode[1] and copy['destination']['inode'] == seed_inode[1]
+         and copy['destination']['path'] == workspace and copy['destinationParent']['path'] == root+'/seeds'
+         and all(copy.get(k) is True for k in ('passed','fsyncCompleted','sourceUnchanged','independentInodes')),
+         'parked-seed-physical-provenance-changed')
+    need(parent['priorCandidateId'] == donor['priorCandidateId'] == authority['priorCandidateId']
+         and parent['targetCandidateId'] != donor['targetCandidateId'] and review['target']['version'] == '2.28.48'
+         and not any('warmSource' in x for x in (parent,child)), 'parked-formal-scenarios-must-be-original')
+    return {'kind':'verified-parked-seed-antecedent', 'operationId':op, 'continuationOperationId':authority['continuationOperationId'], 'workspace':workspace,
+            'sourceManifestSha256':loan['sourceManifestSha256'], 'warmJobId':authority['jobId'],
+            'nativeOutputSha256':authority['nativeOutputSha256'], 'projectionSha256':authority['projectionSha256'],
+            'seedReceiptSha256':loan['seedReplicas']['sha256'], 'formalSeedReceiptSha256':formal_ref['sha256'],
+            'loanSha256':plan['parkedSeedLoanSha256']}
+
+
 def consume(request, read, sources, same_schema_helpers=None):
     need(isinstance(sources, dict) and set(sources) == set(SOURCES)
          and all(isinstance(v, str) and HASH.fullmatch(v) and v != '0' * 64 for v in sources.values()),
          'reviewed-startup-producer-required')
-    need(isinstance(request, dict) and set(request) == {'format', 'kind', 'parent', 'producer'}
+    need(isinstance(request, dict) and set(request) == ({'format', 'kind', 'parent', 'producer'} | ({'warmAntecedent'} if sources['qualified-startup.py'] == PARKED_CAPTURE_PRODUCER else set()))
          and request['format'] == 1 and request['kind'] == 'collect-actual-retained-startup-proof',
          'startup-proof-request-invalid')
     reference(request['parent']); reference(request['producer'])
@@ -304,6 +451,9 @@ def consume(request, read, sources, same_schema_helpers=None):
     profile = document('effectiveProfile', parent['effectiveProfile'])
     properties = profile.get('properties', {})
     runtime = ('7800000000', '2h 10min', '2h10min') if sources['qualified-parent.py'] == LIFECYCLE_PARENT else ('4200000000', '1h 10min', '1h10min')
+    if runner_sha in (COMPLETE_CAPTURE_PRODUCER, PARKED_CAPTURE_PRODUCER):
+        runtime = ('9000000000','2h 30min','2h30min')
+        need(review['maximumChildSeconds']==6600,'warm-startup-child-budget-changed')
     need(profile.get('unit') == 'nova-qa-qualified-' + op + '.service'
          and properties.get('MainPID') == str(worker['pid']) and properties.get('ControlGroup') == worker['controlGroup']
          and properties.get('Type') == 'exec' and properties.get('Restart') == 'no' and properties.get('KillMode') == 'control-group'
@@ -426,7 +576,13 @@ def consume(request, read, sources, same_schema_helpers=None):
     transition_preceding = None
     capture_history = None
     deferred_history = None
-    if runner_sha == DEFERRED_CAPTURE_PRODUCER:
+    parked = runner_sha == PARKED_CAPTURE_PRODUCER
+    complete_capture = parked or runner_sha == COMPLETE_CAPTURE_PRODUCER
+    if complete_capture:
+        need(parent.get('purpose') == plan.get('purpose') ==
+             ('qualified-parked-retained-workspace-release-2.28.48' if parked else 'qualified-retained-workspace-release-2.28.48') and review['target']['version'] == '2.28.48',
+             'qualified-retained-release-scope-changed')
+    if runner_sha == DEFERRED_CAPTURE_PRODUCER or complete_capture:
         need(same_schema, 'deferred-source-needs-same-schema-marker')
         capture_history = consume_capture_history(plan,review,values,document)
         archive = plan['deferredTemplate']
@@ -434,8 +590,14 @@ def consume(request, read, sources, same_schema_helpers=None):
             plan['inputHashes'].get(ref['path']) == ref['sha256'] for ref in archive.values()),
             'deferred-source-template-refs-changed')
         prior = [document('capture-template/' + k,archive[k]) for k in ('parent','preservation','proof')]
-        deferred_history = capture_signed_history(capture_history,capture_manifest,archive,*prior)
-        need(plan['deferredCaptureHistory'] == deferred_history, 'deferred-history-plan-binding-changed')
+        parked_history = capture_signed_history(capture_history,capture_manifest,archive,*prior)
+        need(plan['deferredCaptureHistory'] == parked_history, 'deferred-history-plan-binding-changed')
+        deferred_history = parked_history
+        if parked:
+            loan = parked_seed_antecedent(parent,plan,review,child,parked_history,request['warmAntecedent'],document)
+        elif complete_capture:
+            warm_receipt = consume_warm_origin(parent,plan,review,fixture,document,worker,parked_history)
+            deferred_history=warm_receipt['history']
     for index, item in enumerate(parent['scenarios'], 1):
         scenario = item['scenario']; folder = fixture / 'evidence' / ('attempt-' + str(index))
         need(set(item) == {'scenario', 'started', 'process', 'ready', 'closed', 'preservation', 'bootstrap', 'clock-attribution'}, 'startup-proof-scenario-fields')
@@ -511,10 +673,16 @@ def consume(request, read, sources, same_schema_helpers=None):
             first_start = summaries[0]['startedAtSeconds'] if index == 2 else started['startedAtSeconds']
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
         capture_key = None
+        supplementary = None
         if same_schema:
             capture_keys = [name for name in ('captureObservation', 'captureRetirement', 'captureContinuity', 'captureTransition','captureDeferred') if name in preserved]
-            need(len(capture_keys) == 1, 'startup-proof-single-capture-branch-required')
-            capture_key = capture_keys[0]
+            if complete_capture:
+                need(set(capture_keys) in ({'captureDeferred'},{'captureDeferred','captureTransition'}),
+                     'complete-native-checkpoint-required')
+                capture_key = 'captureDeferred'
+            else:
+                need(len(capture_keys) == 1, 'startup-proof-single-capture-branch-required')
+                capture_key = capture_keys[0]
             need(not summaries or capture_key in summaries[0] or (deferred_history is not None and
                 capture_key in ('captureDeferred','captureTransition') and
                 all('captureDeferred' in row or 'captureTransition' in row for row in summaries)),
@@ -529,7 +697,7 @@ def consume(request, read, sources, same_schema_helpers=None):
                          'deferred-evidence-left-original-scenario')
                     docs[role] = document(scenario+'/deferred/'+role,ref,32*1024**2)
                 capture = capture_closed_summary(docs['before'],docs.get('writer'),docs['closed'],r,
-                    deferred_history,started,ready,ordinary_window,worker['controlGroup'])
+                    deferred_history,started,ready,ordinary_window,worker['controlGroup'],complete=complete_capture)
                 first = summaries[0] if summaries else None
                 if index == 2:
                     earlier = first.get('captureDeferred', first.get('captureTransition'))
@@ -552,6 +720,26 @@ def consume(request, read, sources, same_schema_helpers=None):
                         need(earlier and capture['physicalRoots'][0] == earlier['physicalRoots'][0]
                              and capture['physicalRoots'][1][:2] != earlier['physicalRoots'][1][:2],
                              'deferred-pristine-original-required')
+                if complete_capture:
+                    if parked:
+                        need(capture['jobId'] != loan['warmJobId'] and (index==2 or capture['beforeDisposition']=='all-retired'), 'parked-capture-not-from-fresh-owned-job')
+                    if summaries:
+                        need(capture['jobId'] == summaries[0]['captureDeferred']['jobId'],
+                             'three-scenarios-need-one-real-maintenance-job')
+                    fully_retired = deferred_history['kind']=='signed-prior-capture-windows' and capture['beforeDisposition'] == capture['closedDisposition'] == 'all-retired'
+                    need(fully_retired == ('captureTransition' in preserved),
+                         'original-retired-transition-coverage-changed')
+                    if fully_retired:
+                        prior_root = (summaries[-1]['captureDeferred']['physicalRoots'][1]
+                                      if index == 3 and 'captureTransition' not in summaries[-1] else None)
+                        supplementary,transition_preceding = capture_transition_summary(
+                            preserved['captureTransition'],plan,review,values,capture_history,ordinary_window,
+                            item,index,folder,scenario,document,None if prior_root is not None else transition_preceding,prior_root)
+                        need(supplementary['physicalRoots'] == capture['physicalRoots'] and
+                             supplementary['ordinaryWindow'] == capture['ordinaryWindow'],
+                             'retired-transition-and-native-checkpoint-disagree')
+                    else:
+                        transition_preceding = None
             elif capture_key == 'captureObservation':
                 capture = capture_observation_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, summaries[0].get(capture_key) if summaries else None, capture_manifest, folder, scenario, document)
@@ -593,6 +781,8 @@ def consume(request, read, sources, same_schema_helpers=None):
             summaries[-1]['replicaConfigObservation'] = preserved['replicaConfigObservation']
         if same_schema:
             summaries[-1][capture_key] = capture
+            if supplementary is not None:
+                summaries[-1]['captureTransition'] = supplementary
         elif runner_sha in CAPTURE_PRODUCERS:
             summaries[-1]['captureRetirement'] = capture
     need(parent['restorationIntent']['path'] == str(fixture / 'evidence/workspace-restoration-intent.json')
@@ -604,8 +794,8 @@ def consume(request, read, sources, same_schema_helpers=None):
          and restoration_intent.get('productionMutation') is False and restoration.get('productionMutation') is False
          and restoration.get('passed') is True and restoration.get('targetMutatedStateRetained') is True
          and restoration.get('independentlyRestoredPristine') is True
-         and restoration.get('sourceManifestSha256') == restoration_intent.get('sourceManifestSha256') == review['baseline']['manifest']['sha256']
-         and restoration.get('sourceHomeInventorySha256') == restoration_intent.get('sourceHomeInventorySha256') == review['homeSeed']['inventory']['sha256']
+         and restoration.get('sourceManifestSha256') == restoration_intent.get('sourceManifestSha256') == (warm_receipt['history']['sourceManifestSha256'] if complete_capture and not parked else review['baseline']['manifest']['sha256'])
+         and restoration.get('sourceHomeInventorySha256') == restoration_intent.get('sourceHomeInventorySha256') == (warm_receipt['snapshot']['homeInventorySha256'] if complete_capture and not parked else review['homeSeed']['inventory']['sha256'])
          and restoration.get('independentOriginalRestored') is True and restoration.get('independentHomeRestored') is True
          and restoration.get('fullPreStartSavedAndNativeEquality') is True
          and restoration.get('workspaceInodesDisjoint') is True and restoration.get('homeInodesDisjoint') is True
@@ -643,6 +833,7 @@ def consume(request, read, sources, same_schema_helpers=None):
     return {'format': 1, 'kind': 'actual-retained-startup-qualification-observation', 'readOnly': True, 'hostEffects': False,
             'request': request, 'requestSha256': sha(encoded(request)), 'sourceHashes': sources, 'qualificationOperationId': op,
             'scope': SCOPE, 'qualificationBinding': binding, 'scenarios': summaries, 'references': refs, 'workerIdentity': worker,
+            **({'parkedSeedAntecedent':loan} if parked else {}),
             **({'deferredCaptureHistory':deferred_history} if deferred_history is not None else {}),
             **({'baselineLineage': SAME_SCHEMA_BASELINE} if same_schema else {'baselineLineage': CAPTURE_BASELINE} if runner_sha in CAPTURE_PRODUCERS else {}),
             'actualSettledQualification': True, 'independentOriginalRestored': True,
@@ -683,6 +874,81 @@ def worker_closed(worker, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgr
 CAPTURE_BASELINE = 'verified-pre-swap-aborted-operator-snapshot'
 CAPTURE_TOKEN = 'f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
 CAPTURE_EMPTY = hashlib.sha256(b'').hexdigest()
+
+
+def consume_warm_origin(parent,plan,review,fixture,document,worker,parked):
+    """Rejoin the original before-stop writer, controlled interruption, saved snapshot and its source."""
+    evidence=fixture/'evidence'
+    ref=parent['warmSource']
+    need(ref['path']==str(evidence/'warm-source.json'),'warm-source-original-path-changed')
+    value=document('warmSource',ref,2*1024**2)
+    history,snapshot=value['history'],value['snapshot']
+    need(value['format']==1 and value['kind']=='settled-isolated-held-prior-origin' and
+         value['operationId']==plan['operationId'] and value['actualStop']=='ordinary-private-prior-stop'
+         and snapshot['operationId']==plan['operationId'] and snapshot['kind']=='independent-stopped-prior-home-snapshot'
+         and snapshot['independentCopy'] and snapshot['stoppedSourceUnchanged'] and snapshot['sourceSqliteOpened'] is False
+         and snapshot['originalParkedManifest']==review['baseline']['manifest'] and
+         snapshot['originalWorkspaceManifestSha256']==parked['sourceManifestSha256'] and
+         snapshot['originWorkspaceIdentity']==plan['baselineRootIdentity'] and
+         snapshot['stoppedPriorIdentity'][:2]!=snapshot['snapshotIdentity'][:2] and
+         snapshot['ownerWorkspace']=='/qualification/warm-source/home/workspace' and
+         snapshot['storedWorkspace']=='var-lib/nova-qa-prior-source/home/workspace' and
+         0<snapshot['observedCopyBytes']<=snapshot['admittedCopyBytes']==plan['warmSourceCopyBudgetBytes'],
+         'warm-stopped-source-physical-binding-changed')
+    roles=('started','process','ready','bootstrap','startup-0-capture-writer','held-prior-native-capture','prior-stop','stopped-source','closed')
+    need(set(value['original'])==set(roles),'warm-original-roles-changed')
+    records={}
+    for role in roles:
+        item=value['original'][role]
+        need(item['path']=='/qualification/evidence/warm-origin/'+role+'.json','warm-original-role-path-changed')
+        records[role]=document('warm-source/'+role,{**item,'path':str(evidence/'warm-origin'/(role+'.json'))},1024**2)
+    manifest=snapshot['workspaceManifest']
+    need(manifest['path']=='/qualification/evidence/warm-source-workspace-manifest.json' and
+         manifest['sha256']==history['sourceManifestSha256'],'warm-manifest-reference-changed')
+    actual_manifest=document('warm-source/workspaceManifest',{'sha256':manifest['sha256'],'path':str(evidence/'warm-source-workspace-manifest.json')},32*1024**2,opaque=True)
+    need(len(actual_manifest)==manifest['bytes'],'warm-source-manifest-size-changed')
+    held,writer,started,ready,closed,interrupted,boot=(records[k] for k in
+        ('held-prior-native-capture','startup-0-capture-writer','started','ready','closed','prior-stop','bootstrap'))
+    prior=review['prior']['candidateId'];epoch=review['baseline']['epoch']
+    hkeys={'kind','jobId','priorCandidateId','epoch','sourceManifestSha256','sourceRolesSha256','sourceRosterSha256',
+           'sourceEvidenceSha256','priorEvidenceSha256','selectedRole','sourceStatus','windows'}
+    need(set(history)==hkeys and history['kind']=='held-prior-capture-origin' and history['sourceStatus'] in ('stage','retired','released')
+         and history['jobId']==started['leaseId'] and history['priorCandidateId']==prior and history['epoch']==epoch
+         and all(HASH.fullmatch(history[k]) for k in hkeys if k.endswith('Sha256'))
+         and history['sourceEvidenceSha256']==value['original']['held-prior-native-capture']['sha256']
+         and history['priorEvidenceSha256']==capture_native_digest(held['priorEvidence'])
+         and history['windows']==held['windows'] and history['selectedRole']==held['selectedRole']
+         and held['selectedRole'] in history['windows'] and held['owner']==[history['jobId'],prior,0]
+         and held['physicalRoot']==snapshot['stoppedPriorIdentity'][:5] and held['selectedRelative']==plan['selectedRelative']
+         and held['writer']==writer and set(writer['roles'])=={held['selectedRole']}
+         and held['processStartedAtSeconds']==started['startedAtSeconds'] and
+         held['priorEvidence']['originalManifest']==review['baseline']['manifest']
+         and held['priorEvidence']['originalCaptureHistory']==plan['originalCaptureHistory'],'warm-held-prior-origin-changed')
+    early=records['stopped-source']
+    need(early['kind']=='actual-prior-stop-before-snapshot' and early['status']=='passed'
+         and early['operationId']==plan['operationId'] and early['independentSnapshotAllocated'] is False
+         and early['originalHeldSha256']==history['sourceEvidenceSha256']
+         and all(early[k]==history[k] for k in ('sourceStatus','sourceRolesSha256','sourceRosterSha256','selectedRole'))
+         and early['selectedCatalogSha256']==held['priorEvidence']['selectedCatalogSha256'],
+         'warm-closed-source-lacks-original-precopy-proof')
+    need(set(held['priorEvidence']['actualStartup'])=={'started','process','ready','bootstrap','startup-0-capture-writer'},
+         'warm-actual-startup-original-set-changed')
+    for role,item in held['priorEvidence']['actualStartup'].items():
+        need(role in ('started','process','ready','bootstrap','startup-0-capture-writer') and
+             value['original'][role]==item,'warm-held-prior-original-receipt-changed')
+    need(started['candidateId']==prior and started['epoch']==epoch and started['attempt']==0
+         and ready['candidateId']==prior and ready['epoch']==epoch and ready['process']==records['process']
+         and ready['startedSha256']==value['original']['started']['sha256'] and ready['processSha256']==value['original']['process']['sha256']
+         and boot['acceptanceGuard']['maintenanceHeld'] and boot['acceptanceGuard']['nativeSuspended'] and
+         boot['acceptanceGuard']['blockers']==[] and boot['leaseId']==started['leaseId'] and boot['networkInterfaces']==['lo']
+         and interrupted['kind']=='ordinary-private-prior-stop' and interrupted['stop']['gracefulSignal']=='SIGTERM' and interrupted['stop']['returnedCode'] is not None
+         and interrupted['app']==ready['process'] and interrupted['gateway']==ready['nativeProcess']
+         and interrupted['heldOriginSha256']==history['sourceEvidenceSha256'] and interrupted['namespaces']==started['namespaces']
+         and closed['owningServiceFullyStopped'] and closed['readySha256']==value['original']['ready']['sha256']
+         and ready['readyAtSeconds']*10**9<=writer['observedAtNs']<=interrupted['observedAtNs']<=closed['closedAtSeconds']*10**9,
+         'warm-real-writer-interruption-closure-changed')
+    capture_writer_identity(writer,started,ready,history,worker['controlGroup'])
+    return value
 
 
 def consume_closed_schema_baseline(review, plan, parent, document):
@@ -1185,7 +1451,7 @@ def capture_writer_identity(writer, started, ready, history, control_group):
          and proc['cgroup'].splitlines() == ['0::'+control_group], fail)
 
 
-def capture_closed_summary(before, writer, closed, refs, history, started, ready, window, control_group):
+def capture_closed_summary(before, writer, closed, refs, history, started, ready, window, control_group, *, complete=False):
     fail = 'native-deferred-capture-closure-changed'
     job, candidate, attempt = started['leaseId'], started['candidateId'], started['attempt']
     prior = before['deferredBefore']
@@ -1207,23 +1473,67 @@ def capture_closed_summary(before, writer, closed, refs, history, started, ready
     old, new = outcome['before'], outcome['after']
     added, removed = sorted(set(new)-set(old)), sorted(set(old)-set(new))
     need(outcome['added'] == added and outcome['removed'] == removed and len(added) <= 1
-         and len(removed) <= 1 and len(old) == 2 and 1 <= len(new) <= 2, fail)
+         and len(removed) <= 1 and 1 <= len(old) <= 2 and 1 <= len(new) <= 2, fail)
+    def disposition(roles):
+        values={r['status'] for r in roles.values()}
+        need(values and values <= {'retired','stage','released'}
+             and sum(r['status'] in {'stage','released'} for r in roles.values())<=1,fail)
+        return 'staging-present' if 'stage' in values else 'released-present' if 'released' in values else 'all-retired'
+    before_state,after_state=disposition(old),disposition(new)
+    staged=[role for role in added if new[role]['status']=='stage']
+    released=[role for role in added if new[role]['status']=='released']
+    retired=[role for role in added if new[role]['status']=='retired']
+    residual=[role for role in added if new[role].get('buildDirectories')]
+    if complete:
+        need(outcome['disposition']==after_state,fail)
+        if history.get('kind')=='held-prior-capture-origin':
+            logical={name:[v['status'],v['directory'][2:5],v['owner'][2:8],v['ownerSha256'],
+                     v['journalSha256'],v['coverage'],v['captures']] for name,v in prior['baseline'].items()}
+            need(history['jobId']==job and history['sourceStatus'] in ('stage','retired','released')
+                 and prior['baseline'][history['selectedRole']]['status']==history['sourceStatus']
+                 and history['sourceRosterSha256']==capture_native_digest(logical),fail)
+        if 'roleWindows' in outcome:
+            need(set(outcome['roleWindows'])<=set(new) and all(isinstance(v,list) and len(v)==2 and
+                 all(type(t) is int for t in v) and 0<v[0]<=v[1]<=v[0]+3600 for v in outcome['roleWindows'].values()),fail)
+        for role in retired:
+            row=new[role]
+            need(row['owner'][6]==4096 and row['ownerSha256']=='f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
+                 and row['journal'] is None and row['journalSha256'] is None
+                 and all(window[0]*10**9<=v<=window[1]*10**9 for v in row['owner'][7:]),fail)
+    else:
+        need(not retired and not released and 'released-present' not in (before_state,after_state) and len(old)==2,fail)
     if writer is not None:
         capture_writer_identity(writer, started, ready, history, control_group)
         need(writer['observedAtNs'] <= window[1]*10**9, fail)
-    if added:
-        role = added[0]
+    if staged or released or residual:
+        role = (staged or released or residual)[0]
         need(writer is not None and outcome['writerSha256'] == capture_native_digest(writer)
-             and set(writer['roles']) == {role} and new[role]['status'] == 'stage', fail)
+             and set(writer['roles']) == {role}, fail)
         observed = writer['roles'][role]
         lock = observed['lock']
-        need(all(observed[k] == new[role][k] for k in ('owner','journal','journalSha256'))
-             and observed['captureDirectory'] == new[role]['directory'][:5]
+        if staged:
+            need(all(observed[k] == new[role][k] for k in ('owner','journal','journalSha256')),fail)
+        elif released:
+            need(observed['owner'][:7] == new[role]['owner'][:7] and new[role]['owner'][6]==0
+                 and new[role]['journal'] is None and new[role]['journalSha256'] is None,fail)
+        else:
+            need(observed['owner'][:6]==new[role]['owner'][:6] and observed['owner'][6]==0
+                 and observed['journal'][6]==512 and new[role]['status']=='retired',fail)
+        if residual:
+            saved=new[role]['buildDirectories']; originally=observed.get('buildDirectories',{})
+            need('captures' in saved and 1<len(saved)<=len(originally)<=257 and set(saved)<=set(originally)
+                 and all(saved[k][:5]==originally[k][:5] for k in saved),fail)
+        need(observed['captureDirectory'] == new[role]['directory'][:5]
              and lock['pid'] == writer['process']['pid'] and lock['type'] == 'POSIX' and lock['access'] == 'WRITE'
              and lock['first'] <= 0x40000001 <= lock['last']
              and [lock['device'],lock['inode']] == observed['owner'][:2], fail)
     else:
         need(outcome['writerSha256'] is None, fail)
+        if complete and writer is not None and retired:
+            need(set(writer['roles'])==set(retired),fail)
+            observed=writer['roles'][retired[0]]
+            need(observed['owner'][:5]==new[retired[0]]['owner'][:5] and
+                 observed['captureDirectory']==new[retired[0]]['directory'][:5],fail)
     return {'kind':'closed-native-deferred-capture','attempt':attempt,'candidateId':candidate,'workspaceEpoch':history['epoch'],
             'ordinaryWindow':window,'physicalRoots':closed['physicalRoots'],'baselineSha256':capture_native_digest(outcome['baseline']),
             'beforeRosterSha256':capture_native_digest(old),'afterRosterSha256':capture_native_digest(new),
@@ -1232,8 +1542,9 @@ def capture_closed_summary(before, writer, closed, refs, history, started, ready
             'addedCount':len(added),'removedCount':len(removed),'historySha256':outcome['historySha256'],
             'partitionSha256':outcome['partitionSha256'],'admissionsSha256':outcome['admissionsSha256'],
             'closedCatalogSha256':outcome['closedCatalogSha256'],
-            'predecessorSha256':outcome['predecessor']['sha256'] if outcome['predecessor'] else None}
-
+            'predecessorSha256':outcome['predecessor']['sha256'] if outcome['predecessor'] else None,
+            **({'beforeDisposition':before_state,'closedDisposition':after_state,'addedStageCount':len(staged),'addedReleasedCount':len(released),
+                'addedRetiredCount':len(retired),'addedBuildRoleCount':len(residual),'jobId':job} if complete else {})}
 
 def capture_manifest_families(manifest, prefix):
     need(type(manifest) is dict, 'startup-proof-original-capture-manifest-required')

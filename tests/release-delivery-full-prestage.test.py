@@ -1,5 +1,6 @@
 import ast,hashlib,importlib.util,json,pathlib,re,tempfile,unittest,threading,concurrent.futures
 from unittest.mock import patch
+from full_host_metadata_fixture import frozen_host_metadata
 HERE=pathlib.Path(__file__).resolve().parents[1]/'scripts'
 spec=importlib.util.spec_from_file_location('full_prestage',HERE/'release-delivery-full-prestage.py');M=importlib.util.module_from_spec(spec);spec.loader.exec_module(M)
 
@@ -167,9 +168,9 @@ class RootPrimitiveTests(unittest.TestCase):
 class MetadataStageTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
-  source=HERE/'full-host-primitives/metadata-stage.py';tree=ast.parse(source.read_bytes())
+  source=HERE/'full-host-primitives/metadata-stage.py';tree,cls.helpers=frozen_host_metadata(HERE.parent)
   functions={'need','sha','enc','helper_family','checked_payload','metadata_capacity'}
-  assignments={'FROZEN_HELPERS','FROZEN_APPLICATION_HELPERS','FROZEN_SAME_SCHEMA60_HELPERS'}
+  assignments={'FROZEN_HELPERS','FROZEN_APPLICATION_HELPERS','FROZEN_SAME_SCHEMA60_FAMILIES'}
   nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in functions) or
    (isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and n.targets[0].id in assignments)]
   cls.scope={'ast':ast,'hashlib':hashlib,'json':json,'base64':__import__('base64'),'re':re,'P':pathlib.PurePosixPath}
@@ -178,8 +179,7 @@ class MetadataStageTests(unittest.TestCase):
   module=(HERE/'release-delivery-full-host.mjs').read_text(encoding='utf-8')
   cls.legacy_helpers=ast.literal_eval(re.search(r'export const FULL_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
   cls.historical_helpers=ast.literal_eval(re.search(r'export const FULL_APPLICATION_HELPERS=Object.freeze\((\{.*?\})\);',module,re.S).group(1))
-  startup=(HERE/'release-delivery-startup-retained.mjs').read_text(encoding='utf-8')
-  cls.helpers=json.loads(re.search(r'export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze\((\{[^\n]*\})\);',startup).group(1))
+  cls.same_schema_families=cls.scope['FROZEN_SAME_SCHEMA60_FAMILIES']
   cls.marker=dict(format=1,kind='schema-60-same-runtime',schemaVersion=60,apiVersion=1,agentVersion='2026.9.8')
   cls.transition=dict(format=1,kind='schema-55-to-60-same-runtime',fromSchemaVersion=55,toSchemaVersion=60,apiVersion=1,fromAgentVersion='2026.9.8',toAgentVersion='2026.9.8')
   cls.review=dict(helperHashes=cls.helpers,sameSchemaQualification=cls.marker,leaseId='12942d2f-d9df-4fdf-a617-7833a21cfde7')
@@ -200,7 +200,7 @@ class MetadataStageTests(unittest.TestCase):
   actual={name:hashlib.sha256(self.payload[name]).hexdigest() for name in self.helpers}
   self.assertEqual(self.helpers,actual);self.assertEqual(len(actual),11);self.assertEqual(len(self.legacy_helpers),7)
   self.assertNotEqual(self.helpers,self.historical_helpers)
-  expected={'FROZEN_HELPERS':self.legacy_helpers,'FROZEN_APPLICATION_HELPERS':self.historical_helpers,'FROZEN_SAME_SCHEMA60_HELPERS':self.helpers};maps=[]
+  expected={'FROZEN_HELPERS':self.legacy_helpers,'FROZEN_APPLICATION_HELPERS':self.historical_helpers};maps=[]
   for path in sorted((HERE/'full-host-primitives').glob('*.py')):
    for node in ast.walk(ast.parse(path.read_bytes())):
     if not isinstance(node,ast.Assign):continue
@@ -210,13 +210,15 @@ class MetadataStageTests(unittest.TestCase):
      name=ast.unparse(node.targets[0]);maps.append((path.name,name));self.assertIn(value,expected.values(),str(path))
      if path.name=='metadata-stage.py':self.assertEqual(value,expected[name])
   for name in expected:self.assertIn(('metadata-stage.py',name),maps)
+  self.assertIn(self.helpers,self.same_schema_families)
+  for family in self.same_schema_families:self.assertEqual(set(family),set(actual))
  def test_exact_legacy_historical_and_current_marker_map_matrix(self):
   select=self.scope['helper_family']
-  rows=[({},self.legacy_helpers),({'applicationTransition':self.transition},self.historical_helpers),({'sameSchemaQualification':self.marker},self.helpers)]
-  for markers,helpers in rows:
-   self.assertEqual(select(dict(helperHashes=helpers,**markers),helpers),helpers)
-   for wrong in (self.legacy_helpers,self.historical_helpers,self.helpers):
-    if wrong!=helpers:
+  rows=[({},[self.legacy_helpers]),({'applicationTransition':self.transition},[self.historical_helpers]),({'sameSchemaQualification':self.marker},self.same_schema_families)]
+  for markers,families in rows:
+   for family in families:self.assertEqual(select(dict(helperHashes=family,**markers),family),family)
+   for wrong in [self.legacy_helpers,self.historical_helpers,*self.same_schema_families]:
+    if wrong not in families:
      with self.subTest(markers=markers,wrong=wrong),self.assertRaisesRegex(RuntimeError,'exact-helper-family-required'):
       select(dict(helperHashes=wrong,**markers),wrong)
  def test_malformed_or_conflicting_markers_never_relabel_a_family(self):

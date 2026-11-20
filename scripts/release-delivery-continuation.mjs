@@ -737,7 +737,7 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
  for(const side of ['private','public']){const ci=verifyOperatorCi(json(p.operator.ci[side]),p.operator.sources[side]);need(ci.run.id===request.ciRuns[side],'continuation-request-ci-changed');}
  const host=json(p.hostFacts),target=json(d.descriptor.target),bytes=Buffer.from(host.stdoutRawBase64??'','base64');
  need(host.hostWrites===false&&bytes.length<=131072&&bytes.toString('base64')===host.stdoutRawBase64&&sha256(bytes)===host.stdoutSha256&&same(JSON.parse(bytes),host.facts),'continuation-original-host-observation-changed');
- const spec=fullFactsSpec(d.descriptor,target.full.host,id,null,host.spec.applicationTransition??host.spec.sameSchemaQualification??null);
+ const spec=fullFactsSpec(d.descriptor,target.full.host,id,null,host.spec.applicationTransition??host.spec.sameSchemaQualification??null,host.spec.helperHashes);
  need(same(host.spec,spec),'continuation-original-host-spec-changed');verifyFullFacts(host.facts,spec,p.issuedAtMs,true);
  need(!effect||(now>=p.issuedAtMs&&now<p.expiresAtMs),'continuation-window-expired');
  if(effect)verifyContinuationTimeline(journal,id,saved.recordedAtMs,now);return saved;

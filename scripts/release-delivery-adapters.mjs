@@ -24,7 +24,7 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
-import { fullHostOptionsSchema, FULL_HELPERS, fullHelpersForQualification, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
+import { fullHostOptionsSchema, FULL_HELPERS, fullHelpersForBinding, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter,planFullPublicationContinuation,verifyFullPublicationContinuationPlan } from './release-delivery-full-publication.mjs';
 import { verifyFullProtectedAssets } from './release-delivery-full-prestage.mjs';
 import { runtimeAdmissionCapability } from './release-delivery-runtime-qualification.mjs';
@@ -255,7 +255,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     const producer=dependency(target);
     try { await producer.validate({...context,descriptor,input:{route:prior.route,artifacts:prior.artifacts.repositories}}); }
     catch(error) { if(capabilities.has(error?.message))return [error.message];throw error; }
-    const helperHashes=fullHelpersForQualification(producer.qualification());
+    const helperHashes=fullHelpersForBinding(producer.qualificationBinding());
     for(const side of ['private','public'])for(const [name,digest] of Object.entries(helperHashes)) {
       const artifact=prior.artifacts.repositories[side],claimed=artifact.sourceHashes?.['deploy/update-runner/'+name];
       if(claimed?.sha256!==digest)return ['full-helper-qualification-capability-required'];
@@ -297,7 +297,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       const {target,transport}=targetInput(descriptor);
       need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
       const proof=await collectStartupWithDiagnostics({journal,descriptor},{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore});
-      const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition??proof.qualificationBinding.sameSchemaQualification??null);
+      const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition??proof.qualificationBinding.sameSchemaQualification??null,fullHelpersForBinding(proof.qualificationBinding));
       const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
       const stdout=Buffer.from(response.stdout??''),stderr=Buffer.from(response.stderr??'');
       const retain=(kind,value)=>{const bytes=Buffer.from(canonical(value)+'\n');return receiptStore(journal,descriptor.operation.id,kind+'-'+sha256(bytes)+'.json',bytes);};

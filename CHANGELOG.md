@@ -1,3 +1,8 @@
+## [2.28.48]
+
+- Hosted recovery now checks the native plugin files from the preceding shutdown when restarting or restoring a saved workspace. It can verify multiple temporary build directories left behind by the same plugin.
+- The update controller uses the same verified recovery tools throughout preparation and installation.
+
 ## [2.28.47]
 
 - Hosted updates can verify a temporary file left by the native plugin during shutdown. Restart and rollback checks trace that file to its owner and check that saved work and plugin files were preserved.

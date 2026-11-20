@@ -277,6 +277,7 @@ class RehearsalTests(unittest.TestCase):
         instance.same_schema_qualification = {'format': 1, 'kind': 'schema-60-same-runtime',
             'schemaVersion': 60, 'apiVersion': 1, 'agentVersion': '2026.9.8'}
         instance.from_engine = instance.active_engine = '2026.9.8'
+        instance.release = {'compatibility': {'fromNovaVersion': instance.review['novaVersion']}}
         instance.bind_same_schema_source = lambda stopped: stopped()
         def read_key(workspace, credential, node, prior):
             scope = recovery.current_same_schema_qualification()

@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import unittest
 from pathlib import Path
@@ -75,6 +76,88 @@ class ClosedWriter(unittest.TestCase):
         self.history['sourceRolesSha256']=digest(['a','unseen'])
         self.outcome['historySha256']=digest(self.history)
         with self.assertRaises(RuntimeError): self.verify()
+
+
+class CompleteProjection(unittest.TestCase):
+    def setUp(self):
+        self.case = ClosedWriter()
+        self.case.setUp()
+        self.case.outcome['disposition'] = 'staging-present'
+
+    def derive(self):
+        c = self.case
+        return module.capture_closed_summary(c.before,c.writer,c.closed,c.refs,c.history,c.started,c.ready,
+                                             [100,106],'/test-unit', complete=True)
+
+    def retired(self):
+        c = self.case
+        c.token.update(status='retired',journal=None,journalSha256=None,
+                       ownerSha256='f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b')
+        c.token['owner'][-3:] = [4096,104*10**9,104*10**9]
+        c.outcome.update(disposition='all-retired',writerSha256=None)
+        c.writer=None
+
+    def released(self):
+        c=self.case
+        c.token.update(status='released',journal=None,journalSha256=None)
+        c.outcome['disposition']='released-present'
+
+    def test_authenticated_running_writer_staged_or_released(self):
+        self.assertEqual(self.derive()['addedStageCount'],1)
+        self.released()
+        actual=self.derive()
+        self.assertEqual((actual['addedReleasedCount'],actual['closedDisposition']),(1,'released-present'))
+        self.case.writer=None
+        with self.assertRaises(RuntimeError):
+            self.derive()
+
+    def test_released_cannot_substitute_a_different_inode(self):
+        self.released()
+        self.case.token['owner']=copy.deepcopy(self.case.token['owner'])
+        self.case.token['owner'][1]+=1
+        with self.assertRaises(RuntimeError):
+            self.derive()
+
+    def test_actual_retired_marker_and_startup_bounds(self):
+        self.retired()
+        self.assertEqual((self.derive()['addedRetiredCount'],self.derive()['closedDisposition']),(1,'all-retired'))
+        original=self.case.token['ownerSha256']
+        self.case.token['ownerSha256']='0'*64
+        with self.assertRaises(RuntimeError):
+            self.derive()
+
+        self.case.token['ownerSha256']=original
+        self.case.token['owner'][-1]=107*10**9
+        with self.assertRaises(RuntimeError):
+            self.derive()
+
+    def test_retired_residual_build_roots_need_original_positive_writer(self):
+        c=self.case
+        writer=copy.deepcopy(c.writer)
+        self.retired()
+        c.writer=writer
+        directory=[2,22,0o40700,900,900,3,0,104*10**9,104*10**9]
+        build=[2,23,0o40700,900,900,2,0,104*10**9,104*10**9]
+        measured={'captures':directory,'captures/openclaw-plugin-build-abcdef':build}
+        writer['roles']['c']['buildDirectories']=copy.deepcopy(measured)
+        c.outcome['writerSha256']=module.capture_native_digest(writer)
+        c.token['buildDirectories']=measured
+        self.assertEqual(self.derive()['addedBuildRoleCount'],1)
+        measured['captures'][1]+=1
+        with self.assertRaises(RuntimeError):
+            self.derive()
+
+    def test_carry_of_mixed_state_requires_genuine_native_ancestry(self):
+        c=self.case
+        before=copy.deepcopy(c.outcome['after'])
+        c.before['deferredBefore']['live']=before
+        c.outcome.update(before=before,after={'a':before['a']},added=[],removed=['c'],
+                         disposition='all-retired',writerSha256=None)
+        c.writer=None
+        self.assertEqual(self.derive()['beforeDisposition'],'staging-present')
+        c.outcome['before']={'a':before['a']}
+        with self.assertRaises(RuntimeError):
+            self.derive()
 
 
 if __name__=='__main__':

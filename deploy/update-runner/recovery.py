@@ -1050,7 +1050,8 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     return _selected_workspace(root, expected_epoch, closed, application_schema(root))
 
 
-def _selected_workspace(root, expected_epoch, closed, schema_version):
+def selected_workspace_directory(root):
+    """Read only the maintained selector, recovery marker and workspace identity."""
     original_root = root
     root = retained_image_path(root)
     require(root.resolve(strict=True) == root and root.is_dir(), 'The durable workspace root changed.')
@@ -1066,12 +1067,17 @@ def _selected_workspace(root, expected_epoch, closed, schema_version):
         require(proof.get('jobId') == value['recoveryId'] and re.fullmatch(r'[a-f0-9]{64}', proof.get('sourceHash', '')), 'Selected recovery proof changed.')
     marker = selected / 'edition3.identity'
     require(marker.is_file() and not marker.is_symlink() and marker.read_bytes() == b'private.novadream.edition3.preview\n', 'Selected workspace identity changed.')
-    with contextlib.closing(database(selected / 'workspace.sqlite', closed)) as connection:
+    return original_root / selected.relative_to(root)
+
+
+def _selected_workspace(root, expected_epoch, closed, schema_version):
+    selected = selected_workspace_directory(root)
+    with contextlib.closing(database(retained_image_path(selected) / 'workspace.sqlite', closed)) as connection:
         require(connection.execute('pragma user_version').fetchone()[0] == schema_version, 'The selected workspace schema changed.')
         row = connection.execute("select value from meta where key='epoch'").fetchone()
         require(row is not None and isinstance(row[0], str) and str(uuid.UUID(row[0])) == row[0]
                 and (expected_epoch is None or row[0] == expected_epoch), 'The selected workspace does not match authenticated acceptance.')
-    return original_root / selected.relative_to(root), row[0]
+    return selected, row[0]
 
 
 def native_scope(root, expected_epoch=None, closed=False):
@@ -1247,8 +1253,90 @@ _CAPTURE_RETIREMENT_SOURCES = {
 }
 
 
+_BUILD_ROOT = re.compile(r'openclaw-plugin-build-[A-Za-z0-9]{6}')
+_BUILD_DESCENDANTS = ('package-2', 'package-2/node_modules', 'package-2/node_modules/@openai')
+
+
+def observe_capture_builds(directory):
+    """Record actual generated-container inodes under the live writer without reading package contents."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NOATIME
+    root = directory.lstat()
+    found = {}
+    with contextlib.ExitStack() as stack:
+        def opened(parent, name, key):
+            try:
+                fd = os.open(name,flags,dir_fd=parent)
+            except (FileNotFoundError,NotADirectoryError):
+                return None
+            stack.callback(os.close,fd)
+            info=os.fstat(fd)
+            if (info.st_dev,info.st_uid,info.st_gid,stat.S_IMODE(info.st_mode)) != (
+                    root.st_dev,root.st_uid,root.st_gid,0o700):
+                return None
+            found[key]=list(capture_lease_identity(info))
+            return fd
+        base=os.open(directory,flags)
+        stack.callback(os.close,base)
+        captures=opened(base,'captures','captures')
+        if captures is None:
+            return {}
+        with os.scandir(captures) as entries:
+            for index,entry in enumerate(entries):
+                require(index<64,'Too many live capture builds.')
+                if not _BUILD_ROOT.fullmatch(entry.name):
+                    continue
+                key='captures/'+entry.name
+                parent=opened(captures,entry.name,key)
+                for component in ('package-2','node_modules','@openai'):
+                    if parent is None:
+                        break
+                    key+='/'+component
+                    parent=opened(parent,component,key)
+    return found
+
+
+def closed_build_rows(rows, owner):
+    """Accept only an empty hierarchy of independently observed official package build directories."""
+    builds={key:row for key,row in rows.items() if key.startswith('captures/')}
+    require(len(builds)<=64,'Too many closed package-build directories.')
+    for key,row in builds.items():
+        parts=key.split('/')
+        suffix='/'.join(parts[2:])
+        require(_BUILD_ROOT.fullmatch(parts[1]) and (not suffix or suffix in _BUILD_DESCENDANTS)
+                and key.rsplit('/',1)[0] in rows and row['kind']=='directory'
+                and (row['mode'],row['uid'],row['gid'],row['xattrs'])==(0o700,owner['uid'],owner['gid'],{}),
+                'Unverified data in a closed native capture build.')
+    return builds
+
+
+def verify_closed_capture_builds(state, witness_role, window, *, held_interval=None):
+    physical=state.get('buildDirectories',{})
+    if not physical:
+        return
+    witnessed_directories = witness_role.get('buildDirectories', {})
+    require(isinstance(witnessed_directories,dict) and len(witnessed_directories)<=257 and set(physical)<=set(witnessed_directories)
+            and 'captures' in physical and len(physical)>1, 'Closed builds lack an original writer observation.')
+    inodes=set()
+    for path,ident in physical.items():
+        prior = witnessed_directories[path]
+        children=sum(key.rsplit('/',1)[0]==path for key in physical if key!='captures')
+        times_match=all(window[0]*10**9<=t<=window[1]*10**9 for t in ident[7:])
+        if held_interval is not None and len(ident)==len(prior)==9:
+            started,observed,closed=held_interval
+            require(0<started<=observed<=closed<=observed+MAX_STARTUP_WINDOW_SECONDS*10**9,
+                    'Held capture build observation has no bounded close.')
+            times_match=all((t==previous and started<=t<=observed) or observed<=t<=closed
+                            for t,previous in zip(ident[7:],prior[7:]))
+        require(len(ident)==len(prior)==9 and list(ident[:5])==list(prior[:5])
+                and ident[0]==state['owner'][0] and stat.S_ISDIR(ident[2]) and stat.S_IMODE(ident[2])==0o700
+                and list(ident[3:5])==list(state['owner'][3:5]) and ident[5]==2+children
+                and tuple(ident[:2]) not in inodes and times_match,
+                'A closed package-build directory differs from its observed writer or original startup.')
+        inodes.add(tuple(ident[:2]))
+
+
 def capture_context(directory, *, include_rows=False, allow_retired=False):
-    """Hash every native payload path and metadata. Only an empty captures/ may be removed."""
+    """Hash all native paths. A supported closed residue needs a separate physical writer proof."""
     # This exceptional path is bounded independently of the ordinary complete static inventory.
     seen = 0
     total = 0
@@ -1274,9 +1362,15 @@ def capture_context(directory, *, include_rows=False, allow_retired=False):
             and all(row['kind'] == 'directory' for name, row in rows.items()
                     if name.startswith('native/') and name.count('/') == 1),
             'Unreviewed capture native admission path.')
+    builds=closed_build_rows(rows,rows['owner.sqlite']) if allow_retired else {}
+    for key in builds:
+        rows.pop(key)
     captures = rows.pop('captures', None)
     require(not any(name.startswith('captures/') for name in rows)
             and (captures is None or captures['kind'] == 'directory'), 'Capture retirement has neighboring saved data.')
+    if builds:
+        require(captures['mode']==0o700,'Closed capture build root is unprotected.')
+        captures={**captures,'buildRows':builds}
     root = rows.pop('.')
     owner = rows.pop('owner.sqlite')
     journal = rows.pop('owner.sqlite-journal', None)
@@ -1355,8 +1449,97 @@ def capture_history_bound(history, epoch):
             and windows['target-first-start'][1] <= windows['target-restart'][0], 'Invalid original capture windows.')
 
 
-def deferred_source_links(root, logical, selected, *, archived=None):
-    # Read through the same scratch-copy database helper used by the native verifier.
+def held_capture_history_bound(history, epoch):
+    expected = {'kind','jobId','priorCandidateId','epoch','sourceManifestSha256','sourceRolesSha256',
+                'sourceRosterSha256','sourceEvidenceSha256','priorEvidenceSha256','selectedRole','sourceStatus','windows'}
+    require(type(history) is dict and set(history) == expected and history['kind'] == 'held-prior-capture-origin'
+            and history['epoch'] == epoch and str(uuid.UUID(history['jobId'])) == history['jobId']
+            and all(re.fullmatch('[0-9a-f]{64}',history[key]) for key in expected if key.endswith('Sha256') or key=='priorCandidateId')
+            and history['sourceStatus'] in {'stage','retired','released'},
+            'Invalid held prior capture origin.')
+    require(type(history['windows']) is dict and len(history['windows']) <= 2
+            and all(type(w) is list and len(w)==2 and all(type(t) is int for t in w)
+                    and 0 < w[0] <= w[1] <= w[0] + MAX_STARTUP_WINDOW_SECONDS for w in history['windows'].values()),
+            'Invalid held prior capture creation window.')
+
+
+def held_capture_document(path, expected):
+    require(path.is_absolute() and path.resolve(strict=True)==path and
+            all(p.lstat().st_uid==0 and not p.lstat().st_mode & 0o022 for p in (path,*path.parents)),
+            'The held native writer receipt is not protected.')
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NOATIME),'rb') as stream:
+        identity=capture_lease_identity(os.fstat(stream.fileno()))
+        require(stat.S_ISREG(identity[2]) and not identity[2]&0o077 and identity[5]==1 and identity[6]<=1024**2,
+                'Invalid held native writer receipt.')
+        data=stream.read(1024**2+1)
+        require(len(data)==identity[6] and hashlib.sha256(data).hexdigest()==expected
+                and capture_lease_identity(path.lstat())==identity, 'Held source receipt changed.')
+    return json.loads(data)
+
+
+def bind_held_capture_origin(snapshot, live, selected, runtime, *, owner, epoch, source_manifest_sha256,
+                             held_ref, windows, canonical_source_root=None):
+    """Authenticate the previously running prior's actual writer against its stopped independent source."""
+    path, expected = held_ref
+    held = held_capture_document(path,expected)
+    require(held['format']==1 and held['kind']=='held-prior-native-capture' and owner[2]==0
+            and held['owner']==list(owner) and held['epoch']==epoch and held['selectedRelative']==str(selected)
+            and held['physicalRoot']==list(capture_physical_root(live))
+            and held['windows']==windows
+            and type(held['priorEvidence']) is dict and held['priorEvidence']
+            and re.fullmatch('[0-9a-f]{64}',source_manifest_sha256),
+            'Held capture authority does not match this stopped prior.')
+    logical = canonical_source_root or live
+    role, prior_plugin = selected_capture_registry(snapshot,logical,selected)
+    current_role, current_plugin = selected_capture_registry(live,logical,selected)
+    require(current_role==role and prior_plugin==current_plugin and str(role)==held['selectedRole']
+            and deferred_digest(prior_plugin)==held['priorEvidence']['selectedCatalogSha256'],
+            'The held capture differs from the actual stopped Codex registry.')
+    physical = {}
+    closed = deferred_capture_roster(live,selected,runtime,physical)
+    saved = deferred_capture_roster(snapshot,selected,runtime)
+    require(len(saved)==2 and set(saved)==set(closed) and str(role) in saved and set(windows)<=set(saved)
+            and all(deferred_logical_role(saved[k])==deferred_logical_role(closed[k]) for k in saved)
+            and all(v['status']=='retired' for k,v in saved.items() if k!=str(role)),
+            'The independent stopped capture source differs or has an unsupported sibling.')
+    witness = held['writer']
+    require(type(held['processStartedAtSeconds']) is int and held['processStartedAtSeconds']>0
+            and isinstance(witness,dict) and set(witness.get('roles',{}))=={str(role)},
+            'Held source lacks its unique prior live writer.')
+    observed = witness['roles'][str(role)]
+    token = closed[str(role)]
+    verify_deferred_writer(witness,{'owner':owner,'epoch':epoch},
+        (held['processStartedAtSeconds'],(witness['observedAtNs']+10**9-1)//10**9),str(role),
+        {**observed,'directory':observed['captureDirectory']})
+    require(observed['owner'][:6]==token['owner'][:6] and observed['captureDirectory']==token['directory'][:5]
+            and (token['status']!='stage' or (observed['owner']==token['owner'] and observed['journal']==token['journal']
+                 and observed['journalSha256']==token['journalSha256'])),
+            'The stopped prior token is disconnected from its live writer.')
+    require_closed_deferred_tokens(closed)
+    for name,entry in closed.items():
+        if entry.get('buildDirectories'):
+            require(name==str(role) and name in windows,'A closed build lacks its selected prior writer origin.')
+            verify_closed_capture_builds(entry,observed,windows[name],held_interval=(
+                held['processStartedAtSeconds']*10**9,witness['observedAtNs'],time.time_ns()))
+    result={'kind':'held-prior-capture-origin','jobId':owner[0],'priorCandidateId':owner[1],'epoch':epoch,
+            'sourceManifestSha256':source_manifest_sha256,'sourceRolesSha256':deferred_digest(sorted(saved)),
+            'sourceRosterSha256':deferred_digest({k:deferred_logical_role(v) for k,v in saved.items()}),
+            'sourceEvidenceSha256':expected,'priorEvidenceSha256':deferred_digest(held['priorEvidence']),
+            'selectedRole':str(role),'sourceStatus':token['status'],'windows':windows}
+    held_capture_history_bound(result,epoch)
+    require(physical.keys()==closed.keys(), 'Incomplete physical held capture inventory.')
+    namespaces = next(iter(prior_plugin['sourceAdmissions'].values()))['nativeNamespaces']
+    catalog = {k:{'original':v,'current':k} for k,v in namespaces.items()}
+    files = deferred_source_links(live,logical,selected,archived=catalog)
+    verify_deferred_partition(live,logical,physical,files,catalog,result,runtime,
+        historical_names=set(closed),exact_survivors=set(closed)-set(windows),group_windows=windows,
+        original_creation_roles=set(closed))
+    return result
+
+
+def selected_capture_registry(root, logical, selected):
+    """Return the single Codex capture family recorded in a verified private SQLite copy."""
+    require(not selected.is_absolute() and '..' not in selected.parts, 'Invalid selected capture workspace.')
     path = root / selected / 'openclaw-runtime/state/state/openclaw.sqlite'
     with contextlib.closing(database(path, True)) as con:
         rows = con.execute("select length(value_json),value_json from config_machine_state where state_key='plugins.installedIndex' and length(value_json)<=?", (4*1024**2,)).fetchall()
@@ -1364,10 +1547,33 @@ def deferred_source_links(root, logical, selected, *, archived=None):
     wrapper = json.loads(rows[0][1])
     plugins = [plugin for plugin in wrapper['index']['plugins'] if plugin.get('pluginId') == 'codex']
     require(len(plugins) == 1, 'Selected native capture catalog is ambiguous.')
-    admissions = plugins[0]['sourceAdmissions']
-    require(len(admissions) == 1, 'Selected native capture admission is ambiguous.')
+    plugin = plugins[0]
+    admissions = plugin['sourceAdmissions']
+    package = pathlib.Path(plugin['rootDir'])
+    projects = logical / selected / 'openclaw-runtime/state/npm/projects'
+    require(package.is_relative_to(projects) and len(package.relative_to(projects).parts) == 4
+            and package.relative_to(projects).parts[1:] == ('node_modules','@openclaw','codex')
+            and set(admissions) == {str(package)+'\x00'}, 'Selected native capture admission is ambiguous.')
     namespaces = next(iter(admissions.values()))['nativeNamespaces']
     require(0 < len(namespaces) <= 16, 'Selected native capture namespace bound exceeded.')
+    capture_dir = selected / 'openclaw-runtime/state/tmp/plugin-captures'
+    roles = set()
+    for name, description in namespaces.items():
+        path = pathlib.Path(name)
+        require(path.is_relative_to(logical / capture_dir) and description.get('capturedRoot') == name
+                and description.get('managed') is True, 'Selected native namespace is outside its capture root.')
+        parts = path.relative_to(logical / capture_dir).parts
+        require(len(parts) == 3 and str(uuid.UUID(parts[0])) == parts[0] and parts[1] == 'native'
+                and re.fullmatch(r'admission-[A-Za-z0-9]{6}', parts[2]),
+                'Invalid selected native capture namespace.')
+        roles.add(capture_dir / parts[0] / 'owner.sqlite')
+    require(len(roles) == 1, 'More than one native capture family is selected.')
+    return roles.pop(), plugin
+
+
+def deferred_source_links(root, logical, selected, *, archived=None):
+    _, plugin = selected_capture_registry(root,logical,selected)
+    namespaces = next(iter(plugin['sourceAdmissions'].values()))['nativeNamespaces']
     if archived is not None:
         require(namespaces=={k:v['original'] for k,v in archived.items()},
                 'Unchanged registry differs from the authenticated prior native namespaces.')
@@ -1394,14 +1600,15 @@ def deferred_source_links(root, logical, selected, *, archived=None):
     return files
 
 
-def match_deferred_namespaces(role, rows, namespaces, windows, template, runtime, family=None):
+def match_deferred_namespaces(role, rows, namespaces, windows, template, runtime, family=None,
+                              *, exact_survivor=False, private_copies=False):
     """Match every namespace to exactly one authenticated source tree, including every member."""
     prefixes = {key.split('/')[1] for key in rows if key.startswith('native/')}
     require(0 < len(prefixes) == len(namespaces) <= 16, 'Unexpected deferred admission count.')
     selected = []
     for window in windows:
-        ts = lambda n: window[0]*10**9 <= n <= window[1]*10**9
-        if template and family is not None:
+        ts = lambda n: exact_survivor or window[0]*10**9 <= n <= window[1]*10**9
+        if template and family is not None and not exact_survivor:
             stamps = [family['directory'][7], family['owner'][7]]
             if family['captures'] is not None:
                 stamps.append(family['captures']['mtime_ns'])
@@ -1429,7 +1636,8 @@ def match_deferred_namespaces(role, rows, namespaces, windows, template, runtime
                     source = tuple(map(int, member['sourceIdentity'].split(':')))
                     captured = tuple(map(int, member['capturedIdentity'].split(':')))
                     regular = 'contentHash' in member
-                    valid &= row['mode'] == stat.S_IMODE(captured[2])
+                    copied = regular and private_copies
+                    valid &= row['mode'] == ((0o600 | (source[2] & 0o100)) if copied else stat.S_IMODE(captured[2]))
                     if regular:
                         valid &= (row['kind'],row.get('size'),row.get('sha256')) == ('file',member['sizeBytes'],member['contentHash'])
                     else:
@@ -1437,7 +1645,8 @@ def match_deferred_namespaces(role, rows, namespaces, windows, template, runtime
                     if template:
                         if regular and member['boundaryChecked']:
                             valid &= row['mode'] == (0o600 | (source[2] & 0o100))
-                        valid &= (ts(row['mtime_ns']) if not regular or member['boundaryChecked'] else row['mtime_ns']==source[4])
+                        valid &= (ts(row['mtime_ns']) if not regular or member['boundaryChecked'] or copied
+                                  else row['mtime_ns']==source[4])
                     else:
                         valid &= row['mtime_ns'] == captured[4]
                 if valid:
@@ -1457,7 +1666,8 @@ def match_deferred_namespaces(role, rows, namespaces, windows, template, runtime
     return selected[0]
 
 
-def verify_deferred_partition(root, logical, details, source_ids, catalog, history, runtime, *, historical_names):
+def verify_deferred_partition(root, logical, details, source_ids, catalog, history, runtime, *, historical_names,
+                              previous_catalog=None, exact_survivors=(), group_windows=None, original_creation_roles=()):
     by_role = {}
     for name,record in catalog.items():
         path = pathlib.Path(name)
@@ -1467,10 +1677,22 @@ def verify_deferred_partition(root, logical, details, source_ids, catalog, histo
     require(active_name in {pathlib.Path(key).parent.name for key in details}, 'Selected capture family is absent.')
     # Compare the real partition of sources, verified boundary copies and hardlinked members.
     observed, expected, result = {}, {}, {}
+    previous_by_role = {}
+    for name, record in (previous_catalog or {}).items():
+        category = pathlib.Path(name).parent.parent.name
+        previous_by_role.setdefault(category, {})[name] = record['original']
     source_classes = {}
-    for namespace in namespaces.values():
+    source_members = {}
+    all_namespaces = list(namespaces.values())
+    for group in previous_by_role.values():
+        all_namespaces.extend(group.values())
+    for namespace in all_namespaces:
         for m in namespace['members'].values():
             if 'contentHash' in m:
+                source = m['source']
+                member = (m['contentHash'], m['sizeBytes'], tuple(m['sourceIdentity'].split(':')[2:5]))
+                require(source in source_ids and source_members.setdefault(source, member) == member,
+                        'Previous native namespace no longer represents the current source.')
                 physical = tuple(source_ids[m['source']][:2])
                 require(source_classes.setdefault(tuple(m['sourceIdentity'].split(':')[:2]),physical) == physical,
                         'Selected source hardlink class changed.')
@@ -1481,14 +1703,48 @@ def verify_deferred_partition(root, logical, details, source_ids, catalog, histo
     for name,details_row in details.items():
         role = pathlib.Path(name)
         active = role.parent.name == active_name
-        templates = (namespaces if active or name in historical_names else None)
-        require(templates is not None, 'Unselected capture lacks its authenticated creation lineage.')
+        carried = not active and role.parent.name in previous_by_role
+        canonical = active or carried
+        templates = previous_by_role[role.parent.name] if carried else namespaces
+        require(canonical or name in historical_names, 'Unselected capture lacks its authenticated creation lineage.')
         rows, physical, family = details_row
-        windows = list(history['windows'].values()) if not active else [(0,0)]
-        ledger = match_deferred_namespaces(role,rows,templates,windows,not active,runtime,family)
-        if active and name in historical_names:
-            historical = match_deferred_namespaces(role,rows,templates,history['windows'].values(),True,runtime,family)
+        held = history.get('kind')=='held-prior-capture-origin'
+        windows = ([history['windows'][name]] if name in history['windows'] else []) if held else list(history['windows'].values())
+        survivor = held and name in exact_survivors and not windows
+        checked_windows = [None] if survivor else windows
+        prefixes = {key.split('/')[1] for key in rows if key.startswith('native/')}
+        direct = {pathlib.Path(key).name for key in templates}
+        extra = set()
+        private_copies = False
+        core_rows = rows
+        if canonical and len(prefixes)>len(templates):
+            extra = prefixes-direct
+            origin = (group_windows or {}).get(name)
+            require(direct <= prefixes and len(extra)==len(templates) and origin is not None
+                    and len(origin)==2 and 0<origin[0]<=origin[1]<=origin[0]+MAX_STARTUP_WINDOW_SECONDS,
+                    'Additional native namespaces lack their complete authenticated creation group.')
+            core_rows = {k:v for k,v in rows.items() if not k.startswith('native/') or k.split('/')[1] in direct}
+        ledger = match_deferred_namespaces(role,core_rows,templates,[(0,0)] if canonical else checked_windows,
+                                          not canonical,runtime,family,exact_survivor=survivor)
+        if active and name in historical_names and (not held or name!=history['selectedRole']):
+            historical = match_deferred_namespaces(role,core_rows,templates,checked_windows,True,runtime,family,
+                                                   exact_survivor=survivor)
             require(historical == ledger, 'Selected original namespace template changed.')
+        if extra:
+            extra_rows = {k:v for k,v in rows.items() if k=='native' or (k.startswith('native/') and k.split('/')[1] in extra)}
+            require(all(origin[0]*10**9<=v['mtime_ns']<=origin[1]*10**9 for k,v in extra_rows.items()
+                        if k!='native' and v['kind'] in {'directory','symlink'}),
+                    'Additional native admission structure is outside its authenticated startup.')
+            # The native builder copies every file in a fresh unmanaged group. Later
+            # managed or previously captured groups retain source hardlinks. Only
+            # admit complete patterns; individual unrelated copies may not mix in.
+            files = [physical[k] for k,v in extra_rows.items() if v['kind']=='file']
+            private_copies = bool(files) and all(len(p)==9 and p[5]==1 for p in files)
+            if private_copies and name in original_creation_roles:
+                require(all(origin[0]*10**9<=p[8]<=origin[1]*10**9 for p in files),
+                        'Private admission copies were changed after their authenticated startup.')
+            ledger.update(match_deferred_namespaces(role,extra_rows,templates,[origin],True,runtime,
+                                                    private_copies=private_copies))
         result[name] = ledger
         for prefix, key in ledger.items():
             for rel,m in templates[key]['members'].items():
@@ -1501,11 +1757,11 @@ def verify_deferred_partition(root, logical, details, source_ids, catalog, histo
                 f_id = tuple(physical[capture][:2])
                 label = 'capture:'+name+'/'+capture
                 observed[label] = f_id
-                if active:
+                if canonical and prefix not in extra:
                     captured_class = tuple(m['capturedIdentity'].split(':')[:2])
                     expected[label] = (('source',source_classes[captured_class]) if captured_class in source_classes
                                        else ('captured',captured_class))
-                elif m['boundaryChecked']:
+                elif (prefix in extra and private_copies) or m['boundaryChecked']:
                     expected[label] = ('boundary',label)
                 else:
                     expected[label] = ('source',tuple(source_ids[source][:2]))
@@ -1540,8 +1796,9 @@ def deferred_capture_roster(root, selected, runtime, details=None):
         journal_id = capture_object(journal) if role in staged else None
         owner_hash = digest(owner)
         journal_hash = digest(journal) if journal_id else None
-        require((role in staged and identity[6] == 0) or
-                (role in retired and identity[6] == 4096 and owner_hash == CAPTURE_OWNER_RETIRED_SHA256),
+        status = 'stage' if role in staged else ('released' if identity[6] == 0 else 'retired')
+        require((status in {'stage','released'} and identity[6] == 0 and owner_hash == hashlib.sha256(b'').hexdigest()) or
+                (status == 'retired' and identity[6] == 4096 and owner_hash == CAPTURE_OWNER_RETIRED_SHA256),
                 'Unknown deferred capture token.')
         context, captures, rows = capture_context(directory, include_rows=True, allow_retired=True)
         physical = {k: capture_object(directory / k) for k in sorted(rows)}
@@ -1557,11 +1814,14 @@ def deferred_capture_roster(root, selected, runtime, details=None):
         require(before == capture_object(directory) and identity == capture_object(owner)
                 and journal_id == (capture_object(journal) if os.path.lexists(journal) else None),
                 'Deferred capture changed during its observation.')
-        roster[str(role)] = {'status':'stage' if role in staged else 'retired',
+        roster[str(role)] = {'status':status,
             'directory':list(before),'owner':list(identity),'journal':list(journal_id) if journal_id else None,
             'ownerSha256':owner_hash,'journalSha256':journal_hash,
             'coverage':context[2],'captures':captures,'physicalSha256':deferred_digest({
                 k:(v[:5]+v[6:8] if rows[k]['kind']=='file' else v) for k,v in physical.items()})}
+        if captures and captures.get('buildRows'):
+            build_names=['captures',*captures['buildRows']]
+            roster[str(role)]['buildDirectories']={name:list(capture_object(directory/name)) for name in build_names}
         if details is not None:
             details[str(role)] = [rows,{k:list(v) for k,v in physical.items()},roster[str(role)]]
     return roster
@@ -1577,7 +1837,12 @@ def deferred_logical_role(value):
 
 
 def begin_deferred_capture(snapshot, live, selected, epoch, runtime, owner, previous, history):
-    capture_history_bound(history, epoch)
+    held = history.get('kind')=='held-prior-capture-origin'
+    if held:
+        held_capture_history_bound(history,epoch)
+        require(history['jobId']==owner[0], 'Held capture source belongs to another job.')
+    else:
+        capture_history_bound(history, epoch)
     baseline = deferred_capture_roster(snapshot, selected, runtime)
     prior = previous.get('deferredCapture') if previous is not None else None
     if prior is not None and previous['candidate'] != owner[1]:
@@ -1591,9 +1856,16 @@ def begin_deferred_capture(snapshot, live, selected, epoch, runtime, owner, prev
                 and former_live[:2] != capture_physical_root(live)[:2],
                 'A restored capture must start in an independent pristine workspace.')
         prior = None
-    if not baseline or any(role['status'] != 'retired' for role in baseline.values()):
+    if held:
+        require(history['selectedRole'] in baseline and baseline[history['selectedRole']]['status']==history['sourceStatus']
+                and history['sourceRosterSha256']==deferred_digest({k:deferred_logical_role(v) for k,v in baseline.items()}),
+                'Measured held capture source changed before startup.')
+    elif not baseline or any(role['status'] != 'retired' for role in baseline.values()):
         require(prior is None, 'Deferred capture source lineage changed.')
         return None
+    else:
+        require(not any(row.get('buildDirectories') for row in baseline.values()),
+                'Historical retired source contains unobserved capture builds.')
     details = {}
     before = deferred_capture_roster(live, selected, runtime, details)
     source_ids = deferred_source_links(live, live, selected)
@@ -1607,6 +1879,8 @@ def begin_deferred_capture(snapshot, live, selected, epoch, runtime, owner, prev
                 and bounded_json(path, 4*1024**2).get('deferredCapture') == prior
                 and previous['roots'] == (snapshot,live) and previous['runtime'] == runtime
                 and previous['candidate'] == owner[1] and previous['epoch'] == epoch
+                and prior['owner'] == [owner[0], owner[1], owner[2]-1]
+                and previous['physical'] == (capture_physical_root(snapshot), capture_physical_root(live))
                 and previous['attempt'] + 1 == owner[2] and prior['after'] == before
                 and prior['baseline'] == baseline, 'Previous deferred capture is absent or changed.')
         predecessor = {'path':str(path),'sha256':expected}
@@ -1623,8 +1897,16 @@ def verify_deferred_writer(witness, proof, window, role, state):
             and set(witness.get('roles', {})) == {role}, 'Deferred capture lacks its authentic live writer.')
     process = witness['process']
     observed = witness['roles'][role]
+    require(all(isinstance(observed.get(key),list) and len(observed[key]) == 9 and
+                all(type(x) is int for x in observed[key]) and stat.S_ISREG(observed[key][2]) and
+                observed[key][5:7] == [1, size] for key, size in (('owner',0),('journal',512)))
+            and observed['owner'][0] == observed['journal'][0] and observed['owner'][1] != observed['journal'][1]
+            and observed['owner'][3:5] == observed['journal'][3:5]
+            and re.fullmatch('[0-9a-f]{64}',observed['journalSha256']),
+            'Observed SQLite writer lacks its exact temporary token and journal.')
     require(set(process)=={'pid','startTicks','appPid','appStartTicks','uid','nodeSha256','cgroup','namespace'}
-            and set(observed)=={'owner','journal','journalSha256','captureDirectory','lock'}
+            and set(observed) in ({'owner','journal','journalSha256','captureDirectory','lock'},
+                                  {'owner','journal','journalSha256','captureDirectory','lock','buildDirectories'})
             and all(type(process.get(k)) is int and process[k] > 0 for k in ('pid','startTicks','appPid','appStartTicks','uid'))
             and set(process['namespace'])=={'pid','mnt'} and all(
                 re.fullmatch(name+r':\[[0-9]+\]', process['namespace'][name]) for name in ('pid','mnt'))
@@ -1684,39 +1966,89 @@ def verify_deferred_capture_map(snapshot, live, selected, runtime, window, befor
     added = set(after)-set(before)
     removed = set(before)-set(after)
     stages = {key for key,record in after.items() if record['status']=='stage'}
+    released = {key for key,record in after.items() if record['status']=='released'}
     carried = prepared['predecessor'] is not None
-    require(len(before) == 2 and len(after) in (1,2) and len(added)<=1 and len(removed)<=1
-            and (carried or len(added)==len(removed)==len(stages)==1)
-            and added <= stages and len(stages)<=1, 'Unsupported deferred capture lifecycle.')
+    history = prepared['history']
+    held = history.get('kind')=='held-prior-capture-origin'
+    original_windows = history['windows'] if held else {}
+    prior_windows = proof.get('previousRoleWindows',original_windows)
+    closed_windows = {role:w for role,w in prior_windows.items() if role in after}
+    closed_windows.update({role:list(window) for role in added})
+    require(len(before) in ((1,2) if carried else (2,)) and len(after) in (1,2)
+            and len(added)<=1 and len(removed)<=1 and len(stages)<=1 and len(released)<=1
+            and (carried or len(added)==len(removed)), 'Unsupported deferred capture lifecycle.')
     if carried:
         require(not (set(baseline)-set(before)) & set(after), 'Reaped capture reappeared.')
     for role in set(before) & set(after):
         old, now = before[role], after[role]
         if old == now:
             continue
-        require(carried and old['status']=='stage' and now['status']=='retired'
+        require((carried or (held and role==history['selectedRole'])) and old['status']=='stage' and now['status']=='retired'
                 and old['owner'][:6]==now['owner'][:6] and old['directory'][:5]==now['directory'][:5]
                 and old['coverage']==now['coverage'] and old['physicalSha256']==now['physicalSha256']
                 and (now['captures'] is None or now['captures']==old['captures'])
+                and (not now.get('buildDirectories') or now['buildDirectories']==old.get('buildDirectories'))
                 and all(window[0]*10**9<=ts<=window[1]*10**9 for ts in now['owner'][7:]),
                 'An unqualified deferred capture survived or changed.')
-    if added:
-        role = next(iter(added))
+    added_stages = added & stages
+    if added_stages:
+        role = next(iter(added_stages))
         verify_deferred_writer(closure.get('writerWitness'), proof, window, role, after[role])
-    allowed = {}
-    for role in stages:
-        item = after[role]
-        allowed[pathlib.Path(role)] = ('file',0,item['ownerSha256'])
-        allowed[pathlib.Path(role).with_name('owner.sqlite-journal')] = ('file',512,item['journalSha256'])
-    require(not set(allowed)&set(before_static) and after_static == {**before_static,**allowed},
+    for role in added-stages:
+        token = after[role]
+        empty = role in released
+        require(token['status'] == ('released' if empty else 'retired')
+                and token['owner'][6] == (0 if empty else 4096)
+                and token['ownerSha256'] == (hashlib.sha256(b'').hexdigest() if empty else CAPTURE_OWNER_RETIRED_SHA256)
+                and token['journal'] is None and token['journalSha256'] is None
+                and all(window[0]*10**9 <= t <= window[1]*10**9 for t in token['owner'][7:]),
+                'New closed capture lacks its exact in-window native marker.')
+        witness = closure.get('writerWitness')
+        require(not empty or witness is not None, 'A new released capture lacks its original live SQLite writer.')
+        if witness is not None:
+            observed = witness['roles'].get(role)
+            require(observed and observed['owner'][:6] == token['owner'][:6] and observed['owner'][6] == 0
+                    and observed['journal'][6] == 512 and observed['captureDirectory'] == token['directory'][:5],
+                    'The retired native token differs from its observed staging writer.')
+            verify_deferred_writer(witness, proof, window, role, {**observed,'directory':observed['captureDirectory']})
+    for role in added:
+        if after[role].get('buildDirectories'):
+            witness=closure.get('writerWitness')
+            require(witness and role in witness['roles'],'New capture builds lack their actual live writer.')
+            verify_closed_capture_builds(after[role],witness['roles'][role],window)
+    def static_stages(roster):
+        files = {}
+        for role,item in roster.items():
+            if item['status']=='stage':
+                path=pathlib.Path(role)
+                files[path]=('file',0,item['ownerSha256'])
+                files[path.with_name('owner.sqlite-journal')]=('file',512,item['journalSha256'])
+        return files
+    source_stages = static_stages(baseline)
+    require(all(before_static.get(k)==v for k,v in source_stages.items()),
+            'The original staged capture is absent from the static database inventory.')
+    remaining = {k:v for k,v in before_static.items() if k not in source_stages}
+    allowed = static_stages(after)
+    require(not set(allowed)&set(remaining) and after_static == {**remaining,**allowed},
             'Unrelated static data changed alongside a deferred capture.')
     require(isinstance(admissions,DeferredCaptureAdmissions),
             'Deferred capture lacks genuinely checked native catalog admissions.')
     if not admissions and not admissions.current:
-        require(carried and not added and admissions.unchangedIndex and proof.get('previousCatalog'),
-                'Deferred capture lacks a verified unchanged index and its genuine predecessor.')
-        archived = proof['previousCatalog']['baseline']
-        scoped = {k:{'original':v['original'],'current':k} for k,v in archived.items()}
+        require(admissions.unchangedIndex and not added, 'Missing verified catalog for a changed capture.')
+        if carried:
+            require(proof.get('previousCatalog'), 'Deferred capture lacks its genuine prior native catalog.')
+            archived = {k:v['original'] for k,v in proof['previousCatalog']['baseline'].items()}
+        else:
+            # No native regenerate callback occurs on byte-identical indices. Use the
+            # exact original row only for a literally unchanged first startup.
+            require(before == after and before_static == after_static,
+                    'A first unchanged native catalog cannot justify changed capture data.')
+            original_role, original_plugin = selected_capture_registry(snapshot,live,selected)
+            closed_role, closed_plugin = selected_capture_registry(live,live,selected)
+            require(original_role == closed_role and original_plugin == closed_plugin,
+                    'Original and closed native capture catalogs differ.')
+            archived = next(iter(original_plugin['sourceAdmissions'].values()))['nativeNamespaces']
+        scoped = {k:{'original':v,'current':k} for k,v in archived.items()}
         source_ids = deferred_source_links(snapshot,live,selected,archived=scoped)
         closed_ids = deferred_source_links(live,live,selected,archived=scoped)
         admissions.update(scoped)
@@ -1725,15 +2057,26 @@ def verify_deferred_capture_map(snapshot, live, selected, runtime, window, befor
         require(admissions and admissions.current, 'Canonical capture catalog is incomplete.')
         source_ids = deferred_source_links(snapshot,live,selected)
         closed_ids = deferred_source_links(live,live,selected)
-    history = prepared['history']
+    unchanged = {name for name in baseline.keys() & before.keys() & after.keys() if before[name]==after[name]}
+    if held:
+        require(all(name==history['selectedRole'] or name in history['windows']
+                    for name in removed & baseline.keys()), 'Unselected removed capture lacks its original creation window.')
     source_ledger = verify_deferred_partition(snapshot,live,source_details,source_ids,
-        admissions,history,runtime,historical_names=set(baseline))
+        admissions,history,runtime,historical_names=set(baseline),exact_survivors=unchanged, group_windows=original_windows)
     before_catalog = proof['previousCatalog']['closed'] if carried else admissions
     require(before_catalog, 'Deferred restart needs its original closed native catalog.')
+    earlier_catalog = proof['previousCatalog']['baseline'] if carried else None
     before_ledger = verify_deferred_partition(live,live,prepared['beforeDetails'],prepared['beforeSources'],
-        before_catalog,history,runtime,historical_names=set(baseline))
+        before_catalog,history,runtime,historical_names=set(baseline),exact_survivors=unchanged,
+        previous_catalog=earlier_catalog, group_windows=prior_windows)
+    selected_now = {pathlib.Path(path).parent.parent for path in admissions.current}
+    require(all((live / role).parent in selected_now for role in added),
+            'An added capture lacks its own verified current native catalog entry.')
+    carried_catalog = {**(earlier_catalog or {}),**before_catalog} if carried or held else None
     closed_ledger = verify_deferred_partition(live,live,closed_details,closed_ids,
-        admissions.current,history,runtime,historical_names=set(baseline))
+        admissions.current,history,runtime,historical_names=set(baseline),
+        previous_catalog=carried_catalog,
+        exact_survivors=unchanged, group_windows=closed_windows, original_creation_roles=added)
     if removed:
         attest_native_writer_sources(runtime,_CAPTURE_REAPING_SOURCES)
         for role in removed:
@@ -1744,7 +2087,10 @@ def verify_deferred_capture_map(snapshot, live, selected, runtime, window, befor
     closure['deferredCapture'] = {'format':1,'kind':'closed-native-deferred-capture',
         'owner':list(proof['owner']),'epoch':proof['epoch'],'window':list(window),
         'baseline':baseline,'before':before,'after':after,'added':sorted(added),'removed':sorted(removed),
-        'writerSha256':deferred_digest(closure['writerWitness']) if added else None,
+        'disposition':'staging-present' if stages else ('released-present' if released else 'all-retired'),
+        'roleWindows':closed_windows,
+        'writerSha256':deferred_digest(closure['writerWitness']) if added & (stages | released)
+            or any(after[role].get('buildDirectories') for role in added) else None,
         'admissionsSha256':deferred_digest({'before':admissions,'after':admissions.current}),
         'predecessor':prepared['predecessor'],'historySha256':deferred_digest(history),
         'partitionSha256':deferred_digest([source_ledger,before_ledger,closed_ledger]),
@@ -1760,10 +2106,14 @@ def begin_capture_retention(snapshot, live, epoch, runtime_root, owner, previous
     staged = set()
     retired = native_capture_owner_paths(snapshot, selected, '2026.9.8', staged=staged)
     deferred_before = None
-    if (not staged and deferred and deferred_history is not None and os.name == 'posix' and set(schemas) == {60}
-            and len(retired) == 2 and all((snapshot / role).lstat().st_size == 4096 for role in retired)
-            and deferred_history.get('sourceRolesSha256') == deferred_digest(sorted(map(str,retired)))):
+    held = deferred and deferred_history is not None and deferred_history.get('kind')=='held-prior-capture-origin'
+    if (deferred and deferred_history is not None and os.name == 'posix' and set(schemas) == {60}
+            and ((not staged and len(retired)==2 and all((snapshot / role).lstat().st_size == 4096 for role in retired))
+                 or (held and len(retired|staged)==2))
+            and deferred_history.get('sourceRolesSha256') == deferred_digest(sorted(map(str,retired|staged)))):
         deferred_before = begin_deferred_capture(snapshot, live, selected, epoch, runtime_root, owner, previous, deferred_history)
+    if held:
+        require(deferred_before is not None, 'The authenticated held source is no longer present.')
     if not staged and deferred_before is None:
         return None
     require(confirmed == epoch and set(schemas) in ({55}, {55, 60}, {60}), 'Unknown capture application binding.')
@@ -1772,7 +2122,7 @@ def begin_capture_retention(snapshot, live, epoch, runtime_root, owner, previous
     native_capture_owner_paths(live, selected, '2026.9.8')
     state = {'roots': (snapshot, live), 'physical': (capture_physical_root(snapshot), capture_physical_root(live)),
              'selected': selected, 'epoch': epoch, 'runtime': runtime_root, 'owner': owner, 'roles': {}}
-    for role in staged:
+    for role in (set() if deferred_before is not None else staged):
         # Families outside the demonstrated writer layout get ordinary static equality only.
         directory = (snapshot / role).parent
         children = {child.name for child in directory.iterdir()}
@@ -1813,6 +2163,7 @@ def begin_capture_retention(snapshot, live, epoch, runtime_root, owner, previous
             require(stored.get('deferredCatalog') and deferred_digest(stored['deferredCatalog']) ==
                     previous['deferredCapture']['closedCatalogSha256'], 'Deferred predecessor native catalog changed.')
             state['previousCatalog'] = stored['deferredCatalog']
+            state['previousRoleWindows'] = stored['deferredCapture']['roleWindows']
     if not state['roles'] and deferred_before is None:
         return None
     state['observedAtNs'] = time.time_ns()
@@ -4429,6 +4780,6 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
                             'Retained native work, history, configuration or permissions changed.')
                 elif table in NATIVE_RECONNECT_COLUMNS:
                     require(native_projected_rows(before, table) <= native_projected_rows(after, table, boot_replacements), 'Retained native identity, account content or permissions changed.')
-    if before_static != after_static or (deferred and deferred['predecessor'] is not None):
+    if before_static != after_static or deferred:
         qualify_capture_map(snapshot, live, selected, epoch, catalog_runtime_root, (from_version, to_version),
                             log_retention_window, before_static, after_static, capture_retirement, capture_proofs)
