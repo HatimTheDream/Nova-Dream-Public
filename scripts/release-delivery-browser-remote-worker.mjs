@@ -2,7 +2,7 @@
 import {existsSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {canonicalBrowser,sha256,verifyBrowserTool,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
+import {canonicalBrowser,sha256,verifyBrowserTool,verifyRemoteBrowserMemory,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
 import {verifyPlaywrightClosure,verifyInitialBrowserIdentity,verifySecondPage,ready,tasks,draft,ownedDraftCleanup,accept,untilOriginalDeadline} from './release-delivery-browser-checks.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms)),read=p=>JSON.parse(readFileSync(p,'utf8'));
 const safe=e=>/^[a-z][a-z0-9-]{0,99}$/.test(e?.message??'')?e.message:'browser-dom-or-transport-check-failed';
@@ -18,12 +18,15 @@ export async function remoteBrowserWorker(originalPath){
     const cgroup=readFileSync('/proc/self/cgroup','utf8').split('\n').find(line=>line.startsWith('0::'))?.slice(3);
     need(cgroup?.startsWith('/')&&!cgroup.split('/').includes('..'),'browser-memory-cgroup-invalid');
     const root='/sys/fs/cgroup'+cgroup;
-    writeBrowserOnce(join(dir,'memory-'+name+'.json'),{operationId:binding.operationId,atMs:Date.now(),milestone:name,
+    const sample={operationId:binding.operationId,atMs:Date.now(),milestone:name,
+      maxBytes:Number(readFileSync(root+'/memory.max','utf8').trim()),
       currentBytes:Number(readFileSync(root+'/memory.current','utf8').trim()),peakBytes:Number(readFileSync(root+'/memory.peak','utf8').trim()),
-      stat:readFileSync(root+'/memory.stat','utf8'),events:readFileSync(root+'/memory.events','utf8')});
+      stat:readFileSync(root+'/memory.stat','utf8'),events:readFileSync(root+'/memory.events','utf8')};
+    writeBrowserOnce(join(dir,'memory-'+name+'.json'),sample);
+    return sample;
   };
   milestone('tools-verified');
-  let context,oldPage,prepared,accepted,timer;
+  let context,oldPage,prepared,accepted,timer,closedMemory;
   try{
     const {chromium}=await import(pathToFileURL(entry).href);
     context=await chromium.launchPersistentContext(join(dir,'profile'),{executablePath:options.executable.path,headless:true,chromiumSandbox:true,
@@ -33,22 +36,31 @@ export async function remoteBrowserWorker(originalPath){
     milestone('first-page-ready');
     await tasks(oldPage);const field=await draft(oldPage);need(await field.inputValue()==='','browser-owned-profile-draft-not-empty');
     const text=`Nova release verification ${binding.operationId} — retained unsent draft`;await field.fill(text);
-    const secondPage=await verifySecondPage(context,options,initial,milestone,initialContract);
-    prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:sha256(canonicalBrowser(binding)),startedAtMs:Date.now(),document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text,secondPage};
+    let preparedMemory;
+    const secondPage=await verifySecondPage(context,options,initial,name=>{
+      const sample=milestone(name);
+      if(name==='second-page-ready'){
+        verifyRemoteBrowserMemory(sample,binding.operationId,name);
+        preparedMemory=sample;
+      }
+    },initialContract);
+    need(preparedMemory,'browser-second-page-memory-missing');
+    prepared={format:1,kind:'nova-pre-promotion-browser',bindingSha256:sha256(canonicalBrowser(binding)),startedAtMs:Date.now(),document:initial.identity,health:initial.health,epoch:initial.epoch,draft:text,secondPage,memory:preparedMemory};
     const heartbeat=()=>{const path=join(dir,'heartbeat.tmp');writeFileSync(path,canonicalBrowser({operationId:binding.operationId,originalSha256:sha256(readFileSync(originalPath)),
       pid:process.pid,atMs:Date.now(),browserAlive:!oldPage.isClosed(),tunnelAlive:true,transport:'remote-direct'})+'\n',{mode:0o600});renameSync(path,join(dir,'heartbeat.json'));};
     heartbeat();timer=setInterval(heartbeat,2000);writeBrowserOnce(join(dir,'prepared.json'),prepared);
     while(Date.now()<original.deadlineAtMs){
       if(existsSync(join(dir,'close-request.json'))){need(read(join(dir,'close-request.json')).operationId===binding.operationId,'browser-close-operation-changed');await ownedDraftCleanup(oldPage,prepared.draft);return;}
-      if(existsSync(join(dir,'accept-request.json'))){accepted=await untilOriginalDeadline(()=>accept(context,oldPage,prepared,read(join(dir,'accept-request.json')),dir,original),original.deadlineAtMs);break;}
+      if(existsSync(join(dir,'accept-request.json'))){accepted=await untilOriginalDeadline(()=>accept(context,oldPage,prepared,read(join(dir,'accept-request.json')),dir,original,milestone),original.deadlineAtMs);break;}
       await sleep(250);
     }
     need(accepted,'browser-original-deadline-exhausted');
   }catch(error){writeBrowserOnce(join(dir,'failed.json'),{operationId:binding.operationId,reason:safe(error),detail:String(error.message).slice(0,2000),atMs:Date.now()});}
   finally{clearInterval(timer);if(context)await context.close().catch(()=>{});
-    milestone('browser-closed');
-    writeBrowserOnce(join(dir,'closed.json'),{operationId:binding.operationId,atMs:Date.now(),browserClosed:!context||context.pages().length===0,tunnelClosed:true,transport:'remote-direct'});}
-  if(accepted){const path=join(dir,'closed.json');writeBrowserOnce(join(dir,'acceptance.json'),{...accepted,closed:{path,sha256:sha256(readFileSync(path))}});}
+    closedMemory=milestone('browser-closed');
+    writeBrowserOnce(join(dir,'closed.json'),{operationId:binding.operationId,atMs:Date.now(),memory:closedMemory,browserClosed:!context||context.pages().length===0,tunnelClosed:true,transport:'remote-direct'});}
+  if(accepted){verifyRemoteBrowserMemory(closedMemory,binding.operationId,'browser-closed');
+    const path=join(dir,'closed.json');writeBrowserOnce(join(dir,'acceptance.json'),{...accepted,closed:{path,sha256:sha256(readFileSync(path))}});}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)remoteBrowserWorker(process.argv[2]).catch(error=>{
   const dir=dirname(resolve(process.argv[2]));if(!existsSync(join(dir,'failed.json')))writeBrowserOnce(join(dir,'failed.json'),{reason:safe(error),detail:String(error.message).slice(0,2000),atMs:Date.now()});

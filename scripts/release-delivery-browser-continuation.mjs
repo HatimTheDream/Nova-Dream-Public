@@ -104,8 +104,8 @@ export function verifyBrowserWindowRecoveryReadiness(reference,{descriptor,journ
   &&plan.directory===options.directoryRoot+'/'+plan.sessionId&&plan.unit==='nova-browser-'+plan.sessionId
   &&plan.originalSha256===sha256(Buffer.from(canonicalBrowser(original)+'\n'))&&response.planSha256===sha256(canonicalBrowser(plan))
   &&same(plan.node,options.node)&&same(plan.executable,options.executable)&&plan.playwrightSha256===options.playwright.sha256
-  &&plan.memoryMaxBytes===1073741824&&plan.hostReserveBytes===2147483648
-  &&response.memoryAdmission?.requiredBytes===3221225472&&Number.isSafeInteger(response.memoryAdmission?.availableBytes)
+  &&plan.memoryMaxBytes===2*1024**3&&plan.hostReserveBytes===2147483648
+  &&response.memoryAdmission?.requiredBytes===4*1024**3&&Number.isSafeInteger(response.memoryAdmission?.availableBytes)
   &&response.memoryAdmission.availableBytes>=response.memoryAdmission.requiredBytes,'browser-window-recovery-remote-readiness-changed');
  if(requireUnmaterialized)assertBrowserWindowRecoveryUnmaterialized(journal,request.browser.successorSessionId);
  return proof;

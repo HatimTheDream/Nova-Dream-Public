@@ -161,7 +161,9 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
         if(publicationContinuation)publicationAdmission=journal.deliveryPublicationContinuationAdmission(session.operationId)?.admission??null;
       }finally{journal.close();}
     }
-    need(continuationSessionAuthorityMatches(session.operatorContinuation,continuation,publicationAdmission,sessionRef,session.continuationDispatch)&&continuation.descriptorSha256===sha256(encoded(descriptor).subarray(0,-1)),'storage-continuation-authority-changed');
+    const {normalizedDeliveryDescriptor}=await import('./release-delivery-journal.mjs');
+    const original=preJournalProof?descriptor:normalizedDeliveryDescriptor(descriptor,session.descriptor.path);
+    need(continuationSessionAuthorityMatches(session.operatorContinuation,continuation,publicationAdmission,sessionRef,session.continuationDispatch)&&continuation.descriptorSha256===sha256(encoded(original).subarray(0,-1)),'storage-continuation-authority-changed');
   }else need(session.operatorContinuation===undefined&&session.continuationDispatch===undefined,'storage-unconfigured-continuation');
   need(request.format === 1 && request.operationId === session.operationId && start.operationId === session.operationId
     && same(request.independentSourceReview, originalConfig.storageReview), 'storage-original-request-changed');

@@ -1,10 +1,10 @@
 /** One execution owner, resumable fixed producer phases around ReleaseJournal.
  * An already-reserved phase is ALWAYS observed, including reservation/dispatch
  * crashes. Only a new transaction winner is allowed to make its first effect. */
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ReleaseJournal } from './release-coordinate.mjs';
-import { DELIVERY_PHASES, deliveryDescriptorSchema } from './release-delivery-journal.mjs';
+import { DELIVERY_PHASES, normalizedDeliveryDescriptor } from './release-delivery-journal.mjs';
 import { readEvidenceFile, readReleaseInputFile, sha256 } from './release-plan.mjs';
 import { reconcilePostinstallBrowser } from './release-delivery-postinstall-recovery.mjs';
 import { reconcileFailedDelivery } from './release-delivery-disposition.mjs';
@@ -44,7 +44,7 @@ export async function stepDelivery(journal, operationId, registry, { clock = Dat
     const prior = Object.fromEntries(DELIVERY_PHASES.filter(p => p !== phase).map(p => [p, journal.deliveryPhase(operationId, p)]).filter(([, p]) => p?.state === 'completed').map(([p, v]) => [p, v.current.output]));
     const phaseGaps = await registry.phasePreflight?.(phase,descriptor,prior,{journal}) ?? [];
     if (phaseGaps.length) return { state:'gap',reason:phaseGaps[0],integrationGaps:phaseGaps };
-    const adapter = registry.adapter(phase, descriptor, prior);
+    const adapter = registry.adapter(phase, descriptor, prior, {journal});
     if (!adapter) return { state: 'gap', reason: `missing-${phase}-adapter` };
     // Computing/validating immutable input is read-only and precedes reservation.
     let input = existing?.input ?? await adapter.input({ descriptor, prior, journal });
@@ -149,9 +149,7 @@ export async function deliveryMain(args) {
     if (mode === 'reconcile-failure') return await reconcileFailedDelivery(journal,value,createDeliveryRegistry());
     let id = value;
     if (mode === 'start') {
-      const inputPath = resolve(value), descriptor = deliveryDescriptorSchema.parse(JSON.parse(readReleaseInputFile(inputPath)));
-      descriptor.target.path = resolve(dirname(inputPath), descriptor.target.path);
-      for (const side of ['private', 'public']) descriptor.sources[side].root = resolve(dirname(inputPath), descriptor.sources[side].root);
+      const inputPath = resolve(value), descriptor = normalizedDeliveryDescriptor(JSON.parse(readReleaseInputFile(inputPath)),inputPath);
       if(storage.preJournalProof)journal.initializeReconciledDelivery(descriptor,JSON.parse(readEvidenceFile(storage.preJournalProof)));
       else journal.initializeDelivery(descriptor);
       id = descriptor.operation.id;

@@ -8,7 +8,7 @@ import { sha256 } from '../scripts/release-plan.mjs';
 import { prepareDeliveryBrowser, canonicalBrowser, writeBrowserOnce, browserOptionsSchema, verifyBrowserAcceptance, verifyBrowserSessionAlive, createBrowserAcceptanceAdapter, browserAcceptanceInput } from '../scripts/release-delivery-browser.mjs';
 import { verifyBrowserHealth, verifyDocumentIdentity, verifyPlaywrightClosure } from '../scripts/release-delivery-browser-driver.mjs';
 import {remoteBrowserAcceptance,remoteBrowserCall,prepareRemoteBrowser,verifyRemoteBrowserSessionAlive} from '../scripts/release-delivery-browser-remote.mjs';
-import {verifyBrowserTool} from '../scripts/release-delivery-browser-primitives.mjs';
+import {verifyBrowserTool,verifyRemoteBrowserMemory} from '../scripts/release-delivery-browser-primitives.mjs';
 import {verifyInitialBrowserIdentity,verifySecondPage} from '../scripts/release-delivery-browser-checks.mjs';
 
 const hash=v=>sha256(canonicalBrowser(v));
@@ -20,6 +20,17 @@ test('streamed tool verification covers later chunks and enforces exact size bou
   assert.throws(()=>verifyBrowserTool(ref,{maximum:bytes.length-1}),/browser-reference-not-bounded-file/);
   bytes[bytes.length-2]^=1;writeFileSync(path,bytes);
   assert.throws(()=>verifyBrowserTool(ref,{maximum:bytes.length}),/browser-reference-sha256-changed/);
+});
+test('remote browser checks the effective cgroup cap, cumulative peak and kernel OOM counters',()=>{
+  const id=randomUUID(),milestone='second-page-ready',limit=2*1024**3;
+  const sample={operationId:id,milestone,maxBytes:limit,peakBytes:Math.floor(limit*0.8),
+    events:'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n'};
+  verifyRemoteBrowserMemory(sample,id,milestone);
+  for(const altered of [{maxBytes:limit/2},{peakBytes:sample.peakBytes+1},{peakBytes:0},
+    {events:'oom 1\noom_kill 0\n'},{events:'oom 0\noom_kill 1\n'},
+    {events:'oom 0\noom_kill 0\noom_group_kill 1\n'},{events:'oom 0\n'},
+    {events:'oom 0\noom 0\noom_kill 0\n'},{operationId:randomUUID()},{milestone:'browser-closed'}])
+    assert.throws(()=>verifyRemoteBrowserMemory({...sample,...altered},id,milestone),/browser-memory-/);
 });
 function fixture(t) {
   const parent=resolve(tmpdir()),root=mkdtempSync(join(parent,'nova-browser-'));

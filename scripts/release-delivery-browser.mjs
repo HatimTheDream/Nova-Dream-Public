@@ -13,6 +13,7 @@ import {verifyExistingReplyAcceptance,existingReplyCoverage} from './release-del
 import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './release-delivery-browser-remote.mjs';
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
 import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
+import {verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
 import {verifyFullBundledIdentity,verifyDocumentIdentity,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -176,6 +177,12 @@ export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
   const closed=JSON.parse(readEvidenceFile(output.closed));
   need(closed.operationId===input.operationId&&closed.browserClosed===true&&closed.tunnelClosed===true,'browser-owned-process-closeout-incomplete');
   if(original.binding.options.mode==='remote'){
+    // Earlier immutable evidence predates the worker's cgroup samples.
+    if(prepared.memory!==undefined||closed.memory!==undefined){
+      verifyRemoteBrowserMemory(prepared.memory,input.operationId,'second-page-ready');
+      verifyRemoteBrowserMemory(closed.memory,input.operationId,'browser-closed');
+      need(closed.memory.peakBytes>=prepared.memory.peakBytes,'browser-memory-peak-regressed');
+    }
     const unit=JSON.parse(readEvidenceFile(output.remoteUnitCloseout));
     need(unit.operationId===input.operationId&&unit.originalSha256===input.original.sha256
       &&/ActiveState=(inactive|failed)\n/.test(unit.unitState)&&unit.unitState.includes('MainPID=0\n')&&unit.ownedPids?.length===0,'browser-remote-process-closeout-incomplete');

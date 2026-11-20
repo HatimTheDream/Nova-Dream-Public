@@ -78,6 +78,8 @@ export async function fixedCommand(executable, args, { cwd, maximum = 8 * 1024 *
   }
 }
 const result = (state, reason, output = null, externalId = null, receipt = null) => ({ state, reason, output, externalId, receipt });
+import { correctedDependencyTarget, correctionForPhase } from './release-delivery-dependency-correction.mjs';
+
 function targetInput(descriptor) {
   const target = deliveryTargetSchema.parse(JSON.parse(readEvidenceFile(descriptor.target)));
   const transport = releaseTransportSchema.parse(JSON.parse(readEvidenceFile(target.transport)));
@@ -87,7 +89,7 @@ function targetInput(descriptor) {
 export function deliveryAdapterSourceFiles() {
   // Include implementation and all directly delegated authority/validation code.
   const files = ['release-delivery-adapters.mjs', 'release-delivery-ci-adapter.mjs', 'release-delivery-ci.py', 'release-ci-primitives.py', 'release-delivery-install.mjs', 'release-delivery-artifact-adapter.mjs', 'release-delivery-artifacts.py', 'release-artifact-primitives.py',
-    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
+    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-delivery-dependency-correction.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
@@ -315,14 +317,16 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     phasePreflight: async (phase,descriptor,prior,context={}) => {
       const {target}=targetInput(descriptor),gaps=deliveryPhaseIntegrationGaps(phase,target,prior);
       if(gaps.length||phase!=='package'||prior.route?.route!=='full')return gaps;
-      const sourceGaps=await sourceCapabilityGaps(descriptor,target,prior,context);
+      const correction=context.dependencyCorrection??correctionForPhase(context.journal,descriptor.operation.id);
+      const effective=correctedDependencyTarget(target,descriptor,prior,correction);
+      const sourceGaps=await sourceCapabilityGaps(descriptor,effective,prior,context);
       return sourceGaps.length?sourceGaps:fullHostPrerequisiteGaps({transport:target.transport,options:target.full.host,run});
     },
     // Report unsupported acceptance separately from route admission. Neither a
     // capability flag nor completed installation can satisfy these phases.
     capabilityGaps: async descriptor => { const { target }=targetInput(descriptor);return [
       ...(target.assistantHost?[]:['assistant-host-target-not-configured']),...deliveryPhaseIntegrationGaps('browser',target)]; },
-    adapter(phase, descriptor, prior = {}) {
+    adapter(phase, descriptor, prior = {}, {journal} = {}) {
       if (['private-source', 'public-source', 'private-ci', 'public-ci'].includes(phase)) {
         const { target } = targetInput(descriptor); if (!target.sourceTools) return null;
         const side = phase.split('-')[0];
@@ -355,9 +359,10 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       if (phase === 'package' && prior.route?.route === 'full') {
         const { target } = targetInput(descriptor);
         if (!target.full) return null;
-        const maintained = target.full.dependencyTransport && target.bases ? dependency(target) : null;
+        const effective=correctedDependencyTarget(target,descriptor,prior,correctionForPhase(journal,descriptor.operation.id));
+        const maintained = effective.full.dependencyTransport && effective.bases ? dependency(effective) : null;
         const pairProducer = maintained ? createDependencyPairProducer({ maintained, clock }) : null;
-        return createDurableFullBundleAdapter({ options: target.full, pairProducer, clock });
+        return createDurableFullBundleAdapter({ options: effective.full, pairProducer, clock });
       }
       if (phase === 'sign' && prior.route?.route === 'full') { const { target } = targetInput(descriptor); return target.full && target.bases ? createFullSignAdapter({ signing: target.full.signing, feed: target.full.feed, base: target.bases.private, storeReceipt:receiptStore }) : null; }
       if (phase === 'capacity' && prior.route?.route === 'full') { const {target}=targetInput(descriptor);return target.full?.host ? createFullCapacityAdapter({transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run,clock}) : null; }

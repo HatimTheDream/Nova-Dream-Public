@@ -28,8 +28,8 @@ function browserBoundary(f){
   if(p.mode==='start'&&lost)throw Error('synthetic-lost-launch-response');
   const original=p.original,id=f.id,digest=sha256(Buffer.from(canonical(original)+'\n'));
   const plan={format:1,kind:'nova-remote-browser-plan',operationId:id,sessionId:original.binding.sessionId,directory:options.directoryRoot+'/'+original.binding.sessionId,unit:'nova-browser-'+original.binding.sessionId,
-   originalSha256:digest,node:options.node,executable:options.executable,playwrightSha256:options.playwright.sha256,memoryMaxBytes:1073741824,hostReserveBytes:2147483648};
-  const response=['readiness','plan'].includes(p.mode)?{state:p.mode==='readiness'?'ready':'planned',plan,planSha256:sha256(canonical(plan)),existingOperation:false,sessionAbsent:true,hostWrites:false,memoryAdmission:{availableBytes:4*1024**3,requiredBytes:3*1024**3}}:
+   originalSha256:digest,node:options.node,executable:options.executable,playwrightSha256:options.playwright.sha256,memoryMaxBytes:2*1024**3,hostReserveBytes:2147483648};
+  const response=['readiness','plan'].includes(p.mode)?{state:p.mode==='readiness'?'ready':'planned',plan,planSha256:sha256(canonical(plan)),existingOperation:false,sessionAbsent:true,hostWrites:false,memoryAdmission:{availableBytes:4*1024**3,requiredBytes:4*1024**3}}:
    {state:'observed',operationId:id,originalSha256:digest,observedAtMs:f.at,unitState:'ActiveState=active\nMainPID=123\n',ownedPids:[123],files:{heartbeat:{operationId:id,originalSha256:digest,browserAlive:true,transport:'remote-direct',atMs:f.at,pid:123},prepared:{bindingSha256:sha256(canonical(original.binding)),epoch:original.binding.epoch,document:{candidateId:original.binding.priorCandidateId},startedAtMs:f.at},failed:null,closed:null}};
   return {exitCode:0,stdout:JSON.stringify(response)};
  };

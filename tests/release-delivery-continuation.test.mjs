@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join,dirname,resolve,basename} from 'node:path';
+import {join,dirname,resolve,basename,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {ReleaseJournal} from '../scripts/release-coordinate.mjs';
@@ -12,11 +12,14 @@ import {PREWRITE_PREREQUISITES} from '../scripts/release-delivery-disposition.mj
 import {deliveryAdapterIdentity,deliveryAdapterSourceFiles} from '../scripts/release-delivery-adapters.mjs';
 import {continuationSnapshot,verifyContinuationTimeline,verifyContinuationGrant,verifyContinuationStorageAuthority,verifyOperatorCi,assertDeliveryOperator} from '../scripts/release-delivery-continuation.mjs';
 import {stepDelivery} from '../scripts/release-deliver.mjs';
+import {normalizedDeliveryDescriptor} from '../scripts/release-delivery-journal.mjs';
+import {acceptedDependencyBasis,correctedDependencyTarget,correctionGrantKind,correctionRequestKind,correctionBranch,correctionForPhase,graphRefusal} from '../scripts/release-delivery-dependency-correction.mjs';
 import {fullHostFixture} from '../support/full-host-fixture.mjs';
+import {dependencyCorrectionFixture} from '../support/dependency-correction-fixture.mjs';
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const app=fileURLToPath(new URL('..',import.meta.url)),source=readFileSync(new URL('../scripts/release-coordinate.mjs',import.meta.url),'utf8');
 const baseSchema=source.match(/this\.db\.exec\(`(PRAGMA journal_mode=WAL;[\s\S]+?PRAGMA user_version=1; COMMIT;)`\);/)[1].replace('${APPLICATION_ID}',String(0x4e56524c));
-function fixture(t){
+function fixture(t,{correction=false}={}){
  const dir=mkdtempSync(join(tmpdir(),'nova-continuation-')),journal=Object.create(ReleaseJournal.prototype);journal.db=new DatabaseSync(':memory:');journal.readOnly=false;journal.directory=join(dir,'journal');mkdirSync(journal.directory);journal.db.exec(baseSchema);
  t.after(()=>{journal.close();rmSync(dir,{recursive:true,force:true});});
  const save=(name,value)=>{const path=join(dir,name);mkdirSync(dirname(path),{recursive:true});const raw=Buffer.isBuffer(value)?value:Buffer.from(JSON.stringify(value)+'\n');writeFileSync(path,raw,{mode:0o600});return {path,sha256:sha256(raw)};};
@@ -26,11 +29,12 @@ function fixture(t){
  const oldRows=[{name:'release-delivery-adapters.mjs',sha256:oldAdapter.sha256},{name:'release-deliver.mjs',sha256:oldEntry.sha256}];
  const original={id:randomUUID(),step:'total',issuedAtMs:now,remainingMs:[1000,2000],confidence:'low',basis:'Synthetic original estimate.',reason:'Original estimate.',nextCheckpointAtMs:now+300000};
  const operation={...host.descriptor.operation,stage:'draft',candidateId:null,publicCandidateId:null,version:'8.1.0',buildVersion:'1.0.801',sourceCommits:{private:'a'.repeat(40),public:'b'.repeat(40)},bundleSha256:null,trustedPublicKeySha256:sha256('key'),helperHashes:null};
+ const native=correction?dependencyCorrectionFixture(save,dir,host.options,operation):null;
  const d={format:1,operation,sources:{private:{root:join(dir,'original-private'),repository:'HatimTheDream/Nova-Dream',commit:'a'.repeat(40),baseCommit:'c'.repeat(40),branch:'main'},public:{root:join(dir,'original-public'),repository:'HatimTheDream/Nova-Dream-Public',commit:'b'.repeat(40),baseCommit:'d'.repeat(40),branch:'main'}},
-  target:save('target.json',{artifactTools:{node},full:{host:host.options}}),targetIdentity:sha256('target'),adapterIdentity:sha256(canonical(oldRows)),timeline:{startedAtMs:now,original,revisions:[],reviews:[],lastCheckpointAtMs:now},observationBudgetMs:60000};
+  target:save('target.json',{artifactTools:{node},full:{host:host.options,...(native?{dependencyTransport:native.transport}:{})}}),targetIdentity:sha256('target'),adapterIdentity:sha256(canonical(oldRows)),timeline:{startedAtMs:now,original,revisions:[],reviews:[],lastCheckpointAtMs:now},observationBudgetMs:60000};
  journal.initializeDelivery(d,now);
- for(const phase of PREWRITE_PREREQUISITES){const {intent}=journal.reserveDeliveryPhase(id,phase,{phase},now+1);journal.recordDeliveryObservation(id,phase,{key:intent.key,state:'completed',reason:'synthetic-verified',externalId:null,receipt:null,output:phase==='route'?{route:'full'}:{phase}},now+1);}
- const at=now+120000,originalRequest=save('owner/request.json',{format:1,operationId:id,node,deliveryEntry:oldEntry,releaseInput:save('original-start.json',{synthetic:true}),storageBudget:save('budget.json',{synthetic:true})});
+ for(const phase of PREWRITE_PREREQUISITES){const {intent}=journal.reserveDeliveryPhase(id,phase,{phase},now+1);journal.recordDeliveryObservation(id,phase,{key:intent.key,state:'completed',reason:'synthetic-verified',externalId:null,receipt:null,output:native?.prior[phase]??(phase==='route'?{route:'full'}:{phase})},now+1);}
+ const at=now+(correction?30000:120000),originalRequest=save('owner/request.json',{format:1,operationId:id,node,deliveryEntry:oldEntry,releaseInput:save('original-start.json',{synthetic:true}),storageBudget:save('budget.json',{synthetic:true})});
  const oldRequest=JSON.parse(readFileSync(originalRequest.path));
  const process=(pid,parentPid)=>({pid,parentPid,created:'/Date('+now+')/',executable:node.path,commandLineSha256:sha256('process'+pid)});
  const launcher=save('owner/waiting.json',{format:1,kind:'verified-waiting-release-launcher',dispatchAuthority:false,operationId:id,mode:'resume',cwd:oldRoot,node,entry:oldEntry,start:oldRequest.releaseInput,budget:oldRequest.storageBudget,runner:save('runner.bin',Buffer.from('synthetic runner')),config:save('config.json',{}),owner:process(100,1),worker:process(101,100)});
@@ -41,6 +45,17 @@ function fixture(t){
  // Public CI has no private checkout; materialize only its referenced synthetic entry.
  save('current-private/edition3/scripts/release-deliver.mjs',readFileSync(new URL('../scripts/release-deliver.mjs',import.meta.url)));
  const request={format:1,kind:'nova-expired-prepackage-request',operationId:id,historical:{root:oldRoot,manifest:save('original-graph.json',{format:1,adapterIdentity:d.adapterIdentity,sourceFiles:[oldAdapter,oldEntry]})},owner:{request:originalRequest,attempts:[attempt]},operatorSources,ciRuns:{private:10,public:20},durationMs:60000};
+ if(correction){
+  const packet=(ref,patch)=>save(relative(dir,ref.path),{...JSON.parse(readFileSync(ref.path)),...patch});
+  request.kind=correctionRequestKind;delete request.durationMs;
+  for(const side of Object.values(operatorSources))side.branch=correctionBranch;
+  request.correction=native.correction;
+  attempt.launcher=packet(launcher,{mode:'start'});
+  const descriptorFile=join(resolve(journal.directory,'..'),'request-'+id,'descriptor.json');
+  attempt.intent=packet(attempt.intent,{argv:[node.path,oldEntry.path,'start',journal.directory,descriptorFile]});
+  attempt.exit=packet(attempt.exit,{returnCode:1});attempt.childResult=packet(attempt.childResult,{returnCode:1});
+  attempt.stdout=save(relative(dir,attempt.stdout.path),{kind:'nova-release-delivery-error',reason:graphRefusal,automaticReplayPermitted:false});
+ }
  const requestRef=save('continuation-request.json',request);
  const ci=s=>({requestedAttempt:1,run:{id:10,run_attempt:1,repository:{full_name:s.repository},head_sha:s.commit,head_branch:s.branch,event:'push',path:'.github/workflows/operator-continuation-quality.yml',name:'Operator continuation quality',status:'completed',conclusion:'success'},jobs:{total_count:1,jobs:[{id:11,run_id:10,run_attempt:1,head_sha:s.commit,name:'quality',status:'completed',conclusion:'success',steps:['Run npm run quality','Verify Linux update recovery'].map(name=>({name,status:'completed',conclusion:'success'}))}]}});
  host.facts.observedAtMilliseconds=at;
@@ -49,9 +64,67 @@ function fixture(t){
  const snapshot=continuationSnapshot(journal,id,at,{request,assertAbsent:()=>{}});
  const proof={format:1,kind:'nova-expired-prepackage-continuation',operationId:id,...snapshot,request:requestRef,operator:{adapterIdentity:deliveryAdapterIdentity(),sources:operatorSources,
   sourceFiles:deliveryAdapterSourceFiles().map(name=>({name,sha256:sha256(readFileSync(new URL('../scripts/'+name,import.meta.url)))})),ci:{private:save('ci-private.json',ci(operatorSources.private)),public:save('ci-public.json',{...ci(operatorSources.public),run:{...ci(operatorSources.public).run,id:20},jobs:{total_count:1,jobs:[{...ci(operatorSources.public).jobs.jobs[0],run_id:20}]}})}},hostFacts:hostRef,issuedAtMs:at,expiresAtMs:at+60000,automaticRenewal:false,originalHistoryPreserved:true};
+ if(correction)Object.assign(proof,{kind:correctionGrantKind,correction:request.correction,expiresAtMs:now+d.observationBudgetMs});
  const grant=()=>journal.recordOperatorContinuation(id,proof,at,{assertAbsent:()=>{}});
- return {dir,journal,id,now,at,d,save,request,proof,grant,attempt};
+ return {dir,journal,id,now,at,d,save,request,proof,grant,attempt,native};
 }
+test('typed pre-reservation dependency correction keeps all six observations, genuine event id and first deadline',async t=>{
+ const f=fixture(t,{correction:true}),phases=()=>PREWRITE_PREREQUISITES.map(n=>f.journal.deliveryPhase(f.id,n)),original=phases();
+ const g=f.grant();assert.deepEqual(phases(),original);assert.deepEqual(f.grant(),g);
+ assert.equal(Number.isSafeInteger(g.eventId)&&g.eventId>0,true);
+ const event=f.journal.db.prepare('SELECT kind,payload_json FROM delivery_events WHERE id=?').get(g.eventId);
+ assert.equal(event.kind,'prepackage-dependency-input-corrected');assert.equal(JSON.parse(event.payload_json).originalBudgetExpired,false);
+ assert.deepEqual(correctionForPhase(f.journal,f.id),f.request.correction);
+ const authority=await verifyContinuationStorageAuthority({journal:f.journal,operationId:f.id,now:f.at});
+ assert.equal(authority.expiresAtMs,f.now+f.d.observationBudgetMs);
+ assert.throws(()=>verifyContinuationGrant(f.journal,f.id,{now:authority.expiresAtMs,effect:true}),/window-expired/);
+});
+test('correction rejects later reservations, different native error, extended clock, and additional original attempts',t=>{
+ for(const cause of ['package','error','expired','extended','extra']){
+  const f=fixture(t,{correction:true});
+  if(cause==='package')f.journal.reserveDeliveryPhase(f.id,'package',{role:'fixture'},f.now+2);
+  if(cause==='expired'){assert.throws(()=>continuationSnapshot(f.journal,f.id,f.now+f.d.observationBudgetMs,{request:f.request}),/original-budget-expired/);continue;}
+  if(cause==='extended')f.proof.expiresAtMs++;
+  if(cause==='extra')f.request.owner.attempts.push(f.attempt);
+  if(cause==='error')f.attempt.stdout=f.save(relative(f.dir,f.attempt.stdout.path),{kind:'nova-release-delivery-error',reason:'different-error',automaticReplayPermitted:false});
+  if(['extra','error'].includes(cause))f.proof.request=f.save(relative(f.dir,f.proof.request.path),f.request);
+  assert.throws(()=>f.grant());assert.equal(f.journal.deliveryOperatorContinuation(f.id),null);
+ }
+});
+test('storage binding uses the same original target and source path normalization as delivery startup',t=>{
+ const f=fixture(t),inputFile=join(f.dir,'start','descriptor.json'),raw=structuredClone(f.d);
+ raw.target.path='../target.json';raw.sources.private.root='../original-private';raw.sources.public.root='../original-public';
+ const normalized=normalizedDeliveryDescriptor(raw,inputFile);
+ assert.deepEqual(normalized,f.d);assert.equal(raw.target.path,'../target.json');
+});
+test('the envelope can only project the accepted pack onto the unchanged candidate and verified route',t=>{
+ const f=fixture(t,{correction:true}),n=f.native,target=JSON.parse(readFileSync(f.d.target.path));
+ const actual=correctedDependencyTarget(target,f.d,n.prior,n.correction);
+ assert.deepEqual(actual.full.dependencyTransport.nativeInput,n.correction.correctedNativeInput);
+ assert.deepEqual({...actual,full:{...actual.full,dependencyTransport:{...actual.full.dependencyTransport,nativeInput:n.correction.originalNativeInput}}},target);
+ for(const change of [
+  value=>{value.acceptedCandidate=sha256('another candidate');},
+  value=>{value.targetLock=value.targetPackage;},
+  value=>{value.acceptedInstaller=value.acceptedBundle;},
+  value=>{value.nativeReceipt=n.transport.qualifiedDependencies.execution;},
+  value=>{value.transition.toVersion='999.0.0';},
+  value=>{value.additionalAuthority=true;},
+ ]){
+  const value=structuredClone(n.native);change(value);
+  const proposal={...n.correction,correctedNativeInput:f.save('different-native-input',value)};
+  assert.throws(()=>correctedDependencyTarget(target,f.d,n.prior,proposal));
+ }
+});
+test('next profile carries the successful installed native pack and validated package identity',t=>{
+ const f=fixture(t,{correction:true}),n=f.native,old=n.old,transport={...n.transport,qualifiedDependencies:old.refs};
+ const accepted={pair:transport.selectedPair,result:transport.selectedInstaller,bundle:transport.selectedBundle};
+ const candidate=f.d.operation.priorCandidateId,base={candidateId:candidate,directory:dirname(old.packageRef.path)};
+ const sign={candidateId:candidate,bundle:accepted.bundle,dependencies:{...old.refs,description:old.description,qualification:old.refs.execution,newNativeDependenciesQualified:true,unchangedNativeDependencies:false}};
+ const args={transport,accepted,sign,base,packageRef:old.packageRef,lockRef:old.lockRef};
+ const basis=acceptedDependencyBasis(args);assert.deepEqual(basis.oldArchive,old.refs.archive);assert.deepEqual(basis.nativeReceipt,sign.dependencies.execution);
+ assert.equal(basis.transition.fromVersion,n.acceptedBinding.targets.private.version);
+ assert.throws(()=>acceptedDependencyBasis({...args,sign:{...sign,dependencies:{...sign.dependencies,execution:n.transport.qualifiedDependencies.execution}}}),/accepted-native-pack-changed/);
+});
 test('one append-only grant preserves descriptor, all six keys and original budget; duplicate cannot renew',t=>{
  const f=fixture(t),before=f.journal.loadDelivery(f.id),keys=PREWRITE_PREREQUISITES.map(n=>f.journal.deliveryPhase(f.id,n).key),g=f.grant();
  assert.deepEqual(f.journal.loadDelivery(f.id),before);assert.deepEqual(PREWRITE_PREREQUISITES.map(n=>f.journal.deliveryPhase(f.id,n).key),keys);

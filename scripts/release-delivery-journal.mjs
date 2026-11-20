@@ -1,12 +1,14 @@
 /** Additive early-phase records in ReleaseJournal's existing database.
  * Never dispatches, installs, snapshots or opens another journal. */
 import { randomUUID } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
 import {existingAssistantReplySchema,verifyExistingReplyAcceptance,existingReplyCoverage,EXISTING_REPLY_MODE} from './release-delivery-existing-reply.mjs';
 import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
-import { continuationGrantSchema, continuationRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import { correctionGrantKind } from './release-delivery-dependency-correction.mjs';
+import { prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallCorrectionSchema, postinstallCorrectionSnapshot, verifyPostinstallCorrectionEvidence, currentPostinstallRecovery, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
 
@@ -26,6 +28,12 @@ export const deliveryDescriptorSchema = z.object({ format: z.literal(1), operati
   for (const side of ['private', 'public']) if (v.operation.sourceCommits[side] !== v.sources[side].commit)
     ctx.addIssue({ code: 'custom', message: 'Committed source identity mismatch.' });
 });
+export function normalizedDeliveryDescriptor(raw, filePath) {
+  const descriptor=deliveryDescriptorSchema.parse(raw), directory=dirname(resolve(filePath));
+  descriptor.target.path=resolve(directory,descriptor.target.path);
+  for(const source of Object.values(descriptor.sources))source.root=resolve(directory,source.root);
+  return descriptor;
+}
 const stateSchema = z.enum(['running', 'completed', 'failed', 'uncertain', 'gap']);
 export const deliveryObservationSchema = z.object({ state: stateSchema, key: z.uuid(),
   externalId: z.string().min(1).max(256).nullable(), reason: z.string().regex(/^[a-z][a-z0-9-]{0,99}$/),
@@ -89,7 +97,12 @@ export const deliveryJournalMethods = {
     if(!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_operator_continuations'").get())return null;
     const row=this.db.prepare('SELECT * FROM delivery_operator_continuations WHERE operation_id=?').get(id);if(!row)return null;
     const proof=operatorGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id&&proof.successor===undefined&&proof.browserWindowRecovery===undefined,'continuation-stored-operation-changed');
-    return {proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
+    const saved={proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
+    if(proof.kind!==correctionGrantKind)return saved;
+    const [record,...rest]=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='prepackage-dependency-input-corrected'").all(id);
+    const expected={grantSha256:saved.sha256,originalBudgetExpired:false,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs};
+    need(record&&!rest.length&&record.at_ms===row.at_ms&&canonical(decoded(record.payload_json,record.payload_hash))===canonical(expected),'dependency-correction-original-event-changed');
+    return {...saved,eventId:record.id};
   },
   deliveryStorageSuccessorContinuation(id) {
     const original=this.deliveryOriginalOperatorContinuation(id);
@@ -128,19 +141,21 @@ export const deliveryJournalMethods = {
     });
   },
   recordOperatorContinuation(id,raw,now=Date.now(),{assertAbsent}={}) {
-    const publication=raw?.kind==='nova-expired-publication-continuation',proof=(publication?publicationContinuationGrantSchema:continuationGrantSchema).parse(raw);need(!this.readOnly,'continuation-readonly-journal');need(!proof.successor&&!proof.browserWindowRecovery,'publication-storage-successor-explicit-record-required');
+    const publication=raw?.kind==='nova-expired-publication-continuation',proof=(publication?publicationContinuationGrantSchema:prepackageGrantSchema).parse(raw);need(!this.readOnly,'continuation-readonly-journal');need(!proof.successor&&!proof.browserWindowRecovery,'publication-storage-successor-explicit-record-required');
     return this.transaction(()=>{
       const old=this.deliveryOperatorContinuation(id);if(old){need(canonical(old.proof)===canonical(proof),'continuation-already-granted');return old;}
       need(proof.operationId===id&&now>=proof.issuedAtMs&&now-proof.issuedAtMs<=60000,'continuation-grant-stale');
-      const request=(publication?publicationContinuationRequestSchema:continuationRequestSchema).parse(JSON.parse(readEvidenceFile(proof.request)));
+      const request=(publication?publicationContinuationRequestSchema:prepackageRequestSchema).parse(JSON.parse(readEvidenceFile(proof.request)));
       const snapshot=(publication?publicationContinuationSnapshot:continuationSnapshot)(this,id,now,{request,assertAbsent});
       need(Object.keys(snapshot).every(k=>canonical(snapshot[k])===canonical(proof[k])),'continuation-snapshot-changed-before-grant');
       this.db.exec(`CREATE TABLE IF NOT EXISTS delivery_operator_continuations(operation_id TEXT PRIMARY KEY REFERENCES deliveries(id),at_ms INTEGER NOT NULL,proof_json TEXT NOT NULL,proof_hash TEXT NOT NULL);
         CREATE TRIGGER IF NOT EXISTS continuation_no_update BEFORE UPDATE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;
         CREATE TRIGGER IF NOT EXISTS continuation_no_delete BEFORE DELETE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;`);
       const v=encoded(proof);this.db.prepare('INSERT INTO delivery_operator_continuations VALUES(?,?,?,?)').run(id,now,v.text,v.hash);
-      verifyContinuationGrant(this,id,{now,effect:true});
-      event(this,id,publication?'expired-publication-continuation-granted':'expired-prepackage-continuation-granted',{grantSha256:v.hash,originalBudgetExpired:true,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs},now);
+      const correction=proof.kind===correctionGrantKind;
+      const eventKind=correction?'prepackage-dependency-input-corrected':publication?'expired-publication-continuation-granted':'expired-prepackage-continuation-granted';
+      event(this,id,eventKind,{grantSha256:v.hash,originalBudgetExpired:!correction,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs},now);
+      verifyContinuationGrant(this,id,{now,effect:true,assertAbsent});
       return this.deliveryOperatorContinuation(id);
     });
   },

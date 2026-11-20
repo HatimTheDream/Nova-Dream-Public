@@ -26,7 +26,7 @@ export const applicationDependencyDescriptionSchema=z.object({format:z.literal(1
  platform:z.literal('linux'),arch:z.literal('x64'),nodeVersion:z.literal('22.23.2'),nodeAbi:z.literal(127)}).strict();
 export const qualifiedDependenciesSchema=z.object({archive:ref,metadata:ref,execution:ref}).strict();
 export const DEPENDENCY_PACK_PROBE_SHA='b50cac29bf43ae484921a3ae0fe4332fab83a8d4f01457b41527ee9a86e8d8e9';
-const receiptSchema=z.object({format:z.literal(1),kind:z.literal('qualified-application-dependency-pack'),producerSha256:hash,
+export const dependencyPackReceiptSchema=z.object({format:z.literal(1),kind:z.literal('qualified-application-dependency-pack'),producerSha256:hash,
  node:identity.extend({path:z.string().startsWith('/'),sha256:hash}).strict(),
  source:z.object({packageSha256:hash,packageLockSha256:hash,dependencyGraphSha256:hash,inventoryBeforeSha256:hash,inventoryAfterSha256:hash}).strict(),
  archive:z.object({sha256:hash,bytes:z.number().int().positive().max(512*1024**2)}).strict(),metadataSha256:hash,description:applicationDependencyDescriptionSchema,
@@ -37,7 +37,7 @@ export function verifyQualifiedApplicationDependencies(input,binding,{producerSh
  const refs=qualifiedDependenciesSchema.parse(input),raw=frontendRegular(refs.archive.path,512*1024**2);
  need(sha256(raw)===refs.archive.sha256,'qualified-dependency-archive-hash-changed');
  const metadataRaw=readEvidenceFile(refs.metadata,{maximum:65536}),description=applicationDependencyDescriptionSchema.parse(JSON.parse(metadataRaw));
- const receipt=receiptSchema.parse(JSON.parse(readEvidenceFile(refs.execution,{maximum:1024**2})));
+ const receipt=dependencyPackReceiptSchema.parse(JSON.parse(readEvidenceFile(refs.execution,{maximum:1024**2})));
  need(same(binding.applicationDependencies,description)
   &&binding.dependencyGraphSha256===description.dependencyGraphSha256,'qualified-dependencies-startup-binding-changed');
  need(description.archiveSha256===refs.archive.sha256&&description.archiveBytes===raw.length

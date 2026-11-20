@@ -31,6 +31,20 @@ export function verifyBrowserTool(ref,{maximum=128*1024**2}={}) {
     return {path:ref.path,sha256:ref.sha256,bytes:total};
   }finally{closeSync(fd);}
 }
+export function verifyRemoteBrowserMemory(sample, operationId, milestone) {
+  const limit = 2 * 1024 ** 3;
+  if (sample?.operationId !== operationId || sample.milestone !== milestone ||
+      sample.maxBytes !== limit || !Number.isSafeInteger(sample.peakBytes) ||
+      sample.peakBytes <= 0 || sample.peakBytes > Math.floor(limit * 0.8) ||
+      typeof sample.events !== 'string') throw Error('browser-memory-headroom-not-verified');
+  const events = sample.events.trim().split('\n').map(line => line.split(/\s+/));
+  for (const name of ['oom', 'oom_kill', 'oom_group_kill']) {
+    const matching = events.filter(([key]) => key === name);
+    if (name === 'oom_group_kill' && matching.length === 0) continue;
+    if (matching.length !== 1 || matching[0].length !== 2 || matching[0][1] !== '0')
+      throw Error('browser-memory-oom-not-clear');
+  }
+}
 export function writeBrowserOnce(path,value) {
   const bytes=canonicalBrowser(value)+'\n';
   if(existsSync(path)){if(readFileSync(path,'utf8')!==bytes)throw Error('browser-original-file-changed');return;}

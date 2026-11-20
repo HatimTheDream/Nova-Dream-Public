@@ -22,6 +22,7 @@ import {existingAssistantReplySchema,existingReplyOriginal,verifyExistingReplyAc
 import {verifyBrowserAcceptance} from './release-delivery-browser.mjs';
 import { postinstallCoverageSchema, postinstallCoverage, currentPostinstallRecovery, verifyScopedBrowserAcceptance, verifyPostinstallAuthority } from './release-delivery-postinstall-recovery.mjs';
 import {verifyRuntimeQualificationReference} from './release-delivery-runtime-retained.mjs';
+import {acceptedDependencyBasis, correctionForPhase} from './release-delivery-dependency-correction.mjs';
 import {FULL_HELPERS,priorFailedInstallationAuthority} from './release-delivery-full-host.mjs';
 import {pairedFullPublicationReceipt} from './release-delivery-full-publication.mjs';
 import {predecessorRecoverySchema,verifyRecoveryPredecessor} from './release-delivery-capability-disposition.mjs';
@@ -343,6 +344,12 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
    delete target.full.host.priorRestoredFailure;
   }
   if(target.full.dependencyTransport)Object.assign(target.full.dependencyTransport,{selectedPair:pair,selectedInstaller:profile.accepted.result,selectedBundle:profile.accepted.bundle});
+  if(correctionForPhase(journal,id)){
+   const base=actualBases.private,transport=target.full.dependencyTransport;
+   const basis=acceptedDependencyBasis({transport,accepted:profile.accepted,sign,base,
+    packageRef:reference(join(base.directory,'package.json')),lockRef:reference(join(base.directory,'package-lock.json'))});
+   transport.nativeInput=exactFile(join(directory,'accepted-native-dependency-basis.json'),encoded(basis));
+  }
   if(target.frontendHost)target.frontendHost.baseVersion=identity.request.operation.version;
  }else{
   need(route.route==='frontend'&&target.signing&&sign.manifest&&sign.signature,'successor-frontend-evidence-unavailable');

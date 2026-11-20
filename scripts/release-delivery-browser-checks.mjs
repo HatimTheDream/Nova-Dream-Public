@@ -139,18 +139,10 @@ async function currentExistingReply(page,baseUrl,input) {
   const response=await page.request.get(baseUrl+'/api/assistant/state',{headers:{'X-Edition3-Client':'1','X-Edition3-Candidate':input.installed.installedHealth.candidateId}});
   try{need(response.ok(),'browser-existing-reply-state-unavailable');return verifyExistingReplyBrowserState(await response.json(),input.assistant);}finally{await response.dispose();}
 }
-export async function accept(context,oldPage,prepared,request,dir,original) {
-  const input=request.input,options=original.binding.options,checks=[];
-  need(input.operationId===original.binding.operationId&&input.prepared.sha256===sha256(readFileSync(join(dir,'prepared.json')))
-    &&input.original.sha256===sha256(readFileSync(join(dir,'original.json'))),'browser-request-original-changed');
-  const check=name=>checks.push({name,passed:true,atMs:Date.now()});
-  const expected=input.installed.installedHealth,contract={route:input.installed.route,target:input.fullTarget};
-  if(contract.route==='full'){
-    need(hash(input.fullTarget)===hash(original.binding.fullTarget),'browser-full-target-binding-changed');
-    verifyFullBundledIdentity(expected,input.fullTarget);
-  }
+export async function verifyBrowserTransition(context,oldPage,prepared,options,installed,fullTarget,check,milestone=()=>{}) {
+  const expected=installed.installedHealth,contract={route:installed.route,target:fullTarget};
   need(hash(await documentIdentity(oldPage))===hash(prepared.document),'browser-old-document-replaced');check('old-document-retained');
-  if(input.installed.route==='frontend'){
+  if(installed.route==='frontend'){
     await contentSearch(oldPage);
     need(hash(await documentIdentity(oldPage))===hash(prepared.document),'browser-old-document-replaced');check('old-lazy-module');
     await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-original-draft-lost');
@@ -161,12 +153,25 @@ export async function accept(context,oldPage,prepared,request,dir,original) {
     await oldPage.getByRole('button',{name:'Reload app',exact:true}).waitFor({state:'visible',timeout:45000});check('old-client-fence');
   }
   const newPage=await context.newPage();await newPage.goto(options.baseUrl,{waitUntil:'domcontentloaded'});
-  const fresh=await ready(newPage,options.baseUrl);verifyBrowserHealth(fresh.health,expected,fresh.epoch,contract);verifyDocumentIdentity(fresh.identity,fresh.health,contract);check('new-document-identity');
-  await oldPage.getByRole('button',{name:input.installed.route==='frontend'?'Refresh':'Reload app',exact:true}).click();
+  const fresh=await ready(newPage,options.baseUrl);verifyBrowserHealth(fresh.health,expected,fresh.epoch,contract);verifyDocumentIdentity(fresh.identity,fresh.health,contract);check('new-document-identity');milestone('new-page-ready');
+  await oldPage.getByRole('button',{name:installed.route==='frontend'?'Refresh':'Reload app',exact:true}).click();
   await oldPage.waitForLoadState('domcontentloaded');const reloaded=await ready(oldPage,options.baseUrl);
   verifyBrowserHealth(reloaded.health,expected,reloaded.epoch,contract);verifyDocumentIdentity(reloaded.identity,reloaded.health,contract);
-  await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-reloaded-draft-lost');check('retained-draft-after-refresh');
+  await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-reloaded-draft-lost');check('retained-draft-after-refresh');milestone('old-page-reloaded');
   await assertUi(newPage,options.suite);check('ui-behavior');
+  return {newPage,fresh};
+}
+export async function accept(context,oldPage,prepared,request,dir,original,milestone=()=>{}) {
+  const input=request.input,options=original.binding.options,checks=[];
+  need(input.operationId===original.binding.operationId&&input.prepared.sha256===sha256(readFileSync(join(dir,'prepared.json')))
+    &&input.original.sha256===sha256(readFileSync(join(dir,'original.json'))),'browser-request-original-changed');
+  const check=name=>checks.push({name,passed:true,atMs:Date.now()});
+  const expected=input.installed.installedHealth,contract={route:input.installed.route,target:input.fullTarget};
+  if(contract.route==='full'){
+    need(hash(input.fullTarget)===hash(original.binding.fullTarget),'browser-full-target-binding-changed');
+    verifyFullBundledIdentity(expected,input.fullTarget);
+  }
+  const {newPage,fresh}=await verifyBrowserTransition(context,oldPage,prepared,options,input.installed,input.fullTarget,check,milestone);
   const expectedReply=`Nova verification ${input.assistant.key} passed.`;
   need(sha256(expectedReply)===input.assistant.replySha256,'browser-original-reply-hash-changed');
   await nav(newPage,'Assistant');
@@ -178,7 +183,7 @@ export async function accept(context,oldPage,prepared,request,dir,original) {
   need(history.nativeId===input.assistant.nativeId&&history.messages.some(m=>m.id===input.assistant.savedMessageId
     &&m.role==='assistant'&&m.text?.trim()===expectedReply),'browser-original-saved-message-missing');
   const message=newPage.getByRole('article',{name:'assistant message',exact:true}).filter({hasText:expectedReply});
-  await message.waitFor({state:'visible',timeout:30000});need(await message.count()===1,'browser-original-reply-not-unique');check('saved-assistant-reply-visible');
+  await message.waitFor({state:'visible',timeout:30000});need(await message.count()===1,'browser-original-reply-not-unique');check('saved-assistant-reply-visible');milestone('saved-reply-visible');
   const existingReplyBefore=input.assistant.acceptanceMode==='existing-saved-reply-observation'?await currentExistingReply(newPage,options.baseUrl,input):null;
   const screenshotPath=join(dir,'accepted-ui.png');await newPage.screenshot({path:screenshotPath,fullPage:false});
   await ownedDraftCleanup(oldPage,prepared.draft);check('owned-draft-cleaned');

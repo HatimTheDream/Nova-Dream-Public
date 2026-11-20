@@ -6,7 +6,7 @@ The caller creates no account, installs no package and changes no existing ACL.
 import base64, hashlib, json, os, pathlib, re, signal, subprocess, time, uuid, shutil
 
 NAMES = ('release-delivery-browser-primitives.mjs', 'release-delivery-browser-checks.mjs', 'release-delivery-browser-remote-worker.mjs')
-MEMORY_MAX_BYTES = 1073741824
+MEMORY_MAX_BYTES = 2 * 1024**3
 HOST_RESERVE_BYTES = 2147483648
 def need(value, reason):
     if not value: raise RuntimeError(reason)
@@ -153,7 +153,7 @@ def main(data):
         value=screenshot.read_bytes();offset=data['offset'];need(type(offset)==int and 0<=offset<len(value),'browser-remote-screenshot-offset-invalid')
         return {'state':'screenshot','sha256':digest(value),'bytes':len(value),'offset':offset,'base64':base64.b64encode(value[offset:offset+49152]).decode()}
     files={name:json_file(path/(name+'.json')) for name in ('prepared','heartbeat','failed','closed','acceptance','worker-identity','launch-result','memory-admission',
-           'memory-tools-verified','memory-first-page-ready','memory-second-page-opened','memory-second-page-ready','memory-browser-closed')}
+           'memory-tools-verified','memory-first-page-ready','memory-second-page-opened','memory-second-page-ready','memory-new-page-ready','memory-old-page-reloaded','memory-saved-reply-visible','memory-browser-closed')}
     owned=[]
     for proc in pathlib.Path('/proc').iterdir():
         if proc.name.isdigit():
