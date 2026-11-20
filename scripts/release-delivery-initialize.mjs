@@ -384,6 +384,8 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
   await operatorAuthority({journal,operationId:id});
   profile.operatorProvenance=exactFile(join(directory,'accepted-operator-continuation.json'),encoded(operatorGrant));
  }
+ // Qualification describes the accepted pair. Future targets need their own evidence.
+ delete target.browserWindowQualification;
  profile.target=exactFile(join(directory,'successor-target.json'),encoded(deliveryTargetSchema.parse(target)));
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.

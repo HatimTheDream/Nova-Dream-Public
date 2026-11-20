@@ -14,6 +14,7 @@ import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
 import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
 import {verifyRemoteBrowserMemory,verifyRetainedWindowPolicy,verifyRetainedPreparation} from './release-delivery-browser-primitives.mjs';
+import {ordinaryWindowQualification} from './release-delivery-browser-qualification.mjs';
 import {verifyFullBundledIdentity,verifyDocumentIdentity,verifyWindowPairEvidence,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -37,7 +38,7 @@ export function writeBrowserOnce(path,value) {
 }
 export function browserBinding(context,options,transport) {
   const op=context.descriptor.operation;
-  let fullTarget,priorBundledTarget;
+  let fullTarget,priorBundledTarget,ordinaryPolicy;
   if(context.prior.route.route==='full'){
     const candidateId=context.prior.route.targetCandidateId;
     need(context.prior.sign?.candidateId===candidateId&&context.prior.sign.priorCandidateId===op.priorCandidateId
@@ -47,13 +48,17 @@ export function browserBinding(context,options,transport) {
     need(base?.candidateId===op.priorCandidateId,'browser-prior-bundled-binding-changed');
     const manifest=JSON.parse(readEvidenceFile(base.manifest));
     priorBundledTarget={candidateId:base.candidateId,version:manifest.version,buildVersion:manifest.buildVersion};
+    ordinaryPolicy=ordinaryWindowQualification(context.descriptor,target,context.prior.route);
   }
   const binding={format:1,operationId:context.descriptor.operation.id,descriptorSha256:hash(context.descriptor),
     options:browserOptionsSchema.parse(options),transport,route:context.prior.route.route,
     ...(fullTarget?{fullTarget,priorBundledTarget}:{}),
     priorCandidateId:context.descriptor.operation.priorCandidateId,epoch:context.descriptor.operation.workspaceEpoch};
   const grant=context.journal?.deliveryOperatorContinuation?.(op.id)?.proof;
-  if(grant?.kind==='nova-prepackage-dependency-correction'&&verifyRetainedWindowPolicy(grant.browserWindowPolicy,binding))
+  if(ordinaryPolicy){
+    need(!grant?.browserWindowPolicy&&verifyRetainedWindowPolicy(ordinaryPolicy,binding),'browser-qualification-policy-conflict');
+    binding.windowPolicy=ordinaryPolicy;
+  }else if(grant?.kind==='nova-prepackage-dependency-correction'&&verifyRetainedWindowPolicy(grant.browserWindowPolicy,binding))
     binding.windowPolicy=grant.browserWindowPolicy;
   return binding;
 }

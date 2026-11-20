@@ -26,14 +26,23 @@ export const QUALIFIED_STARTUP_SOURCES=Object.freeze({
 export const SAME_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"2b86508e231a282ceab5b36796090b5759d66ff9dc43c47a93dd766e3d926dff","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"d4b8dbb9cf866fa12726cf1360b6704f1d7fdf3697a85b805274844eb050ea61","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
 // Additional exact source family; every actual candidate proof remains mandatory.
 export const RETIRED_RECAPTURE_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"12d59c2b45e9a6791cba66cec1d9cf0c077ebce3e6cc12392b6090a3e6a0c580","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
-const sameSchemaSources=sources=>[SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES].some(v=>v!==null&&same(sources,v));
-export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef","recovery.py":"113f2c937e40eac597ec056fcc8042e69392505fa5f5f96dd44a1ea9441e3b11","operator_rehearsal.py":"8fe10fd13b924b78e8eccbe01334ce627e09c46961e5750062c57dcfe957a8d2","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export const REHEARSAL_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"12d59c2b45e9a6791cba66cec1d9cf0c077ebce3e6cc12392b6090a3e6a0c580","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
+const sameSchemaSources=sources=>[SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].some(v=>v!==null&&same(sources,v));
+export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"b4cf0ee98ebb80723dba69425f55409adecf7f3d7427d42b53c037251f4b6200","recovery.py":"b4c59da8ee92a1ddf2bbaef4139635494123eab2b299e7e6ea5e627629652ee4","operator_rehearsal.py":"081d4f928b6800ff05dd5a0dbfc3416031425a0c892c5186d994533ca42b1b21","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
+export const HISTORICAL_SCHEMA60_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
+  'install.py':'54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef',
+  'recovery.py':'113f2c937e40eac597ec056fcc8042e69392505fa5f5f96dd44a1ea9441e3b11',
+  'operator_rehearsal.py':'8fe10fd13b924b78e8eccbe01334ce627e09c46961e5750062c57dcfe957a8d2',
+});
+function helpersForStartupSources(sources){
+  return same(sources,REHEARSAL_SCHEMA60_STARTUP_SOURCES) ? SAME_SCHEMA60_STARTUP_HELPERS : HISTORICAL_SCHEMA60_HELPERS;
+}
 export function reviewedStartupSources(producer){
- const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
+ const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
  need(sources,'reviewed-startup-producer-required');return sources;
 }
 // Exact source capability only; it grants no candidate or runtime acceptance.
-const RETIRED_RECAPTURE_PRODUCER=RETIRED_RECAPTURE_STARTUP_SOURCES['qualified-startup.py'];
+const retiredRecaptureProducers=new Set([RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].map(family=>family['qualified-startup.py']));
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
 const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
@@ -86,7 +95,7 @@ export function buildStartupRetainedProgram(request){
   startupRetainedRequest({format:1,parent:request.parent,producer:request.producer});
   const sources=reviewedStartupSources(request.producer);
   const source=readFileSync(new URL('./release-startup-retained-proof.py',import.meta.url));
-  const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources,...(sameSchemaSources(sources)?{sameSchemaHelpers:SAME_SCHEMA60_STARTUP_HELPERS}:{})}).toString('base64');
+  const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources,...(sameSchemaSources(sources)?{sameSchemaHelpers:helpersForStartupSources(sources)}:{})}).toString('base64');
   return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'))},separators=(',',':')))\n`;
 }
 
@@ -292,15 +301,15 @@ export function verifyStartupRetainedProjection(v,request,sources=undefined){
   const continuity=binding.sameSchemaQualification&&captureOnly('captureContinuity');
   const transition=binding.sameSchemaQualification&&captureOnly('captureTransition');
   if(binding.sameSchemaQualification){
-    need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,SAME_SCHEMA60_STARTUP_HELPERS),'same-schema-capture-source-required');
+    need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,helpersForStartupSources(sources)),'same-schema-capture-source-required');
     need(noStaging||continuity||transition||captureOnly('captureRetirement'),'same-schema-capture-branch-changed');
     if(noStaging)verifyNoStagingCaptures(v,binding);
     if(transition){
-      need(RETIRED_RECAPTURE_PRODUCER!==null&&sources['qualified-startup.py']===RETIRED_RECAPTURE_PRODUCER,'startup-retired-recapture-source-not-qualified');
+      need(retiredRecaptureProducers.has(sources['qualified-startup.py']),'startup-retired-recapture-source-not-qualified');
       verifyCaptureTransition(v,binding);
     }
     if(continuity){
-      need(RETIRED_RECAPTURE_PRODUCER!==null&&sources['qualified-startup.py']===RETIRED_RECAPTURE_PRODUCER,'startup-retired-recapture-source-not-qualified');
+      need(retiredRecaptureProducers.has(sources['qualified-startup.py']),'startup-retired-recapture-source-not-qualified');
       verifyCaptureContinuity(v,binding);
     }
   }

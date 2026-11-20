@@ -22,7 +22,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 import app_dependencies
-from install import Driver, NoRedirect, STARTUP_FILES, candidate, protected, protected_configuration_files, protected_selector, read_json
+from install import Driver, NoRedirect, STARTUP_FILES, protected, protected_configuration_files, protected_selector, read_json
 from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
@@ -310,7 +310,7 @@ class Rehearsal(Driver):
         require(self.current.is_symlink() and self.current.lstat().st_uid == 0, 'The app selector is not root-owned.')
         self.prior = self.target = self.current.resolve(strict=True)
         require(self.prior.parent == self.releases, 'The unchanged prior release left its protected root.')
-        self.prior_manifest = candidate(self.prior, self.prior_id, review['novaVersion'])
+        self.prior_manifest = self.candidate(self.prior, self.prior_id, review['novaVersion'])
         require(set(review['sourceHostHashes']) == {'scripts/host.mjs', 'scripts/candidate.mjs'}, 'Pin both prior startup scripts.')
         for name, expected in review['sourceHostHashes'].items():
             protected(self.prior / name)
@@ -358,7 +358,8 @@ class Rehearsal(Driver):
         context, health = self.api('access/context'), self.api('health')
         require(context.get('workspaceEpoch') == self.expected_prior['workspaceEpoch'] and health.get('candidateId') == self.prior_id
                 and health.get('status') == 'ready' and health.get('version') == review['novaVersion'], 'The read-only prior identity changed.')
-        native_preflight(self.data, self.expected_prior['workspaceEpoch'], self.active_engine)
+        native_preflight(self.data, self.expected_prior['workspaceEpoch'], self.active_engine,
+                         same_schema_qualification=self.same_schema_qualification)
         self.verify_configuration()
         self.source_process = self.process_identity()
         return {'format': 1, 'kind': 'operator-rehearsal-plan', 'candidateId': self.prior_id,
@@ -386,7 +387,7 @@ class Rehearsal(Driver):
 
     def verify_configuration(self):
         require(self.current.resolve(strict=True) == self.prior, 'Operator rehearsal cannot change the selected application.')
-        candidate(self.prior, self.prior_id, self.review['novaVersion'])
+        self.candidate(self.prior, self.prior_id, self.review['novaVersion'])
         for name, expected in self.review['sourceHostHashes'].items():
             require(digest(self.prior/name) == expected, 'Reviewed prior startup bytes changed.')
         return super().verify_configuration()
@@ -612,8 +613,8 @@ class Rehearsal(Driver):
                     saved_state(self.recovery / 'workspace', self.data, restored=True)
                     native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.active_engine, self.active_engine,
                                        catalog_runtime_root=self.prior_agent)
+                    self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
                 self.bind_same_schema_source(self.require_stopped)
-                self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
                 for index, path in enumerate(self.config_files):
                     target = self.recovery / ('protected-' + str(index))
                     shutil.copy2(path, target)
@@ -624,6 +625,7 @@ class Rehearsal(Driver):
                 self.verify_configuration(); self.record('snapshot-verified')
                 self.mark('restore')
                 prepare_independent(self.recovery / 'workspace', self.restore, self.data, self.require_stopped)
+                require(root_identity(self.data) == self.source_root, 'The original workspace changed before independent restore verification.')
                 with self.application_comparison(self.recovery / 'workspace', self.restore, restored=True):
                     saved_state(self.recovery / 'workspace', self.restore, restored=True)
                     native_saved_state(self.recovery / 'workspace', self.restore, self.before['epoch'], self.active_engine, self.active_engine,

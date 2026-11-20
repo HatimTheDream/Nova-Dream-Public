@@ -30,6 +30,90 @@ class SameSchemaTests(legacy.SchemaTransitionTests):
             r.saved_state(self.before, self.after)
         self.assertEqual(r.application_schema(self.before), 55)
 
+    def add_native_root(self, root):
+        native = root / 'openclaw-runtime'
+        native.mkdir()
+        (native / 'edition3-runtime.identity').write_bytes(b'edition3-owned-gateway\n')
+
+    def test_single_root_preflight_uses_only_the_reviewed_prior_contract(self):
+        self.prepare(60, 55)
+        self.add_native_root(self.before)
+        self.add_native_root(self.after)
+        options = dict(same_schema_qualification=SPEC, closed=True)
+        self.assertEqual(r.native_preflight(self.before, legacy.EPOCH, '2026.9.8', **options),
+                         (Path('.'), legacy.EPOCH, set()))
+        self.assertEqual(r.native_preflight(self.after, legacy.EPOCH, '2026.9.8', closed=True),
+                         (Path('.'), legacy.EPOCH, set()))
+        for root, engine, target, marker, reason in (
+                (self.before, '2026.9.8', None, None, 'schema changed'),
+                (self.after, '2026.9.8', None, SPEC, 'schema changed'),
+                (self.before, '2026.9.6', None, SPEC, 'unchanged runtime'),
+                (self.before, '2026.9.8', '2026.9.9', SPEC, 'unchanged runtime'),
+                (self.before, '2026.9.8', None, {**SPEC, 'schemaVersion': 55}, 'exact contract')):
+            with self.subTest(root=root, engine=engine, target=target, marker=marker):
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    r.native_preflight(root, legacy.EPOCH, engine, target, closed=True, same_schema_qualification=marker)
+        with self.assertRaisesRegex(RuntimeError, 'authenticated acceptance'):
+            r.native_preflight(self.before, 'b'*36, '2026.9.8', **options)
+        with r.hosted_same_schema_qualification(SPEC, self.before, self.after):
+            with self.assertRaisesRegex(RuntimeError, 'single-root'):
+                r.native_preflight(self.before, legacy.EPOCH, '2026.9.8', **options)
+
+    def test_prestart_logical_original_has_exact_schema_epoch_and_database_set(self):
+        self.prepare(60, 60)
+        original = self.root / 'original'
+        original.mkdir()
+        self.database(original, 60)
+        for root in (self.before, self.after, original):
+            self.add_native_root(root)
+        class SelectionVerified(Exception):
+            pass
+        def compare():
+            r.native_saved_state(self.before, self.after, legacy.EPOCH, '2026.9.8', logical_workspace_root=original)
+        with r.hosted_same_schema_qualification(SPEC, self.before, self.after, restored=True), \
+             legacy.patch.object(r, 'native_runtime_configuration', side_effect=SelectionVerified):
+            with self.assertRaises(SelectionVerified):
+                compare()
+            with self.assertRaisesRegex(RuntimeError, 'escaped its bound roots'):
+                r.selected_workspace(original, closed=True)
+            with legacy.connection(original / 'workspace.sqlite') as db:
+                db.execute('PRAGMA user_version=55')
+            with self.assertRaisesRegex(RuntimeError, 'schema changed'):
+                compare()
+            with legacy.connection(original / 'workspace.sqlite') as db:
+                db.execute('PRAGMA user_version=60')
+                db.execute("UPDATE meta SET value=? WHERE key='epoch'", ('11111111-1111-4111-8111-111111111111',))
+            with self.assertRaisesRegex(RuntimeError, 'authenticated acceptance'):
+                compare()
+            with legacy.connection(original / 'workspace.sqlite') as db:
+                db.execute("UPDATE meta SET value=? WHERE key='epoch'", (legacy.EPOCH,))
+            extra = original / 'openclaw-runtime/state/state/openclaw.sqlite'
+            extra.parent.mkdir(parents=True)
+            extra.touch()
+            with self.assertRaisesRegex(RuntimeError, 'authoritative selected workspace'):
+                compare()
+        with r.hosted_same_schema_qualification(SPEC, self.before, self.after):
+            with self.assertRaisesRegex(RuntimeError, 'exact independent same-schema restore'):
+                compare()
+
+    def test_installer_stage_preflights_the_live_prior_before_opening_the_archive(self):
+        self.prepare(60, 60)
+        self.add_native_root(self.before)
+        driver = legacy.install.Driver(self.root / 'request.json')
+        driver.data = self.before
+        driver.before = {'epoch': legacy.EPOCH}
+        driver.from_engine = driver.to_engine = '2026.9.8'
+        class PriorVerified(Exception):
+            pass
+        with legacy.patch.object(driver, 'archive_members', side_effect=PriorVerified) as archive:
+            with self.assertRaisesRegex(RuntimeError, 'schema changed'):
+                driver.stage_app()
+            archive.assert_not_called()
+            driver.same_schema_qualification = dict(SPEC)
+            with self.assertRaises(PriorVerified):
+                driver.stage_app()
+            archive.assert_called_once()
+
     def test_scope_is_detached_exact_and_resets_on_exception(self):
         self.prepare(60, 60)
         with self.assertRaisesRegex(ValueError, 'owned-test-error'):
@@ -90,6 +174,9 @@ class SameSchemaTests(legacy.SchemaTransitionTests):
 
 # Explicit suite avoids inheriting/rerunning the unchanged legacy migration tests.
 SAME_CASES = ('test_schema60_selected_saved_state_and_pristine_restoration',
+              'test_single_root_preflight_uses_only_the_reviewed_prior_contract',
+              'test_prestart_logical_original_has_exact_schema_epoch_and_database_set',
+              'test_installer_stage_preflights_the_live_prior_before_opening_the_archive',
               'test_scope_is_detached_exact_and_resets_on_exception',
               'test_saved_accounts_history_and_unselected_databases_remain_exact',
               'test_marker_is_exact_nonmigration_and_local_scope_cannot_mix')

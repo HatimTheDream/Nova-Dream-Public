@@ -1047,6 +1047,10 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     """Follow the reviewed workspace-host selection contract, then bind its epoch
     to the authenticated live acceptance. Never guess the active runtime by name.
     """
+    return _selected_workspace(root, expected_epoch, closed, application_schema(root))
+
+
+def _selected_workspace(root, expected_epoch, closed, schema_version):
     original_root = root
     root = retained_image_path(root)
     require(root.resolve(strict=True) == root and root.is_dir(), 'The durable workspace root changed.')
@@ -1063,7 +1067,7 @@ def selected_workspace(root, expected_epoch=None, closed=False):
     marker = selected / 'edition3.identity'
     require(marker.is_file() and not marker.is_symlink() and marker.read_bytes() == b'private.novadream.edition3.preview\n', 'Selected workspace identity changed.')
     with contextlib.closing(database(selected / 'workspace.sqlite', closed)) as connection:
-        require(connection.execute('pragma user_version').fetchone()[0] == application_schema(original_root), 'The selected workspace schema changed.')
+        require(connection.execute('pragma user_version').fetchone()[0] == schema_version, 'The selected workspace schema changed.')
         row = connection.execute("select value from meta where key='epoch'").fetchone()
         require(row is not None and isinstance(row[0], str) and str(uuid.UUID(row[0])) == row[0]
                 and (expected_epoch is None or row[0] == expected_epoch), 'The selected workspace does not match authenticated acceptance.')
@@ -1071,7 +1075,11 @@ def selected_workspace(root, expected_epoch=None, closed=False):
 
 
 def native_scope(root, expected_epoch=None, closed=False):
-    selected, epoch = selected_workspace(root, expected_epoch, closed)
+    return _native_scope(root, expected_epoch, closed, application_schema(root))
+
+
+def _native_scope(root, expected_epoch, closed, schema_version):
+    selected, epoch = _selected_workspace(root, expected_epoch, closed, schema_version)
     original_selected = selected
     selected = retained_image_path(selected)
     native = selected / 'openclaw-runtime'
@@ -1884,8 +1892,16 @@ def native_schema(connection, relative, version='2026.9.2', prior_tables=None):
     return tables
 
 
-def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None, *, closed=False):
-    selected, epoch, paths = native_scope(root, expected_epoch, closed=closed)
+def native_preflight(root, expected_epoch=None, version='2026.9.2', target_version=None, *, closed=False,
+                     same_schema_qualification=None):
+    if same_schema_qualification is None:
+        selected, epoch, paths = native_scope(root, expected_epoch, closed=closed)
+    else:
+        qualified = validate_same_schema_qualification(same_schema_qualification)
+        require(current_hosted_application_comparison() is None and _LOCAL_WINDOWS.get() is None
+                and version == qualified['agentVersion'] and target_version in (None, version),
+                'A single-root same-schema preflight requires its reviewed unchanged runtime.')
+        selected, epoch, paths = _native_scope(root, expected_epoch, closed, qualified['schemaVersion'])
     for relative in sorted(embedded_database_paths(root, selected, paths, version)):
         with contextlib.closing(database(root / relative, closed)) as connection:
             embedded_schema(connection, relative.name, version)
@@ -3890,7 +3906,15 @@ def native_saved_state(snapshot, live, expected_epoch=None, from_version='2026.9
         require(logical_workspace_root.is_absolute() and logical_workspace_root.resolve(strict=True) == logical_workspace_root
                 and logical_workspace_root != live and not logical_workspace_root.is_relative_to(live)
                 and not live.is_relative_to(logical_workspace_root), 'The logical workspace authority must be the separate canonical original.')
-        logical_selected, logical_epoch, logical_paths = native_scope(logical_workspace_root, before_epoch, closed=True)
+        same = current_same_schema_qualification()
+        if same is None:
+            logical_selected, logical_epoch, logical_paths = native_scope(logical_workspace_root, before_epoch, closed=True)
+        else:
+            require(same['restored'] and (same['beforeRoot'], same['afterRoot']) == (snapshot, live)
+                    and from_version == same['sameSchemaQualification']['agentVersion']
+                    and not logical_workspace_root.is_relative_to(snapshot) and not snapshot.is_relative_to(logical_workspace_root),
+                    'Logical prior selection requires the exact independent same-schema restore.')
+            logical_selected, logical_epoch, logical_paths = _native_scope(logical_workspace_root, before_epoch, True, same['fromSchemaVersion'])
         require((logical_selected, logical_epoch, logical_paths) == (selected, epoch, paths),
                 'The pre-start copy differs from the authoritative selected workspace.')
     configuration = native_runtime_configuration(snapshot, live, selected, from_version, to_version, app_releases,

@@ -45,6 +45,83 @@ def exclusive_json(path, value):
 
 
 class RehearsalTests(unittest.TestCase):
+    def test_read_only_plan_and_recheck_validate_the_reviewed_prior_schema(self):
+        # Use real package, manifest and artifact checks. Only Linux ownership
+        # and the root-owned selection link are simulated for this portable test.
+        from install import Driver
+        same = {'format': 1, 'kind': 'schema-60-same-runtime', 'schemaVersion': 60,
+                'apiVersion': 1, 'agentVersion': '2026.9.8'}
+        migration = {'format': 1, 'kind': 'schema-55-to-60-same-runtime', 'fromSchemaVersion': 55,
+                     'toSchemaVersion': 60, 'apiVersion': 1, 'fromAgentVersion': '2026.9.8', 'toAgentVersion': '2026.9.8'}
+        paths = {name: self.root / name for name in ('data', 'releases', 'current', 'runtime', 'recovery', 'lab', 'config')}
+        for path in paths.values():
+            path.mkdir()
+        prior = paths['releases'] / 'prior'
+        files = ('dist/client/index.html', 'dist/service/apps/service/main.js')
+        for name in files:
+            path = prior / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode())
+        host = dict(zip(('workspaceDirectory', 'releaseDirectory', 'appCurrent', 'runtimeDirectory'),
+                        (str(paths[k]) for k in ('data', 'releases', 'current', 'runtime'))))
+        host.update(stateDirectory=str(self.root / 'state'), agentDirectory=str(self.root / 'agent'), agentNodePath=str(self.root / 'agent-node'))
+        configuration = paths['config'] / 'host.json'
+        configuration.write_text(json.dumps(host))
+        settings = dict(format=1, serviceName='fixture.service', serviceUser='fixture', nodePath=str(self.root / 'node'),
+                        healthPort=4383, dependencyDirectory='', recoveryDirectory=str(paths['recovery']),
+                        baselineDirectory='', protectedFiles=[], workspaceKeyCredential='')
+        configuration.with_name('runner.json').write_text(json.dumps(settings))
+        instance = operator.Rehearsal(self.root / 'review.json')
+        review = dict(format=1, kind='operator-rehearsal-review', leaseId='11111111-1111-4111-8111-111111111111',
+                      workspaceEpoch='22222222-2222-4222-8222-222222222222', novaVersion='2.28.39', agentVersion='2026.9.8',
+                      hostConfiguration=str(configuration), baselineDirectory='', baselineManifestSha256='', labParent=str(paths['lab']),
+                      startupGuardFile='', startupGuardSha256='', startupBarrier={}, nodeSha256='', sourceDependencies={}, sourceHostHashes={})
+        actual_stat, actual_resolve = pathlib.Path.stat, pathlib.Path.resolve
+        actual_lstat, actual_link = pathlib.Path.lstat, pathlib.Path.is_symlink
+        self.stack.enter_context(patch.object(pathlib.Path, 'stat', lambda p, *a, **k:
+            types.SimpleNamespace(st_mode=0o40700, st_dev=actual_stat(p).st_dev) if p == paths['lab'] else actual_stat(p, *a, **k)))
+        self.stack.enter_context(patch.object(pathlib.Path, 'lstat', lambda p:
+            types.SimpleNamespace(st_uid=0) if p == paths['current'] else actual_lstat(p)))
+        self.stack.enter_context(patch.object(pathlib.Path, 'is_symlink', lambda p: p == paths['current'] or actual_link(p)))
+        self.stack.enter_context(patch.object(pathlib.Path, 'resolve', lambda p, strict=False:
+            prior if p == paths['current'] else actual_resolve(p, strict=strict)))
+        self.stack.enter_context(patch.object(operator.sys, 'platform', 'linux'))
+        self.stack.enter_context(patch.object(operator.os, 'geteuid', return_value=0, create=True))
+        self.stack.enter_context(patch('install.protected'))
+        self.fake('protected', lambda *args, **kwargs: None)
+        for marker, schema, admitted in (({}, 55, True), ({'applicationTransition': migration}, 55, True),
+                                         ({'sameSchemaQualification': same}, 60, True), ({}, 60, False),
+                                         ({'applicationTransition': migration}, 60, False), ({'sameSchemaQualification': same}, 55, False)):
+            with self.subTest(marker=marker, schema=schema):
+                edition = dict(apiVersion=1, schemaVersion=schema, appId='fixture', buildVersion='1.0.1')
+                package = prior / 'package.json'
+                package.write_text(json.dumps(dict(name='nova-dream-edition-3', version=review['novaVersion'], edition3=edition)))
+                manifest = dict(version=review['novaVersion'], **edition, artifacts=[{'path': n, 'sha256': operator.digest(prior/n)} for n in files])
+                info = prior / 'dist/candidate.json'
+                info.write_text(json.dumps(manifest))
+                review['candidateId'] = hashlib.sha256(package.read_bytes() + info.read_bytes()).hexdigest()
+                review['helperHashes'] = {n: operator.digest(instance.bundle/n) for n in operator.helper_names(marker)}
+                instance.review_path.write_text(json.dumps({**review, **marker}))
+                # Stop at the next independent gate. No host service is needed.
+                reason = 'Pin both prior startup scripts' if admitted else 'outside this reviewed app-only compatibility route'
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    instance.validate_operator()
+                with patch.object(Driver, 'verify_configuration') as next_check:
+                    if not admitted:
+                        with self.assertRaisesRegex(RuntimeError, reason):
+                            instance.verify_configuration()
+                        next_check.assert_not_called()
+                        continue
+                    self.assertEqual(instance.prior_manifest, manifest)
+                    instance.verify_configuration()
+                    next_check.assert_called_once()
+                    artifact = prior / files[0]
+                    saved = artifact.read_bytes()
+                    artifact.write_bytes(b'changed after admission')
+                    with self.assertRaisesRegex(RuntimeError, 'Candidate artifact bytes changed'):
+                        instance.verify_configuration()
+                    artifact.write_bytes(saved)
+
     def test_review_admits_only_exact_qualified_unchanged_engines(self):
         fields = {'format', 'kind', 'leaseId', 'candidateId', 'workspaceEpoch', 'novaVersion', 'agentVersion',
                   'hostConfiguration', 'baselineDirectory', 'baselineManifestSha256', 'labParent',
@@ -193,6 +270,25 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(self.key, bytearray(32))
         phases = [json.loads(p.read_text())['phase'] for p in sorted(instance.output.glob('phase-*.json'))]
         self.assertEqual(phases[-2:], ['trial-cleanup-intent','complete'])
+
+    def test_qualified_rehearsal_reads_the_key_only_inside_its_closed_prior_scope(self):
+        import recovery
+        instance = self.fixture()
+        instance.same_schema_qualification = {'format': 1, 'kind': 'schema-60-same-runtime',
+            'schemaVersion': 60, 'apiVersion': 1, 'agentVersion': '2026.9.8'}
+        instance.from_engine = instance.active_engine = '2026.9.8'
+        instance.bind_same_schema_source = lambda stopped: stopped()
+        def read_key(workspace, credential, node, prior):
+            scope = recovery.current_same_schema_qualification()
+            self.assertEqual((scope['beforeRoot'], scope['afterRoot'], scope['restored']),
+                             (workspace, instance.data, True))
+            self.assertEqual(recovery.application_schema(workspace), 60)
+            self.assertEqual((credential, node, prior), (instance.workspace_key_credential, instance.node, instance.prior))
+            return self.key
+        self.fake('read_workspace_key', read_key)
+        instance.run_rehearsal()
+        self.assertIsNone(recovery.current_same_schema_qualification())
+        self.assertEqual(operator.root_identity(instance.data), instance.source_root)
 
     def test_prior_acceptance_is_saved_before_service_stop_and_retained_on_failure(self):
         instance = self.fixture()

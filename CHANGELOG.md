@@ -1,3 +1,8 @@
+## [2.28.46] - 2026-11-20
+
+- Hosted update rehearsal checks the installed app and saved work using their verified database version, including when restoring a copy.
+- The release controller can use a verified browser check that keeps a Tasks draft open through the upgrade and checks it after reload.
+
 ## [2.28.45] - 2026-11-19
 
 - Preserve file access times while checking that saved work survives a hosted update and rollback.

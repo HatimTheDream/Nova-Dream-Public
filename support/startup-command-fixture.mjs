@@ -5,7 +5,7 @@ import {inflateSync} from 'node:zlib';
 import {sha256} from '../scripts/release-plan.mjs';
 import {verifyCandidate} from '../scripts/candidate.mjs';
 import {dependencyFixture} from './dependency-transport-fixture.mjs';
-import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,startupHelperNames} from '../scripts/release-delivery-startup-retained.mjs';
+import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,startupHelperNames} from '../scripts/release-delivery-startup-retained.mjs';
 export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'plan', 'intent', 'sourceCapture', 'sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceMetadata', 'seedInventory', 'seedPhysical', 'seedMetadata', 'liveContext', 'effectiveUnit']);
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
@@ -17,7 +17,7 @@ function historicalHelper(name){
 export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchema60=false,newDependencyGraph=false}={}){
   sources??=Object.fromEntries(['qualified-startup.py','qualified-parent.py','produce-startup-inputs.py','contracts.py'].map(n=>[n,sha256(n)]));
   const sameSchemaMarker={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
-  const currentFamily=SAME_SCHEMA60_STARTUP_SOURCES!==null&&sources['qualified-startup.py']===SAME_SCHEMA60_STARTUP_SOURCES['qualified-startup.py'];
+  const currentFamily=REHEARSAL_SCHEMA60_STARTUP_SOURCES!==null&&sources['qualified-startup.py']===REHEARSAL_SCHEMA60_STARTUP_SOURCES['qualified-startup.py'];
   const targetHelpers=currentFamily?Object.fromEntries(startupHelperNames(sameSchemaMarker).map(name=>[name,readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))]))
     :sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']
     ?Object.fromEntries(['recovery.py','install.py'].map(name=>[name,historicalHelper(name)])):{};

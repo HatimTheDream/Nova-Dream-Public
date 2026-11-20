@@ -6,7 +6,7 @@ import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-p
 import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
 import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
-import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS,RETIRED_RECAPTURE_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
+import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS,HISTORICAL_SCHEMA60_HELPERS,RETIRED_RECAPTURE_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
 import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
@@ -143,7 +143,7 @@ test('fixed collector source is part of the adapter graph and does not launch a 
 });
 
 async function pairLifecycle(t,schemaMigration=false,qualifiedDependencies=false,sameSchema60=false){
-  const f=startupCommandFixture(t,{schemaMigration,sameSchema60,newDependencyGraph:qualifiedDependencies,...(sameSchema60?{sources:SAME_SCHEMA60_STARTUP_SOURCES}:schemaMigration?{sources:QUALIFIED_STARTUP_SOURCES}:{})}),commands=[];
+  const f=startupCommandFixture(t,{schemaMigration,sameSchema60,newDependencyGraph:qualifiedDependencies,...(sameSchema60?{sources:REHEARSAL_SCHEMA60_STARTUP_SOURCES}:schemaMigration?{sources:QUALIFIED_STARTUP_SOURCES}:{})}),commands=[];
   if(qualifiedDependencies){
     const binding=f.proof.qualificationBinding,archive=f.put(join(f.root,'qualified-dependencies.tgz'),Buffer.from('synthetic freshly qualified different Linux graph'));
     const description={format:1,archiveBytes:readFileSync(archive.path).length,archiveSha256:archive.sha256,expandedBytes:100,fileCount:3,packageLockSha256:binding.targets.private.packageLockSha256,dependencyGraphSha256:sha256('different installed fixture2 graph'),platform:'linux',arch:'x64',nodeVersion:'22.23.2',nodeAbi:127};
@@ -279,7 +279,7 @@ test('only the explicit schema55-to60 actual startup proof admits migration; unq
   const transport=createMaintainedDependencyTransport({options:f.transportOptions,base:f.base,run:async()=>{throw Error('No command allowed');},startupCollector:async()=>f.proof,startupSources:f.sources});
   await transport.validate({descriptor:f.descriptor,input:f.intent.input});
   assert.equal(f.calls.length,0);
-  const same=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+  const same=startupCommandFixture(t,{sameSchema60:true,sources:REHEARSAL_SCHEMA60_STARTUP_SOURCES});
   const absent=structuredClone(same.proof);delete absent.qualificationBinding.sameSchemaQualification;
   assert.throws(()=>assertStartupQualifiedCandidate(absent,same.assertion,same.sources),/same-schema|artifact-closure/);
   const stale=structuredClone(same.proof);stale.qualificationBinding.applicationTransition=f.proof.qualificationBinding.applicationTransition;
@@ -387,7 +387,7 @@ test('new lifecycle profile accepts only bound role reaping and preserves old re
 
 
 test('same schema60 candidate retains complete startup, prior, source and native proof requirements',async t=>{
- const f=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ const f=startupCommandFixture(t,{sameSchema60:true,sources:REHEARSAL_SCHEMA60_STARTUP_SOURCES});
  assert.doesNotThrow(()=>assertStartupQualifiedCandidate(f.proof,f.assertion,f.sources));
  for(const change of [p=>delete p.qualificationBinding.sameSchemaQualification,p=>p.qualificationBinding.sameSchemaQualification.schemaVersion=55,
   p=>p.qualificationBinding.sameSchemaQualification.apiVersion=2,p=>p.qualificationBinding.sameSchemaQualification.agentVersion='2026.9.9',
@@ -406,7 +406,7 @@ test('same schema60 candidate retains complete startup, prior, source and native
 test('same schema60 qualified pair reaches the native installer descriptor and reconnects without replay',t=>pairLifecycle(t,false,true,true));
 
 test('closed39 capture evidence is explicit, complete and cannot mix staging and no-staging branches',t=>{
- const f=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ const f=startupCommandFixture(t,{sameSchema60:true,sources:REHEARSAL_SCHEMA60_STARTUP_SOURCES});
  assert.doesNotThrow(()=>verifyStartupRetainedProjection(f.proof,f.proof.request));
  for(const change of [p=>delete p.scenarios[0].captureObservation,p=>p.scenarios[0].captureRetirement={},
   p=>p.scenarios[0].captureObservation.stagingCount=1,p=>p.scenarios[1].captureObservation.classificationSha256=sha256('changed'),
@@ -435,11 +435,11 @@ test('closed39 capture evidence is explicit, complete and cannot mix staging and
 });
 
 test('compiled same-schema collector helper authority comes only from the registered source family',t=>{
- const current=startupCommandFixture(t,{sameSchema60:true,sources:SAME_SCHEMA60_STARTUP_SOURCES});
+ const current=startupCommandFixture(t,{sameSchema60:true,sources:REHEARSAL_SCHEMA60_STARTUP_SOURCES});
  const historical=startupCommandFixture(t,{schemaMigration:true,sources:QUALIFIED_STARTUP_SOURCES});
  const payload=request=>JSON.parse(Buffer.from(buildStartupRetainedProgram(request).match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1],'base64'));
  const observed=payload(current.proof.request);
- assert.deepEqual(observed.sources,SAME_SCHEMA60_STARTUP_SOURCES);
+ assert.deepEqual(observed.sources,REHEARSAL_SCHEMA60_STARTUP_SOURCES);
  assert.deepEqual(observed.sameSchemaHelpers,SAME_SCHEMA60_STARTUP_HELPERS);
  assert.equal(observed.sha256,sha256(readFileSync(new URL('../scripts/release-startup-retained-proof.py',import.meta.url))));
  assert.equal(Object.hasOwn(payload(historical.proof.request),'sameSchemaHelpers'),false);
@@ -454,12 +454,13 @@ test('fresh capture qualification selects one normal generation and binds its co
   };
   const request = startupRetainedRequest(options);
   assert.equal(request.format, 1);
-  assert.notDeepEqual(RETIRED_RECAPTURE_STARTUP_SOURCES, SAME_SCHEMA60_STARTUP_SOURCES);
+  assert.notDeepEqual(RETIRED_RECAPTURE_STARTUP_SOURCES, REHEARSAL_SCHEMA60_STARTUP_SOURCES);
   const program = buildStartupRetainedProgram(request);
   const encodedPayload = program.match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1];
   const payload = JSON.parse(Buffer.from(encodedPayload, 'base64'));
   assert.deepEqual(payload.sources, RETIRED_RECAPTURE_STARTUP_SOURCES);
-  assert.deepEqual(payload.sameSchemaHelpers, SAME_SCHEMA60_STARTUP_HELPERS);
+  assert.deepEqual(payload.sameSchemaHelpers, HISTORICAL_SCHEMA60_HELPERS);
+  assert.notEqual(payload.sameSchemaHelpers['operator_rehearsal.py'], SAME_SCHEMA60_STARTUP_HELPERS['operator_rehearsal.py']);
   const collector = readFileSync(new URL('../scripts/release-startup-retained-proof.py', import.meta.url));
   assert.equal(payload.sha256, sha256(collector));
   const pinnedProducer = collector.toString().match(/^RETIRED_RECAPTURE_PRODUCER = '([a-f0-9]{64})'$/m)[1];

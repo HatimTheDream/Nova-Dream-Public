@@ -1372,7 +1372,9 @@ class Driver:
         return members
 
     def stage_app(self):
-        selected, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine)
+        same = getattr(self, 'same_schema_qualification', None)
+        selected, _, native_paths = native_preflight(self.data, self.before['epoch'], self.from_engine, self.to_engine,
+                                                     **({'same_schema_qualification': same} if same is not None else {}))
         members = self.archive_members()
         required = sum(member.size for member in members) + len(members) * 4096
         required += self.application_dependency_storage_required()
@@ -1791,8 +1793,8 @@ class Driver:
                 raise
             with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
                 saved_state(self.recovery / 'workspace', self.data, restored=True)
-            if getattr(self, 'workspace_key_credential', None) is not None:
-                self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
+                if getattr(self, 'workspace_key_credential', None) is not None:
+                    self.session_binding_key = read_workspace_key(self.recovery / 'workspace', self.workspace_key_credential, self.node, self.prior)
             for number, path in enumerate(self.config_files):
                 shutil.copy2(path, self.recovery / ('protected-' + str(number)))
                 require(digest(path) == digest(self.recovery / ('protected-' + str(number))), 'Protected configuration copy did not verify.')
@@ -1804,8 +1806,9 @@ class Driver:
             if getattr(self, 'adopting_prior', False):
                 # Adoption earns its rollback proof from this stopped selected
                 # tree. Never publish the older generation as current recovery.
-                native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine, self.from_engine,
-                                   catalog_runtime_root=self.prior_agent)
+                with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
+                    native_saved_state(self.recovery / 'workspace', self.data, self.before['epoch'], self.from_engine, self.from_engine,
+                                       catalog_runtime_root=self.prior_agent)
                 write_json(self.recovery / 'prior-acceptance.json', {'health': self.before['health'], 'agentVersion': self.from_engine,
                            'snapshotManifestSha256': digest(self.recovery / 'snapshot-manifest.json'), 'independentRestoreBytes': independent})
             self.bind_same_schema_source(self.require_stopped)

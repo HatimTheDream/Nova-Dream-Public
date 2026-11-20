@@ -33,6 +33,7 @@ import {createStartupRetainedCollector} from './release-delivery-startup-retaine
 import {fullHostPrerequisiteGaps} from './release-delivery-host-preflight.mjs';
 import {awaitObservationTime} from './release-observation-clock.mjs';
 import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAdapter, inspectBrowserWindowRecoveryReadiness} from './release-delivery-browser.mjs';
+import {ordinaryWindowQualification} from './release-delivery-browser-qualification.mjs';
 
 import {verifyBrowserWindowRecoveryReadiness} from './release-delivery-browser-continuation.mjs';
 import {verifyContinuationStorageAuthority} from './release-delivery-continuation.mjs';
@@ -61,6 +62,7 @@ export const deliveryTargetSchema = z.object({ format: z.literal(1), transport: 
     feed: z.object({ channel: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), sequence: z.number().int().positive(), createdAt: z.iso.datetime(), expiresAt: z.iso.datetime() }).strict(),
     signing: z.object({ privateKeyPath: z.string().min(1), publicKey: ref, previousFeed: z.union([z.literal('initial'), ref]) }).strict() }).strict().optional(),
   browserTools: browserOptionsSchema.optional(),
+  browserWindowQualification: ref.optional(),
   browserCapability: z.enum(['available', 'unavailable']) }).strict();
 const executeFile = promisify(execFile);
 export async function fixedCommand(executable, args, { cwd, maximum = 8 * 1024 ** 2, binary = false, timeoutMs = 120000, acceptJsonFailure = false, gitExecPath } = {}) {
@@ -94,7 +96,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
     'release-delivery-postinstall-recovery.mjs', 'release-delivery-postinstall-browser.mjs', 'release-delivery-postinstall-browser-worker.mjs', 'release-delivery-postinstall-browser.py',
-    'release-delivery-browser.mjs', 'release-delivery-browser-continuation.mjs', 'release-delivery-browser-driver.mjs',
+    'release-delivery-browser.mjs', 'release-delivery-browser-qualification.mjs', 'release-delivery-browser-continuation.mjs', 'release-delivery-browser-driver.mjs',
     'release-delivery-browser-checks.mjs', 'release-delivery-browser-primitives.mjs',
     'release-delivery-browser-remote.mjs', 'release-delivery-browser-remote-worker.mjs', 'release-delivery-browser-remote.py',
     'release-delivery-assistant.mjs', 'release-delivery-assistant-transport.mjs', 'release-assistant-transport.py',
@@ -316,6 +318,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       ...(target.bases ? [] : ['verified-base-candidates-not-configured']),...await runtimeGaps(descriptor,target)]; },
     phasePreflight: async (phase,descriptor,prior,context={}) => {
       const {target}=targetInput(descriptor),gaps=deliveryPhaseIntegrationGaps(phase,target,prior);
+      if(phase==='package')ordinaryWindowQualification(descriptor,target,prior.route);
       if(gaps.length||phase!=='package'||prior.route?.route!=='full')return gaps;
       const correction=context.dependencyCorrection??correctionForPhase(context.journal,descriptor.operation.id);
       const effective=correctedDependencyTarget(target,descriptor,prior,correction);

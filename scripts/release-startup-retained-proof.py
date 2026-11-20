@@ -23,6 +23,7 @@ SCOPE = 'retained-same-runtime-startup-restart-restoration'
 LIFECYCLE_PARENT = '81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036'
 # Exact source capability only; it grants no candidate or runtime acceptance.
 RETIRED_RECAPTURE_PRODUCER = 'f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092'
+RETIRED_RECAPTURE_PRODUCERS = {RETIRED_RECAPTURE_PRODUCER, '0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6'}
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
@@ -507,14 +508,14 @@ def consume(request, read, sources, same_schema_helpers=None):
                 capture = capture_observation_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, summaries[0].get(capture_key) if summaries else None, capture_manifest, folder, scenario, document)
             elif capture_key == 'captureTransition':
-                need(RETIRED_RECAPTURE_PRODUCER is not None and runner_sha == RETIRED_RECAPTURE_PRODUCER,
+                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS,
                      'startup-proof-retired-recapture-source-not-qualified')
                 if capture_history is None:
                     capture_history=consume_capture_history(plan,review,values,document)
                 capture,transition_preceding=capture_transition_summary(preserved[capture_key],plan,review,values,
                     capture_history,ordinary_window,item,index,folder,scenario,document,transition_preceding)
             elif capture_key == 'captureContinuity':
-                need(RETIRED_RECAPTURE_PRODUCER is not None and runner_sha == RETIRED_RECAPTURE_PRODUCER,
+                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS,
                      'startup-proof-retired-recapture-source-not-qualified')
                 capture = capture_continuity_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, ordinary_window, capture_preceding,

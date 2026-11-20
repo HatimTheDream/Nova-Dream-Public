@@ -9,9 +9,13 @@ export const retainedWindowPolicy='one-prior-then-two-targets';
 export function verifyRetainedWindowPolicy(policy,binding) {
   if(!policy)return false;
   const prior=binding.priorBundledTarget,target=binding.fullTarget,digest=/^[a-f0-9]{64}$/;
+  const qualified=policy.qualification;
+  const correctTarget=qualified===undefined ? target?.version==='2.28.45'&&target.buildVersion==='1.0.418'
+    : target?.version==='2.28.46'&&target.buildVersion==='1.0.419'&&qualified!==null
+      &&['reviewSha256','planSha256','terminalSha256'].every(key=>digest.test(qualified[key]));
   if(policy.kind!==retainedWindowPolicy || binding.route!=='full' || binding.options.mode!=='remote'
     || binding.options.suite!=='tasks-search-focus' || prior?.version!=='2.28.39' || prior.buildVersion!=='1.0.412'
-    || target?.version!=='2.28.45' || target.buildVersion!=='1.0.418'
+    || !correctTarget
     || !digest.test(policy.priorCandidateId) || !digest.test(policy.targetCandidateId) || policy.priorCandidateId===policy.targetCandidateId
     || policy.priorCandidateId!==prior.candidateId || policy.priorCandidateId!==binding.priorCandidateId || policy.targetCandidateId!==target.candidateId)
     throw Error('browser-retained-window-policy-target-changed');
