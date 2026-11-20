@@ -51,6 +51,41 @@ export async function documentIdentity(page) {
   return page.evaluate(()=>{const meta=name=>document.querySelector(`meta[name="${name}"]`)?.getAttribute('content');
     return {candidateId:meta('e3-candidate'),frontendId:meta('e3-frontend'),version:meta('e3-frontend-version'),buildVersion:meta('e3-frontend-build'),assets:meta('e3-assets')};});
 }
+export async function documentWindow(page,epoch) {
+  const document=await documentIdentity(page);
+  const {timeOrigin,reducedMotion}=await page.evaluate(()=>({timeOrigin:performance.timeOrigin,
+    reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches}));
+  need(Number.isFinite(timeOrigin)&&timeOrigin>0&&typeof reducedMotion==='boolean','browser-window-observation-incomplete');
+  return {document,epoch,timeOrigin,reducedMotion};
+}
+export async function observeWindowPair(context,oldPage,newPage,oldEpoch,newEpoch,expectedDraft) {
+  const pages=context.pages();
+  need(oldPage!==newPage&&pages.length===2&&pages.includes(oldPage)&&pages.includes(newPage),'browser-two-live-pages-required');
+  const [original,opened]=await Promise.all([documentWindow(oldPage,oldEpoch),documentWindow(newPage,newEpoch)]);
+  need(await (await draft(oldPage)).inputValue()===expectedDraft,'browser-simultaneous-draft-lost');
+  need(context.pages().length===2&&!oldPage.isClosed()&&!newPage.isClosed(),'browser-two-live-pages-required');
+  return {count:2,original,opened,draftSha256:sha256(expectedDraft)};
+}
+export function verifyWindowPairEvidence(binding,prepared,coverage) {
+  const original=prepared.priorWindow, mixed=coverage?.mixed, reloaded=coverage?.reloaded;
+  need(original&&coverage?.policy===binding.windowPolicy.kind&&coverage.twoPriorPages==='unverified-live'&&prepared.secondPage===undefined
+    &&hash(original.document)===hash(prepared.document)&&original.document.candidateId===binding.priorCandidateId
+    &&original.epoch===binding.epoch&&original.reducedMotion===true&&Number.isFinite(original.timeOrigin)&&original.timeOrigin>0,
+    'browser-retained-prior-window-changed');
+  for(const pair of [mixed,reloaded]){
+    need(pair?.count===2 && pair.original.timeOrigin!==pair.opened.timeOrigin && pair.draftSha256===sha256(prepared.draft)
+      &&[pair.original,pair.opened].every(w=>w.epoch===binding.epoch&&w.reducedMotion===false&&Number.isFinite(w.timeOrigin)&&w.timeOrigin>0),
+      'browser-window-coexistence-changed');
+  }
+  need(mixed.original.timeOrigin===original.timeOrigin&&hash(mixed.original.document)===hash(original.document)
+    &&reloaded.original.timeOrigin!==original.timeOrigin&&hash(reloaded.opened)===hash(mixed.opened),'browser-retained-document-transition-changed');
+  for(const w of [mixed.opened,reloaded.opened,reloaded.original]){
+    const t=binding.fullTarget;
+    need(w.document.candidateId===t.candidateId&&w.document.frontendId===t.candidateId&&w.document.version===t.version&&w.document.buildVersion===t.buildVersion
+      &&w.document.assets===`/__bundled/${t.candidateId}/`,'browser-target-window-identity-changed');
+  }
+  return coverage;
+}
 export async function ready(page,baseUrl) {
   // The startup crossfade mounts a temporary workspace. Navigation and drafts
   // must begin in the workspace that stays mounted after the crossfade.
@@ -139,8 +174,9 @@ async function currentExistingReply(page,baseUrl,input) {
   const response=await page.request.get(baseUrl+'/api/assistant/state',{headers:{'X-Edition3-Client':'1','X-Edition3-Candidate':input.installed.installedHealth.candidateId}});
   try{need(response.ok(),'browser-existing-reply-state-unavailable');return verifyExistingReplyBrowserState(await response.json(),input.assistant);}finally{await response.dispose();}
 }
-export async function verifyBrowserTransition(context,oldPage,prepared,options,installed,fullTarget,check,milestone=()=>{}) {
+export async function verifyBrowserTransition(context,oldPage,prepared,options,installed,fullTarget,check,milestone=()=>{},windowBinding=null) {
   const expected=installed.installedHealth,contract={route:installed.route,target:fullTarget};
+  if(windowBinding)await oldPage.emulateMedia({reducedMotion:'no-preference'});
   need(hash(await documentIdentity(oldPage))===hash(prepared.document),'browser-old-document-replaced');check('old-document-retained');
   if(installed.route==='frontend'){
     await contentSearch(oldPage);
@@ -152,14 +188,21 @@ export async function verifyBrowserTransition(context,oldPage,prepared,options,i
     // Full releases retain their captured service identity and request fence.
     await oldPage.getByRole('button',{name:'Reload app',exact:true}).waitFor({state:'visible',timeout:45000});check('old-client-fence');
   }
-  const newPage=await context.newPage();await newPage.goto(options.baseUrl,{waitUntil:'domcontentloaded'});
-  const fresh=await ready(newPage,options.baseUrl);verifyBrowserHealth(fresh.health,expected,fresh.epoch,contract);verifyDocumentIdentity(fresh.identity,fresh.health,contract);check('new-document-identity');milestone('new-page-ready');
+  const newPage=await context.newPage();
+  if(windowBinding)await newPage.emulateMedia({reducedMotion:'no-preference'});
+  await newPage.goto(options.baseUrl,{waitUntil:'domcontentloaded'});
+  const fresh=await ready(newPage,options.baseUrl);verifyBrowserHealth(fresh.health,expected,fresh.epoch,contract);verifyDocumentIdentity(fresh.identity,fresh.health,contract);check('new-document-identity');
+  const mixed=windowBinding?await observeWindowPair(context,oldPage,newPage,prepared.epoch,fresh.epoch,prepared.draft):null;
+  await milestone('new-page-ready');
   await oldPage.getByRole('button',{name:installed.route==='frontend'?'Refresh':'Reload app',exact:true}).click();
   await oldPage.waitForLoadState('domcontentloaded');const reloaded=await ready(oldPage,options.baseUrl);
   verifyBrowserHealth(reloaded.health,expected,reloaded.epoch,contract);verifyDocumentIdentity(reloaded.identity,reloaded.health,contract);
-  await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-reloaded-draft-lost');check('retained-draft-after-refresh');milestone('old-page-reloaded');
+  await tasks(oldPage);need(await(await draft(oldPage)).inputValue()===prepared.draft,'browser-reloaded-draft-lost');check('retained-draft-after-refresh');
+  const windowCoverage=windowBinding?verifyWindowPairEvidence(windowBinding,prepared,{policy:windowBinding.windowPolicy.kind,twoPriorPages:'unverified-live',
+    mixed,reloaded:await observeWindowPair(context,oldPage,newPage,reloaded.epoch,fresh.epoch,prepared.draft)}):null;
+  await milestone('old-page-reloaded');
   await assertUi(newPage,options.suite);check('ui-behavior');
-  return {newPage,fresh};
+  return {newPage,fresh,windowCoverage};
 }
 export async function accept(context,oldPage,prepared,request,dir,original,milestone=()=>{}) {
   const input=request.input,options=original.binding.options,checks=[];
@@ -171,7 +214,8 @@ export async function accept(context,oldPage,prepared,request,dir,original,miles
     need(hash(input.fullTarget)===hash(original.binding.fullTarget),'browser-full-target-binding-changed');
     verifyFullBundledIdentity(expected,input.fullTarget);
   }
-  const {newPage,fresh}=await verifyBrowserTransition(context,oldPage,prepared,options,input.installed,input.fullTarget,check,milestone);
+  const {newPage,fresh,windowCoverage}=await verifyBrowserTransition(context,oldPage,prepared,options,input.installed,input.fullTarget,check,milestone,
+    original.binding.windowPolicy?original.binding:null);
   const expectedReply=`Nova verification ${input.assistant.key} passed.`;
   need(sha256(expectedReply)===input.assistant.replySha256,'browser-original-reply-hash-changed');
   await nav(newPage,'Assistant');
@@ -190,7 +234,7 @@ export async function accept(context,oldPage,prepared,request,dir,original,miles
   const healthFinal=await ready(oldPage,options.baseUrl);verifyBrowserHealth(healthFinal.health,expected,healthFinal.epoch,contract);
   const existingReplyAfter=existingReplyBefore?await currentExistingReply(oldPage,options.baseUrl,input):null;
   return {format:1,kind:'nova-real-browser-acceptance',operationId:input.operationId,inputSha256:hash(input),
-    accepted:true,browserUiVerified:true,gatewayCoverage:'not-tested-loopback-host-surface',
+    accepted:true,browserUiVerified:true,gatewayCoverage:'not-tested-loopback-host-surface',...(windowCoverage?{windowCoverage}:{}),
     startedAtMs:prepared.startedAtMs,completedAtMs:Date.now(),checks,loadedDocument:fresh.identity,originalDocument:prepared.document,
     ...(contract.route==='full'?{selectorDiagnostics:browserSelectorDiagnostics(healthFinal.health)}:{}),
     savedReplySha256:sha256(expectedReply),savedMessageId:input.assistant.savedMessageId,

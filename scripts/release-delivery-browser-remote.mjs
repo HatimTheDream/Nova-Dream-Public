@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
 import {runInstallTransport,releaseTransportSchema} from './release-adapters.mjs';
-import {canonicalBrowser,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
+import {canonicalBrowser,verifyRetainedPreparation,writeBrowserOnce} from './release-delivery-browser-primitives.mjs';
 import {verifyLinkedBrowserRecord} from './release-delivery-browser-continuation.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);},sleep=ms=>new Promise(r=>setTimeout(r,ms)),hash=v=>sha256(canonicalBrowser(v));
 const read=p=>JSON.parse(readFileSync(p,'utf8'));
@@ -43,7 +43,8 @@ function verifyRemoteLaunchPlan(response,original){
   need(response?.state==='planned'&&response.existingOperation===false&&plan?.operationId===original.binding.operationId
     &&response.planSha256===hash(plan)&&plan.originalSha256===sha256(Buffer.from(canonicalBrowser(original)+'\n'))
     &&canonicalBrowser(plan.node)===canonicalBrowser(options.node)&&canonicalBrowser(plan.executable)===canonicalBrowser(options.executable)
-    &&plan.playwrightSha256===options.playwright.sha256
+    &&plan.playwrightSha256===options.playwright.sha256&&canonicalBrowser(plan.windowPolicy)===canonicalBrowser(original.binding.windowPolicy)
+    &&(!original.binding.windowPolicy || (plan.memoryMaxBytes===2147483648&&plan.hostReserveBytes===2147483648))
     &&(!original.binding.sessionId||(plan.sessionId===original.binding.sessionId&&plan.directory===options.directoryRoot+'/'+plan.sessionId&&plan.unit==='nova-browser-'+plan.sessionId)),'browser-remote-plan-binding-changed');
   return {operationId:original.binding.operationId,planSha256:response.planSha256,originalSha256:plan.originalSha256};
 }
@@ -89,7 +90,12 @@ export async function prepareRemoteBrowser(kept,context,{options,transport,inspe
   while(clock()<deadline){
     const status=keepStatus(dir,await remoteBrowserCall(original,transport,'status',{},run),original);
     if(status.files.failed)throw Error(status.files.failed.reason);
-    if(status.files.prepared){verifyRemoteBrowserSessionAlive(status,original,dir,clock());const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};}
+    if(status.files.prepared){
+      verifyRemoteBrowserSessionAlive(status,original,dir,clock());
+      verifyRetainedPreparation(original.binding,status.files.prepared);
+      if(original.binding.windowPolicy)need(canonicalBrowser(status.files['memory-prior-draft-ready'])===canonicalBrowser(status.files.prepared.memory),'browser-prior-memory-evidence-changed');
+      const path=join(dir,'prepared.json');return {path,sha256:sha256(readFileSync(path))};
+    }
     need(!status.files.closed,'browser-original-session-closed');await sleep(1500);
   }
   throw Error('browser-original-response-unavailable');

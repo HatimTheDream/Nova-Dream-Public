@@ -41,7 +41,7 @@ export const deliveryProfileSchema=z.object({format:z.literal(1),target:ref,targ
   operatorProvenance:ref.optional(),
  previousDelivery:z.object({operationId:z.uuid(),descriptorSha256:hash,assistantReceipt:ref,publicationReceipt:ref,
   sourceCandidates:z.object({private:ref,public:ref}).strict(),assistantAcceptanceMode:z.literal(EXISTING_REPLY_MODE).optional(),nativeRunActivityCoverage:z.literal('unverified-retained-history').optional(),browserAccepted:z.boolean(),browserInput:ref.optional(),browserReceipt:ref.optional(),
-  acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional(),mailActivityPolicy:postinstallCoverageSchema.shape.mailActivityPolicy,mailFunctionalityCoverage:postinstallCoverageSchema.shape.mailFunctionalityCoverage}).strict()
+  twoPriorPages:z.literal('unverified-live').optional(),acceptanceScope:postinstallCoverageSchema.shape.acceptanceScope.optional(),originalTransitionCoverage:postinstallCoverageSchema.shape.originalTransitionCoverage.optional(),transitionCoverageGaps:postinstallCoverageSchema.shape.transitionCoverageGaps.optional(),mailActivityPolicy:postinstallCoverageSchema.shape.mailActivityPolicy,mailFunctionalityCoverage:postinstallCoverageSchema.shape.mailFunctionalityCoverage}).strict()
   .refine(value=>value.nativeRunActivityCoverage===undefined||value.assistantAcceptanceMode===EXISTING_REPLY_MODE,'Retained history activity coverage requires existing reply mode.')
   .refine(value=>value.acceptanceScope ? value.browserAccepted&&postinstallCoverageSchema.safeParse({acceptanceScope:value.acceptanceScope,originalTransitionCoverage:value.originalTransitionCoverage,transitionCoverageGaps:value.transitionCoverageGaps,...(value.mailActivityPolicy===undefined?{}:{mailActivityPolicy:value.mailActivityPolicy}),...(value.mailFunctionalityCoverage===undefined?{}:{mailFunctionalityCoverage:value.mailFunctionalityCoverage})}).success : value.originalTransitionCoverage===undefined&&value.transitionCoverageGaps===undefined&&value.mailFunctionalityCoverage===undefined&&value.mailActivityPolicy===undefined,'Explicit browser recovery coverage required.')
   .refine(value=>value.browserAccepted ? Boolean(value.browserInput&&value.browserReceipt) : !value.browserInput&&!value.browserReceipt,
@@ -103,6 +103,7 @@ export function validateAcceptedProfile(profile,target,{candidate=verifyCandidat
  if(profile.previousDelivery?.browserAccepted){
   const prior=profile.previousDelivery,input=json(prior.browserInput),output=json(prior.browserReceipt);
   need(input.operationId===prior.operationId&&same(input.assistant,json(prior.assistantReceipt)),'accepted-browser-original-delivery-changed');
+  need(prior.twoPriorPages===output.windowCoverage?.twoPriorPages,'accepted-browser-prior-page-coverage-changed');
   if(prior.acceptanceScope){need(same(postinstallCoverage(output),postinstallCoverage(prior)),'accepted-browser-recovery-scope-changed');verifyScopedBrowserAcceptance(output,input);}
   else{need(output.acceptanceScope===undefined,'accepted-unqualified-browser-scope-refused');verifyBrowserAcceptance(output,input);}
  }
@@ -372,7 +373,7 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
   const coverage=postinstallCoverage(browser.current.output);
   if(coverage.acceptanceScope)verifyScopedBrowserAcceptance(browser.current.output,browser.input);else verifyBrowserAcceptance(browser.current.output,browser.input);
   browserEvidence={browserAccepted:true,browserInput:exactFile(join(directory,'accepted-browser-input.json'),encoded(browser.input)),
-   browserReceipt:normalizedRef(browser.current.receipt),...coverage};
+   browserReceipt:normalizedRef(browser.current.receipt),...(browser.current.output.windowCoverage?{twoPriorPages:browser.current.output.windowCoverage.twoPriorPages}:{}),...coverage};
  }
  profile.previousDelivery={operationId:id,descriptorSha256:record.descriptor.reference.sha256,assistantReceipt:normalizedRef(accepted.current.receipt),
   publicationReceipt:normalizedRef(publication.current.receipt),sourceCandidates,...existingReplyCoverage(accepted.current.output),...browserEvidence};
@@ -387,7 +388,7 @@ export async function exportSuccessorProfile(journal,id,{command=fixedCommand,fe
  // Late browser acceptance creates a new immutable successor. It does not
  // rewrite an earlier profile which accurately recorded an acceptance gap.
  const output=persistSuccessorProfile(directory,profile,postinstall,browserEvidence);
- return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...existingReplyCoverage(accepted.current.output),...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
+ return {profile:output,operationId:id,browserAccepted:browserEvidence.browserAccepted,...(browserEvidence.twoPriorPages?{twoPriorPages:browserEvidence.twoPriorPages}:{}),...existingReplyCoverage(accepted.current.output),...postinstallCoverage(browserEvidence),mutableSelectionUpdated:false};
 }
 
 /** Immutable write tail only. The caller completes all accepted-profile and authority validation first. */

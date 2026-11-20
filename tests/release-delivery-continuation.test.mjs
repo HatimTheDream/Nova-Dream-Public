@@ -115,6 +115,11 @@ test('the envelope can only project the accepted pack onto the unchanged candida
   assert.throws(()=>correctedDependencyTarget(target,f.d,n.prior,proposal));
  }
 });
+test('a prepackage grant cannot select the alternate browser route for another release',t=>{
+ const f=fixture(t,{correction:true});
+ const request={...f.request,browserWindowPolicy:{kind:'one-prior-then-two-targets',priorCandidateId:f.d.operation.priorCandidateId,targetCandidateId:sha256('other')}};
+ assert.throws(()=>continuationSnapshot(f.journal,f.id,f.at,{request,assertAbsent:()=>{}}),/browser-retained-window-policy-target-changed/);
+});
 test('next profile carries the successful installed native pack and validated package identity',t=>{
  const f=fixture(t,{correction:true}),n=f.native,old=n.old,transport={...n.transport,qualifiedDependencies:old.refs};
  const accepted={pair:transport.selectedPair,result:transport.selectedInstaller,bundle:transport.selectedBundle};

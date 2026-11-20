@@ -13,8 +13,8 @@ import {verifyExistingReplyAcceptance,existingReplyCoverage} from './release-del
 import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './release-delivery-browser-remote.mjs';
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
 import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
-import {verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
-import {verifyFullBundledIdentity,verifyDocumentIdentity,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
+import {verifyRemoteBrowserMemory,verifyRetainedWindowPolicy,verifyRetainedPreparation} from './release-delivery-browser-primitives.mjs';
+import {verifyFullBundledIdentity,verifyDocumentIdentity,verifyWindowPairEvidence,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
 
 const ref = z.object({ path:z.string().min(1), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const localBrowserOptionsSchema = z.object({ format:z.literal(1), node:ref, executable:ref, playwright:ref, ssh:ref,
@@ -48,10 +48,14 @@ export function browserBinding(context,options,transport) {
     const manifest=JSON.parse(readEvidenceFile(base.manifest));
     priorBundledTarget={candidateId:base.candidateId,version:manifest.version,buildVersion:manifest.buildVersion};
   }
-  return {format:1,operationId:context.descriptor.operation.id,descriptorSha256:hash(context.descriptor),
+  const binding={format:1,operationId:context.descriptor.operation.id,descriptorSha256:hash(context.descriptor),
     options:browserOptionsSchema.parse(options),transport,route:context.prior.route.route,
     ...(fullTarget?{fullTarget,priorBundledTarget}:{}),
     priorCandidateId:context.descriptor.operation.priorCandidateId,epoch:context.descriptor.operation.workspaceEpoch};
+  const grant=context.journal?.deliveryOperatorContinuation?.(op.id)?.proof;
+  if(grant?.kind==='nova-prepackage-dependency-correction'&&verifyRetainedWindowPolicy(grant.browserWindowPolicy,binding))
+    binding.windowPolicy=grant.browserWindowPolicy;
+  return binding;
 }
 function directory(context) {
   return validateJournalDirectory(join(context.journal.directory,'browser-session'),{create:true});
@@ -149,6 +153,10 @@ export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
   else need(output.existingReplyObservation===undefined,'browser-unqualified-existing-reply-proof');
   const original=JSON.parse(readEvidenceFile(input.original)),prepared=JSON.parse(readEvidenceFile(input.prepared));
   verifyLinkedBrowserRecord(original);
+  const retained=verifyRetainedWindowPolicy(original.binding.windowPolicy,original.binding);
+  if(retained){
+    verifyRetainedPreparation(original.binding,prepared);verifyWindowPairEvidence(original.binding,prepared,output.windowCoverage);
+  }else need(output.windowCoverage===undefined&&output.targetMemory===undefined,'browser-window-policy-unbound');
   need(original.binding.operationId===input.operationId&&original.binding.route===input.installed.route
     &&prepared.bindingSha256===hash(original.binding)&&prepared.epoch===original.binding.epoch
     &&prepared.document.candidateId===original.binding.priorCandidateId,'browser-preparation-proof-changed');
@@ -178,10 +186,18 @@ export function verifyBrowserAcceptance(output,input,{requireCleanup=true}={}) {
   need(closed.operationId===input.operationId&&closed.browserClosed===true&&closed.tunnelClosed===true,'browser-owned-process-closeout-incomplete');
   if(original.binding.options.mode==='remote'){
     // Earlier immutable evidence predates the worker's cgroup samples.
-    if(prepared.memory!==undefined||closed.memory!==undefined){
-      verifyRemoteBrowserMemory(prepared.memory,input.operationId,'second-page-ready');
+    if(retained||prepared.memory!==undefined||closed.memory!==undefined){
+      verifyRemoteBrowserMemory(prepared.memory,input.operationId,retained?'prior-draft-ready':'second-page-ready');
       verifyRemoteBrowserMemory(closed.memory,input.operationId,'browser-closed');
-      need(closed.memory.peakBytes>=prepared.memory.peakBytes,'browser-memory-peak-regressed');
+      let peak=prepared.memory.peakBytes;
+      const sampleMatches=(sample,milestone)=>isDeepStrictEqual(sample,read(join(dirname(input.original.path),'memory-'+milestone+'.json')));
+      if(retained)need(sampleMatches(prepared.memory,'prior-draft-ready')&&sampleMatches(closed.memory,'browser-closed'),'browser-memory-evidence-changed');
+      if(retained)for(const name of ['new-page-ready','old-page-reloaded','saved-reply-visible']){
+        const sample=output.targetMemory?.[name];verifyRemoteBrowserMemory(sample,input.operationId,name);
+        need(sampleMatches(sample,name),'browser-memory-evidence-changed');
+        need(sample.peakBytes>=peak,'browser-memory-peak-regressed');peak=sample.peakBytes;
+      }
+      need(closed.memory.peakBytes>=peak,'browser-memory-peak-regressed');
     }
     const unit=JSON.parse(readEvidenceFile(output.remoteUnitCloseout));
     need(unit.operationId===input.operationId&&unit.originalSha256===input.original.sha256

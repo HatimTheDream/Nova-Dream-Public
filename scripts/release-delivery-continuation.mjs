@@ -39,11 +39,12 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
 
 
 const correctionSources=pair(source.extend({branch:z.literal(correctionBranch)}));
+const browserWindowPolicy=z.object({kind:z.literal('one-prior-then-two-targets'),priorCandidateId:hash,targetCandidateId:hash}).strict().optional();
 const correctionRequest=continuationRequestSchema.omit({durationMs:true}).extend({
- kind:z.literal(correctionRequestKind),operatorSources:correctionSources,correction:dependencyCorrectionSchema
+ kind:z.literal(correctionRequestKind),operatorSources:correctionSources,correction:dependencyCorrectionSchema,browserWindowPolicy
 });
 const correctionGrant=z.object({...continuationGrantSchema.shape,kind:z.literal(correctionGrantKind),correction:dependencyCorrectionSchema,
- operator:continuationGrantSchema.shape.operator.extend({sources:correctionSources})
+ operator:continuationGrantSchema.shape.operator.extend({sources:correctionSources}),browserWindowPolicy
 }).strict().refine(value=>value.expiresAtMs>value.issuedAtMs&&value.expiresAtMs===value.originalCreatedAtMs+value.originalBudgetMs,
  'dependency-correction-original-deadline-required');
 export const prepackageRequestSchema=z.discriminatedUnion('kind',[continuationRequestSchema,correctionRequest]);
@@ -300,7 +301,16 @@ export function continuationSnapshot(journal,id,now,{assertAbsent=absentOwner,re
   need(original.operationId===id&&same(original.node,target.artifactTools.node),'continuation-original-storage-request-changed');
   if(correction){
    need(request.owner.attempts.length===1,'dependency-correction-single-closed-attempt-required');
-   correctedDependencyTarget(target,d,Object.fromEntries(phases.map(p=>[p.phase,p.current.output])),request.correction);
+   const prior=Object.fromEntries(phases.map(p=>[p.phase,p.current.output]));
+   correctedDependencyTarget(target,d,prior,request.correction);
+   const policy=request.browserWindowPolicy;
+   if(policy){
+    need(prior.route.route==='full'&&policy.priorCandidateId===d.operation.priorCandidateId
+     &&policy.priorCandidateId===prior.route.baseCandidateId&&policy.targetCandidateId===prior.route.targetCandidateId
+     &&target.full.host.priorVersion==='2.28.39'&&target.full.host.priorBuildVersion==='1.0.412'
+     &&d.operation.version==='2.28.45'&&d.operation.buildVersion==='1.0.418'&&target.browserTools?.mode==='remote'
+     &&target.browserTools.suite==='tasks-search-focus','browser-retained-window-policy-target-changed');
+   }
   }
   for(const a of request.owner.attempts){
    const launcher=json(a.launcher),intent=json(a.intent),closed=json(a.childResult),exit=json(a.exit),status=json(a.stdout),dir=resolve(a.intent.path,'..');dirs.push(dir);
@@ -573,7 +583,8 @@ export async function reconcileExpiredPrepackage(journal,id,requestRef,{clock=Da
  const at=clock(),after=continuationSnapshot(journal,id,at,{request,assertAbsent});need(same(before,after),'continuation-original-history-changed');
  const correction=request.kind===correctionRequestKind;
  const proof=prepackageGrantSchema.parse({format:1,kind:correction?correctionGrantKind:'nova-expired-prepackage-continuation',operationId:id,...after,request:requestRef,operator,hostFacts,
-  ...(correction?{correction:request.correction}:{}),issuedAtMs:at,expiresAtMs:correction?after.originalCreatedAtMs+after.originalBudgetMs:at+request.durationMs,
+  ...(correction?{correction:request.correction}:{}),...(request.browserWindowPolicy?{browserWindowPolicy:request.browserWindowPolicy}:{}),
+  issuedAtMs:at,expiresAtMs:correction?after.originalCreatedAtMs+after.originalBudgetMs:at+request.durationMs,
   automaticRenewal:false,originalHistoryPreserved:true});
  return journal.recordOperatorContinuation(id,proof,at,{assertAbsent});
 }
@@ -718,7 +729,7 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
  }
  need(request.operationId===id&&same(p.operator.sources,request.operatorSources),'continuation-request-authority-changed');
  if(p.kind===correctionGrantKind){
-  need(request.kind===correctionRequestKind&&same(p.correction,request.correction)&&p.expiresAtMs===d.created_at+d.descriptor.observationBudgetMs,
+  need(request.kind===correctionRequestKind&&same(p.correction,request.correction)&&same(p.browserWindowPolicy,request.browserWindowPolicy)&&p.expiresAtMs===d.created_at+d.descriptor.observationBudgetMs,
    'dependency-correction-original-authority-changed');
   const original=request.owner.attempts[0];requireCorrectionExit(json(original.stdout),json(original.exit),json(original.childResult),p.issuedAtMs);
  }else need(p.expiresAtMs-p.issuedAtMs===request.durationMs,'continuation-request-authority-changed');

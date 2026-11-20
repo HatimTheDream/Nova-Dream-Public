@@ -102,6 +102,7 @@ def main(data):
           'workerSha256':worker_sha,'originalSha256':digest(original_bytes),'node':options['node'],'executable':options['executable'],'playwrightSha256':options['playwright']['sha256'],
           'memoryMaxBytes':MEMORY_MAX_BYTES,'hostReserveBytes':HOST_RESERVE_BYTES}
     if session!=operation:plan['sessionId']=session
+    if 'windowPolicy' in binding:plan['windowPolicy']=binding['windowPolicy']
     if mode in ('readiness','plan','start'):
         need((mode=='readiness' or time.time()*1000<original['deadlineAtMs']) and original['deadlineAtMs']==original['startedAtMs']+options['timeoutMs'] and 300000<=options['timeoutMs']<=1800000,'browser-original-deadline-exhausted')
         bytes_ref(options['node']);bytes_ref(options['executable'],536870912)
@@ -153,7 +154,7 @@ def main(data):
         value=screenshot.read_bytes();offset=data['offset'];need(type(offset)==int and 0<=offset<len(value),'browser-remote-screenshot-offset-invalid')
         return {'state':'screenshot','sha256':digest(value),'bytes':len(value),'offset':offset,'base64':base64.b64encode(value[offset:offset+49152]).decode()}
     files={name:json_file(path/(name+'.json')) for name in ('prepared','heartbeat','failed','closed','acceptance','worker-identity','launch-result','memory-admission',
-           'memory-tools-verified','memory-first-page-ready','memory-second-page-opened','memory-second-page-ready','memory-new-page-ready','memory-old-page-reloaded','memory-saved-reply-visible','memory-browser-closed')}
+           'memory-tools-verified','memory-first-page-ready','memory-prior-draft-ready','memory-second-page-opened','memory-second-page-ready','memory-new-page-ready','memory-old-page-reloaded','memory-saved-reply-visible','memory-browser-closed')}
     owned=[]
     for proc in pathlib.Path('/proc').iterdir():
         if proc.name.isdigit():

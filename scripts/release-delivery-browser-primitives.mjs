@@ -5,6 +5,18 @@ import {isAbsolute,dirname,resolve} from 'node:path';
 export const canonicalBrowser=value=>JSON.stringify(value,(_key,x)=>x&&typeof x==='object'&&!Array.isArray(x)
   ?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 export const sha256=value=>createHash('sha256').update(value).digest('hex');
+export const retainedWindowPolicy='one-prior-then-two-targets';
+export function verifyRetainedWindowPolicy(policy,binding) {
+  if(!policy)return false;
+  const prior=binding.priorBundledTarget,target=binding.fullTarget,digest=/^[a-f0-9]{64}$/;
+  if(policy.kind!==retainedWindowPolicy || binding.route!=='full' || binding.options.mode!=='remote'
+    || binding.options.suite!=='tasks-search-focus' || prior?.version!=='2.28.39' || prior.buildVersion!=='1.0.412'
+    || target?.version!=='2.28.45' || target.buildVersion!=='1.0.418'
+    || !digest.test(policy.priorCandidateId) || !digest.test(policy.targetCandidateId) || policy.priorCandidateId===policy.targetCandidateId
+    || policy.priorCandidateId!==prior.candidateId || policy.priorCandidateId!==binding.priorCandidateId || policy.targetCandidateId!==target.candidateId)
+    throw Error('browser-retained-window-policy-target-changed');
+  return true;
+}
 function referenceInfo(ref,maximum) {
   if(!isAbsolute(ref?.path??'')||!/^[a-f0-9]{64}$/.test(ref?.sha256??''))throw Error('browser-reference-invalid');
   for(let part=resolve(ref.path);;part=dirname(part)){if(lstatSync(part).isSymbolicLink())throw Error('browser-reference-symlink');if(dirname(part)===part)break;}
@@ -44,6 +56,19 @@ export function verifyRemoteBrowserMemory(sample, operationId, milestone) {
     if (matching.length !== 1 || matching[0].length !== 2 || matching[0][1] !== '0')
       throw Error('browser-memory-oom-not-clear');
   }
+}
+export function verifyRetainedPreparation(binding,prepared) {
+  if(!verifyRetainedWindowPolicy(binding.windowPolicy,binding))return;
+  const window=prepared?.priorWindow;
+  if(!window || prepared.secondPage!==undefined || prepared.windowPolicy!==retainedWindowPolicy
+    || prepared.twoPriorPages!=='unverified-live' || prepared.priorWindowCount!==1 || prepared.epoch!==binding.epoch || window.epoch!==binding.epoch
+    || window.reducedMotion!==true || !Number.isFinite(window.timeOrigin) || window.timeOrigin<=0
+    || window.document.candidateId!==binding.priorCandidateId || window.document.frontendId!==binding.priorCandidateId
+    || window.document.version!==binding.priorBundledTarget.version || window.document.buildVersion!==binding.priorBundledTarget.buildVersion
+    || window.document.assets!==`/__bundled/${binding.priorCandidateId}/` || canonicalBrowser(window.document)!==canonicalBrowser(prepared.document)
+    || prepared.bindingSha256!==sha256(canonicalBrowser(binding)) || prepared.draft!==`Nova release verification ${binding.operationId} — retained unsent draft`)
+    throw Error('browser-single-prior-preparation-changed');
+  verifyRemoteBrowserMemory(prepared.memory,binding.operationId,'prior-draft-ready');
 }
 export function writeBrowserOnce(path,value) {
   const bytes=canonicalBrowser(value)+'\n';
