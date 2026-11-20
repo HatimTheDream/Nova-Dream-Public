@@ -3,6 +3,7 @@
 No producer import/execution, database access, process launch, or receipt writes.
 The maintained JavaScript collector supplies the compiled-in reviewed source map.
 """
+import copy
 import hashlib
 import json
 import os
@@ -20,6 +21,8 @@ SCENARIOS = ('target-first-start', 'target-restart', 'pristine-prior-restoration
 SCOPE = 'retained-same-runtime-startup-restart-restoration'
 # The fixed JS source-family selector authenticates this exact parent before consume.
 LIFECYCLE_PARENT = '81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036'
+# Exact source capability only; it grants no candidate or runtime acceptance.
+RETIRED_RECAPTURE_PRODUCER = 'f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
@@ -417,6 +420,9 @@ def consume(request, read, sources, same_schema_helpers=None):
              'startup-proof-original-capture-manifest-input-binding')
         capture_manifest = document('baselineManifest', original_manifest)
     summaries = []
+    capture_preceding = None
+    transition_preceding = None
+    capture_history = None
     for index, item in enumerate(parent['scenarios'], 1):
         scenario = item['scenario']; folder = fixture / 'evidence' / ('attempt-' + str(index))
         need(set(item) == {'scenario', 'started', 'process', 'ready', 'closed', 'preservation', 'bootstrap', 'clock-attribution'}, 'startup-proof-scenario-fields')
@@ -493,12 +499,27 @@ def consume(request, read, sources, same_schema_helpers=None):
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
         capture_key = None
         if same_schema:
-            capture_key = 'captureObservation' if 'captureObservation' in preserved else 'captureRetirement'
-            need((('captureObservation' in preserved) + ('captureRetirement' in preserved)) == 1
-                 and (not summaries or capture_key in summaries[0]), 'startup-proof-single-capture-branch-required')
+            capture_keys = [name for name in ('captureObservation', 'captureRetirement', 'captureContinuity', 'captureTransition') if name in preserved]
+            need(len(capture_keys) == 1, 'startup-proof-single-capture-branch-required')
+            capture_key = capture_keys[0]
+            need(not summaries or capture_key in summaries[0], 'startup-proof-single-capture-branch-required')
             if capture_key == 'captureObservation':
                 capture = capture_observation_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, summaries[0].get(capture_key) if summaries else None, capture_manifest, folder, scenario, document)
+            elif capture_key == 'captureTransition':
+                need(RETIRED_RECAPTURE_PRODUCER is not None and runner_sha == RETIRED_RECAPTURE_PRODUCER,
+                     'startup-proof-retired-recapture-source-not-qualified')
+                if capture_history is None:
+                    capture_history=consume_capture_history(plan,review,values,document)
+                capture,transition_preceding=capture_transition_summary(preserved[capture_key],plan,review,values,
+                    capture_history,ordinary_window,item,index,folder,scenario,document,transition_preceding)
+            elif capture_key == 'captureContinuity':
+                need(RETIRED_RECAPTURE_PRODUCER is not None and runner_sha == RETIRED_RECAPTURE_PRODUCER,
+                     'startup-proof-retired-recapture-source-not-qualified')
+                capture = capture_continuity_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
+                    index, ordinary_window, capture_preceding,
+                    capture_manifest, folder, scenario, document, review['runtime']['agent'])
+                capture_preceding = preserved[capture_key]
             else:
                 capture = capture_retirement_summary(preserved[capture_key], plan, started['leaseId'], app['candidateId'],
                     binding['workspaceEpoch'], index, [started['startedAtSeconds'], closed['closedAtSeconds']],
@@ -654,6 +675,339 @@ def consume_closed_schema_baseline(review, plan, parent, document):
          and verified.get('currentLiveSnapshotQualified') is False and type(manifest) is dict and len(manifest) > 40000,
          'startup-proof-complete-closed-source-inventory-required')
     return manifest
+
+
+# Pure raw-proof reconstruction, copied from the separately reviewed producer predicate.
+# No producer code is imported or executed; all evidence comes from authenticated original files.
+CONTINUITY_WRITER_SOURCES={"retirement":{"sqlite-staging-token-CcxeaYVw.mjs":"640abcf7ec6e84134f752e94c9c49b8d4d1eea55d0416b4f0102e722ff89702f","plugin-source-capture-path-L0n-8p-6.mjs":"2b5c87c781d8299882aa5ca90d66f8f20eda194a84cd3b73224f2fdd8163d7cf","plugin-source-capture-directory-CsjPVlzr.mjs":"bb59fd7c7b721a67fce0201e8f6bd250a66c84bc055d06d0ce645ecf18b25f79","plugin-generation-artifact-Bm1J86Hz.mjs":"cf407e9631824208f504fd5271253647b5423d53020694228a732938bf149686"},"reaping":{"startup-config-preflight-n5_82TxL.mjs":"5c6b4c413548ab08e5168d429be1de37b439ab1a3c40b104e1e7a8b5958ca243","plugin-source-capture-report-BdUXHa10.mjs":"4aa98618a9fbac29e1bf83af25e486d20eeed416ce2cdcc5e95a231bbba71ac9","plugin-source-capture-report-UvN1qTM0.mjs":"0f8775cc9fa4787877e379b69c1412bcfbf6fd74ee54eb634e2c8a3d3abc391b","doctor-sqlite-maintenance-lock-BMIeQhbQ.mjs":"c4d81de690f07f2b3e283df0f388bb50b7153a27ad3c55e239554fb47a25cf9d","doctor-sqlite-maintenance-lock-TnMKHoAr.mjs":"a08726a748f566409f2fef2481824a2209717be02cd10c3fe3d42768bca4c657","installed-plugin-index-store-CUXGXwqh.mjs":"8f44c30d7555a3efdbe0c02254c2d050b019ae24b416d83a9cb61c8da8356232"}}
+
+def continuity_encoded(value):return (json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
+def continuity_digest(value):return hashlib.sha256(continuity_encoded(value)).hexdigest()
+def continuity_copied(value):return json.loads(continuity_encoded(value))
+def continuity_relative(value):
+ need(type(value) is str and value and '\0' not in value and '\\' not in value,'capture-relative-path-required')
+ path=PurePosixPath(value);need(not path.is_absolute() and '..' not in path.parts and str(path)==value,'capture-relative-path-required');return path
+
+def continuity_exact_window(value):
+ need(type(value) in (list,tuple) and len(value)==2 and all(type(v) is int for v in value)
+      and 0<=value[0]<=value[1] and value[1]-value[0]<=3600,'capture-genuine-window-required')
+ return list(value)
+
+def continuity_state_hashes(state):
+ return {'baselineInventorySha256':continuity_digest(state['inventory']['baseline']),'liveInventorySha256':continuity_digest(state['inventory']['live']),
+  'baselineClassificationSha256':continuity_digest(state['classification']['baseline']),'liveClassificationSha256':continuity_digest(state['classification']['live'])}
+
+def continuity_validate_state(state):
+ fields={'format','kind','phase','candidateId','attempt','workspaceEpoch','selectedRelative','physicalRoots','classification','inventory','classificationSha256','inventorySha256','stagingCount'}
+ need(type(state) is dict and set(state)==fields and state['format']==1 and state['kind']=='closed-9.8-retired-capture-state'
+      and state['phase'] in ('before','closed') and type(state['attempt']) is int and state['attempt'] in (1,2,3) and type(state['stagingCount']) is int and state['stagingCount']==0,'capture-state-contract-changed')
+ need(type(state['candidateId']) is str and re.fullmatch('[a-f0-9]{64}',state['candidateId'])
+      and type(state['physicalRoots']) is list and len(state['physicalRoots'])==2
+      and all(type(row) is list and len(row)==5 and all(type(v) is int and 0<=v<=2**53-1 for v in row)
+              and row[0]>0 and row[1]>0 and stat.S_ISDIR(row[2]) and row[3:]==[999,986] for row in state['physicalRoots'])
+      and state['physicalRoots'][0][:2]!=state['physicalRoots'][1][:2],'capture-physical-authority-changed')
+ need(set(state['inventory'])==set(state['classification'])=={'baseline','live'}
+      and state['inventorySha256']==continuity_digest(state['inventory']) and state['classificationSha256']==continuity_digest(state['classification']),'capture-state-hashes-changed')
+ for role in ('baseline','live'):
+  rows=state['inventory'][role];need(type(rows) is dict and 0<len(rows)<=8192 and '.' in rows,'capture-complete-inventory-required')
+  for path,row in rows.items():
+   continuity_relative(path);need(type(row) is dict and row.get('kind') in ('file','directory','symlink'),'capture-row-kind-changed')
+   need(type(row.get('mtime_ns')) is int and row['mtime_ns']>=0 and type(row.get('xattrs')) is dict,'capture-exact-metadata-required')
+  classes=state['classification'][role];prefix=state['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures/'
+  owners=sorted(prefix+p for p,row in rows.items() if p.endswith('/owner.sqlite') and p.count('/')==1)
+  need(classes==owners,'capture-owner-classification-incomplete')
+ return state
+
+def continuity_prestart(before,previous=None):
+ continuity_validate_state(before);need(before['phase']=='before','capture-prestart-phase-required')
+ baseline=before['inventory']['baseline'];live=before['inventory']['live']
+ if before['attempt'] in (1,3):
+  need(previous is None and baseline==live and before['classification']['baseline']==before['classification']['live'],'capture-pristine-prestart-required')
+ else:
+  need(type(previous) is dict and set(previous)=={'before','closed','proof','beforeSha256','closedSha256','proofSha256'},'capture-restart-predecessor-required')
+  old=continuity_validate_state(previous['closed']);proof=previous['proof']
+  need(previous['beforeSha256']==continuity_digest(previous['before']) and previous['closedSha256']==continuity_digest(old)
+       and previous['proofSha256']==continuity_digest(proof) and proof['beforeSha256']==previous['beforeSha256']
+       and proof['closedSha256']==previous['closedSha256'] and old['attempt']==1 and old['phase']=='closed','capture-restart-predecessor-hashes-changed')
+  need(before['candidateId']==old['candidateId'] and before['workspaceEpoch']==old['workspaceEpoch']
+       and before['selectedRelative']==old['selectedRelative'] and before['physicalRoots']==old['physicalRoots']
+       and before['inventory']==old['inventory'] and before['classification']==old['classification'],'capture-restart-exact-closed-state-required')
+ return continuity_state_hashes(before)
+
+def continuity_namespace_rows(admissions):
+ need(type(admissions) is dict and len(admissions)==1,'capture-canonical-admission-key-required')
+ receipt=next(iter(admissions.values()));need(type(receipt) is dict and set(receipt)=={'signature','sourceDigest','nativeArtifacts','nativeNamespaces'},'capture-canonical-receipt-required')
+ need(type(receipt['nativeNamespaces']) is dict and 0<len(receipt['nativeNamespaces'])<=16,'capture-canonical-namespaces-required')
+ return receipt['nativeNamespaces']
+
+def continuity_mappings(reports,logical_root):
+ need(type(reports) is list and 0<len(reports)<=8,'capture-successful-canonical-reports-required')
+ result={};current_names=set()
+ for report in reports:
+  need(report['kind']=='canonical-retired-capture-admissions' and report['canonicalReturnedTrue'] is True,'capture-successful-canonical-report-required')
+  old=continuity_namespace_rows(report['originalSourceAdmissions']);new=continuity_namespace_rows(report['currentSourceAdmissions']);mapping=report['provedNamespaceMapping']
+  a_receipt=next(iter(report['originalSourceAdmissions'].values()));b_receipt=next(iter(report['currentSourceAdmissions'].values()))
+  need(all(a_receipt[k]==b_receipt[k] for k in ('signature','sourceDigest')) and set(a_receipt['nativeArtifacts'])==set(b_receipt['nativeArtifacts']),'capture-canonical-content-authority-changed')
+  need(set(mapping)==set(old),'capture-complete-canonical-mapping-required')
+  for receipt in (a_receipt,b_receipt):
+   for source,artifact in receipt['nativeArtifacts'].items():
+    need(type(artifact) is dict and set(artifact)=={'sourceIdentity','contentHash','sizeBytes','namespace','capturedPath','capturedIdentity'} and artifact['namespace'] in receipt['nativeNamespaces'],'capture-native-artifact-shape-changed')
+    ns=receipt['nativeNamespaces'][artifact['namespace']];directory=PurePosixPath(ns['sourceDirectory']);path=PurePosixPath(source)
+    need(path.is_relative_to(directory),'capture-native-artifact-source-changed');rel=str(path.relative_to(directory));member=ns['members'].get(rel)
+    need(member is not None and artifact['capturedPath']==str(PurePosixPath(artifact['namespace'])/'content'/rel)
+         and all(artifact[k]==member[k] for k in ('sourceIdentity','contentHash','sizeBytes','capturedIdentity')),'capture-native-artifact-member-changed')
+  need(all(a_receipt['nativeArtifacts'][k]['contentHash']==b_receipt['nativeArtifacts'][k]['contentHash']
+       and a_receipt['nativeArtifacts'][k]['sizeBytes']==b_receipt['nativeArtifacts'][k]['sizeBytes'] for k in a_receipt['nativeArtifacts']),'capture-native-artifact-content-changed')
+  for old_name,proof in mapping.items():
+   new_name=proof['current'];need(proof['original']==old[old_name] and new_name in new,'capture-current-preprojection-receipt-required')
+   a,b=PurePosixPath(old_name),PurePosixPath(new_name);base=PurePosixPath(logical_root)
+   need(a.is_relative_to(base) and b.is_relative_to(base),'capture-mapping-root-changed')
+   a,b=str(a.relative_to(base)),str(b.relative_to(base))
+   pattern=r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/native/admission-[A-Za-z0-9]{6}'
+   need(re.fullmatch(pattern,a) and re.fullmatch(pattern,b) and a not in result and b not in current_names,'capture-mapping-not-bijective')
+   original,current=old[old_name],new[new_name]
+   need(original['sourceDirectory']==current['sourceDirectory'] and original['managed'] is current['managed'] is True
+        and set(original['members'])==set(current['members']),'capture-managed-source-members-changed')
+   selected_window=continuity_exact_window(report['evaluatedWindow'])
+   for rel,member in original['members'].items():
+    observed=current['members'][rel]
+    need(set(member)==set(observed) and all(member[k]==observed[k] for k in member if k not in ('sourceIdentity','capturedIdentity')),'capture-member-content-or-boundary-policy-changed')
+    for field in ('sourceIdentity','capturedIdentity'):
+     parse=lambda value:tuple(map(int,value.split(':')))
+     x,y=parse(member[field]),parse(observed[field]);need(len(x)==len(y)==6,'capture-member-physical-identity-required')
+     positions=(2,3,4) if stat.S_ISREG(x[2]) and (field=='sourceIdentity' or not member['boundaryChecked']) else (2,)
+     need(all(x[p]==y[p] for p in positions),'capture-member-mode-size-mtime-changed')
+     if field=='capturedIdentity' and (a!=b or x[4]!=y[4]) and (stat.S_ISDIR(y[2]) or member['boundaryChecked']):
+      need(all(selected_window[0]*10**9<=y[p]<=selected_window[1]*10**9 for p in (4,5)),'capture-member-outside-canonical-window')
+   result[a]={'current':b,'original':original,'receipt':current,'window':report['evaluatedWindow'],
+              'windowSource':report['windowSource'],'canonicalReportSha256':continuity_digest(report)};current_names.add(b)
+  need(set(new)=={v['current'] for v in mapping.values()},'capture-current-namespace-complement-unproved')
+ return result
+
+def continuity_family_rows(rows,family,namespaces,runtime,retired_sha):
+ names={p for p in rows if p==family or p.startswith(family+'/')};owner=family+'/owner.sqlite';expected={family,owner,family+'/native'}
+ need(owner in names and rows[owner]['kind']=='file' and rows[owner]['size']==4096 and rows[owner]['sha256']==retired_sha
+      and rows[owner]['mode'] in (0o600,0o644) and rows[owner]['xattrs']=={} and 'hardlink_group' not in rows[owner], 'capture-exact-retired-owner-required')
+ uid,gid=rows[owner]['uid'],rows[owner]['gid'];need((uid,gid)==(999,986),'capture-service-owner-changed')
+ member_rows={}
+ for name,receipt in namespaces.items():
+  need(name.startswith(family+'/native/') and receipt['managed'] is True,'capture-family-namespace-changed')
+  expected.update((name,name+'/node_modules',name+'/node_modules/openclaw'))
+  for rel,member in receipt['members'].items():
+   need(rel=='' or str(continuity_relative(rel))==rel,'capture-member-relative-path-changed')
+   path=name+'/content'+('/'+rel if rel else '');expected.add(path);row=rows.get(path)
+   parts=member['capturedIdentity'].split(':');need(len(parts)==6 and all(p.isdigit() for p in parts),'capture-member-identity-required');identity=tuple(map(int,parts))
+   need(row is not None and row['mode']==stat.S_IMODE(identity[2]) and row['mtime_ns']==identity[4],'capture-member-exact-metadata-changed')
+   if stat.S_ISREG(identity[2]):
+    need(row['kind']=='file' and row['size']==member['sizeBytes'] and row['sha256']==member['contentHash'],'capture-member-content-changed')
+   else:need(stat.S_ISDIR(identity[2]) and row['kind']=='directory','capture-member-kind-changed')
+   member_rows[path]=member
+  link=rows.get(name+'/node_modules/openclaw')
+  need(link is not None and link['kind']=='symlink' and link['mode']==0o777 and link['target']==runtime,'capture-runtime-link-changed')
+ need(names==expected,'capture-family-neighbor-or-partial-removal')
+ for name in names:
+  row=rows[name];need((row['uid'],row['gid'])==(uid,gid) and row['xattrs']=={},'capture-family-protection-changed')
+  if row['kind']=='directory':need(row['mode']==0o700,'capture-family-private-ancestry-required')
+ return member_rows
+
+def continuity_hardlink_classes(rows,rename):
+ groups={}
+ for path,row in rows.items():
+  if row['kind']=='file':groups.setdefault(row.get('hardlink_group',path),[]).append(rename[path])
+ for group,members in groups.items():
+  original=[p for p,row in rows.items() if row['kind']=='file' and row.get('hardlink_group',p)==group]
+  need(group==min(original) and (len(original)>1 or 'hardlink_group' not in rows[original[0]]),'capture-hardlink-group-shape-changed')
+ return sorted(sorted(v) for v in groups.values())
+
+def continuity_source_capture_partition(matched,current):
+ identities={};groups={}
+ for name,value in matched.items():
+  namespace=value['receipt' if current else 'original']
+  for rel,member in namespace['members'].items():
+   if 'contentHash' not in member:continue
+   captured=value['current']+'/content'+('/'+rel if rel else '')
+   for label,field in (('source:'+member['source'],'sourceIdentity'),('capture:'+captured,'capturedIdentity')):
+    parts=member[field].split(':');need(len(parts)==6 and all(p.isdigit() for p in parts),'capture-link-partition-identity-required')
+    identity=tuple(map(int,parts[:2]))
+    need(identities.setdefault(label,identity)==identity,'capture-shared-source-identity-conflict')
+ for label,identity in identities.items():groups.setdefault(identity,[]).append(label)
+ return sorted(sorted(labels) for labels in groups.values())
+
+
+def continuity_closure(before,closed,reports,window,runtime,retired_sha,writer_sources,previous=None):
+ continuity_prestart(before,previous);continuity_validate_state(closed);ordinary=continuity_exact_window(window)
+ need(closed['phase']=='closed' and all(closed[k]==before[k] for k in ('candidateId','attempt','workspaceEpoch','selectedRelative','physicalRoots'))
+      and closed['inventory']['baseline']==before['inventory']['baseline'] and closed['classification']['baseline']==before['classification']['baseline'],'capture-baseline-or-scenario-changed')
+ old=before['inventory']['baseline'];new=closed['inventory']['live'];logical='/var/lib/nova/workspace/'+before['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures'
+ matched=continuity_mappings(reports,logical);families={};reverse={}
+ for name,value in matched.items():
+  a=name.split('/')[0];b=value['current'].split('/')[0]
+  need(families.setdefault(a,b)==b and reverse.setdefault(b,a)==a,'capture-family-mapping-not-bijective')
+ changed={a:b for a,b in families.items() if a!=b or any(p not in new or old[p]!=new[p] for p in old if p==a or p.startswith(a+'/'))}
+ # Every changed family is fully covered by original AND actual current receipts.
+ old_members={};new_members={}
+ for a,b in changed.items():
+  old_ns={n:v['original'] for n,v in matched.items() if n.split('/')[0]==a};new_ns={v['current']:v['receipt'] for n,v in matched.items() if n.split('/')[0]==a}
+  old_members.update(continuity_family_rows(old,a,old_ns,runtime,retired_sha));new_members.update(continuity_family_rows(new,b,new_ns,runtime,retired_sha))
+ rename={};categories={};windows={}
+ for path in old:
+  if path=='.':rename[path]='.';continue
+  family=path.split('/')[0]
+  if family not in changed:rename[path]=path;continue
+  replacement=changed[family];dest=replacement+path[len(family):];category='container'
+  for name,value in matched.items():
+   if path==name or path.startswith(name+'/'):
+    dest=value['current']+path[len(name):];windows[path]=continuity_exact_window(value['window'])
+    if path in old_members:
+     member=old_members[path];category='canonical-directory' if old[path]['kind']=='directory' else 'canonical-boundary-file' if member['boundaryChecked'] else 'unchanged-content-file'
+    elif path==name+'/node_modules/openclaw':category='host-runtime-symlink'
+    break
+  if path==family+'/owner.sqlite':category='retired-owner'
+  rename[path]=dest;categories[path]=category
+ need(len(set(rename.values()))==len(rename) and set(rename.values())==set(new),'capture-complete-inventory-bijection-required')
+ changes=[]
+ for path,dest in rename.items():
+  a,b=dict(old[path]),dict(new[dest]);ag=a.pop('hardlink_group',None);bg=b.pop('hardlink_group',None)
+  if a==b:continue
+  need({k:v for k,v in a.items() if k!='mtime_ns'}=={k:v for k,v in b.items() if k!='mtime_ns'},'capture-unproved-content-link-or-metadata-change')
+  category=categories.get(path,'root-container' if path=='.' and changed else None)
+  need(category in {'container','root-container','canonical-directory','canonical-boundary-file','host-runtime-symlink','retired-owner'},'capture-unattributed-mtime-change')
+  # Retained whole capture state can inherit only its preceding authenticated window.
+  selected_window=windows.get(path,ordinary)
+  if previous is not None and closed['inventory']['live']==previous['closed']['inventory']['live']:
+   selected_window=continuity_exact_window(previous['proof']['ordinaryWindow'])
+  need(selected_window[0]*10**9<=b['mtime_ns']<=selected_window[1]*10**9,'capture-mtime-outside-proved-writer-window')
+  if category in {'host-runtime-symlink','retired-owner'}:
+   need(path.split('/')[0]!=dest.split('/')[0],'capture-fresh-writer-family-required')
+  changes.append({'beforePath':path,'closedPath':dest,'field':'mtime_ns','category':category,'before':a['mtime_ns'],'closed':b['mtime_ns'],'window':selected_window})
+ need(continuity_hardlink_classes(old,rename)==continuity_hardlink_classes(new,{p:p for p in new}),'capture-hardlink-equivalence-changed')
+ # Compare the full source+mapped-capture partition, including boundary copies.
+ need(continuity_source_capture_partition(matched,False)==continuity_source_capture_partition(matched,True),'capture-source-capture-partition-changed')
+ need(writer_sources==CONTINUITY_WRITER_SOURCES,'capture-authenticated-writer-sources-required')
+ prior=previous['closedSha256'] if previous else None
+ return {'format':1,'kind':'closed-9.8-retired-recapture-closure','beforeSha256':continuity_digest(before),'closedSha256':continuity_digest(closed),
+  'ordinaryWindow':ordinary,'predecessorClosedSha256':prior,'writerSources':continuity_copied(writer_sources),
+  'canonicalReports':continuity_copied(reports),'namespaceMapping':{n:{'current':v['current'],'sourceDirectory':v['original']['sourceDirectory'],'canonicalReportSha256':v['canonicalReportSha256']} for n,v in sorted(matched.items())},
+  'timestampChanges':changes,'pathMappingSha256':continuity_digest(rename),'hardlinkClassesSha256':continuity_digest(continuity_hardlink_classes(new,{p:p for p in new})),
+  'unchangedFamilies':sorted({p.split('/')[0] for p in old if p!='.'}-set(changed)),
+  'baselineInventorySha256':continuity_digest(old),'beforeLiveInventorySha256':continuity_digest(before['inventory']['live']),'closedLiveInventorySha256':continuity_digest(new),
+  'baselineClassificationSha256':continuity_digest(before['classification']['baseline']),'beforeLiveClassificationSha256':continuity_digest(before['classification']['live']),'closedLiveClassificationSha256':continuity_digest(closed['classification']['live'])}
+
+
+def continuity_capture_subtree(source_manifest, prefix):
+    """Restrict the authenticated whole-manifest link partition to this subtree."""
+    fail = 'startup-proof-capture-manifest-link-partition-changed'
+    inventory, groups, selected_groups = {}, {}, {}
+    for name, row in source_manifest.items():
+        if row.get('kind') == 'file':
+            group = row.get('hardlink_group', name)
+            need(type(group) is str, fail)
+            groups.setdefault(group, []).append(name)
+        if name == prefix or name.startswith(prefix+'/'):
+            relative = '.' if name == prefix else name[len(prefix)+1:]
+            copied = dict(row)
+            copied.pop('hardlink_group', None)
+            inventory[relative] = copied
+            if row.get('kind') == 'file':
+                selected_groups.setdefault(row.get('hardlink_group', name), []).append(relative)
+    for group, selected in selected_groups.items():
+        members = groups[group]
+        need(group == min(members) and all(
+            source_manifest[name].get('hardlink_group') == group if len(members) > 1
+            else 'hardlink_group' not in source_manifest[name] for name in members), fail)
+        if len(selected) > 1:
+            representative = min(selected)
+            for relative in selected:
+                inventory[relative]['hardlink_group'] = representative
+    return inventory
+
+def capture_continuity_summary(evidence, plan, candidate, epoch, attempt, window, previous, source_manifest, folder, scenario, document, runtime):
+    """Recompute complete raw closure; authenticated producer capability is checked by the caller."""
+    fail = 'startup-proof-authentic-retired-capture-continuity-required'
+    need(type(evidence) is dict and set(evidence) == {'before','closed','proof','beforeSha256','closedSha256','proofSha256'}, fail)
+    expected = {'format','kind','phase','candidateId','attempt','workspaceEpoch','selectedRelative',
+                'physicalRoots','classification','inventory','classificationSha256','inventorySha256','stagingCount'}
+    for phase in ('before','closed'):
+        value = evidence[phase]
+        need(type(value) is dict and set(value) == expected and type(value['format']) is int and value['format'] == 1
+             and value['kind'] == 'closed-9.8-retired-capture-state' and value['phase'] == phase
+             and value['candidateId'] == candidate and value['workspaceEpoch'] == epoch
+             and type(value['attempt']) is int and value['attempt'] == attempt
+             and value['selectedRelative'] == plan['selectedRelative']
+             and type(value['stagingCount']) is int and value['stagingCount'] == 0
+             and continuity_digest(value) == evidence[phase+'Sha256'], fail)
+        continuity_validate_state(value)
+        raw = document(scenario+'/capture-'+phase, {'path':str(folder/('capture-'+phase+'.json')), 'sha256':evidence[phase+'Sha256']})
+        need(continuity_encoded(raw) == continuity_encoded(value), fail)
+    before, closed, proof = (evidence[k] for k in ('before','closed','proof'))
+    need(type(proof) is dict and continuity_digest(proof) == evidence['proofSha256']
+         and len(continuity_encoded(proof)) <= 4*1024**2, fail)
+    raw = document(scenario+'/capture-continuity', {'path':str(folder/'capture-continuity.json'), 'sha256':evidence['proofSha256']})
+    need(continuity_encoded(raw) == continuity_encoded(proof), fail)
+    roots = before['physicalRoots']
+    need(roots[0] == plan['baselineRootIdentity'][:5] and roots[1][0] == plan['fixtureStorageAuthority']['device'], fail)
+    prefix = str(PurePosixPath(plan['selectedRelative'])/'openclaw-runtime/state/tmp/plugin-captures')
+    inventory = continuity_capture_subtree(source_manifest, prefix)
+    classification = []
+    for name, row in inventory.items():
+        if re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/owner[.]sqlite', name):
+            need(row.get('kind') == 'file' and not any(name+s in inventory for s in ('-journal','-wal','-shm')), fail)
+            classification.append(prefix+'/'+name)
+    classification.sort()
+    need(before['inventory']['baseline'] == inventory and before['classification']['baseline'] == classification, fail)
+    need((attempt == 1) == (previous is None), fail)
+    if previous is not None:
+        prior = previous['closed']
+        need(roots[0] == prior['physicalRoots'][0] and before['workspaceEpoch'] == prior['workspaceEpoch']
+             and before['selectedRelative'] == prior['selectedRelative'], fail)
+        if attempt == 3:
+            need(prior['attempt'] == 2 and roots[1][:2] != prior['physicalRoots'][1][:2], fail)
+    predecessor = previous if attempt == 2 else None
+    continuity_prestart(before, predecessor)
+    reports = proof.get('canonicalReports')
+    need(type(reports) is list and 0 < len(reports) <= 8, fail)
+    report_keys = {'format','kind','packageRoot','workspaceRoots','originalSourceAdmissions','currentSourceAdmissions',
+                   'provedNamespaceMapping','canonicalReturnedTrue','ordinaryWindow','evaluatedWindow','windowSource','predecessorClosedSha256'}
+    report_summaries = []
+    for report in reports:
+        need(type(report) is dict and set(report) == report_keys and type(report['format']) is int and report['format'] == 1
+             and report['kind'] == 'canonical-retired-capture-admissions' and report['canonicalReturnedTrue'] is True
+             and report['ordinaryWindow'] == window and len(continuity_encoded(report)) <= 4*1024**2, fail)
+        need(report['workspaceRoots'] == ['/qualification/recovery/workspace','/var/lib/nova/workspace','/var/lib/nova/workspace',plan['selectedRelative']], fail)
+        package = PurePosixPath(report['packageRoot'])
+        projects = PurePosixPath('/var/lib/nova/workspace')/plan['selectedRelative']/'openclaw-runtime/state/npm/projects'
+        need(package.is_relative_to(projects) and str(package) == report['packageRoot']
+             and len(package.relative_to(projects).parts) == 4 and '..' not in package.parts
+             and package.relative_to(projects).parts[1:] == ('node_modules','@openclaw','codex'), fail)
+        need(all(type(report[k]) is dict and set(report[k]) == {str(package)+'\0'} for k in ('originalSourceAdmissions','currentSourceAdmissions')), fail)
+        evaluated = continuity_exact_window(report['evaluatedWindow'])
+        if report['windowSource'] == 'current-startup':
+            need(evaluated == window and report['predecessorClosedSha256'] is None, fail)
+        else:
+            need(report['windowSource'] == 'exact-preceding-closed-state' and predecessor is not None
+                 and report['predecessorClosedSha256'] == predecessor['closedSha256']
+                 and all(closed[k] == predecessor['closed'][k] for k in ('inventory','classification','physicalRoots'))
+                 and evaluated[1] <= window[0], fail)
+            matches = [r for r in predecessor['proof']['canonicalReports'] if all(r[k] == report[k]
+                       for k in ('packageRoot','workspaceRoots','originalSourceAdmissions','currentSourceAdmissions','provedNamespaceMapping'))]
+            need(len(matches) == 1 and matches[0]['evaluatedWindow'] == evaluated, fail)
+        report_summaries.append({'sha256':continuity_digest(report),'packageRootSha256':continuity_digest(report['packageRoot']),
+            'originalSourceAdmissionsSha256':continuity_digest(report['originalSourceAdmissions']),
+            'currentSourceAdmissionsSha256':continuity_digest(report['currentSourceAdmissions']),
+            'namespaceMappingSha256':continuity_digest(report['provedNamespaceMapping']),
+            'windowSource':report['windowSource'],'evaluatedWindow':evaluated,'predecessorClosedSha256':report['predecessorClosedSha256']})
+    derived = continuity_closure(before,closed,reports,window,runtime,CAPTURE_TOKEN,CONTINUITY_WRITER_SOURCES,predecessor)
+    need(continuity_encoded(proof) == continuity_encoded(derived), 'startup-proof-complete-retired-recapture-closure-changed')
+    keys = ('baselineInventorySha256','beforeLiveInventorySha256','closedLiveInventorySha256',
+            'baselineClassificationSha256','beforeLiveClassificationSha256','closedLiveClassificationSha256',
+            'pathMappingSha256','hardlinkClassesSha256','predecessorClosedSha256')
+    return {'kind':'closed-9.8-retired-capture-continuity','beforeSha256':evidence['beforeSha256'],
+        'closedSha256':evidence['closedSha256'],'proofSha256':evidence['proofSha256'],
+        'selectedRelative':before['selectedRelative'],'workspaceEpoch':epoch,'candidateId':candidate,'attempt':attempt,
+        'physicalRoots':roots,'ordinaryWindow':list(window),'stagingCount':0,
+        **{key:derived[key] for key in keys},'writerSourcesSha256':continuity_digest(derived['writerSources']),
+        'canonicalReportsSha256':continuity_digest(reports),'namespaceMappingSha256':continuity_digest(derived['namespaceMapping']),
+        'timestampChangesSha256':continuity_digest(derived['timestampChanges']),'canonicalReports':report_summaries}
 
 
 def capture_observation_summary(evidence, plan, candidate, epoch, attempt, first, source_manifest, folder, scenario, document):
@@ -929,3 +1283,625 @@ def invoke(request, sources, same_schema_helpers=None):
     result['observedAtMilliseconds'] = time.time_ns() // 1000000
     need(len(encoded(result)) <= 500 * 1024, 'startup-proof-summary-bound')
     return result
+
+TRANSITION_CORE_SHA256='26477f1c0610d753194929d10dc910395eaa99aaa9f25513cfa1028b68943d93'
+TRANSITION_FAMILY=r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}'
+TRANSITION_NS=TRANSITION_FAMILY+r'/native/admission-[A-Za-z0-9]{6}'
+TRANSITION_RETIRED='f9b7a02201bbcec6133d5d043ba09d189aec76517b4db7e337696cd16d40db9b'
+
+def transition_need(v,r):
+ if not v:raise RuntimeError(r)
+def transition_encoded(v):return (json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
+def transition_digest(v):return hashlib.sha256(transition_encoded(v)).hexdigest()
+def transition_without_group(v):return {k:x for k,x in v.items() if k!='hardlink_group'}
+def transition_window(core,v):return core.exact_window(v)
+def transition_intime(n,w):return type(n) is int and w[0]*10**9<=n<=w[1]*10**9
+
+def transition_reference(v):
+ transition_need(type(v) is dict and set(v) in ({'path','sha256'},{'path','sha256','bytes'}) and type(v['path']) is str and v['path'] and ('bytes' not in v or type(v['bytes']) is int and 0<v['bytes']<=67108864) and re.fullmatch('[a-f0-9]{64}',v['sha256']),'transition-exact-raw-reference-required')
+ return v
+
+def transition_document(v,limit=4194304):
+ transition_need(type(v) is dict and set(v)=={'ref','raw'} and type(v['raw']) is str,'transition-raw-document-required')
+ ref=transition_reference(v['ref']);raw=v['raw'].encode();transition_need(len(raw)<=limit and ('bytes' not in ref or len(raw)==ref['bytes']) and hashlib.sha256(raw).hexdigest()==ref['sha256'],'transition-raw-document-hash-changed')
+ return json.loads(raw)
+
+def transition_validate_state(core,state,authority):
+ fields={'format','kind','phase','candidateId','attempt','workspaceEpoch','selectedRelative','physicalRoots','classification','inventory','classificationSha256','inventorySha256','stagingCount'}
+ transition_need(type(state) is dict and set(state)==fields and state['format']==1 and state['kind']=='closed-9.8-retired-capture-state'
+      and state['phase'] in ('before','closed') and type(state['attempt']) is int and state['attempt'] in (1,2,3) and type(state['stagingCount']) is int and state['stagingCount']==0,'capture-state-contract-changed')
+ transition_need(type(state['candidateId']) is str and re.fullmatch('[a-f0-9]{64}',state['candidateId'])
+      and type(state['physicalRoots']) is list and len(state['physicalRoots'])==2
+      and all(type(row) is list and len(row)==5 and all(type(v) is int and 0<=v<=2**53-1 for v in row)
+              and row[0]>0 and row[1]>0 and stat.S_ISDIR(row[2]) and row[3:]==authority['serviceOwner'] for row in state['physicalRoots'])
+      and state['physicalRoots'][0][:2]!=state['physicalRoots'][1][:2],'capture-physical-authority-changed')
+ transition_need(set(state['inventory'])==set(state['classification'])=={'baseline','live'}
+      and state['inventorySha256']==core.digest(state['inventory']) and state['classificationSha256']==core.digest(state['classification']),'capture-state-hashes-changed')
+ for role in ('baseline','live'):
+  rows=state['inventory'][role];transition_need(type(rows) is dict and 0<len(rows)<=8192 and '.' in rows,'capture-complete-inventory-required')
+  for path,row in rows.items():
+   core.relative(path);transition_need(type(row) is dict and row.get('kind') in ('file','directory','symlink'),'capture-row-kind-changed')
+   transition_need(type(row.get('mtime_ns')) is int and row['mtime_ns']>=0 and type(row.get('xattrs')) is dict,'capture-exact-metadata-required')
+  classes=state['classification'][role];prefix=state['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures/'
+  owners=sorted(prefix+p for p,row in rows.items() if p.endswith('/owner.sqlite') and p.count('/')==1)
+  transition_need(classes==owners,'capture-owner-classification-incomplete')
+ return state
+
+def transition_families(rows):
+ result={p.split('/')[0] for p in rows if p!='.'}
+ transition_need(all(re.fullmatch(TRANSITION_FAMILY,p) for p in result),'transition-family-name-invalid');return result
+
+def transition_semantic(ns):
+ return {'sourceDirectory':ns['sourceDirectory'],'managed':ns['managed'],'members':{p:{k:v for k,v in m.items() if k not in ('sourceIdentity','capturedIdentity')} for p,m in ns['members'].items()}}
+
+def transition_source_roster(namespaces):
+ result={}
+ for ns in namespaces.values():
+  for member in ns['members'].values():
+   if 'contentHash' not in member:continue
+   key=member['source'];identity=tuple(map(int,member['sourceIdentity'].split(':')))
+   transition_need(len(identity)==6 and stat.S_ISREG(identity[2]),'transition-source-regular-identity-required')
+   stable=(stat.S_IMODE(identity[2]),identity[3],identity[4],member['contentHash'])
+   transition_need(result.setdefault(key,stable)==stable,'transition-source-semantic-conflict')
+ return result
+
+def transition_family_check(core,rows,family,entry,authority):
+ names={p for p in rows if p==family or p.startswith(family+'/')};ns=entry['namespaces'];w=transition_window(core,entry['window'])
+ transition_need(ns and all(n.startswith(family+'/native/') and re.fullmatch(TRANSITION_NS,n) for n in ns),'transition-family-namespaces-invalid')
+ transition_need(entry['kind'] in ('canonical','archived-native-receipt','historical-template'),'transition-family-origin-kind-invalid')
+ expected={family,family+'/native',family+'/owner.sqlite'};members={}
+ for name,t in ns.items():
+  expected.update((name,name+'/node_modules',name+'/node_modules/openclaw'))
+  for rel,m in t['members'].items():
+   p=name+'/content'+('/'+rel if rel else '');expected.add(p);members[p]=m;row=rows.get(p)
+   transition_need(row is not None,'transition-family-member-missing')
+   src=tuple(map(int,m['sourceIdentity'].split(':')));capt=tuple(map(int,m['capturedIdentity'].split(':')))
+   transition_need(row['mode']==stat.S_IMODE(capt[2]),'transition-family-member-mode-changed')
+   if entry['kind']!='historical-template':transition_need(row['mtime_ns']==capt[4],'transition-exact-captured-metadata-changed')
+   if 'contentHash' in m:
+    transition_need(row['kind']=='file' and row['size']==m['sizeBytes'] and row['sha256']==m['contentHash'],'transition-family-content-changed')
+    if m['boundaryChecked']:
+     transition_need(row['mode']==(0o600|(src[2]&0o100)) and transition_intime(row['mtime_ns'],w),'transition-copied-boundary-policy-changed')
+    else:transition_need(row['mtime_ns']==src[4],'transition-stable-member-time-changed')
+   else:transition_need(row['kind']=='directory' and transition_intime(row['mtime_ns'],w),'transition-directory-time-unproved')
+  link=rows.get(name+'/node_modules/openclaw')
+  transition_need(link and link['kind']=='symlink' and link['mode']==0o777 and link['target']==authority['runtime'],'transition-runtime-link-changed')
+ transition_need(names==expected,'transition-family-roster-not-complete')
+ owner=rows[family+'/owner.sqlite']
+ transition_need(owner['kind']=='file' and owner['size']==4096 and owner['sha256']==TRANSITION_RETIRED and owner['mode'] in (0o600,0o644) and 'hardlink_group' not in owner,'transition-retired-owner-invalid')
+ for p in names:
+  row=rows[p];transition_need([row['uid'],row['gid']]==authority['serviceOwner'] and row['xattrs']=={},'transition-protection-changed')
+  if row['kind']=='directory':transition_need(row['mode']==0o700,'transition-private-ancestry-required')
+  m=members.get(p)
+  if m is None or row['kind']=='directory' or m.get('boundaryChecked'):transition_need(transition_intime(row['mtime_ns'],w),'transition-writer-time-outside-origin')
+ return members
+
+def transition_initial_ledger(core,baseline,namespaces,origins,first_window,baseline_kind,authority):
+ transition_need(set(origins)=={'format','parent','baselineManifest','workspaceEpoch','selectedRelative','candidateId','windows'} and origins['format']==1,'transition-baseline-origin-contract')
+ transition_reference(origins['parent']);transition_reference(origins['baselineManifest'])
+ transition_need(origins['parent']==authority['baselineParent'] and origins['candidateId']==authority['baselineCandidateId'],'transition-exact-archived-baseline-authority-required')
+ transition_need(set(origins['windows'])=={'target-first-start','target-restart'},'transition-two-historical-windows-required')
+ windows={}
+ for name,origin in origins['windows'].items():
+  transition_need(set(origin)=={'window','references'} and set(origin['references'])=={'started','process','ready','closed'},'transition-historical-receipt-roster-changed')
+  w=transition_window(core,origin['window']);transition_need(w[1]<first_window[0],'transition-historical-window-not-prior')
+  for ref in origin['references'].values():transition_reference(ref)
+  transition_need(len({ref['sha256'] for ref in origin['references'].values()})==4,'transition-distinct-historical-receipts-required');windows[name]=w
+ transition_need(windows['target-first-start'][1]<windows['target-restart'][0],'transition-historical-window-order-changed')
+ active={p.split('/')[0] for p in namespaces};transition_need(len(active)==1,'transition-one-baseline-active-family-required')
+ active=next(iter(active));all_families=transition_families(baseline);transition_need(0<len(all_families)<=16,'transition-baseline-family-bound')
+ result={}
+ for family in sorted(all_families):
+  compatible=[]
+  for window_name,w in windows.items():
+   if family==active:ns=copy.deepcopy(namespaces);kind=baseline_kind
+   else:
+    ns={};seen=set();okay=True
+    for name in sorted(p for p in baseline if re.fullmatch(TRANSITION_NS,p) and p.startswith(family+'/')):
+     candidates=[]
+     for source,t in namespaces.items():
+      prefix=name+'/content';actual={p[len(prefix):].lstrip('/'):r for p,r in baseline.items() if p==prefix or p.startswith(prefix+'/')}
+      if set(actual)!=set(t['members']):continue
+      matches=True
+      for rel,row in actual.items():
+       m=t['members'][rel];src=tuple(map(int,m['sourceIdentity'].split(':')));cap=tuple(map(int,m['capturedIdentity'].split(':')))
+       matches=matches and row['mode']==stat.S_IMODE(cap[2])
+       if 'contentHash' in m:matches=matches and row['kind']=='file' and row['size']==m['sizeBytes'] and row['sha256']==m['contentHash'] and (transition_intime(row['mtime_ns'],w) if m['boundaryChecked'] else row['mtime_ns']==src[4])
+       else:matches=matches and row['kind']=='directory' and transition_intime(row['mtime_ns'],w)
+      if matches:candidates.append(source)
+     if len(candidates)!=1 or candidates[0] in seen:okay=False;break
+     seen.add(candidates[0]);ns[name]=copy.deepcopy(namespaces[candidates[0]])
+    if not okay or seen!=set(namespaces):continue
+    kind='historical-template'
+   entry={'kind':kind,'window':w,'namespaces':ns,'origin':{'kind':'archived-writer-field-window-compatibility','windowName':window_name,'parent':origins['parent'],'references':origins['windows'][window_name]['references'],'creatorAttribution':False},'rowsSha256':transition_digest({p:r for p,r in baseline.items() if p==family or p.startswith(family+'/')})}
+   try:transition_family_check(core,baseline,family,entry,authority)
+   except RuntimeError:continue
+   compatible.append(entry)
+  transition_need(len(compatible)==1,'transition-historical-shape-window-not-unique');result[family]=compatible[0]
+ return result
+
+def transition_capture_subtree(source_manifest, prefix):
+    """Restrict the authenticated whole-manifest link partition to this subtree."""
+    fail = 'startup-proof-capture-manifest-link-partition-changed'
+    inventory, groups, selected_groups = {}, {}, {}
+    for name, row in source_manifest.items():
+        if row.get('kind') == 'file':
+            group = row.get('hardlink_group', name)
+            transition_need(type(group) is str, fail)
+            groups.setdefault(group, []).append(name)
+        if name == prefix or name.startswith(prefix+'/'):
+            relative = '.' if name == prefix else name[len(prefix)+1:]
+            copied = dict(row)
+            copied.pop('hardlink_group', None)
+            inventory[relative] = copied
+            if row.get('kind') == 'file':
+                selected_groups.setdefault(row.get('hardlink_group', name), []).append(relative)
+    for group, selected in selected_groups.items():
+        members = groups[group]
+        transition_need(group == min(members) and all(
+            source_manifest[name].get('hardlink_group') == group if len(members) > 1
+            else 'hardlink_group' not in source_manifest[name] for name in members), fail)
+        if len(selected) > 1:
+            representative = min(selected)
+            for relative in selected:
+                inventory[relative]['hardlink_group'] = representative
+    return inventory
+
+def transition_exact_report_context(core,reports,before,ordinary,previous,authority):
+ transition_need(type(reports) is list and len(reports)==1,'transition-canonical-reports-required')
+ expected=authority['workspaceRoots'];transition_need(expected[3]==before['selectedRelative'],'transition-selected-root-context-changed')
+ for r in reports:
+  transition_need(r['workspaceRoots']==expected and r['ordinaryWindow']==ordinary and r['canonicalReturnedTrue'] is True and r['kind']=='canonical-retired-capture-admissions','transition-genuine-canonical-context-required')
+  transition_need(set(r['originalSourceAdmissions'])=={r['packageRoot']+'\0'} and set(r['currentSourceAdmissions'])=={r['packageRoot']+'\0'},'transition-canonical-package-key-changed')
+  if r['windowSource']=='current-startup':transition_need(r['evaluatedWindow']==ordinary and r['predecessorClosedSha256'] is None,'transition-current-window-changed')
+  else:
+   transition_need(previous is not None and r['windowSource']=='exact-preceding-closed-state' and r['predecessorClosedSha256']==previous['closedSha256'],'transition-inherited-window-predecessor-missing')
+   matches=[p for p in previous['canonicalReports'] if all(p[k]==r[k] for k in ('packageRoot','originalSourceAdmissions','currentSourceAdmissions'))]
+   transition_need(len(matches)==1 and r['evaluatedWindow']==matches[0]['evaluatedWindow'] and r['evaluatedWindow'][1]<ordinary[0],'transition-inherited-window-authority-changed')
+ logical=authority['workspaceRoots'][2]+'/'+before['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures'
+ return core.mappings(reports,logical)
+
+def transition_registry_selection(value,admissions,logical,raw_index):
+ transition_need(value['format']==1 and value['kind']=='complete-writer-retained-paths' and value['wholeIndexSha256'] and re.fullmatch('[a-f0-9]{64}',value['wholeIndexSha256']),'transition-whole-index-authority-required')
+ transition_need(value['writerRule']=='all-rows/all-receipts:capturedRoot/content UNION capturedPath','transition-writer-selection-rule-changed')
+ transition_need(type(raw_index) is dict and type(raw_index.get('plugins')) is list and value['wholeIndexSha256']==transition_digest(raw_index),'transition-raw-whole-index-binding-changed')
+ rows=value['registryRows'];transition_need(type(rows) is list and len(rows)==value['registryRowCount'] and len(rows)<=4096 and [r['position'] for r in rows]==list(range(len(rows))),'transition-registry-coverage-incomplete')
+ transition_need(len(rows)==len(raw_index['plugins']),'transition-raw-registry-row-count-changed')
+ for row,raw_row in zip(rows,raw_index['plugins']):
+  transition_need(type(raw_row) is dict and row['pluginId']==raw_row.get('pluginId') and row['sourceAdmissions']==raw_row.get('sourceAdmissions') and ('sourceAdmissions' not in raw_row or type(raw_row['sourceAdmissions']) is dict),'transition-raw-registry-admissions-changed')
+ union=set();codex=[]
+ for row in rows:
+  transition_need(set(row)=={'position','pluginId','sourceAdmissions'},'transition-raw-registry-row-required');raw=row['sourceAdmissions']
+  if row['pluginId']=='codex':codex.append(raw)
+  if raw is None:continue
+  transition_need(type(raw) is dict,'transition-invalid-raw-admissions')
+  for receipt in raw.values():
+   transition_need(type(receipt) is dict and set(receipt)=={'signature','sourceDigest','nativeNamespaces','nativeArtifacts'},'transition-unclassified-receipt')
+   for name,ns in receipt['nativeNamespaces'].items():
+    transition_need(name==ns['capturedRoot'],'transition-namespace-root-changed');union.add(name+'/content')
+   for item in receipt['nativeArtifacts'].values():union.add(item['capturedPath'])
+ transition_need(len(codex)==1 and codex[0]==admissions,'transition-codex-selection-not-canonical')
+ transition_need(value['retainedPaths']==sorted(union),'transition-complete-writer-union-changed')
+ result=set()
+ for name in union:
+  p=PurePosixPath(name);transition_need(p.is_absolute() and str(p)==name and '..' not in p.parts,'transition-noncanonical-retained-path')
+  if p.is_relative_to(PurePosixPath(logical)):result.add(p.relative_to(PurePosixPath(logical)).as_posix())
+ return result
+
+def transition_labeled_partition(labels):
+ groups={}
+ for label,identity in labels.items():groups.setdefault(tuple(identity),[]).append(label)
+ return sorted(sorted(g) for g in groups.values())
+
+def transition_expected_partition(rows,ledger):
+ parent={}
+ def find(x):
+  parent.setdefault(x,x)
+  if parent[x]!=x:parent[x]=find(parent[x])
+  return parent[x]
+ def join(labels):
+  first=None
+  for x in labels:
+   r=find(x)
+   if first is None:first=r
+   else:parent[r]=find(first)
+ for family,entry in ledger.items():
+  groups={}
+  for name,ns in entry['namespaces'].items():
+   for rel,m in ns['members'].items():
+    if 'contentHash' not in m:continue
+    source='source:'+m['source'];capture='capture:'+name+'/content/'+rel
+    sid=tuple(map(int,m['sourceIdentity'].split(':')[:2]));cid=tuple(map(int,m['capturedIdentity'].split(':')[:2]))
+    groups.setdefault(sid,[]).append(source)
+    if entry['kind'] in ('canonical','archived-native-receipt'):groups.setdefault(cid,[]).append(capture)
+    elif m['boundaryChecked']:find(capture)
+    else:join([source,capture])
+  for labels in groups.values():join(labels)
+ for p,r in rows.items():
+  if r['kind']=='file':find('capture:'+p)
+ groups={}
+ for label in parent:groups.setdefault(find(label),[]).append(label)
+ return sorted(sorted(v) for v in groups.values())
+
+def transition_measured_partition(core,rows,ledger,physical):
+ transition_need(set(physical)=={'sources','captures'},'transition-complete-physical-role-required')
+ files={p for p,r in rows.items() if r['kind']=='file'};transition_need(set(physical['captures'])==files,'transition-physical-capture-roster-incomplete')
+ ns={n:t for entry in ledger.values() for n,t in entry['namespaces'].items()};roster=transition_source_roster(ns)
+ transition_need(set(physical['sources'])==set(roster),'transition-physical-source-roster-incomplete')
+ labels={};capture_labels={}
+ for p,value in physical['captures'].items():
+  transition_need(type(value) is dict and all(type(value.get(k)) is int and value[k]>0 for k in ('device','inode')),'transition-capture-physical-identity-invalid')
+  labels['capture:'+p]=(value['device'],value['inode']);capture_labels[p]=labels['capture:'+p]
+ transition_need(transition_labeled_partition(capture_labels)==core.hardlink_classes(rows,{p:p for p in rows}),'transition-capture-raw-partition-changed')
+ for p,v in physical['sources'].items():
+  transition_need(set(v)=={'device','inode','mode','size','mtime_ns','ctime_ns'} and all(type(x) is int and x>=0 for x in v.values()) and v['device']>0 and v['inode']>0,'transition-physical-source-identity-invalid')
+  mode,size,mtime,_=roster[p];transition_need(stat.S_ISREG(v['mode']) and stat.S_IMODE(v['mode'])==mode and v['size']==size and v['mtime_ns']==mtime,'transition-source-metadata-authority-changed')
+  labels['source:'+p]=(v['device'],v['inode'])
+ actual=transition_labeled_partition(labels);expected=transition_expected_partition(rows,ledger)
+ transition_need(actual==expected,'transition-full-source-capture-partition-changed')
+ return actual
+
+def transition_prove(core,core_sha,packet,authority,previous=None,_depth=0):
+ transition_need(core_sha==TRANSITION_CORE_SHA256 and _depth<=1,'transition-reviewed-core-required')
+ transition_need(set(authority)=={'baselineParent','baselineCandidateId','workspaceRoots','runtime','serviceOwner'} and type(authority['workspaceRoots']) is list and len(authority['workspaceRoots'])==4 and type(authority['serviceOwner']) is list and len(authority['serviceOwner'])==2 and all(type(v) is int and v>=0 for v in authority['serviceOwner']),'transition-authenticated-context-required')
+ transition_reference(authority['baselineParent']);transition_need(re.fullmatch('[a-f0-9]{64}',authority['baselineCandidateId']) and all(PurePosixPath(p).is_absolute() for p in authority['workspaceRoots'][:3]) and PurePosixPath(authority['runtime']).is_absolute(),'transition-context-paths-invalid')
+ transition_need(set(packet)=={'before','closed','canonical','selection','physical','origins','baselineManifest','rawIndexes','lifecycle','writerSources'},'transition-input-contract-changed')
+ docs={k:transition_document(v,67108864 if k=='baselineManifest' else 4194304) for k,v in packet.items() if k!='writerSources'}
+ transition_need(packet['writerSources']==core.WRITER_SOURCES,'transition-writer-sources-changed')
+ before,closed=docs['before'],docs['closed'];transition_validate_state(core,before,authority);transition_validate_state(core,closed,authority)
+ life=docs['lifecycle'];transition_need(set(life)=={'window','started','closed'} and life['started']!=life['closed'],'transition-ordinary-lifecycle-required')
+ transition_reference(life['started']);transition_reference(life['closed']);ordinary=transition_window(core,life['window']);attempt=before['attempt']
+ transition_need(before['phase']=='before' and closed['phase']=='closed' and all(before[k]==closed[k] for k in ('candidateId','attempt','workspaceEpoch','selectedRelative','physicalRoots')),'transition-scenario-identity-changed')
+ transition_need(before['inventory']['baseline']==closed['inventory']['baseline'] and before['classification']['baseline']==closed['classification']['baseline'],'transition-baseline-mutated')
+ prior=None
+ if attempt==2:
+  transition_need(previous is not None and set(previous)=={'packet','proof'},'transition-restart-predecessor-required')
+  prior=transition_prove(core,core_sha,previous['packet'],authority,None,_depth+1);transition_need(transition_document(previous['proof'])==prior,'transition-predecessor-proof-changed')
+  pb=transition_document(previous['packet']['before']);pc=transition_document(previous['packet']['closed']);pp=transition_document(previous['packet']['physical']);ps=transition_document(previous['packet']['selection'])
+  transition_need(pb['attempt']==1 and ordinary[0]>prior['ordinaryWindow'][1] and all(before[k]==pc[k] for k in ('candidateId','workspaceEpoch','selectedRelative','physicalRoots','inventory','classification')),'transition-restart-exact-prior-closed-required')
+  transition_need(docs['origins']==transition_document(previous['packet']['origins']) and docs['physical']['beforeLive']==pp['closedLive'] and docs['selection']['before']==ps['after'],'transition-restart-physical-or-registry-predecessor-changed')
+ else:
+  transition_need(attempt in (1,3) and previous is None and before['inventory']['baseline']==before['inventory']['live'] and before['classification']['baseline']==before['classification']['live'],'transition-pristine-prestart-required')
+ reports=docs['canonical'];unchanged_catalog=reports==[]
+ if unchanged_catalog:
+  transition_need(before['inventory']==closed['inventory'] and before['classification']==closed['classification'] and docs['physical']['beforeLive']==docs['physical']['closedLive'] and docs['selection']['before']==docs['selection']['after'],'transition-no-callback-requires-exact-whole-state')
+  active=[r['sourceAdmissions'] for r in docs['selection']['before']['registryRows'] if r['pluginId']=='codex'];transition_need(len(active)==1,'transition-unchanged-codex-row-required')
+  closed_admissions=active[0];baseline_admissions=prior['baselineSourceAdmissions'] if prior else closed_admissions
+  baseline_ns=copy.deepcopy(core.namespace_rows(baseline_admissions));current_ns=copy.deepcopy(core.namespace_rows(closed_admissions));matched=None
+  # Raw catalog namespaces use absolute paths; all remaining predicates operate on selected relative names.
+  logical=authority['workspaceRoots'][2]+'/'+before['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures'
+  for group in (baseline_ns,current_ns):transition_need(all(str(PurePosixPath(n).parent.parent.parent)==logical and re.fullmatch(TRANSITION_NS,str(PurePosixPath(n).relative_to(logical))) for n in group),'transition-unchanged-namespace-root-changed')
+  baseline_ns={str(PurePosixPath(n).relative_to(logical)):v for n,v in baseline_ns.items()};current_ns={str(PurePosixPath(n).relative_to(logical)):v for n,v in current_ns.items()}
+ else:
+  matched=transition_exact_report_context(core,reports,before,ordinary,prior,authority)
+  baseline_admissions=reports[0]['originalSourceAdmissions'];closed_admissions=reports[0]['currentSourceAdmissions']
+  baseline_ns={name:v['original'] for name,v in matched.items()};current_ns={v['current']:v['receipt'] for v in matched.values()}
+ transition_need(len({n.split('/')[0] for n in baseline_ns})==len({n.split('/')[0] for n in current_ns})==1,'transition-one-active-family-required')
+ if prior:
+  transition_need(baseline_admissions==prior['baselineSourceAdmissions'],'transition-common-baseline-admissions-changed')
+  prior_current={n:t for e in prior['closedLedger'].values() if e['kind'] in ('canonical','archived-native-receipt') for n,t in e['namespaces'].items()}
+  previous_active=prior['closedActiveFamily'];prior_ns={n:t for n,t in prior_current.items() if n.startswith(previous_active+'/')}
+  transition_need(len(prior_ns)==len(current_ns),'transition-composed-namespace-count-changed')
+  used=set()
+  for ns in prior_ns.values():
+   matches=[n for n,t in current_ns.items() if transition_semantic(t)==transition_semantic(ns)]
+   transition_need(len(matches)==1 and matches[0] not in used,'transition-composed-semantic-join-not-unique');used.add(matches[0])
+ baseline=before['inventory']['baseline'];old=before['inventory']['live'];new=closed['inventory']['live']
+ transition_need(docs['origins']['baselineManifest']==packet['baselineManifest']['ref'] and docs['origins']['workspaceEpoch']==before['workspaceEpoch'] and docs['origins']['selectedRelative']==before['selectedRelative'],'transition-archived-baseline-join-changed')
+ transition_need(transition_capture_subtree(docs['baselineManifest'],before['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures')==baseline,'transition-complete-archived-baseline-projection-changed')
+ base_ledger=transition_initial_ledger(core,baseline,baseline_ns,docs['origins'],ordinary,'archived-native-receipt' if unchanged_catalog else 'canonical',authority)
+ old_ledger=copy.deepcopy(prior['closedLedger'] if prior else base_ledger)
+ transition_need(set(old_ledger)==transition_families(old),'transition-prestart-family-ledger-incomplete')
+ for f,e in old_ledger.items():transition_family_check(core,old,f,e,authority)
+ physical=docs['physical'];transition_need(set(physical)=={'baseline','beforeLive','closedLive'},'transition-three-physical-roles-required')
+ baseline_partition=transition_measured_partition(core,baseline,base_ledger,physical['baseline']);before_partition=transition_measured_partition(core,old,old_ledger,physical['beforeLive'])
+ logical=authority['workspaceRoots'][2]+'/'+before['selectedRelative']+'/openclaw-runtime/state/tmp/plugin-captures'
+ transition_need(set(docs['selection'])=={'before','after'},'transition-two-writer-selections-required')
+ before_admissions=prior['closedSourceAdmissions'] if prior else baseline_admissions
+ before_paths=transition_registry_selection(docs['selection']['before'],before_admissions,logical,docs['rawIndexes']['before']);after_paths=transition_registry_selection(docs['selection']['after'],closed_admissions,logical,docs['rawIndexes']['after'])
+ removed=transition_families(old)-transition_families(new);created=transition_families(new)-transition_families(old);survived=transition_families(old)&transition_families(new)
+ transition_need(len(created)<=1 and len(removed)<=16,'transition-family-change-bound')
+ closed_active=next(iter({n.split('/')[0] for n in current_ns}));transition_need(closed_active in transition_families(new),'transition-current-active-family-absent')
+ if created:transition_need(created=={closed_active} and all(r['windowSource']=='current-startup' for r in reports),'transition-created-family-current-window-required')
+ for f in removed:transition_need(not any(p==f or p.startswith(f+'/') for p in before_paths|after_paths),'transition-referenced-family-removal')
+ closed_ledger={}
+ for f in survived:
+  old_rows={p:r for p,r in old.items() if p==f or p.startswith(f+'/')};new_rows={p:r for p,r in new.items() if p==f or p.startswith(f+'/')}
+  transition_need(set(old_rows)==set(new_rows) and all(transition_without_group(old_rows[p])==transition_without_group(new_rows[p]) for p in old_rows),'transition-surviving-family-mutated')
+  closed_ledger[f]=copy.deepcopy(old_ledger[f]);closed_ledger[f]['rowsSha256']=transition_digest(new_rows)
+ for f in created:
+  entry={'kind':'canonical','window':ordinary,'namespaces':copy.deepcopy(current_ns),'origin':{'canonical':packet['canonical']['ref'],'started':life['started'],'closed':life['closed']},'rowsSha256':transition_digest({p:r for p,r in new.items() if p==f or p.startswith(f+'/')})}
+  transition_family_check(core,new,f,entry,authority);closed_ledger[f]=entry
+ transition_need(set(closed_ledger)==transition_families(new),'transition-closed-family-complement-unproved')
+ if not created:
+  transition_need(closed_active in closed_ledger and closed_ledger[closed_active]['kind'] in ('canonical','archived-native-receipt') and closed_ledger[closed_active]['namespaces']==current_ns,'transition-existing-active-authority-changed')
+ if any(r['windowSource']!='current-startup' for r in reports):transition_need(prior is not None and before['inventory']==closed['inventory'] and before['classification']==closed['classification'] and docs['selection']['before']==docs['selection']['after'] and physical['beforeLive']==physical['closedLive'],'transition-inherited-window-requires-entire-unchanged-state')
+ if old==new:transition_need(not removed and not created,'transition-unchanged-family-set-differs')
+ else:transition_need((removed or created) and {k:v for k,v in old['.'].items() if k!='mtime_ns'}=={k:v for k,v in new['.'].items() if k!='mtime_ns'} and transition_intime(new['.']['mtime_ns'],ordinary),'transition-root-writer-time-unproved')
+ for f,e in closed_ledger.items():transition_family_check(core,new,f,e,authority)
+ closed_partition=transition_measured_partition(core,new,closed_ledger,physical['closedLive'])
+ if matched is not None:transition_need(core.source_capture_partition(matched,False)==core.source_capture_partition(matched,True),'transition-canonical-source-topology-changed')
+ # Complete survivor/source projection remains equal even if group representatives or new family names sort earlier.
+ common_labels={'source:'+p for p in physical['beforeLive']['sources']}|{'capture:'+p for p,r in old.items() if r['kind']=='file' and p.split('/')[0] in survived}
+ def restricted(parts):return sorted(sorted(set(group)&common_labels) for group in parts if set(group)&common_labels)
+ transition_need(restricted(before_partition)==restricted(closed_partition),'transition-surviving-source-topology-changed')
+ return {'format':1,'kind':'retired-capture-role-transition','attempt':attempt,'candidateId':before['candidateId'],'workspaceEpoch':before['workspaceEpoch'],'selectedRelative':before['selectedRelative'],'physicalRoots':before['physicalRoots'],
+ 'beforeSha256':packet['before']['ref']['sha256'],'closedSha256':packet['closed']['ref']['sha256'],'bindings':{k:v['ref'] for k,v in packet.items() if k!='writerSources'},'ordinaryWindow':ordinary,'predecessorProofSha256':previous['proof']['ref']['sha256'] if previous else None,
+ 'removedFamilies':sorted(removed),'createdFamilies':sorted(created),'survivingFamilies':sorted(survived),'closedActiveFamily':closed_active,'closedLedger':closed_ledger,'canonicalReports':copy.deepcopy(reports),'closedSourceAdmissions':copy.deepcopy(closed_admissions),'baselineSourceAdmissions':copy.deepcopy(baseline_admissions),'unchangedCatalogEarlyReturn':unchanged_catalog,'canonicalFunctionObserved':not unchanged_catalog,
+ 'baselinePartitionSha256':transition_digest(baseline_partition),'beforePartitionSha256':transition_digest(before_partition),'closedPartitionSha256':transition_digest(closed_partition),'composedSemanticJoin':prior is not None,'composedCanonicalInvocationClaimed':False,
+ 'writerSources':copy.deepcopy(packet['writerSources']),'authorityContext':copy.deepcopy(authority),'qualificationAccepted':False}
+
+def transition_packet_need(value,reason):
+ if not value:raise RuntimeError(reason)
+
+def transition_packet_encoded(value):return (json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
+
+def transition_packet_digest(value):return hashlib.sha256(transition_packet_encoded(value)).hexdigest()
+
+def transition_packet_value(doc):
+ raw=doc['raw'].encode();ref=doc['ref']
+ transition_packet_need(hashlib.sha256(raw).hexdigest()==ref['sha256'] and ('bytes' not in ref or len(raw)==ref['bytes']),'capture-packet-raw-document-changed')
+ return json.loads(raw)
+TRANSITION_DOCUMENT_NAMES={'before':'capture-before.json','closed':'capture-closed.json','canonical':'capture-canonical.json',
+ 'selection':'capture-registry-selection.json','physical':'capture-physical-roles.json','origins':'capture-history.json',
+ 'rawIndexes':'capture-registry-indexes.json','lifecycle':'capture-lifecycle.json'}
+TRANSITION_OBSERVATION_KEYS={'registryInputs','registrySelections','canonical','canonicalPhysical','capturePhysical','prestart','selectedIndexRead','coverage','closedSources'}
+
+
+def transition_packet_compose(before_doc,closed_doc,observations,prestart_input,baseline_doc,origins,lifecycle,writer_sources,write,previous=None):
+ before,closed=transition_packet_value(before_doc),transition_packet_value(closed_doc);attempt=before['attempt']
+ transition_packet_need(attempt in (1,2,3) and (previous is not None)==(attempt==2),'capture-packet-predecessor-role')
+ def get(name):transition_packet_need(name in observations,'capture-packet-observation-missing:'+name);return transition_packet_value(observations[name])
+ raw=get('registry-input-1.json');selection=get('registry-selection-1.json');read=get('registry-selected-read.json');coverage=get('registry-coverage.json')
+ transition_packet_need(raw['ordinal']==selection['ordinal']==1 and raw['rawIndexesSha256']==selection['rawIndexesSha256']==read['rawIndexesSha256']==transition_packet_digest(raw['indexes'])
+      and raw['observationOrigin']==selection['observationOrigin']==read['observationOrigin'],'capture-packet-original-registry-bindings')
+ transition_packet_need(len(raw['indexes'])==2 and read['wholeIndexSha256']==dict(zip(('before','after'),map(transition_packet_digest,raw['indexes'])))
+      and read['originalSelectedIndexReturned'] is True,'capture-packet-selected-whole-index-join')
+ canonical_names=sorted(n for n in observations if n.startswith('canonical-observation-'))
+ physical_names=sorted(n for n in observations if n.startswith('canonical-source-files-'))
+ transition_packet_need(len(canonical_names)==len(physical_names)<=1 and coverage['canonicalCallbackCount']==len(canonical_names),'capture-packet-canonical-roster')
+ reports=[get(n) for n in canonical_names]
+ transition_packet_need(coverage['selectedIndexReadCount']==1 and coverage['observationOrigin']==raw['observationOrigin'],'capture-packet-coverage-origin')
+ if reports:
+  transition_packet_need(raw['observationOrigin']=='qualifier' and coverage['catalogCallbackCount']==1,'capture-packet-genuine-callback-origin')
+ else:
+  transition_packet_need(raw['observationOrigin']=='unchanged-index-return' and coverage['catalogCallbackCount']==0 and read['indexRowsExactlyEqual'] is True
+       and raw['indexes'][0]==raw['indexes'][1],'capture-packet-exact-unchanged-index-required')
+ input_selections=selection['selection'];transition_packet_need(set(input_selections)=={'before','after'},'capture-packet-two-selections-required')
+ if attempt==2:
+  old_indexes=transition_packet_value(previous['packet']['rawIndexes']);old_selections=transition_packet_value(previous['packet']['selection'])
+  transition_packet_need(raw['indexes'][0]==old_indexes['before'],'capture-packet-restart-common-baseline-index-changed')
+  indexes={'before':old_indexes['after'],'after':raw['indexes'][1]}
+  selected={'before':old_selections['after'],'after':input_selections['after']}
+  transition_packet_need(prestart_input is None,'capture-packet-restart-no-fake-prestart-index')
+ else:
+  transition_packet_need(prestart_input is not None,'capture-packet-pristine-prestart-index-required')
+  initial=transition_packet_value(prestart_input)
+  transition_packet_need(initial['rawIndex']==raw['indexes'][0] and initial['originalSelectedIndexReturned'] is True
+       and initial['canonicalReturnedTrue'] is False,'capture-packet-actual-prestart-index-join')
+  indexes=dict(zip(('before','after'),raw['indexes']));selected=input_selections
+ physical_before=get('capture-physical-before.json');physical_pre=get('capture-physical-pre-native.json');physical_post=get('capture-physical-post-native.json')
+ transition_packet_need(physical_before['stateSha256']==before_doc['ref']['sha256'] and physical_pre['stateSha256']==physical_post['stateSha256']==closed_doc['ref']['sha256'],'capture-packet-same-walk-state-join')
+ for role in ('baseline','live'):
+  transition_packet_need(physical_pre['inventory'][role]==physical_post['inventory'][role] and physical_pre['fileInodes'][role]==physical_post['fileInodes'][role],'capture-packet-closed-physical-state-changed')
+ transition_packet_need(physical_before['inventory']==before['inventory'] and physical_post['inventory']==closed['inventory']
+      and physical_before['fileInodes']['baseline']==physical_post['fileInodes']['baseline'],'capture-packet-baseline-physical-state-changed')
+ source_names=sorted(n for n in observations if n.startswith('prestart-source-files-'));transition_packet_need(len(source_names)==1,'capture-packet-prestart-source-roster')
+ initial_sources=get(source_names[0]);transition_packet_need(initial_sources['physicalSourceRoles']=={'before':'retained-baseline','after':'unstarted-live'},'capture-packet-prestart-source-role')
+ if reports:
+  closed_sources=get(physical_names[0]);transition_packet_need(closed_sources['canonicalReportSha256']==transition_packet_digest(reports[0]) and closed_sources['physicalSourceRoles']=={'before':'retained-baseline','after':'closed-live'},'capture-packet-actual-canonical-source-binding')
+  closed_source_ref=None
+ else:
+  closed_sources=get('closed-source-files.json');closed_source_ref=observations['closed-source-files.json']['ref']
+  transition_packet_need(closed_sources['canonicalReturnedTrue'] is False and closed_sources['physicalSourceRoles']=={'before':'retained-baseline','after':'closed-live'},'capture-packet-unchanged-source-no-canonical-claim')
+ transition_packet_need(initial_sources['workspaceRoots']==closed_sources['workspaceRoots'] and initial_sources['packageRoot']==closed_sources['packageRoot']
+      and initial_sources['physicalSources']['before']==closed_sources['physicalSources']['before'],'capture-packet-source-baseline-role-changed')
+ physical={'baseline':{'sources':initial_sources['physicalSources']['before'],'captures':physical_before['fileInodes']['baseline']},
+  'beforeLive':{'sources':initial_sources['physicalSources']['after'],'captures':physical_before['fileInodes']['live']},
+  'closedLive':{'sources':closed_sources['physicalSources']['after'],'captures':physical_post['fileInodes']['live']}}
+ if attempt==2:transition_packet_need(physical['beforeLive']==transition_packet_value(previous['packet']['physical'])['closedLive'],'capture-packet-restart-full-physical-join')
+ documents={'before':before_doc,'closed':closed_doc,'baselineManifest':baseline_doc}
+ values={'canonical':reports,'selection':selected,'physical':physical,'origins':origins,'rawIndexes':indexes,'lifecycle':lifecycle}
+ for role,content in values.items():documents[role]=write(TRANSITION_DOCUMENT_NAMES[role],content)
+ packet={**documents,'writerSources':writer_sources}
+ manifest={'format':1,'kind':'capture-role-transition-packet','documents':{k:v['ref'] for k,v in documents.items()},'writerSources':writer_sources}
+ packet_doc=write('capture-transition-packet.json',manifest)
+ references={'registryInputs':[observations['registry-input-1.json']['ref']], 'registrySelections':[observations['registry-selection-1.json']['ref']],
+  'canonical':[observations[n]['ref'] for n in canonical_names],'canonicalPhysical':[observations[n]['ref'] for n in physical_names],
+  'capturePhysical':{'before':observations['capture-physical-before.json']['ref'],'preNative':observations['capture-physical-pre-native.json']['ref'],'postNative':observations['capture-physical-post-native.json']['ref']},
+  'prestart':{'input':prestart_input['ref'] if prestart_input else None,'sources':[observations[n]['ref'] for n in source_names]},
+  'selectedIndexRead':observations['registry-selected-read.json']['ref'],'coverage':observations['registry-coverage.json']['ref'],'closedSources':closed_source_ref}
+ transition_packet_need(set(references)==TRANSITION_OBSERVATION_KEYS,'capture-packet-observation-reference-shape')
+ return packet,packet_doc,references
+
+
+
+# Exact source-bound pure role predicate and composition copies; no producer import/execution.
+TRANSITION_PREDICATE_SHA256='df724c3ab3fcbfa53da4ec611603ababe0839c5a41900b606583ffe8a54b27a0'
+TRANSITION_PARSER_SOURCES={'installed-plugin-index-store-CUXGXwqh.mjs':'8f44c30d7555a3efdbe0c02254c2d050b019ae24b416d83a9cb61c8da8356232','plugin-source-capture-report-BdUXHa10.mjs':'4aa98618a9fbac29e1bf83af25e486d20eeed416ce2cdcc5e95a231bbba71ac9'}
+
+class _TransitionCore:
+    exact_window=staticmethod(continuity_exact_window)
+    digest=staticmethod(continuity_digest)
+    relative=staticmethod(continuity_relative)
+    mappings=staticmethod(continuity_mappings)
+    hardlink_classes=staticmethod(continuity_hardlink_classes)
+    namespace_rows=staticmethod(continuity_namespace_rows)
+    source_capture_partition=staticmethod(continuity_source_capture_partition)
+    WRITER_SOURCES=CONTINUITY_WRITER_SOURCES
+
+def transition_same(left,right):
+    return continuity_encoded(left)==continuity_encoded(right)
+
+def consume_capture_history(plan,review,values,document):
+    fail='startup-proof-original-capture-history-required'
+    history=plan.get('originalCaptureHistory');baseline=review['baseline'];original=values['retainedParent']
+    need(type(history) is dict and set(history)=={'format','parent','baselineManifest','workspaceEpoch','selectedRelative','candidateId','windows'}
+         and history['format']==1 and history['parent']==baseline['retainedParent'] and history['baselineManifest']==baseline['manifest']
+         and history['workspaceEpoch']==baseline['epoch']==plan['workspaceEpoch'] and history['selectedRelative']==plan['selectedRelative']
+         and history['candidateId']==review['prior']['candidateId']==original['targetCandidateId']
+         and original['selectedRelative']==plan['selectedRelative'] and [s['scenario'] for s in original['scenarios']]==list(SCENARIOS)
+         and set(history['windows'])==set(SCENARIOS[:2]),fail)
+    last=None
+    for attempt,name in enumerate(SCENARIOS[:2],1):
+        witness=history['windows'][name];prior=original['scenarios'][attempt-1]
+        need(type(witness) is dict and set(witness)=={'window','references'} and set(witness['references'])=={'started','process','ready','closed'},fail)
+        records={}
+        for role,ref in witness['references'].items():
+            need(ref==prior[role] and plan['inputHashes'].get(ref['path'])==ref['sha256']
+                 and PurePosixPath(ref['path'])==PurePosixPath(baseline['retainedParent']['path']).parent/('attempt-'+str(attempt))/(role+'.json'),fail)
+            records[role]=document('capture-history/'+name+'/'+role,ref)
+        started,process,ready,closed=(records[k] for k in ('started','process','ready','closed'))
+        need(started['operationId']==original['operationId'] and started['candidateId']==history['candidateId']
+             and started['epoch']==history['workspaceEpoch'] and started['attempt']==attempt
+             and ready['startedSha256']==sha(encoded(started)) and ready['processSha256']==sha(encoded(process))
+             and transition_same(ready['process'],process) and closed['readySha256']==sha(encoded(ready))
+             and closed['owningServiceFullyStopped'] is True and ready['candidateId']==history['candidateId'] and ready['epoch']==history['workspaceEpoch'],fail)
+        start,settled,end=started['startedAtSeconds'],ready['readyAtSeconds'],closed['closedAtSeconds']
+        need(all(type(n) is int for n in (start,settled,end)) and start<=settled<=end and end-start<=3600
+             and witness['window']==[start,end] and (last is None or last<=start),fail)
+        last=end
+    return history
+
+def transition_registry_provenance(raw,selection,selected,roots,ordinary):
+    fail='startup-proof-complete-official-registry-observation-required'
+    need(raw.get('format')==selection.get('format')==1 and raw.get('kind')=='private-original-registry-pair'
+         and selection.get('kind')=='pre-normalization-registry-selection' and raw.get('ordinal')==selection.get('ordinal')==1
+         and raw.get('observationOrigin')==selection.get('observationOrigin')==selected.get('observationOrigin')
+         and raw['observationOrigin'] in ('qualifier','unchanged-index-return')
+         and raw['rawIndexesSha256']==selection['rawIndexesSha256']==selected['rawIndexesSha256']==continuity_digest(raw['indexes'])
+         and selection['workspaceRoots']==roots and selection['ordinaryWindow']==ordinary
+         and selection['parserSources']==TRANSITION_PARSER_SOURCES and len(raw['indexes'])==len(selection['sides'])==2,fail)
+    for key,index,side in zip(('before','after'),raw['indexes'],selection['sides']):
+        need(side['parserReturnedIndex'] is True and side['presentAdmissionsUnchanged'] is True
+             and HASH.fullmatch(side['parsedIndexSha256']) and type(index.get('plugins')) is list
+             and len(index['plugins'])==side['registryRowCount']==len(side['registryRows'])<=4096,fail)
+        rows=[]
+        for position,(row,observed) in enumerate(zip(index['plugins'],side['registryRows'])):
+            present='sourceAdmissions' in row
+            need(observed['position']==position and observed['pluginId']==row['pluginId']
+                 and ('sourceAdmissions' in observed)==present and (not present or transition_same(observed['sourceAdmissions'],row['sourceAdmissions'])),fail)
+            rows.append({'position':position,'pluginId':row['pluginId'],'sourceAdmissions':row.get('sourceAdmissions')})
+        framed={'format':1,'kind':'complete-writer-retained-paths','wholeIndexSha256':continuity_digest(index),
+                'writerRule':'all-rows/all-receipts:capturedRoot/content UNION capturedPath','registryRowCount':len(rows),
+                'registryRows':rows,'retainedPaths':side['retainedPaths']}
+        need(transition_same(selection['selection'][key],framed) and selection['retained_paths'][key]==side['retainedPaths']
+             and selected['wholeIndexSha256'][key]==continuity_digest(index),fail)
+
+def transition_package(report,roots):
+    fail='startup-proof-transition-package-context-required'
+    need(report['workspaceRoots']==roots,fail)
+    package=PurePosixPath(report['packageRoot']);projects=PurePosixPath(roots[2])/roots[3]/'openclaw-runtime/state/npm/projects'
+    need(package.is_absolute() and str(package)==report['packageRoot'] and package.is_relative_to(projects)
+         and len(package.relative_to(projects).parts)==4 and package.relative_to(projects).parts[1:]==('node_modules','@openclaw','codex')
+         and '..' not in package.parts,fail)
+    return str(package)
+
+
+def capture_transition_summary(evidence,plan,review,values,history,window,item,attempt,folder,scenario,document,previous):
+    fail='startup-proof-authentic-capture-transition-required'
+    need(type(evidence) is dict and set(evidence)=={'packet','proof','observationRefs'},fail)
+    def read_fixed(role,ref,name):
+        reference(ref);need(ref['path']==str(folder/name),fail)
+        raw=document(scenario+'/transition/'+role,ref,MAX_JSON,True);parse(raw)
+        return {'ref':ref,'raw':raw.decode('utf-8')}
+    packet_doc=read_fixed('packet',evidence['packet'],'capture-transition-packet.json')
+    manifest=transition_packet_value(packet_doc)
+    need(type(manifest) is dict and set(manifest)=={'format','kind','documents','writerSources'}
+         and manifest['format']==1 and manifest['kind']=='capture-role-transition-packet'
+         and set(manifest['documents'])==set(TRANSITION_DOCUMENT_NAMES)|{'baselineManifest'}
+         and manifest['writerSources']==CONTINUITY_WRITER_SOURCES,fail)
+    packet={}
+    for name,ref in manifest['documents'].items():
+        if name=='baselineManifest':
+            need(ref==review['baseline']['manifest'] and plan['inputHashes'].get(ref['path'])==ref['sha256'],fail)
+            raw=document(scenario+'/transition/baselineManifest',ref,MAX_JSON,True);parse(raw)
+            packet[name]={'ref':ref,'raw':raw.decode('utf-8')}
+        else:packet[name]=read_fixed(name,ref,TRANSITION_DOCUMENT_NAMES[name])
+    packet['writerSources']=manifest['writerSources'];docs={k:transition_packet_value(v) for k,v in packet.items() if k!='writerSources'}
+    proof_doc=read_fixed('proof',evidence['proof'],'capture-continuity.json');proof=transition_packet_value(proof_doc)
+    app=review['prior' if attempt==3 else 'target'];before,closed=docs['before'],docs['closed']
+    roots=['/qualification/recovery/workspace','/var/lib/nova/workspace','/var/lib/nova/workspace',plan['selectedRelative']]
+    authority={'baselineParent':review['baseline']['retainedParent'],'baselineCandidateId':review['prior']['candidateId'],
+               'workspaceRoots':roots,'runtime':review['runtime']['agent'],'serviceOwner':[review['serviceUid'],review['serviceGid']]}
+    need(all(v['candidateId']==app['candidateId'] and v['workspaceEpoch']==plan['workspaceEpoch'] and v['attempt']==attempt
+             and v['selectedRelative']==plan['selectedRelative'] for v in (before,closed))
+         and before['physicalRoots'][0]==plan['baselineRootIdentity'][:5]
+         and before['physicalRoots'][1][0]==plan['fixtureStorageAuthority']['device']
+         and transition_same(docs['origins'],history)
+         and docs['lifecycle']=={'window':window,'started':item['started'],'closed':item['closed']},fail)
+    need((attempt==1)==(previous is None),fail)
+    if attempt==3:need(previous['proofValue']['attempt']==2 and before['physicalRoots'][1][:2]!=previous['proofValue']['physicalRoots'][1][:2],fail)
+    predecessor={'packet':previous['packet'],'proof':previous['proof']} if attempt==2 else None
+    refs=evidence['observationRefs'];need(type(refs) is dict and set(refs)==TRANSITION_OBSERVATION_KEYS,fail)
+    observations={}
+    def observation(ref,name):
+        doc=read_fixed('observation/'+name,ref,name);need(name not in observations,fail);observations[name]=doc;return transition_packet_value(doc)
+    for key,prefix,count in (('registryInputs','registry-input-',1),('registrySelections','registry-selection-',1),
+                             ('canonical','canonical-observation-',None),('canonicalPhysical','canonical-source-files-',None)):
+        need(type(refs[key]) is list and (len(refs[key])==count if count is not None else len(refs[key])<=1),fail)
+        for ordinal,ref in enumerate(refs[key],1):observation(ref,prefix+str(ordinal)+'.json')
+    need(set(refs['capturePhysical'])=={'before','preNative','postNative'} and set(refs['prestart'])=={'input','sources'},fail)
+    for key,suffix,phase,state in (('before','before','before',before),('preNative','pre-native','closed',closed),('postNative','post-native','closed',closed)):
+        observed=observation(refs['capturePhysical'][key],'capture-physical-'+suffix+'.json')
+        need(observed['format']==1 and observed['kind']=='same-walk-capture-physical-observation' and observed['phase']==phase
+             and all(observed[k]==state[k] for k in ('attempt','candidateId','workspaceEpoch','selectedRelative','physicalRoots'))
+             and transition_same(observed['inventory'],state['inventory'])
+             and observed['stateSha256']==packet['before' if key=='before' else 'closed']['ref']['sha256'],fail)
+    need(type(refs['prestart']['sources']) is list and len(refs['prestart']['sources'])==1,fail)
+    initial_sources=observation(refs['prestart']['sources'][0],'prestart-source-files-1.json')
+    selected=observation(refs['selectedIndexRead'],'registry-selected-read.json');coverage=observation(refs['coverage'],'registry-coverage.json')
+    if refs['closedSources'] is not None:observation(refs['closedSources'],'closed-source-files.json')
+    prestart=None
+    if attempt==2:need(refs['prestart']['input'] is None,fail)
+    else:
+        ref=refs['prestart']['input'];reference(ref)
+        need(ref['path']==str(folder.parent/('registry-prestart-'+str(attempt))/'registry-prestart-input.json'),fail)
+        raw=document(scenario+'/transition/prestart-input',ref,MAX_JSON,True);parse(raw);prestart={'ref':ref,'raw':raw.decode('utf-8')}
+        initial=transition_packet_value(prestart)
+        need(initial['workspaceRoots']==roots and initial['selection']['before']==initial['selection']['after']
+             and initial['sourceAdmissions']==next(r['sourceAdmissions'] for r in initial['rawIndex']['plugins'] if r['pluginId']=='codex')
+             and initial_sources['rosterSha256']==continuity_digest(initial),fail)
+        transition_package(initial,roots)
+    raw=transition_packet_value(observations['registry-input-1.json']);selection=transition_packet_value(observations['registry-selection-1.json'])
+    transition_registry_provenance(raw,selection,selected,roots,window)
+    need(selection['runtimeRoot']==review['runtime']['agent'] and selection['nativeSourcePinsSha256']=='87576ee6b9e1a2a5c0bb6b9d5caccbf42b8e2d311e225591272c73503c516b0d',fail)
+    need(selected['workspaceRoots']==roots and selected['ordinaryWindow']==window and selected['originalSelectedIndexReturned'] is True,fail)
+    canonical=[transition_packet_value(observations['canonical-observation-'+str(i)+'.json']) for i in range(1,len(refs['canonical'])+1)]
+    need(transition_same(canonical,docs['canonical']),fail)
+    transition_package(initial_sources,roots)
+    for ordinal,report in enumerate(canonical,1):
+        package=transition_package(report,roots)
+        need(report['canonicalReturnedTrue'] is True and report['ordinaryWindow']==window and report['kind']=='canonical-retired-capture-admissions'
+             and set(report['originalSourceAdmissions'])==set(report['currentSourceAdmissions'])=={package+'\0'},fail)
+        physical=transition_packet_value(observations['canonical-source-files-'+str(ordinal)+'.json'])
+        need(physical['kind']=='actual-canonical-source-physical-observation' and physical['canonicalReportSha256']==continuity_digest(report)
+             and physical['workspaceRoots']==roots and physical['packageRoot']==package and physical['ordinaryWindow']==window,fail)
+    if not canonical:
+        need(refs['closedSources'] is not None and len(refs['canonicalPhysical'])==0,fail)
+        transition_package(transition_packet_value(observations['closed-source-files.json']),roots)
+    def compare_written(name,value):
+        role=next((k for k,v in TRANSITION_DOCUMENT_NAMES.items() if v==name),None)
+        if name=='capture-transition-packet.json':doc=packet_doc
+        else:need(role in packet,fail);doc=packet[role]
+        need(continuity_encoded(value)==doc['raw'].encode('utf-8'),'startup-proof-transition-document-recomposition-changed')
+        return doc
+    recomposed,_,recomposed_refs=transition_packet_compose(packet['before'],packet['closed'],observations,prestart,
+        packet['baselineManifest'],history,docs['lifecycle'],CONTINUITY_WRITER_SOURCES,compare_written,predecessor)
+    need(transition_same(recomposed_refs,refs),fail)
+    derived=transition_prove(_TransitionCore,TRANSITION_CORE_SHA256,recomposed,authority,predecessor)
+    need(continuity_encoded(derived)==proof_doc['raw'].encode('utf-8'),'startup-proof-complete-capture-transition-changed')
+    summary={'kind':'closed-9.8-retired-capture-transition','candidateId':app['candidateId'],'workspaceEpoch':plan['workspaceEpoch'],
+             'selectedRelative':plan['selectedRelative'],'attempt':attempt,'physicalRoots':before['physicalRoots'],'ordinaryWindow':window,
+             'packetSha256':evidence['packet']['sha256'],'proofSha256':evidence['proof']['sha256'],
+             'beforeSha256':packet['before']['ref']['sha256'],'closedSha256':packet['closed']['ref']['sha256'],
+             'predicateSha256':TRANSITION_PREDICATE_SHA256,'writerSourcesSha256':continuity_digest(CONTINUITY_WRITER_SOURCES),
+             'baselineManifestSha256':packet['baselineManifest']['ref']['sha256'],'originsSha256':packet['origins']['ref']['sha256'],
+             'observationRefsSha256':continuity_digest(refs),'authorityContextSha256':continuity_digest(authority),
+             'baselineInventorySha256':continuity_digest(before['inventory']['baseline']),
+             'beforeLiveInventorySha256':continuity_digest(before['inventory']['live']),'closedLiveInventorySha256':continuity_digest(closed['inventory']['live']),
+             'baselineClassificationSha256':continuity_digest(before['classification']['baseline']),
+             'beforeLiveClassificationSha256':continuity_digest(before['classification']['live']),'closedLiveClassificationSha256':continuity_digest(closed['classification']['live']),
+             **{k:derived[k] for k in ('baselinePartitionSha256','beforePartitionSha256','closedPartitionSha256','predecessorProofSha256','unchangedCatalogEarlyReturn','canonicalFunctionObserved')},
+             'canonicalReportsSha256':continuity_digest(canonical),'canonicalReportCount':len(canonical)}
+    return summary,{'packet':packet,'proof':proof_doc,'proofValue':derived}

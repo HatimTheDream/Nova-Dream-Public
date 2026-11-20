@@ -6,7 +6,7 @@ import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-p
 import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
 import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
-import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS} from '../scripts/release-delivery-startup-retained.mjs';
+import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS,RETIRED_RECAPTURE_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
 import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
@@ -444,4 +444,25 @@ test('compiled same-schema collector helper authority comes only from the regist
  assert.equal(observed.sha256,sha256(readFileSync(new URL('../scripts/release-startup-retained-proof.py',import.meta.url))));
  assert.equal(Object.hasOwn(payload(historical.proof.request),'sameSchemaHelpers'),false);
  assert.throws(()=>payload({...current.proof.request,producer:{...current.proof.request.producer,sha256:'a'.repeat(64)}}),/reviewed-startup/);
+});
+
+test('fresh capture qualification selects one normal generation and binds its complete producer family', () => {
+  const options = {
+    format: 1,
+    parent: {path: '/qualification/evidence/parent-verified.json', sha256: '1'.repeat(64)},
+    producer: {path: '/qualification/qualified-startup.py', sha256: RETIRED_RECAPTURE_STARTUP_SOURCES['qualified-startup.py']}
+  };
+  const request = startupRetainedRequest(options);
+  assert.equal(request.format, 1);
+  assert.notDeepEqual(RETIRED_RECAPTURE_STARTUP_SOURCES, SAME_SCHEMA60_STARTUP_SOURCES);
+  const program = buildStartupRetainedProgram(request);
+  const encodedPayload = program.match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1];
+  const payload = JSON.parse(Buffer.from(encodedPayload, 'base64'));
+  assert.deepEqual(payload.sources, RETIRED_RECAPTURE_STARTUP_SOURCES);
+  assert.deepEqual(payload.sameSchemaHelpers, SAME_SCHEMA60_STARTUP_HELPERS);
+  const collector = readFileSync(new URL('../scripts/release-startup-retained-proof.py', import.meta.url));
+  assert.equal(payload.sha256, sha256(collector));
+  const pinnedProducer = collector.toString().match(/^RETIRED_RECAPTURE_PRODUCER = '([a-f0-9]{64})'$/m)[1];
+  assert.equal(pinnedProducer, request.producer.sha256);
+  assert.throws(() => startupRetainedRequest({...options, format: 2}));
 });

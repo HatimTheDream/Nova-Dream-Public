@@ -1,3 +1,8 @@
+## [2.28.45] - 2026-11-19
+
+- Preserve file access times while checking that saved work survives a hosted update and rollback.
+- Check the previous app’s expected database version during rollback qualification.
+
 ## [2.28.44] - 2026-11-17
 
 - Bind the previous version’s verified dependency information during hosted startup and restoration checks, preventing a controller failure after a healthy startup.
