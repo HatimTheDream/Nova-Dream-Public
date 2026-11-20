@@ -9,7 +9,7 @@ import {browserBinding} from '../scripts/release-delivery-browser.mjs';
 import {retainedWindowPolicy,verifyRetainedWindowPolicy} from '../scripts/release-delivery-browser-primitives.mjs';
 import {createDeliveryRegistry} from '../scripts/release-delivery-adapters.mjs';
 
-function fixture(t) {
+function fixture(t, version='2.28.46', buildVersion='1.0.419') {
   const dir=mkdtempSync(join(tmpdir(),'ordinary-browser-'));
   t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const save=(name,object)=>{
@@ -18,7 +18,7 @@ function fixture(t) {
   };
   const id=randomUUID(),epoch=randomUUID(),oldId=sha256('prior'),nextId=sha256('target');
   const app=(candidateId,version,buildVersion)=>({candidateId,version,buildVersion});
-  const old=app(oldId,'2.28.39','1.0.412'),next=app(nextId,'2.28.46','1.0.419');
+  const old=app(oldId,'2.28.39','1.0.412'),next=app(nextId,version,buildVersion);
   const doc=a=>({...a,frontendId:a.candidateId,assets:`/__bundled/${a.candidateId}/`});
   const checks=['one-prior-document-and-unsent-draft','old-document-retained','old-client-fence','new-document-identity',
     'retained-draft-after-refresh','ui-behavior','owned-draft-cleaned'];
@@ -69,6 +69,19 @@ test('normal package admission and signed browser consume one exact candidate-bo
   assert.throws(f.bind,/ordinary-window-qualification-required/);
   f.descriptor.operation.version='2.28.45';f.descriptor.operation.buildVersion='1.0.418';
   assert.equal(f.bind().windowPolicy,undefined);
+});
+
+test('recovery update requires its own measured Tasks window and exact build', t => {
+  const f = fixture(t, '2.28.47', '1.0.420');
+  const binding = f.bind();
+  assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
+  f.descriptor.operation.buildVersion = '1.0.419';
+  assert.throws(f.bind, /ordinary-window-qualification-required/);
+  f.descriptor.operation.buildVersion = '1.0.420';
+  f.plan.apps.target.version = '2.28.46';
+  f.plan.apps.target.buildVersion = '1.0.419';
+  f.freeze();
+  assert.throws(f.bind, /browser-qualification-plan-changed/);
 });
 
 test('normal release rejects changed evidence, wrong candidates, bad geometry, over-budget workers and open units',t=>{

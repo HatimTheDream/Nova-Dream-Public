@@ -27,22 +27,28 @@ export const SAME_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py"
 // Additional exact source family; every actual candidate proof remains mandatory.
 export const RETIRED_RECAPTURE_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"12d59c2b45e9a6791cba66cec1d9cf0c077ebce3e6cc12392b6090a3e6a0c580","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
 export const REHEARSAL_SCHEMA60_STARTUP_SOURCES=Object.freeze({"qualified-startup.py":"0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6","qualified-parent.py":"81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa3036","produce-startup-inputs.py":"12d59c2b45e9a6791cba66cec1d9cf0c077ebce3e6cc12392b6090a3e6a0c580","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
-const sameSchemaSources=sources=>[SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].some(v=>v!==null&&same(sources,v));
+export const DEFERRED_CAPTURE_STARTUP_SOURCES=Object.freeze({...REHEARSAL_SCHEMA60_STARTUP_SOURCES,
+  'qualified-startup.py':'50f964d0b766a3795d6f819e555da511b58bde3ad3a066f489663067b92971f0'});
+const sameSchemaSources=sources=>[SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].some(v=>v!==null&&same(sources,v));
 export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"b4cf0ee98ebb80723dba69425f55409adecf7f3d7427d42b53c037251f4b6200","recovery.py":"b4c59da8ee92a1ddf2bbaef4139635494123eab2b299e7e6ea5e627629652ee4","operator_rehearsal.py":"081d4f928b6800ff05dd5a0dbfc3416031425a0c892c5186d994533ca42b1b21","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 export const HISTORICAL_SCHEMA60_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
   'install.py':'54d8495b616ae94dfce928470ffc46860331f71fc93c70af081f7061943e36ef',
   'recovery.py':'113f2c937e40eac597ec056fcc8042e69392505fa5f5f96dd44a1ea9441e3b11',
   'operator_rehearsal.py':'8fe10fd13b924b78e8eccbe01334ce627e09c46961e5750062c57dcfe957a8d2',
 });
+export const DEFERRED_CAPTURE_STARTUP_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
+  'install.py':'d44cba1bddb9c39703cc8714e4fe3d5af4704429e746f47efe7a29a533b6b572',
+  'recovery.py':'6081a0364c912442a4ff41eecaf99121b35d619ff6a31f0d6aa1310da5b489ee'});
 function helpersForStartupSources(sources){
+  if(same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES))return DEFERRED_CAPTURE_STARTUP_HELPERS;
   return same(sources,REHEARSAL_SCHEMA60_STARTUP_SOURCES) ? SAME_SCHEMA60_STARTUP_HELPERS : HISTORICAL_SCHEMA60_HELPERS;
 }
 export function reviewedStartupSources(producer){
- const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
+ const sources=[QUALIFIED_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].find(v=>v!==null&&producer?.sha256===v['qualified-startup.py']);
  need(sources,'reviewed-startup-producer-required');return sources;
 }
 // Exact source capability only; it grants no candidate or runtime acceptance.
-const retiredRecaptureProducers=new Set([RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES].map(family=>family['qualified-startup.py']));
+const retiredRecaptureProducers=new Set([RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES].map(family=>family['qualified-startup.py']));
 const CAPTURE_RETIREMENT_PRODUCER='bf65b3f46cdabb5272c7bc2a6824fd242b46d761255f2633887a6f9b61b3fd58';
 const CAPTURE_REAPING_PRODUCER='7ca0aa07ead0d6d6672352a59a520cd93e42295993cd36064994bfb701cfe6eb';
 const CAPTURE_REAPING_PRODUCERS=new Set([CAPTURE_REAPING_PRODUCER,'352ce2f79419c0722e902a15df639a04b7854d87d3bab6ed7d79484148da6db9','4e1f6d0aaa729b5df938bb0566e7442be6abf9bfc832c0b5ab1cfcd1746b7dd3',
@@ -99,7 +105,70 @@ export function buildStartupRetainedProgram(request){
   return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'))},separators=(',',':')))\n`;
 }
 
-function verifyCaptureTransition(proof,binding){
+function verifyDeferredCaptureHistory(proof,binding){
+  const timestamp=z.number().int().positive();
+  const window=z.tuple([timestamp,timestamp]).refine(([a,b])=>a<=b&&b-a<=3600);
+  const history=z.object({kind:z.literal('signed-prior-capture-windows'),priorCandidateId:hash,epoch:z.uuid(),
+    sourceManifestSha256:hash,sourceEvidenceSha256:hash,sourceRolesSha256:hash,
+    windows:z.object({'target-first-start':window,'target-restart':window}).strict()}).strict().parse(proof.deferredCaptureHistory);
+  need(history.priorCandidateId===binding.prior.candidateId&&history.epoch===binding.workspaceEpoch
+    &&history.sourceManifestSha256===proof.references?.baselineManifest?.sha256
+    &&history.windows['target-first-start'][1]<=history.windows['target-restart'][0],
+    'deferred-capture-history-binding-changed');
+  for(const [role,name] of [['parent','parent-verified.json'],['preservation','attempt-1/preservation.json'],
+                           ['proof','attempt-1/capture-continuity.json']]){
+    const ref=proof.references['capture-template/'+role];
+    need(hostRef.safeParse({path:ref?.path,sha256:ref?.sha256}).success&&ref.path.endsWith('/'+name)
+      &&Number.isSafeInteger(ref.bytes)&&ref.bytes>0,'deferred-history-original-template-required');
+  }
+  for(const name of ['target-first-start','target-restart']){
+    for(const role of ['started','process','ready','closed']){
+      const ref=proof.references['capture-history/'+name+'/'+role];
+      need(hostRef.safeParse({path:ref?.path,sha256:ref?.sha256}).success&&Number.isSafeInteger(ref.bytes)&&ref.bytes>0,
+        'deferred-history-original-lifecycle-required');
+    }
+  }
+}
+
+function verifyDeferredCaptureScenarios(proof,binding){
+  const integer=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+  const root=z.tuple([integer.positive(),integer.positive(),integer.refine(v=>(v&0o170000)===0o040000),integer,integer]);
+  const shape=z.object({kind:z.literal('closed-native-deferred-capture'),attempt:z.number().int().min(1).max(3),
+    candidateId:hash,workspaceEpoch:z.uuid(),ordinaryWindow:z.tuple([integer,integer]),physicalRoots:z.tuple([root,root]),
+    baselineSha256:hash,beforeRosterSha256:hash,afterRosterSha256:hash,beforeSha256:hash,closedSha256:hash,
+    writerFileSha256:hash.nullable(),addedCount:integer.max(1),removedCount:integer.max(1),historySha256:hash,
+    partitionSha256:hash,admissionsSha256:hash,closedCatalogSha256:hash,predecessorSha256:hash.nullable()}).strict();
+  const first=proof.scenarios[0].captureDeferred??proof.scenarios[0].captureTransition;
+  const historyHash=sha256(Buffer.from(canonical(proof.deferredCaptureHistory)));
+  for(const [index,scenario] of proof.scenarios.entries()){
+    if(!scenario.captureDeferred)continue;
+    const row=shape.parse(scenario.captureDeferred), prior=proof.scenarios[index-1]?.captureDeferred;
+    need(row.attempt===index+1&&row.candidateId===scenario.candidateId&&row.workspaceEpoch===binding.workspaceEpoch
+      &&row.historySha256===historyHash&&same(row.ordinaryWindow,[scenario.startedAtSeconds,scenario.closedAtSeconds])
+      &&same(row.physicalRoots[0],first.physicalRoots[0])&&!same(row.physicalRoots[0].slice(0,2),row.physicalRoots[1].slice(0,2))
+      &&row.physicalRoots[0][0]===scenario.replicaConfigObservation?.sourceDevice
+      &&row.physicalRoots[1][0]===scenario.replicaConfigObservation?.replicaDevice
+      &&(row.addedCount===0||row.writerFileSha256!==null),'deferred-scenario-native-binding-changed');
+    if(index===1){
+      need(same(row.physicalRoots,first.physicalRoots)&&(prior?
+        row.predecessorSha256===prior.closedSha256&&row.beforeRosterSha256===prior.afterRosterSha256&&row.baselineSha256===prior.baselineSha256:
+        row.predecessorSha256===null&&first.closedLiveInventorySha256===first.baselineInventorySha256),
+        'deferred-scenario-restart-ancestry-changed');
+    }else{
+      need(row.predecessorSha256===null&&(index!==2||!same(row.physicalRoots[1].slice(0,2),first.physicalRoots[1].slice(0,2))),
+        'deferred-scenario-pristine-state-required');
+    }
+    for(const [role,expected] of [['before',row.beforeSha256],['closed',row.closedSha256],['writer',row.writerFileSha256]]){
+      const ref=proof.references[scenario.scenario+'/deferred/'+role];
+      if(expected===null){need(ref===undefined,'unexpected-deferred-writer-reference');continue;}
+      need(hostRef.safeParse({path:ref?.path,sha256:ref?.sha256}).success&&ref.sha256===expected
+        &&ref.path.endsWith('/attempt-'+row.attempt+'/startup-'+row.attempt+'-capture-'+role+'.json')
+        &&Number.isSafeInteger(ref.bytes)&&ref.bytes>0&&ref.bytes<=32*1024**2,'deferred-scenario-original-reference-changed');
+    }
+  }
+}
+
+function verifyCaptureTransition(proof,binding,mixed=false){
   const integer=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
   const root=z.tuple([integer.positive(),integer.positive(),integer.max(0o177777).refine(v=>(v&0o170000)===0o040000),integer,integer]);
   const window=z.tuple([integer,integer]).refine(v=>v[1]>=v[0]&&v[1]-v[0]<=3600);
@@ -113,8 +182,10 @@ function verifyCaptureTransition(proof,binding){
     predicateSha256:z.literal('df724c3ab3fcbfa53da4ec611603ababe0839c5a41900b606583ffe8a54b27a0'),
     ...Object.fromEntries(hashes.map(k=>[k,hash])),predecessorProofSha256:hash.nullable(),
     unchangedCatalogEarlyReturn:z.boolean(),canonicalFunctionObserved:z.boolean(),canonicalReportCount:integer.max(1)}).strict();
-  const rows=proof.scenarios.map(s=>shape.parse(s.captureTransition)),first=rows[0];
+  const rows=proof.scenarios.map(s=>mixed&&s.captureDeferred?null:shape.parse(s.captureTransition));
+  const first=rows.find(Boolean),initialRoot=proof.scenarios[0].captureDeferred?.physicalRoots??first?.physicalRoots;
   for(const [i,row]of rows.entries()){
+    if(row===null)continue;
     const scenario=proof.scenarios[i],prior=rows[i-1];
     need(row.attempt===i+1&&row.candidateId===scenario.candidateId&&row.workspaceEpoch===binding.workspaceEpoch
       &&row.selectedRelative===first.selectedRelative&&same(row.ordinaryWindow,[scenario.startedAtSeconds,scenario.closedAtSeconds])
@@ -132,7 +203,7 @@ function verifyCaptureTransition(proof,binding){
     }else{
       need(row.predecessorProofSha256===null&&row.beforeLiveInventorySha256===row.baselineInventorySha256
         &&row.beforeLiveClassificationSha256===row.baselineClassificationSha256
-        &&(i!==2||!same(row.physicalRoots[1].slice(0,2),first.physicalRoots[1].slice(0,2))),
+        &&(i!==2||!same(row.physicalRoots[1].slice(0,2),initialRoot[1].slice(0,2))),
         'same-schema-capture-transition-pristine-required');
     }
     if(row.unchangedCatalogEarlyReturn)need(row.beforeLiveInventorySha256===row.closedLiveInventorySha256
@@ -296,13 +367,24 @@ export function verifyStartupRetainedProjection(v,request,sources=undefined){
     }
   }
 
-  const captureOnly=key=>v.scenarios.every(s=>['captureObservation','captureRetirement','captureContinuity','captureTransition'].filter(k=>Object.hasOwn(s,k)).join(',')===key);
+  const captureKeys=s=>['captureObservation','captureRetirement','captureContinuity','captureTransition','captureDeferred'].filter(k=>Object.hasOwn(s,k));
+  const captureOnly=key=>v.scenarios.every(s=>captureKeys(s).join(',')===key);
   const noStaging=binding.sameSchemaQualification&&captureOnly('captureObservation');
   const continuity=binding.sameSchemaQualification&&captureOnly('captureContinuity');
   const transition=binding.sameSchemaQualification&&captureOnly('captureTransition');
+  const newFamily=same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES);
+  const deferred=newFamily&&v.scenarios.some(s=>Object.hasOwn(s,'captureDeferred'));
+  need(newFamily===Object.hasOwn(v,'deferredCaptureHistory'),'deferred-capture-history-source-changed');
+  if(newFamily)verifyDeferredCaptureHistory(v,binding);
   if(binding.sameSchemaQualification){
     need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,helpersForStartupSources(sources)),'same-schema-capture-source-required');
-    need(noStaging||continuity||transition||captureOnly('captureRetirement'),'same-schema-capture-branch-changed');
+    need(noStaging||continuity||transition||captureOnly('captureRetirement')||deferred,'same-schema-capture-branch-changed');
+    if(deferred){
+      need(v.scenarios.every(s=>['captureDeferred','captureTransition'].includes(captureKeys(s).join(','))),
+        'deferred-scenario-needs-one-original-capture-branch');
+      verifyDeferredCaptureScenarios(v,binding);
+      verifyCaptureTransition(v,binding,true);
+    }
     if(noStaging)verifyNoStagingCaptures(v,binding);
     if(transition){
       need(retiredRecaptureProducers.has(sources['qualified-startup.py']),'startup-retired-recapture-source-not-qualified');
@@ -313,7 +395,7 @@ export function verifyStartupRetainedProjection(v,request,sources=undefined){
       verifyCaptureContinuity(v,binding);
     }
   }
-  if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])||(binding.sameSchemaQualification&&!noStaging&&!continuity&&!transition)){
+  if(CAPTURE_REAPING_PRODUCERS.has(sources['qualified-startup.py'])||(binding.sameSchemaQualification&&!noStaging&&!continuity&&!transition&&!deferred)){
     need(v.baselineLineage===(binding.sameSchemaQualification?'verified-closed-schema60-target-retained':'verified-pre-swap-aborted-operator-snapshot'),'incident-capture-baseline-required');
     need(binding.sameSchemaQualification||binding.helpers['recovery.py']==='23b7d18d415393a315a8140b674edee4a12cbc1b8f996b439843472208dcbd15'
       &&['941e295816bbb4c5da054928018ee59ae3164d032dffcab63d79f36b79050a59','f85ef9249d9722558ad6ab6dccee60b8d4412ca793afeeb1a53d316a85a2e62a','522b78eeb6a6d986dde2ac353516c47a987d8283bb030d273b0b4122d08cbe24'].includes(binding.helpers['install.py']),

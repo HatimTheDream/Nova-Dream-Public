@@ -6,12 +6,15 @@ export const canonicalBrowser=value=>JSON.stringify(value,(_key,x)=>x&&typeof x=
   ?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 export const sha256=value=>createHash('sha256').update(value).digest('hex');
 export const retainedWindowPolicy='one-prior-then-two-targets';
+const qualifiedBrowserBuilds = new Map([['2.28.46', '1.0.419'], ['2.28.47', '1.0.420']]);
+export const qualifiedBrowserBuild = version => qualifiedBrowserBuilds.get(version);
 export function verifyRetainedWindowPolicy(policy,binding) {
   if(!policy)return false;
   const prior=binding.priorBundledTarget,target=binding.fullTarget,digest=/^[a-f0-9]{64}$/;
   const qualified=policy.qualification;
   const correctTarget=qualified===undefined ? target?.version==='2.28.45'&&target.buildVersion==='1.0.418'
-    : target?.version==='2.28.46'&&target.buildVersion==='1.0.419'&&qualified!==null
+    : target!=null && qualifiedBrowserBuild(target.version)!==undefined
+      && target.buildVersion===qualifiedBrowserBuild(target.version) && qualified!==null
       &&['reviewSha256','planSha256','terminalSha256'].every(key=>digest.test(qualified[key]));
   if(policy.kind!==retainedWindowPolicy || binding.route!=='full' || binding.options.mode!=='remote'
     || binding.options.suite!=='tasks-search-focus' || prior?.version!=='2.28.39' || prior.buildVersion!=='1.0.412'

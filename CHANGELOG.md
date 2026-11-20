@@ -1,3 +1,7 @@
+## [2.28.47]
+
+- Hosted updates can verify a temporary file left by the native plugin during shutdown. Restart and rollback checks trace that file to its owner and check that saved work and plugin files were preserved.
+
 ## [2.28.46] - 2026-11-20
 
 - Hosted update rehearsal checks the installed app and saved work using their verified database version, including when restoring a copy.

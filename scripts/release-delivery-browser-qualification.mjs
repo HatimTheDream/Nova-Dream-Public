@@ -2,7 +2,7 @@
 import {isDeepStrictEqual as same} from 'node:util';
 import {z} from 'zod';
 import {readEvidenceFile} from './release-plan.mjs';
-import {retainedWindowPolicy, verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
+import {qualifiedBrowserBuild, retainedWindowPolicy, verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
 
 const digest=z.string().regex(/^[a-f0-9]{64}$/);
 const reference=z.object({path:z.string().min(1),sha256:digest}).strict();
@@ -20,8 +20,9 @@ const document=({candidateId,version,buildVersion})=>({candidateId,frontendId:ca
  * required by the separate live browser acceptance. */
 export function ordinaryWindowQualification(descriptor,target,route) {
   const op=descriptor.operation,ref=target.browserWindowQualification;
-  if(!ref&&(op.version!=='2.28.46'||route?.route!=='full'))return null;
-  need(ref&&op.version==='2.28.46'&&op.buildVersion==='1.0.419'&&route?.route==='full'
+  const expectedBuild = qualifiedBrowserBuild(op.version);
+  if(!ref&&(expectedBuild===undefined||route?.route!=='full'))return null;
+  need(ref&&expectedBuild!==undefined&&op.buildVersion===expectedBuild&&route?.route==='full'
     &&target.browserCapability==='available'&&target.browserTools?.mode==='remote'&&target.browserTools.suite==='tasks-search-focus',
     'browser-ordinary-window-qualification-required');
   const review=reviewSchema.parse(read(reference.parse(ref),65536)),base=target.bases?.private;

@@ -24,6 +24,7 @@ LIFECYCLE_PARENT = '81410714bcb95d168fd8c3e90837813a8ce11847bf9b111cc5ecb5c874aa
 # Exact source capability only; it grants no candidate or runtime acceptance.
 RETIRED_RECAPTURE_PRODUCER = 'f9307cd30f7c9b4b50034e81942604772f93027f5ba915ebd9e9176e67b00092'
 RETIRED_RECAPTURE_PRODUCERS = {RETIRED_RECAPTURE_PRODUCER, '0c86d97f56addc71e0d8c57665265da1f40009f14caf19bcf75c1899f4d430c6'}
+DEFERRED_CAPTURE_PRODUCER = '50f964d0b766a3795d6f819e555da511b58bde3ad3a066f489663067b92971f0'
 HELPERS = ('install.py', 'recovery.py', 'operator_rehearsal.py', 'app_dependencies.py',
            'codex_log_retention.py', 'workspace_key.py', 'verify-session-bindings.mjs')
 APPLICATION_HELPERS = ('hosted_retained_configuration.py', 'local-retained-configuration.mjs', 'hosted_retained_catalog.py', 'hosted-retained-catalog.mjs')
@@ -424,6 +425,17 @@ def consume(request, read, sources, same_schema_helpers=None):
     capture_preceding = None
     transition_preceding = None
     capture_history = None
+    deferred_history = None
+    if runner_sha == DEFERRED_CAPTURE_PRODUCER:
+        need(same_schema, 'deferred-source-needs-same-schema-marker')
+        capture_history = consume_capture_history(plan,review,values,document)
+        archive = plan['deferredTemplate']
+        need(set(archive) == {'parent','preservation','proof'} and all(
+            plan['inputHashes'].get(ref['path']) == ref['sha256'] for ref in archive.values()),
+            'deferred-source-template-refs-changed')
+        prior = [document('capture-template/' + k,archive[k]) for k in ('parent','preservation','proof')]
+        deferred_history = capture_signed_history(capture_history,capture_manifest,archive,*prior)
+        need(plan['deferredCaptureHistory'] == deferred_history, 'deferred-history-plan-binding-changed')
     for index, item in enumerate(parent['scenarios'], 1):
         scenario = item['scenario']; folder = fixture / 'evidence' / ('attempt-' + str(index))
         need(set(item) == {'scenario', 'started', 'process', 'ready', 'closed', 'preservation', 'bootstrap', 'clock-attribution'}, 'startup-proof-scenario-fields')
@@ -500,22 +512,61 @@ def consume(request, read, sources, same_schema_helpers=None):
             validate_replica_observation_receipt(preserved.get('replicaConfigObservation'), plan, first_start)
         capture_key = None
         if same_schema:
-            capture_keys = [name for name in ('captureObservation', 'captureRetirement', 'captureContinuity', 'captureTransition') if name in preserved]
+            capture_keys = [name for name in ('captureObservation', 'captureRetirement', 'captureContinuity', 'captureTransition','captureDeferred') if name in preserved]
             need(len(capture_keys) == 1, 'startup-proof-single-capture-branch-required')
             capture_key = capture_keys[0]
-            need(not summaries or capture_key in summaries[0], 'startup-proof-single-capture-branch-required')
-            if capture_key == 'captureObservation':
+            need(not summaries or capture_key in summaries[0] or (deferred_history is not None and
+                capture_key in ('captureDeferred','captureTransition') and
+                all('captureDeferred' in row or 'captureTransition' in row for row in summaries)),
+                'startup-proof-single-capture-branch-required')
+            if capture_key == 'captureDeferred':
+                need(deferred_history is not None, 'deferred-source-not-qualified')
+                r = preserved[capture_key]
+                need(set(r) in ({'before','closed'}, {'before','closed','writer'}),'deferred-evidence-role-set-changed')
+                docs = {}
+                for role, ref in r.items():
+                    need(ref['path'] == str(folder / ('startup-'+str(index)+'-capture-'+role+'.json')),
+                         'deferred-evidence-left-original-scenario')
+                    docs[role] = document(scenario+'/deferred/'+role,ref,32*1024**2)
+                capture = capture_closed_summary(docs['before'],docs.get('writer'),docs['closed'],r,
+                    deferred_history,started,ready,ordinary_window,worker['controlGroup'])
+                first = summaries[0] if summaries else None
+                if index == 2:
+                    earlier = first.get('captureDeferred', first.get('captureTransition'))
+                    need(earlier and capture['physicalRoots'] == earlier['physicalRoots'],'deferred-restart-physical-roots-changed')
+                    earlier_deferred = first.get('captureDeferred')
+                    if earlier_deferred is not None:
+                        need(capture['beforeRosterSha256'] == earlier_deferred['afterRosterSha256']
+                             and capture['baselineSha256'] == earlier_deferred['baselineSha256']
+                             and docs['closed']['deferredCapture']['predecessor'] == {
+                                 'path':'/qualification/evidence/attempt-1/startup-1-capture-closed.json',
+                                 'sha256':earlier_deferred['closedSha256']}, 'deferred-original-restart-ancestry-changed')
+                    else:
+                        need(capture['predecessorSha256'] is None and
+                             earlier['closedLiveInventorySha256'] == earlier['baselineInventorySha256'],
+                             'deferred-restart-requires-original-or-continued-state')
+                else:
+                    need(capture['predecessorSha256'] is None,'deferred-pristine-has-predecessor')
+                    if index == 3:
+                        earlier = first.get('captureDeferred',first.get('captureTransition'))
+                        need(earlier and capture['physicalRoots'][0] == earlier['physicalRoots'][0]
+                             and capture['physicalRoots'][1][:2] != earlier['physicalRoots'][1][:2],
+                             'deferred-pristine-original-required')
+            elif capture_key == 'captureObservation':
                 capture = capture_observation_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, summaries[0].get(capture_key) if summaries else None, capture_manifest, folder, scenario, document)
             elif capture_key == 'captureTransition':
-                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS,
+                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS or deferred_history is not None,
                      'startup-proof-retired-recapture-source-not-qualified')
                 if capture_history is None:
                     capture_history=consume_capture_history(plan,review,values,document)
+                previous_root = (summaries[-1]['captureDeferred']['physicalRoots'][1] if index == 3
+                                 and 'captureDeferred' in summaries[-1] else None)
                 capture,transition_preceding=capture_transition_summary(preserved[capture_key],plan,review,values,
-                    capture_history,ordinary_window,item,index,folder,scenario,document,transition_preceding)
+                    capture_history,ordinary_window,item,index,folder,scenario,document,
+                    None if previous_root is not None else transition_preceding,previous_root)
             elif capture_key == 'captureContinuity':
-                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS,
+                need(runner_sha in RETIRED_RECAPTURE_PRODUCERS or deferred_history is not None,
                      'startup-proof-retired-recapture-source-not-qualified')
                 capture = capture_continuity_summary(preserved[capture_key], plan, app['candidateId'], binding['workspaceEpoch'],
                     index, ordinary_window, capture_preceding,
@@ -592,6 +643,7 @@ def consume(request, read, sources, same_schema_helpers=None):
     return {'format': 1, 'kind': 'actual-retained-startup-qualification-observation', 'readOnly': True, 'hostEffects': False,
             'request': request, 'requestSha256': sha(encoded(request)), 'sourceHashes': sources, 'qualificationOperationId': op,
             'scope': SCOPE, 'qualificationBinding': binding, 'scenarios': summaries, 'references': refs, 'workerIdentity': worker,
+            **({'deferredCaptureHistory':deferred_history} if deferred_history is not None else {}),
             **({'baselineLineage': SAME_SCHEMA_BASELINE} if same_schema else {'baselineLineage': CAPTURE_BASELINE} if runner_sha in CAPTURE_PRODUCERS else {}),
             'actualSettledQualification': True, 'independentOriginalRestored': True,
             'completeMaintainedSavedAndNativeState': True, 'heldBootstrapVerified': True,
@@ -1076,6 +1128,111 @@ def capture_observation_summary(evidence, plan, candidate, epoch, attempt, first
 def capture_receipt_sha(value):
     # The hosted writer serializes protected receipts with these options and no final newline.
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+"""Shared projection of authenticated capture receipts for the isolated runner and reader."""
+
+def capture_native_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def capture_signed_history(original, manifest, archive, template_parent, preservation, template):
+    """Derive the parked source's scope from the original and a previously verified full run."""
+    fail = 'deferred-source-template-lineage-changed'
+    family = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}')
+    relative = original['selectedRelative'] + '/openclaw-runtime/state/tmp/plugin-captures/'
+    roles = sorted(path for path in manifest if path.startswith(relative) and
+                   re.fullmatch(family.pattern + '/owner[.]sqlite', path[len(relative):]))
+    ids = {path[len(relative):].split('/')[0] for path in roles}
+    need(len(ids) == len(roles) == 2 and all(manifest[p]['kind'] == 'file'
+         and manifest[p]['size'] > 0 and p + '-journal' not in manifest for p in roles), fail)
+    need(template_parent.get('passed') is True and template_parent.get('independentOriginalRestored') is True
+         and template_parent.get('originalSourceAndProtectedClosuresUnchanged') is True
+         and template_parent['priorCandidateId'] == original['candidateId']
+         and template_parent['workspaceEpoch'] == original['workspaceEpoch']
+         and template_parent['scenarios'][0]['preservation'] == archive['preservation']
+         and preservation['captureTransition']['proof'] == archive['proof']
+         and preservation.get('fullMaintainedNativeVerifier') is True and preservation.get('fullyStopped') is True
+         and template['kind'] == 'retired-capture-role-transition' and template['attempt'] == 1
+         and template['candidateId'] == template_parent['targetCandidateId']
+         and template['workspaceEpoch'] == original['workspaceEpoch']
+         and template['selectedRelative'] == original['selectedRelative']
+         and template['authorityContext']['baselineParent'] == original['parent']
+         and template['authorityContext']['baselineCandidateId'] == original['candidateId']
+         and template['bindings']['baselineManifest']['sha256'] == original['baselineManifest']['sha256']
+         and set(template['removedFamilies']).isdisjoint(template['survivingFamilies'])
+         and set(template['removedFamilies']) | set(template['survivingFamilies']) == ids
+         and len(template['removedFamilies']) == len(template['survivingFamilies']) == 1, fail)
+    return {'kind':'signed-prior-capture-windows', 'priorCandidateId':original['candidateId'],
+            'epoch':original['workspaceEpoch'], 'sourceManifestSha256':original['baselineManifest']['sha256'],
+            'windows':{name:original['windows'][name]['window'] for name in ('target-first-start','target-restart')},
+            'sourceRolesSha256':capture_native_digest(roles),
+            'sourceEvidenceSha256':capture_native_digest({'original':original, 'template':archive})}
+
+
+def capture_writer_identity(writer, started, ready, history, control_group):
+    fail = 'native-writer-startup-identity-changed'
+    proc, app, gateway = writer['process'], ready['process'], ready['nativeProcess']
+    need(writer['format'] == 1 and writer['kind'] == 'native-capture-writer'
+         and writer['owner'] == [started['leaseId'], started['candidateId'], started['attempt']]
+         and writer['epoch'] == started['epoch'] == history['epoch']
+         and writer['observedAtNs'] >= ready['readyAtSeconds'] * 10**9
+         and (proc['pid'],proc['startTicks'],proc['nodeSha256']) ==
+             (gateway['pid'],gateway['startTicks'],gateway['nodeSha256'])
+         and (proc['appPid'],proc['appStartTicks']) == (app['pid'],app['startTicks'])
+         and proc['uid'] == gateway['uid'] == app['uid']
+         and proc['namespace'] == {k:started['namespaces'][k] for k in ('pid','mnt')}
+         and proc['cgroup'].splitlines() == ['0::'+control_group], fail)
+
+
+def capture_closed_summary(before, writer, closed, refs, history, started, ready, window, control_group):
+    fail = 'native-deferred-capture-closure-changed'
+    job, candidate, attempt = started['leaseId'], started['candidateId'], started['attempt']
+    prior = before['deferredBefore']
+    outcome = closed['deferredCapture']
+    need(all(doc['format'] == 1 and doc['jobId'] == job and doc['candidateId'] == candidate
+             and doc['attempt'] == attempt and doc['epoch'] == history['epoch'] for doc in (before,closed))
+         and outcome['format'] == 1 and outcome['kind'] == 'closed-native-deferred-capture'
+         and outcome['owner'] == [job,candidate,attempt] and outcome['epoch'] == history['epoch']
+         and outcome['window'] == closed['closedWindow'] == window
+         and before['physicalRoots'] == closed['physicalRoots']
+         and before['observedAtNs'] <= (started['startedAtSeconds'] + 1)*10**9
+         and closed['beforeSha256'] == refs['before']['sha256']
+         and prior['history'] == history and outcome['historySha256'] == capture_native_digest(history)
+         and prior['baseline'] == outcome['baseline'] and prior['live'] == outcome['before']
+         and prior['predecessor'] == outcome['predecessor']
+         and capture_native_digest(sorted(prior['baseline'])) == history['sourceRolesSha256']
+         and all(re.fullmatch('[0-9a-f]{64}', outcome[k]) for k in ('admissionsSha256','partitionSha256'))
+         and outcome['closedCatalogSha256'] == capture_native_digest(closed['deferredCatalog']), fail)
+    old, new = outcome['before'], outcome['after']
+    added, removed = sorted(set(new)-set(old)), sorted(set(old)-set(new))
+    need(outcome['added'] == added and outcome['removed'] == removed and len(added) <= 1
+         and len(removed) <= 1 and len(old) == 2 and 1 <= len(new) <= 2, fail)
+    if writer is not None:
+        capture_writer_identity(writer, started, ready, history, control_group)
+        need(writer['observedAtNs'] <= window[1]*10**9, fail)
+    if added:
+        role = added[0]
+        need(writer is not None and outcome['writerSha256'] == capture_native_digest(writer)
+             and set(writer['roles']) == {role} and new[role]['status'] == 'stage', fail)
+        observed = writer['roles'][role]
+        lock = observed['lock']
+        need(all(observed[k] == new[role][k] for k in ('owner','journal','journalSha256'))
+             and observed['captureDirectory'] == new[role]['directory'][:5]
+             and lock['pid'] == writer['process']['pid'] and lock['type'] == 'POSIX' and lock['access'] == 'WRITE'
+             and lock['first'] <= 0x40000001 <= lock['last']
+             and [lock['device'],lock['inode']] == observed['owner'][:2], fail)
+    else:
+        need(outcome['writerSha256'] is None, fail)
+    return {'kind':'closed-native-deferred-capture','attempt':attempt,'candidateId':candidate,'workspaceEpoch':history['epoch'],
+            'ordinaryWindow':window,'physicalRoots':closed['physicalRoots'],'baselineSha256':capture_native_digest(outcome['baseline']),
+            'beforeRosterSha256':capture_native_digest(old),'afterRosterSha256':capture_native_digest(new),
+            'beforeSha256':refs['before']['sha256'],'closedSha256':refs['closed']['sha256'],
+            'writerFileSha256':refs['writer']['sha256'] if writer is not None else None,
+            'addedCount':len(added),'removedCount':len(removed),'historySha256':outcome['historySha256'],
+            'partitionSha256':outcome['partitionSha256'],'admissionsSha256':outcome['admissionsSha256'],
+            'closedCatalogSha256':outcome['closedCatalogSha256'],
+            'predecessorSha256':outcome['predecessor']['sha256'] if outcome['predecessor'] else None}
 
 
 def capture_manifest_families(manifest, prefix):
@@ -1799,7 +1956,7 @@ def transition_package(report,roots):
     return str(package)
 
 
-def capture_transition_summary(evidence,plan,review,values,history,window,item,attempt,folder,scenario,document,previous):
+def capture_transition_summary(evidence,plan,review,values,history,window,item,attempt,folder,scenario,document,previous,prior_deferred_root=None):
     fail='startup-proof-authentic-capture-transition-required'
     need(type(evidence) is dict and set(evidence)=={'packet','proof','observationRefs'},fail)
     def read_fixed(role,ref,name):
@@ -1831,8 +1988,11 @@ def capture_transition_summary(evidence,plan,review,values,history,window,item,a
          and before['physicalRoots'][1][0]==plan['fixtureStorageAuthority']['device']
          and transition_same(docs['origins'],history)
          and docs['lifecycle']=={'window':window,'started':item['started'],'closed':item['closed']},fail)
-    need((attempt==1)==(previous is None),fail)
-    if attempt==3:need(previous['proofValue']['attempt']==2 and before['physicalRoots'][1][:2]!=previous['proofValue']['physicalRoots'][1][:2],fail)
+    if attempt==3 and prior_deferred_root is not None:
+        need(previous is None and before['physicalRoots'][1][:2] != prior_deferred_root[:2],fail)
+    else:
+        need((attempt==1)==(previous is None),fail)
+        if attempt==3:need(previous['proofValue']['attempt']==2 and before['physicalRoots'][1][:2]!=previous['proofValue']['physicalRoots'][1][:2],fail)
     predecessor={'packet':previous['packet'],'proof':previous['proof']} if attempt==2 else None
     refs=evidence['observationRefs'];need(type(refs) is dict and set(refs)==TRANSITION_OBSERVATION_KEYS,fail)
     observations={}

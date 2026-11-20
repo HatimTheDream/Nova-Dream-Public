@@ -2097,5 +2097,115 @@ export const close=async()=>{};
         self.assertTrue((data / 'failed-only').exists())
 
 
+class CaptureWriterTests(unittest.TestCase):
+    def test_only_gateway_posix_reserved_writer_is_authoritative(self):
+        import struct
+        kernel = types.SimpleNamespace(F_WRLCK=1, F_GETLK=5, F_UNLCK=2, fcntl=None)
+        token = types.SimpleNamespace(st_dev=88, st_ino=99)
+        layout = struct.Struct('@hhqqi4x')
+        def query(kind, start, length, pid):
+            kernel.fcntl = lambda fd, cmd, arg: layout.pack(kind, os.SEEK_SET, start, length, pid)
+            with patch.object(driver, 'fcntl', kernel), patch.object(os, 'uname', create=True,
+                                                                    return_value=types.SimpleNamespace(machine='x86_64')):
+                return driver._capture_reserved_lock(12, token, 781)
+        reserved = 0x40000001
+        self.assertEqual(query(1, reserved, 1, 781), {'type':'POSIX', 'access':'WRITE', 'pid':781,
+                         'first':reserved, 'last':reserved, 'device':88, 'inode':99})
+        self.assertIsNone(query(2, reserved, 1, 0))
+        for kind, start, length, pid in [(1, reserved, 1, 782), (1, reserved, 1, -1),
+                                         (0, reserved, 1, 781), (1, reserved+1, 1, 781)]:
+            with self.subTest(pid=pid, kind=kind, start=start), self.assertRaises(RuntimeError):
+                query(kind, start, length, pid)
+
+    @unittest.skipUnless(sys.platform == 'linux' and os.uname().machine == 'x86_64', 'requires Linux file locks')
+    def test_real_owner_disappears_on_close_and_a_foreign_owner_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root, contextlib.ExitStack() as stack:
+            path = pathlib.Path(root) / 'owner.sqlite'
+            path.touch(mode=0o600)
+            script = ('import fcntl,sys; f=open(sys.argv[1],"r+b"); '
+                      'fcntl.lockf(f,fcntl.LOCK_EX,1,0x40000001); print("held",flush=True); sys.stdin.read(1)')
+            child = subprocess.Popen([sys.executable, '-I', '-c', script, str(path)], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE)
+            stack.callback(child.wait, timeout=5)
+            stack.callback(child.kill)
+            stack.callback(child.stdout.close)
+            stack.callback(child.stdin.close)
+            self.assertEqual(child.stdout.readline(), b'held\n')
+            with path.open('rb') as stream:
+                fd = stream.fileno()
+                self.assertEqual(driver._capture_reserved_lock(fd, os.fstat(fd), child.pid)['pid'], child.pid)
+                with self.assertRaises(RuntimeError):
+                    driver._capture_reserved_lock(fd, os.fstat(fd), child.pid+1)
+                child.stdin.close()
+                self.assertEqual(child.wait(timeout=5), 0)
+                self.assertIsNone(driver._capture_reserved_lock(fd, os.fstat(fd), child.pid))
+
+    @unittest.skipUnless(sys.platform == 'linux', 'requires a Linux gateway process')
+    def test_real_gateway_writer_is_bound_to_its_exact_app_and_stopped_lifetime(self):
+        node = os.environ.get('NODE_BINARY') or shutil.which('node')
+        if not node or subprocess.run([node, '-e', "require('node:sqlite')"], capture_output=True).returncode:
+            self.skipTest('requires Node with SQLite')
+        import select
+        import signal
+        node = pathlib.Path(node).resolve(strict=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp).resolve()
+            selected = pathlib.Path('selected')
+            native_root = root / selected / 'openclaw-runtime'
+            family = native_root / 'state/tmp/plugin-captures' / '1cbaf1b8-9de7-4127-ae82-deb1cf38e473'
+            family.mkdir(parents=True, mode=0o700)
+            for directory in (native_root, native_root / 'state', native_root / 'state/tmp', family.parent):
+                directory.chmod(0o700)
+            path = family / 'owner.sqlite'
+            js = ("process.umask(0o077);process.title='openclaw-gateway';"
+                  "const d=new (require('node:sqlite').DatabaseSync)(process.argv[1]);"
+                  "d.exec('BEGIN EXCLUSIVE; CREATE TABLE token(id INTEGER)');"
+                  "process.stdout.write(String(process.pid)+'\\n');process.stdin.resume();")
+            # Exit the synthetic app as well as its direct gateway child, so the
+            # close check sees the same two ended lifetimes as the real driver.
+            supervisor = ("import subprocess,sys; child=subprocess.Popen(sys.argv[1:],stdin=subprocess.PIPE);"
+                          "sys.stdin.buffer.read(1);child.terminate();child.wait(timeout=5)")
+            app = subprocess.Popen([sys.executable, '-I', '-c', supervisor, str(node), '-e', js, str(path)],
+                                   cwd=native_root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+            try:
+                self.assertTrue(select.select([app.stdout], [], [], 8)[0], 'gateway did not report readiness')
+                line = app.stdout.readline()
+                self.assertTrue(line.strip().isdigit(), 'gateway failed to create the SQLite fixture')
+                pid = int(line)
+                doc = driver.observe_capture_writer(root, selected, ('job','candidate',1), 'epoch',
+                                                    app.pid, pid, node, os.getuid(), native_root)
+                self.assertEqual(doc['process']['pid'], pid)
+                self.assertEqual(doc['process']['appPid'], app.pid)
+                role = doc['roles'][str(path.relative_to(root))]
+                self.assertEqual((role['owner'][6], role['journal'][6]), (0, 512))
+                self.assertEqual(role['journalSha256'], hashlib.sha256(path.with_suffix('.sqlite-journal').read_bytes()).hexdigest())
+                self.assertEqual(role['lock']['pid'], pid)
+                with self.assertRaises(RuntimeError):
+                    driver.require_closed_capture_writer(doc)
+                with self.assertRaises(RuntimeError):
+                    driver.observe_capture_writer(root, selected, ('job','candidate',1), 'epoch',
+                                                  os.getpid(), pid, node, os.getuid(), native_root)
+                app.stdin.close()
+                self.assertEqual(app.wait(timeout=8), 0)
+                driver.require_closed_capture_writer(doc)
+            finally:
+                if app.poll() is None:
+                    os.killpg(app.pid, signal.SIGKILL)
+                    app.wait(timeout=5)
+                for stream in (app.stdin, app.stdout, app.stderr):
+                    stream.close()
+
+    def test_closure_requires_both_original_processes_to_have_ended(self):
+        witness = {'process':{'pid':812, 'startTicks':8, 'appPid':810, 'appStartTicks':7}, 'roles':{}}
+        for sequence in [[(1, 8)], [(1, 81), (1, 7)]]:
+            with patch.object(driver, '_process_fields', side_effect=sequence), self.assertRaises(RuntimeError):
+                driver.require_closed_capture_writer(witness)
+        with patch.object(driver, '_process_fields', side_effect=[FileNotFoundError(), (1, 11)]), \
+                patch.object(recovery, 'require_closed_deferred_tokens') as check:
+            driver.require_closed_capture_writer(witness)
+            check.assert_called_once_with(witness['roles'])
+
+
 if __name__ == '__main__':
     unittest.main()

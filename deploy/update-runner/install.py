@@ -217,6 +217,120 @@ STARTUP_FILES = {'dist/service/apps/service/http.js', 'dist/service/apps/service
                  'dist/service/apps/service/gateway.js', 'dist/service/apps/service/update-maintenance.js'}
 
 
+def _process_fields(process):
+    with (process / 'stat').open('rb') as stream:
+        line = stream.read(4097)
+    fields = line[line.rfind(b')') + 2:].split()
+    require(len(line) <= 4096 and len(fields) > 19, 'Invalid native process identity.')
+    return int(fields[1]), int(fields[19])
+
+
+def _gateway_title(process):
+    with (process / 'cmdline').open('rb') as stream:
+        raw = stream.read(16385)
+    return len(raw) <= 16384 and raw.rstrip(b'\x00') == b'openclaw-gateway'
+
+
+def _capture_process(app_pid, native_pid, node, uid, native_root):
+    app, gateway = (pathlib.Path('/proc') / str(pid) for pid in (app_pid, native_pid))
+    parent, start = _process_fields(gateway)
+    _, app_start = _process_fields(app)
+    require(app_pid > 1 and native_pid > 1 and native_pid != app_pid and parent == app_pid
+            and _gateway_title(gateway) and gateway.stat().st_uid == app.stat().st_uid == uid
+            and (gateway / 'exe').resolve(strict=True) == node and (gateway / 'cwd').resolve(strict=True) == native_root,
+            'The native capture writer does not belong to this startup.')
+    namespaces = {kind: os.readlink(gateway / 'ns' / kind) for kind in ('pid', 'mnt')}
+    require(namespaces == {kind: os.readlink(app / 'ns' / kind) for kind in namespaces},
+            'The gateway and application namespaces differ.')
+    def cgroup(proc):
+        with (proc / 'cgroup').open('rb') as stream:
+            data = stream.read(4097)
+        require(0 < len(data) <= 4096, 'Invalid native process cgroup.')
+        return data.decode('utf8')
+    group = cgroup(gateway)
+    require(cgroup(app) == group, 'The gateway and application cgroups differ.')
+    return {'pid': native_pid, 'appPid': app_pid, 'startTicks': start, 'appStartTicks': app_start,
+            'uid': uid, 'namespace': namespaces, 'cgroup': group}
+
+
+def _capture_reserved_lock(fd, owner_stat, native_pid):
+    # Linux x86-64 struct flock. Query only the SQLite RESERVED byte so a
+    # shared lock elsewhere on the file cannot impersonate its writer.
+    import struct
+    layout = struct.Struct('@hhqqi4x')
+    require(os.uname().machine == 'x86_64' and layout.size == 32, 'Unknown capture lock ABI.')
+    reserved = 0x40000001
+    query = layout.pack(fcntl.F_WRLCK, os.SEEK_SET, reserved, 1, 0)
+    kind, whence, first, length, pid = layout.unpack(fcntl.fcntl(fd, fcntl.F_GETLK, query))
+    if kind == fcntl.F_UNLCK:
+        return None
+    last = first + length - 1 if length else 2**63 - 1
+    require(kind == fcntl.F_WRLCK and whence == os.SEEK_SET and pid == native_pid and
+            0 <= first <= reserved <= last < 2**63, 'The SQLite reserved byte has another owner.')
+    # F_GETLK returns the PID for traditional POSIX locks and -1 for OFD locks.
+    return {'type': 'POSIX', 'access': 'WRITE', 'pid': pid, 'first': first, 'last': last,
+            'device': owner_stat.st_dev, 'inode': owner_stat.st_ino}
+
+
+def observe_capture_writer(data_root, selected_relative, owner, epoch, app_pid, native_pid, node_path, service_uid, native_root):
+    """Observe a real native writer before the ordinary stop, without opening SQLite."""
+    from recovery import capture_lease_identity, native_capture_owner_paths, is_header_only_capture_journal
+    require(not selected_relative.is_absolute() and '..' not in selected_relative.parts and
+            data_root.resolve(strict=True) == data_root and native_root == data_root / selected_relative / 'openclaw-runtime',
+            'Invalid selected native capture workspace.')
+    identity = _capture_process(app_pid, native_pid, node_path, service_uid, native_root)
+    staged = set()
+    native_capture_owner_paths(data_root, selected_relative, '2026.9.8', staged=staged)
+    roles = {}
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOATIME
+    for role in sorted(staged):
+        path = data_root / role
+        journal = path.with_name('owner.sqlite-journal')
+        directory = list(capture_lease_identity(path.parent.lstat())[:5])
+        with os.fdopen(os.open(path, flags), 'rb') as main, os.fdopen(os.open(journal, flags), 'rb') as side:
+            main_stat = os.fstat(main.fileno())
+            main_id = list(capture_lease_identity(main_stat))
+            journal_id = list(capture_lease_identity(os.fstat(side.fileno())))
+            require(main_id[3] == journal_id[3] == service_uid and main_id[6] == 0 and journal_id[6] == 512,
+                    'A candidate capture token changed size or owner.')
+            lock = _capture_reserved_lock(main.fileno(), main_stat, native_pid)
+            if lock is None:
+                continue  # A carried, closed token may still be present.
+            data = side.read(513)
+            require(is_header_only_capture_journal(data),
+                    'Unrecognized SQLite capture journal.')
+            require(_capture_reserved_lock(main.fileno(), main_stat, native_pid) == lock
+                    and list(capture_lease_identity(path.lstat())) == main_id
+                    and list(capture_lease_identity(journal.lstat())) == journal_id
+                    and list(capture_lease_identity(path.parent.lstat())[:5]) == directory,
+                    'Native capture family changed while measuring its writer.')
+            roles[str(role)] = {'owner': main_id, 'journal': journal_id, 'journalSha256': hashlib.sha256(data).hexdigest(),
+                                'captureDirectory': directory, 'lock': lock}
+    node_hash = digest(node_path) if roles else None
+    require(_capture_process(app_pid, native_pid, node_path, service_uid, native_root) == identity,
+            'The observed native process changed.')
+    require(len(roles) <= 1, 'Multiple native staging writers are outside this lifecycle.')
+    if not roles:
+        return None
+    return {'format': 1, 'kind': 'native-capture-writer', 'owner': list(owner), 'epoch': epoch,
+            'observedAtNs': time.time_ns(), 'process': {**identity, 'nodeSha256': node_hash}, 'roles': roles}
+
+
+def require_closed_capture_writer(document):
+    """Reconcile the observed process lifetimes and their original kernel lock identities."""
+    if document is None:
+        return
+    from recovery import require_closed_deferred_tokens
+    proc = document['process']
+    for pid, started in ((proc['pid'], proc['startTicks']), (proc['appPid'], proc['appStartTicks'])):
+        try:
+            _, present = _process_fields(pathlib.Path('/proc') / str(pid))
+        except FileNotFoundError:
+            continue
+        require(present != started, 'The original capture writer startup is still running.')
+    require_closed_deferred_tokens(document['roles'])
+
+
 def protected(path, directory=False, private=False):
     require(path.is_absolute() and path.resolve(strict=True) == path, 'A protected path was redirected.')
     for current in (path, *path.parents):
@@ -395,6 +509,7 @@ class Driver:
         """No changed-schema effect is admitted by metadata or a source-only plan."""
         self.application_transition = None
         self.same_schema_qualification = None
+        self.deferred_capture_history = None
         if (self.from_schema, self.to_schema) == (55, 55):
             require('applicationTransition' not in self.pair and 'sameSchemaQualification' not in self.pair
                     and 'startupQualification' not in self.pair,
@@ -450,6 +565,12 @@ class Driver:
         admitted = validator(self.pair, proof, prior_id=self.prior_id, target_id=self.target_id,
             workspace_epoch=self.expected_prior['workspaceEpoch'], helper_hashes=helpers)
         if self.from_schema == 60:
+            history = proof.get('deferredCaptureHistory')
+            if history is not None:
+                from recovery import capture_history_bound
+                capture_history_bound(history, self.expected_prior['workspaceEpoch'])
+                require(history['priorCandidateId'] == self.prior_id, 'Deferred source belongs to another installed candidate.')
+                self.deferred_capture_history = history
             self.same_schema_qualification = admitted
         else:
             self.application_transition = admitted
@@ -1093,9 +1214,18 @@ class Driver:
                 or recovery is None or not (recovery / 'workspace').is_dir()):
             return
         schemas = (self.from_schema, self.to_schema) if candidate == self.target_id else (self.from_schema,)
+        history = getattr(self, 'deferred_capture_history', None)
+        if history is not None:
+            from hosted_retained_configuration import document
+            source = document(self.same_schema_prior_source)
+            manifest, line_manifest = self.deferred_source_manifest
+            require(source['manifestSha256'] == manifest, 'Original stopped capture source changed.')
+            if line_manifest != history['sourceManifestSha256']:
+                history = None
         with self.application_comparison(recovery / 'workspace', self.data, restored=candidate != self.target_id):
             state = begin_capture_retention(recovery / 'workspace', self.data, self.before['epoch'],
-                self.prior_agent, (self.job_id, candidate, attempt), getattr(self, 'capture_retirement_previous', None), schemas)
+                self.prior_agent, (self.job_id, candidate, attempt), getattr(self, 'capture_retirement_previous', None), schemas,
+                **({'deferred': True, 'deferred_history': history} if history is not None else {}))
         if state is None:
             return
         self.capture_retirement_start = state
@@ -1103,7 +1233,8 @@ class Driver:
         write_json(path,
                    {'format': 1, 'jobId': self.job_id, 'candidateId': candidate, 'attempt': attempt,
                     'epoch': self.before['epoch'], 'physicalRoots': state['physical'], 'observedAtNs': state['observedAtNs'],
-                    'roles': {str(k): v for k, v in state['roles'].items()}})
+                    'roles': {str(k): v for k, v in state['roles'].items()},
+                    **({'deferredBefore': state['deferredBefore']} if 'deferredBefore' in state else {})})
         state['receipt'] = (path, digest(path))
 
 
@@ -1298,6 +1429,42 @@ class Driver:
         require(record == {'format': 1, 'jobId': self.job_id, **launch}, 'Recorded startup window changed.')
         return record, digest(path)
 
+    def observe_ready_capture(self, ready):
+        capture = getattr(self, 'capture_retirement_start', None)
+        if capture is None or 'deferredBefore' not in capture:
+            return
+        import pwd
+        app_pid = ready['process']['pid']
+        native_root = self.data / capture['selected'] / 'openclaw-runtime'
+        children = set()
+        for task in (pathlib.Path('/proc') / str(app_pid) / 'task').iterdir():
+            try:
+                with (task / 'children').open('rb') as stream:
+                    raw = stream.read(65537)
+            except FileNotFoundError:
+                continue
+            require(len(raw) <= 65536, 'Native child process listing exceeded its bound.')
+            children.update(int(pid) for pid in raw.split())
+        gateways = []
+        for pid in children:
+            try:
+                if _gateway_title(pathlib.Path('/proc') / str(pid)):
+                    gateways.append(pid)
+            except FileNotFoundError:
+                continue
+        require(len(gateways) == 1, 'A unique settled gateway is required for native writer observation.')
+        document = observe_capture_writer(self.data, capture['selected'], capture['owner'], capture['epoch'],
+                                          app_pid, gateways[0], self.prior_agent_node,
+                                          pwd.getpwnam(self.settings['serviceUser']).pw_uid, native_root)
+        if document is None:
+            return
+        require(document['process']['nodeSha256'] == self.agent_node_hash
+                and document['process']['appStartTicks'] == ready['process']['startTicks'],
+                'The native writer differs from the reviewed Node and ready application.')
+        path = self.output / ('startup-' + str(ready['attempt']) + '-capture-writer.json')
+        write_json(path, document)
+        capture['writerReceipt'] = (path, digest(path))
+
     def stop_for_retention(self, *, restored_prior=False):
         """Close one held process lifetime before comparing retained data.
 
@@ -1320,6 +1487,7 @@ class Driver:
         accepted = self.acceptance(ready['candidateId'], version, restored_prior=restored_prior)
         require(accepted['epoch'] == ready['epoch'] and accepted['accounts'] == self.before['accounts'],
                 'The held account or workspace identity changed before stop.')
+        self.observe_ready_capture(ready)
         admitted()
         self.service('stop')
         self.require_stopped()
@@ -1500,6 +1668,15 @@ class Driver:
                     and owner[1] == (self.target_id if target else self.prior_id),
                     'Capture retirement belongs to another startup.')
             closure = {'start': capture, 'owner': owner, 'window': window}
+            if 'writerReceipt' in capture:
+                writer_path = self.output / ('startup-' + str(owner[2]) + '-capture-writer.json')
+                protected(writer_path, private=True)
+                require(capture['writerReceipt'] == (writer_path, digest(writer_path)), 'Native writer receipt changed.')
+                writer = read_json(writer_path)
+                require(writer['owner'] == list(owner) and writer['epoch'] == self.before['epoch'],
+                        'Native writer receipt belongs to another startup.')
+                require_closed_capture_writer(writer)
+                closure['writerWitness'] = writer
         with self.application_comparison(snapshot, self.data, restored=not target):
             native_saved_state(snapshot, self.data, self.before['epoch'] if self.before else None,
                                self.from_engine, self.active_engine, (self.target_agent_node if self.runtime is not None else
@@ -1534,12 +1711,15 @@ class Driver:
             self.capture_retirement_previous = {'roots': capture['roots'], 'physical': capture['physical'],
                 'epoch': self.before['epoch'], 'runtime': capture['runtime'], 'candidate': owner[1],
                 'attempt': owner[2], 'retired': retired}
+            deferred = ({key: closure[key] for key in ('deferredCapture', 'deferredCatalog')}
+                        if 'deferredCapture' in closure else {})
+            self.capture_retirement_previous.update(deferred)
             closed_path = self.output / ('startup-' + str(owner[2]) + '-capture-closed.json')
             write_json(closed_path,
                        {'format': 1, 'jobId': owner[0], 'candidateId': owner[1], 'attempt': owner[2],
                         'epoch': self.before['epoch'], 'closedWindow': window, 'physicalRoots': capture['physical'],
                         'beforeSha256': digest(self.output / ('startup-' + str(owner[2]) + '-capture-before.json')),
-                        'retired': {str(k): v for k,v in retired.items()}})
+                        'retired': {str(k): v for k,v in retired.items()}, **deferred})
             self.capture_retirement_previous['receipt'] = (closed_path, digest(closed_path))
 
     def bind_same_schema_source(self, closed_source):
@@ -1554,13 +1734,17 @@ class Driver:
             selected, epoch = __import__('recovery').selected_workspace(snapshot, self.before['epoch'], closed=True)
         relative = selected.relative_to(snapshot)
         entries = inventory(snapshot)[0]
-        manifest_hash = __import__('hashlib').sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        manifest_bytes = json.dumps(entries, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
         root = snapshot.lstat()
         record = {'format': 1, 'kind': 'same-schema-closed-prior-source', 'candidateId': self.prior_id,
             'workspaceEpoch': epoch, 'sourceRoot': str(snapshot), 'sourceIdentity': [root.st_dev, root.st_ino],
             'manifestSha256': manifest_hash,
             'configuration': file_reference(selected / 'openclaw-runtime/openclaw.json'),
             'logicalNativeRoot': str(self.data / relative / 'openclaw-runtime'), 'sourceClosed': True}
+        if getattr(self, 'deferred_capture_history', None) is not None:
+            # The retained producer stored its compact inventory as a JSON line.
+            self.deferred_source_manifest = (manifest_hash, hashlib.sha256(manifest_bytes + b'\n').hexdigest())
         closed_source()
         path = self.output / 'same-schema-prior-source.json'
         write_json(path, record)

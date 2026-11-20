@@ -5,20 +5,23 @@ import {inflateSync} from 'node:zlib';
 import {sha256} from '../scripts/release-plan.mjs';
 import {verifyCandidate} from '../scripts/candidate.mjs';
 import {dependencyFixture} from './dependency-transport-fixture.mjs';
-import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,startupHelperNames} from '../scripts/release-delivery-startup-retained.mjs';
+import {STARTUP_SCENARIOS,startupRetainedRequest,APPLICATION_TRANSITION_HELPERS,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,startupHelperNames} from '../scripts/release-delivery-startup-retained.mjs';
 export const HOME_CAPTURE_ROLES=Object.freeze(['result', 'closure', 'input', 'plan', 'intent', 'sourceCapture', 'sourceBefore', 'sourceAfter', 'sourcePhysical', 'sourceMetadata', 'seedInventory', 'seedPhysical', 'seedMetadata', 'liveContext', 'effectiveUnit']);
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const digest=v=>sha256(Buffer.from(canonical(v)+'\n'));
-function historicalHelper(name){
- const table=JSON.parse(readFileSync(new URL('./historical-startup-helpers.json',import.meta.url))),item=table.files[name];
+function historicalHelper(name,tableName='historical-startup-helpers.json'){
+ const table=JSON.parse(readFileSync(new URL('./'+tableName,import.meta.url))),item=table.files[name];
  const raw=inflateSync(Buffer.from(item.zlibBase64,'base64'),{maxOutputLength:512*1024});
  if(raw.length!==item.bytes||sha256(raw)!==item.sha256)throw Error('historical-fixture-helper-changed');return raw;
 }
 export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchema60=false,newDependencyGraph=false}={}){
   sources??=Object.fromEntries(['qualified-startup.py','qualified-parent.py','produce-startup-inputs.py','contracts.py'].map(n=>[n,sha256(n)]));
   const sameSchemaMarker={format:1,kind:'schema-60-same-runtime',schemaVersion:60,apiVersion:1,agentVersion:'2026.9.8'};
-  const currentFamily=REHEARSAL_SCHEMA60_STARTUP_SOURCES!==null&&sources['qualified-startup.py']===REHEARSAL_SCHEMA60_STARTUP_SOURCES['qualified-startup.py'];
-  const targetHelpers=currentFamily?Object.fromEntries(startupHelperNames(sameSchemaMarker).map(name=>[name,readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))]))
+  const historical46=sources['qualified-startup.py']===REHEARSAL_SCHEMA60_STARTUP_SOURCES['qualified-startup.py'];
+  const currentFamily=sources['qualified-startup.py']===DEFERRED_CAPTURE_STARTUP_SOURCES['qualified-startup.py'];
+  const targetHelpers=(currentFamily||historical46)?Object.fromEntries(startupHelperNames(sameSchemaMarker).map(name=>[
+    name,historical46&&['install.py','recovery.py'].includes(name)?historicalHelper(name,'historical-rehearsal-helpers.json'):
+    readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url))]))
     :sources['qualified-startup.py']===QUALIFIED_STARTUP_SOURCES['qualified-startup.py']
     ?Object.fromEntries(['recovery.py','install.py'].map(name=>[name,historicalHelper(name)])):{};
   const f=dependencyFixture(t,{format:4,change:'startup',includeHost:true,targetHelpers,...(newDependencyGraph?{targetDependencyVersion:'2.0.0'}:{}),...(schemaMigration?{targetSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:sameSchema60?{targetSchema:60,priorSchema:60,migrationHelpers:[...APPLICATION_TRANSITION_HELPERS,'operator_rehearsal.py']}:{})});
@@ -72,7 +75,7 @@ export function startupCommandFixture(t,{sources,schemaMigration=false,sameSchem
         lastWindow:[scenario.startedAtSeconds,scenario.closedAtSeconds]});
     }
   }
-  if(currentFamily){
+  if(currentFamily||historical46){
     proof.baselineLineage='verified-closed-schema60-target-retained';
     for(const role of ['baselineManifest','baselineVerified','retainedParent','retainedRoles','retainedClosure','retainedSecondPreservation'])
       proof.references[role]={path:'/fixture/evidence/'+role+'.json',sha256:sha256('full closed39 '+role),bytes:123};
