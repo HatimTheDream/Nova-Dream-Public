@@ -213,24 +213,23 @@ test('image actions still open the exact saved original when the current message
   finally { app.close(); }
 });
 
-test('Open PDF saves one returned artifact and opens its verified attachment inside the chat', async () => {
-  const saving = deferred<any>();
-  const file = { id: 'saved-pdf', name: 'Pages.pdf', sha256: 'hash' };
-  let saves = 0, opened: unknown;
+test('Open PDF reads a native-only returned artifact in the chat without saving it', async () => {
   const app = host(GeneratedOutput, {
     conversation, epoch: 'epoch', message: { id: 'reply', textHash: 'hash', attachments: [] },
-    attachment: { artifactId: 'pdf-result', name: file.name, type: 'file', mimeType: 'application/pdf' },
-    controller: { outputs: [], saveArtifact: () => { saves++; return saving.promise; } },
-    blocked: false, open: (original: unknown) => { opened = original; }, contentActions: {},
+    attachment: { artifactId: 'pdf-result', name: 'Pages.pdf', type: 'file', mimeType: 'application/pdf' },
+    controller: { outputs: [], saveArtifact: () => assert.fail('Reading must not save the output') },
+    blocked: false, open: () => assert.fail('This artifact has no saved attachment'), contentActions: {},
   });
   try {
     await app.flush();
-    const open = find(app.tree, node => node.type === 'button' && node.props.children === 'Open PDF');
-    open.props.onClick(); open.props.onClick();
-    assert.equal(saves, 1);
-    saving.resolve({ id: 'output', file }); await app.flush();
-    assert.deepEqual(opened, file);
+    find(app.tree, node => node.type === 'button' && node.props.children === 'Open PDF').props.onClick();
+    await app.flush();
+    const viewer = find(app.tree, node => node.props?.artifact);
+    assert.deepEqual(viewer.props.artifact, { epoch: 'epoch', conversationId: 'chat-a', nativeId: 'native-a', messageId: 'reply', messageHash: 'hash', artifactId: 'pdf-result' });
     assert.equal(app.downloads, 0);
+    find(app.tree, node => node.type === 'button' && node.props.children === 'Close PDF').props.onClick();
+    await app.flush();
+    assert.equal(find(app.tree, node => node.props?.artifact), undefined);
   } finally { app.close(); }
 });
 
