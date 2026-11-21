@@ -6,7 +6,7 @@ import {sha256,qualifyApplicationPackage,planRelease} from '../scripts/release-p
 import {buildFullCoordinatorDescriptor} from '../scripts/release-delivery-full-coordinator.mjs';
 import {coordinatorFixture,now as coordinatorNow} from '../support/full-coordinator-fixture.mjs';
 import {startupCommandFixture,HOME_CAPTURE_ROLES} from '../support/startup-command-fixture.mjs';
-import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS,HISTORICAL_SCHEMA60_HELPERS,RETIRED_RECAPTURE_STARTUP_SOURCES} from '../scripts/release-delivery-startup-retained.mjs';
+import {startupRetainedRequest,verifyStartupRetainedProjection,assertStartupQualifiedCandidate,createStartupRetainedCollector,buildStartupRetainedProgram,QUALIFIED_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_HELPERS,HISTORICAL_SCHEMA60_HELPERS,RETIRED_RECAPTURE_STARTUP_SOURCES,RETAINED_TARGET_STARTUP_SOURCES,RETAINED_BINDINGS_STARTUP_HELPERS} from '../scripts/release-delivery-startup-retained.mjs';
 import {createMaintainedDependencyTransport,dependencyTransportSchema,DEPENDENCY_PARSER_SHA} from '../scripts/release-delivery-dependency-transport.mjs';
 import {createDependencyPairProducer} from '../scripts/release-delivery-dependencies.mjs';
 import {createFullBundleAdapter} from '../scripts/release-delivery-full.mjs';
@@ -466,4 +466,24 @@ test('fresh capture qualification selects one normal generation and binds its co
   const pinnedProducer = collector.toString().match(/^RETIRED_RECAPTURE_PRODUCER = '([a-f0-9]{64})'$/m)[1];
   assert.equal(pinnedProducer, request.producer.sha256);
   assert.throws(() => startupRetainedRequest({...options, format: 2}));
+});
+
+
+test('a retained target selects its exact reviewed source family and its own closed lifecycle', () => {
+  const producer = {path: '/qualification/qualified-startup.py', sha256: RETAINED_TARGET_STARTUP_SOURCES['qualified-startup.py']};
+  const options = {format: 1, parent: {path: '/qualification/evidence/parent-verified.json', sha256: '1'.repeat(64)}, producer};
+  const request = startupRetainedRequest(options);
+  const encoded = buildStartupRetainedProgram(request).match(/v=json.loads\(base64.b64decode\('([A-Za-z0-9+/=]+)'/)[1];
+  const program = JSON.parse(Buffer.from(encoded, 'base64'));
+  assert.deepEqual(program.sources, RETAINED_TARGET_STARTUP_SOURCES);
+  assert.deepEqual(program.sameSchemaHelpers, RETAINED_BINDINGS_STARTUP_HELPERS);
+  assert.equal(program.sha256, sha256(readFileSync(new URL('../scripts/release-startup-retained-proof.py', import.meta.url))));
+  assert.equal(Object.hasOwn(request, 'warmAntecedent'), false);
+  assert.throws(() => startupRetainedRequest({...options, warmEvidence: {
+    format: 2, donorSeal: {path: '/unused', sha256: '2'.repeat(64)}
+  }}), /parked-original-warm-evidence/);
+  for (const name of Object.keys(RETAINED_TARGET_STARTUP_SOURCES).filter(k => k !== 'qualified-startup.py')) {
+    assert.throws(() => startupRetainedRequest(options, {...RETAINED_TARGET_STARTUP_SOURCES, [name]: '3'.repeat(64)}),
+      /retained-target-source-family-changed/);
+  }
 });

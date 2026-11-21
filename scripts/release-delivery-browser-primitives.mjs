@@ -12,8 +12,13 @@ const qualifiedBrowserBuilds = new Map([
   ['2.28.48', '1.0.421'],
   ['2.28.49', '1.0.422'],
   ['2.28.50', '1.0.423'],
+  ['2.29.0', '1.0.424'],
 ]);
 export const qualifiedBrowserBuild = version => qualifiedBrowserBuilds.get(version);
+export function qualifiedBrowserPrior(targetVersion, prior) {
+  if (targetVersion === '2.29.0') return prior?.version === '2.28.50' && prior.buildVersion === '1.0.423';
+  return prior?.version === '2.28.39' && prior.buildVersion === '1.0.412';
+}
 export function verifyRetainedWindowPolicy(policy,binding) {
   if(!policy)return false;
   const prior=binding.priorBundledTarget,target=binding.fullTarget,digest=/^[a-f0-9]{64}$/;
@@ -23,7 +28,7 @@ export function verifyRetainedWindowPolicy(policy,binding) {
       && target.buildVersion===qualifiedBrowserBuild(target.version) && qualified!==null
       &&['reviewSha256','planSha256','terminalSha256'].every(key=>digest.test(qualified[key]));
   if(policy.kind!==retainedWindowPolicy || binding.route!=='full' || binding.options.mode!=='remote'
-    || binding.options.suite!=='tasks-search-focus' || prior?.version!=='2.28.39' || prior.buildVersion!=='1.0.412'
+    || binding.options.suite!=='tasks-search-focus' || !qualifiedBrowserPrior(target?.version,prior)
     || !correctTarget
     || !digest.test(policy.priorCandidateId) || !digest.test(policy.targetCandidateId) || policy.priorCandidateId===policy.targetCandidateId
     || policy.priorCandidateId!==prior.candidateId || policy.priorCandidateId!==binding.priorCandidateId || policy.targetCandidateId!==target.candidateId)

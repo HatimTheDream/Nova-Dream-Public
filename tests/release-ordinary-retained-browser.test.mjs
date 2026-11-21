@@ -18,7 +18,8 @@ function fixture(t, version='2.28.46', buildVersion='1.0.419') {
   };
   const id=randomUUID(),epoch=randomUUID(),oldId=sha256('prior'),nextId=sha256('target');
   const app=(candidateId,version,buildVersion)=>({candidateId,version,buildVersion});
-  const old=app(oldId,'2.28.39','1.0.412'),next=app(nextId,version,buildVersion);
+  const old=version==='2.29.0' ? app(oldId,'2.28.50','1.0.423') : app(oldId,'2.28.39','1.0.412');
+  const next=app(nextId,version,buildVersion);
   const doc=a=>({...a,frontendId:a.candidateId,assets:`/__bundled/${a.candidateId}/`});
   const checks=['one-prior-document-and-unsent-draft','old-document-retained','old-client-fence','new-document-identity',
     'retained-draft-after-refresh','ui-behavior','owned-draft-cleaned'];
@@ -79,6 +80,14 @@ test('the release being built admits its measured browser proof in the package a
   const binding = f.bind();
   assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
 
+  const previousRelease = {...binding, priorBundledTarget: {...binding.priorBundledTarget, version: '2.28.39', buildVersion: '1.0.412'}};
+  assert.throws(() => verifyRetainedWindowPolicy(binding.windowPolicy, previousRelease), /policy-target-changed/);
+  const oldBase=f.target.bases.private.manifest;
+  f.target.bases.private.manifest=f.save('unaccepted-base',previousRelease.priorBundledTarget);
+  f.freeze();
+  assert.throws(f.bind,/qualification-prior-changed/);
+  f.target.bases.private.manifest=oldBase;
+  f.freeze();
   const wrongBuild = {...binding, fullTarget: {...binding.fullTarget, buildVersion: '0.0.0'}};
   assert.throws(() => verifyRetainedWindowPolicy(binding.windowPolicy, wrongBuild), /policy-target-changed/);
   delete f.target.browserWindowQualification;

@@ -13,7 +13,7 @@ import { verifyRuntimeQualificationReference } from './release-delivery-runtime-
 import { runtimeTransition } from './release-runtime-artifact.mjs';
 import { verificationOnce } from './release-verification-pass.mjs';
 import { awaitObservationTime } from './release-observation-clock.mjs';
-import { assertStartupQualifiedCandidate, startupQualificationMarker, qualificationMarkerFields, verifyStartupRetainedProjection, SAME_SCHEMA60_STARTUP_HELPERS, reviewedSameSchemaHelperFamilies } from './release-delivery-startup-retained.mjs';
+import { assertStartupQualifiedCandidate, startupQualificationMarker, qualificationMarkerFields, verifyStartupRetainedProjection, SAME_SCHEMA60_STARTUP_HELPERS, RETAINED_BINDINGS_STARTUP_HELPERS, reviewedSameSchemaHelperFamilies } from './release-delivery-startup-retained.mjs';
 import {verifyQualifiedApplicationDependencies} from './release-delivery-qualified-dependencies.mjs';
 import {frontendRegular} from './frontend-contract.mjs';
 
@@ -143,6 +143,10 @@ const templates=['collect-facts.py','metadata-stage.py','launch-plan-template.py
 function primitive(name){
  need(templates.includes(name),'full-host-fixed-program-required');
  const source=readFileSync(new URL('full-host-primitives/'+name,import.meta.url));
+ if(name==='collect-completion-template.py'){
+  const reader=readFileSync(new URL('full-host-primitives/collect-returned-completion.py',import.meta.url));
+  return Buffer.concat([reader,Buffer.from('\nRETAINED_CAPTURE_HELPERS = '+JSON.stringify(RETAINED_BINDINGS_STARTUP_HELPERS)+'\n'),source]);
+ }
  if(name!=='metadata-stage.py')return source;
  // Ship the reviewed source registry inside the hashed, standalone host program.
  const registry=JSON.stringify(reviewedSameSchemaHelperFamilies());

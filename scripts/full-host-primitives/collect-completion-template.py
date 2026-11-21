@@ -127,9 +127,13 @@ def main():
  protected(phases[-1],private=True);need(phases[-1].stat().st_size<=1024*1024,'Bounded final phase required.')
  final=json.loads(phases[-1].read_bytes());need(final['phase']=='complete' and final['leaseId']==V['leaseId'],'Actual final phase differs.')
  failure=output/'operator-request-failure.json';need(not os.path.lexists(failure),'Automatic request failure needs separate review.')
- related={}
- for path in sorted(output.glob('startup-*.json')):
-  need(len(related)<32,'Bounded startup metadata required.');protected(path,private=True);need(path.stat().st_size<=65536,'Bounded startup receipt required.');related[path.name]=sha(path)
+ if V['stageResult']['helperHashes']==RETAINED_CAPTURE_HELPERS:
+  rows=returned_roster(output,V,detail)
+  related={name:row['sha256'] for name,row in rows.items()}
+ else:
+  related={}
+  for path in sorted(output.glob('startup-*.json')):
+   need(len(related)<32,'Bounded startup metadata required.');protected(path,private=True);need(path.stat().st_size<=65536,'Bounded startup receipt required.');related[path.name]=sha(path)
  budget_refs=[{'attempt':budget['attempt'],'receiptSha256':budget['receiptSha256']} for budget in detail['startupCapacityBudgets']]
  final_status=operator_status();need(final_status.get('lease')==durable and final_status.get('held') is False and json.loads(current.read_bytes())==durable and terminal_success(unit_state(V['executionUnit'])),'Actual release changed during observation.')
  normalized={'format':1,'readOnlyObservation':True,'observedAtMilliseconds':result['observedAtMilliseconds'],'unit':state,'unitName':V['executionUnit'],'status':observed,'operator':durable,'phaseCount':len(phases),'requestFailure':None,

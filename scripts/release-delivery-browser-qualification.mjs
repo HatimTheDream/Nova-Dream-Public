@@ -2,7 +2,7 @@
 import {isDeepStrictEqual as same} from 'node:util';
 import {z} from 'zod';
 import {readEvidenceFile} from './release-plan.mjs';
-import {qualifiedBrowserBuild, retainedWindowPolicy, verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
+import {qualifiedBrowserBuild, qualifiedBrowserPrior, retainedWindowPolicy, verifyRemoteBrowserMemory} from './release-delivery-browser-primitives.mjs';
 
 const digest=z.string().regex(/^[a-f0-9]{64}$/);
 const reference=z.object({path:z.string().min(1),sha256:digest}).strict();
@@ -30,7 +30,7 @@ export function ordinaryWindowQualification(descriptor,target,route) {
     &&review.targetCandidateId===route.targetCandidateId&&review.targetCandidateId!==review.priorCandidateId
     &&(op.candidateId==null||op.candidateId===review.targetCandidateId),'browser-qualification-candidate-changed');
   const manifest=read(base.manifest,2*1024**2);
-  need(manifest.version==='2.28.39'&&manifest.buildVersion==='1.0.412','browser-qualification-prior-changed');
+  need(qualifiedBrowserPrior(op.version,manifest),'browser-qualification-prior-changed');
   const old=document({candidateId:review.priorCandidateId,version:manifest.version,buildVersion:manifest.buildVersion});
   const next=document({candidateId:review.targetCandidateId,version:op.version,buildVersion:op.buildVersion});
   const plan=read(review.plan,256*1024),terminal=read(review.terminal,2*1024**2),id=z.uuid().parse(terminal.fixtureId),files=terminal.files;

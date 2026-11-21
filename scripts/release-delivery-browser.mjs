@@ -2,7 +2,7 @@
  * browser is an explicit gap; resuming never fabricates an old window. */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
