@@ -213,6 +213,27 @@ test('image actions still open the exact saved original when the current message
   finally { app.close(); }
 });
 
+test('Open PDF saves one returned artifact and opens its verified attachment inside the chat', async () => {
+  const saving = deferred<any>();
+  const file = { id: 'saved-pdf', name: 'Pages.pdf', sha256: 'hash' };
+  let saves = 0, opened: unknown;
+  const app = host(GeneratedOutput, {
+    conversation, epoch: 'epoch', message: { id: 'reply', textHash: 'hash', attachments: [] },
+    attachment: { artifactId: 'pdf-result', name: file.name, type: 'file', mimeType: 'application/pdf' },
+    controller: { outputs: [], saveArtifact: () => { saves++; return saving.promise; } },
+    blocked: false, open: (original: unknown) => { opened = original; }, contentActions: {},
+  });
+  try {
+    await app.flush();
+    const open = find(app.tree, node => node.type === 'button' && node.props.children === 'Open PDF');
+    open.props.onClick(); open.props.onClick();
+    assert.equal(saves, 1);
+    saving.resolve({ id: 'output', file }); await app.flush();
+    assert.deepEqual(opened, file);
+    assert.equal(app.downloads, 0);
+  } finally { app.close(); }
+});
+
 for (const restriction of ['blocked', 'archived']) test(`a pending image save cannot refine after the current chat becomes ${restriction}`, async () => {
   const saving = deferred<any>(); let refined = 0;
   const app = host(GeneratedOutput, { conversation, epoch: 'epoch', message: { id: 'message-a', textHash: 'hash', attachments: [] }, attachment: { artifactId: 'artifact-a', name: 'Image.png', type: 'image' }, controller: { outputs: [], saveArtifact: () => saving.promise }, blocked: false, refine: async () => { refined++; }, contentActions: {} });

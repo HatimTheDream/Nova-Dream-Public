@@ -9,6 +9,10 @@
 .assistant-context-body { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 .assistant-file-preview { overflow-wrap: anywhere; }
 .assistant-file-preview > img { max-width: 100%; height: auto; }
+.pdf-preview-image { display: block; width: 100%; border: 1px solid var(--line); box-sizing: border-box; }
+.history-pdf { min-width: 0; max-width: 100%; }
+.history-pdf > .assistant-file-preview { margin-top: 8px; }
+.pdf-preview-controls { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .assistant-file-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-file-preview .message-text { font-size: 14px; }
 .context-source-summary { display: flex; align-items: center; gap: 6px; font-size: 12px; }

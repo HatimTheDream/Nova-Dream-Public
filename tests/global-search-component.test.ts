@@ -612,3 +612,29 @@ test('an unreadable original Agents view admits no index or draft write', async 
     } finally { f.close(); }
   }
 });
+
+test('conversation search pages through message and title matches and opens the exact older source', async () => {
+  const conversations = Array.from({ length: 28 }, (_, i) => ({ id: `chat-${i + 1}`, nativeId: `native-${i + 1}`, title: `Needle ${i + 1}`, projectId: null, archived: false }));
+  const controller = { space: 'chat', connection: { generation: 'connected' }, conversations };
+  const opened: unknown[] = [];
+  const f = fixture((_path, init) => {
+    const { cursor, query } = JSON.parse(String(init.body)); assert.equal(query, 'needle');
+    const hits = (cursor ? conversations.slice(25) : conversations.slice(0,25)).map(c => ({ conversationId: c.id, nativeId: c.nativeId, messageId: 'exact-message', role: 'user', timestamp: 1, snippet: c.title }));
+    return { query, results: hits, searchedConversations: 28, excludedConversations: 0, indexing: false, limited: !cursor, nativeLimited: false, changedDuringSearch: false, nextCursor: cursor ? null : 'page-two' };
+  });
+  try {
+    const panel = f.mount(ConversationSearch, { snapshot: snapshot(), controller, open: (target: unknown) => opened.push(target) });
+    await panel.flush(); panel.find(n => n.type === 'input').props.onChange({ target: { value: 'needle' } }); await panel.flush();
+    panel.button('Next titles').props.onClick(); await panel.flush();
+    panel.find(n => n.type === 'button' && text(n).includes('Needle 27')).props.onClick();
+    assert.deepEqual(opened.pop(), { epoch: scope.epoch, conversationId: 'chat-27', nativeId: 'native-27' });
+    panel.find(n => n.type === 'form').props.onSubmit({ preventDefault() {} }); await panel.flush();
+    panel.button('Next matches').props.onClick(); await panel.flush();
+    panel.find(n => n.props.className === 'message-match' && text(n).includes('Needle 27')).props.onClick();
+    assert.deepEqual(opened.pop(), { epoch: scope.epoch, conversationId: 'chat-27', nativeId: 'native-27', messageId: 'exact-message', role: 'user' });
+    panel.button('Previous matches').props.onClick(); await panel.flush(); panel.button('Next matches').props.onClick(); await panel.flush();
+    assert.equal(f.calls.length, 2);
+    panel.find(n => n.type === 'input').props.onChange({ target: { value: 'changed' } }); await panel.flush();
+    assert.equal(nodes(panel.tree).some(n => n.props.className === 'message-match'), false);
+  } finally { f.close(); }
+});

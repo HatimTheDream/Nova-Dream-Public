@@ -1,3 +1,8 @@
+## [2.29.0]
+
+- Assistant conversation search now pages through matching messages and conversation titles. Use Next matches to reach older replies and open the exact message. Search keeps your Chat or Work, archive, and Project filters.
+- Open a PDF in Assistant to read its pages inside the conversation. Use Previous page and Next page to move through it, or download the original file.
+
 ## [2.28.50]
 
 - Hosted updates check that the release controller recognizes the current app version and its measured browser result before publication. The browser still has to demonstrate that an unsent Tasks draft survives an upgrade and reload.

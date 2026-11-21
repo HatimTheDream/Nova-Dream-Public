@@ -43,12 +43,13 @@ test('HTTP refusal and already-aborted requests cancel without consuming body da
 
 const fixtureKey=Symbol.for('nova.test.file-preview'),react=pathToFileURL(createRequire(import.meta.url).resolve('react')).href;
 const loader=registerHooks({resolve(s,c,next){if(s==='react'&&c.parentURL?.includes('/apps/client/src/'))return{url:'nova-test:preview-hooks',shortCircuit:true};return next(s,c);},load(u,c,next){if(u==='nova-test:preview-hooks')return{format:'module',shortCircuit:true,source:`export * from ${JSON.stringify(react)};const h=()=>globalThis[Symbol.for('nova.test.file-preview')];export const useState=v=>h().state(v),useRef=v=>h().ref(v),useEffect=(f,d)=>h().effect(f,d);`};if(u.endsWith('.css'))return{format:'module',source:'',shortCircuit:true};return next(u,c);}});
-const {AssistantFilePreview}=await import('../apps/client/src/AssistantFilePreview');loader.deregister();
+const {AssistantFilePreview}=await import('../apps/client/src/AssistantFilePreview');
+const {PdfPreview}=await import('../apps/client/src/PdfPreview');loader.deregister();
 const nodes=(n:any):any[]=>Array.isArray(n)?n.flatMap(nodes):n?.props?[n,...nodes(n.props.children)]:[];
 const text=(n:any):string=>Array.isArray(n)?n.map(text).join(''):n?.props?text(n.props.children):typeof n==='string'||typeof n==='number'?String(n):'';
 const attachment=(name:string,data:Uint8Array):Attachment=>({id:randomUUID(),name,size:data.length,sha256:sha(data)});
 function deferred<T>(){let resolve!:(v:T)=>void;const promise=new Promise<T>(r=>resolve=r);return{promise,resolve};}
-function host(initial:Attachment,respond:(url:string,init:RequestInit)=>Response|Promise<Response>){
+function host(initial:Attachment,respond:(url:string,init:RequestInit)=>Response|Promise<Response>, render = AssistantFilePreview){
   let file=initial,cursor=0,dirty=true,mounted=true,tree:any;const cells:any[]=[],effects:(()=>void)[]=[],calls:{url:string;init:RequestInit}[]=[],created:{url:string;blob:Blob}[]=[],revoked:string[]=[];
   const values:Record<PropertyKey,unknown>={
     [fixtureKey]:{state(v:any){const i=cursor++;if(!cells[i])cells[i]={value:typeof v==='function'?v():v};return[cells[i].value,(n:any)=>{const next=typeof n==='function'?n(cells[i].value):n;if(!Object.is(next,cells[i].value)){cells[i].value=next;dirty=true;}}];},ref(v:any){return cells[cursor++]??={current:v};},effect(run:()=>void|(()=>void),deps:unknown[]){const i=cursor++,old=cells[i];if(!old||deps.some((v,n)=>!Object.is(v,old.deps[n]))){cells[i]={deps,cleanup:old?.cleanup};effects.push(()=>{cells[i].cleanup?.();cells[i].cleanup=run();});}}},
@@ -56,13 +57,13 @@ function host(initial:Attachment,respond:(url:string,init:RequestInit)=>Response
   };
   const originals=Reflect.ownKeys(values).map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]as const),create=URL.createObjectURL,revoke=URL.revokeObjectURL;
   for(const k of Reflect.ownKeys(values))Object.defineProperty(globalThis,k,{configurable:true,writable:true,value:values[k]});URL.createObjectURL=(blob:Blob)=>{const url=`blob:controlled-${created.length}`;created.push({url,blob});return url;};URL.revokeObjectURL=url=>{revoked.push(url);};
-  const flush=async(until?:()=>boolean)=>{const deadline=performance.now()+5000;for(let i=0;until||i<25;i++){if(dirty&&mounted){dirty=false;cursor=0;tree=AssistantFilePreview({file});while(effects.length)effects.shift()!();}if(until?.())return;if(until)assert.ok(performance.now()<deadline,'Preview did not reach the expected state within5seconds');await new Promise<void>(r=>until?setTimeout(r,1):setImmediate(r));}};
+  const flush=async(until?:()=>boolean)=>{const deadline=performance.now()+5000;for(let i=0;until||i<25;i++){if(dirty&&mounted){dirty=false;cursor=0;tree=render({file});while(effects.length)effects.shift()!();}if(until?.())return;if(until)assert.ok(performance.now()<deadline,'Preview did not reach the expected state within5seconds');await new Promise<void>(r=>until?setTimeout(r,1):setImmediate(r));}};
   return{calls,created,revoked,get tree(){return tree;},flush,async ready(){await flush(()=>nodes(tree).some(n=>['pre','img','p'].includes(n.type)));},async update(next:Attachment){file=next;dirty=true;await flush();},unmount(){mounted=false;for(const c of cells)c?.cleanup?.();},close(){this.unmount();URL.createObjectURL=create;URL.revokeObjectURL=revoke;for(const[k,d]of originals)if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}};
 }
 test('actual preview verifies original saved bytes and SHA before showing text; download remains the fallback',async()=>{
   const data=utf8('Original exact text'),file=attachment('original.txt',data),app=host(file,()=>stream([data],{'content-length':String(data.length)}).response);
   try{await app.ready();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children,'Original exact text');assert.equal(app.calls[0].url,`/api/attachments/${file.id}?preview=1`);assert.equal(app.calls[0].init.credentials,'same-origin');assert.equal(app.created.length,0);}finally{app.close();}
-  for(const mode of ['hash','invalid-text','unsupported']as const){const bytes=mode==='invalid-text'?new Uint8Array([255]):data,f=attachment(mode==='unsupported'?'original.pdf':'original.txt',bytes);if(mode==='hash')f.sha256='0'.repeat(64);const h=host(f,()=>stream([bytes]).response);try{await h.ready();assert.equal(nodes(h.tree).find(n=>n.type==='pre'),undefined);assert.match(text(h.tree),mode==='hash'?/version could not be verified/:/Download/);}finally{h.close();}}
+  for(const mode of ['hash','invalid-text','unsupported']as const){const bytes=mode==='invalid-text'?new Uint8Array([255]):data,f=attachment(mode==='unsupported'?'original.rtf':'original.txt',bytes);if(mode==='hash')f.sha256='0'.repeat(64);const h=host(f,()=>stream([bytes]).response);try{await h.ready();assert.equal(nodes(h.tree).find(n=>n.type==='pre'),undefined);assert.match(text(h.tree),mode==='hash'?/version could not be verified/:/Download/);}finally{h.close();}}
 });
 test('oversized or invalid saved metadata refuses before any fetch and keeps an original-download explanation',async()=>{
   for(const change of ['large','hash','size']as const){const f=attachment('original.txt',utf8('abc'));if(change==='large')f.size=previewByteLimit+1;if(change==='hash')f.sha256='bad';if(change==='size')f.size=-1;const app=host(f,()=>{throw Error('Must not fetch');});try{await app.flush();assert.equal(app.calls.length,0);assert.match(text(app.tree),/Download the original/);}finally{app.close();}}
@@ -106,4 +107,61 @@ test('the finite preview deadline cancels its pending body and exposes the origi
 test('supported text is bounded visually without changing the verified original download bytes',async()=>{
   const bytes=utf8('a'.repeat(200005)),app=host(attachment('long.txt',bytes),()=>stream([bytes]).response);
   try{await app.ready();assert.equal(nodes(app.tree).find(n=>n.type==='pre').props.children.length,200000);assert.match(text(app.tree),/Download includes the full file/);}finally{app.close();}
+});
+
+test('PDF page navigation shows only verified raster pages; changing pages releases the previous preview', async () => {
+  const file = attachment('history.pdf', utf8('saved original'));
+  const jpeg = Uint8Array.from([255, 216, 255, 217]);
+  const app = host(file, (url, init) => {
+    const query = new URL(url, 'http://localhost').searchParams;
+    assert.equal(query.get('sha256'), file.sha256);
+    assert.equal(query.get('size'), String(file.size));
+    assert.equal(init.credentials, 'same-origin');
+    return stream([jpeg], { 'content-type': 'image/jpeg', 'X-Source-SHA256': file.sha256, 'X-PDF-Page': query.get('pdfPage')!, 'X-PDF-Pages': '2', 'X-PDF-Page-Bytes': String(jpeg.length) }).response;
+  }, PdfPreview);
+  try {
+    await app.ready();
+    const button = (label: string) => nodes(app.tree).find(n => n.type === 'button' && text(n) === label);
+    assert.equal(button('Previous page').props.disabled, true);
+    assert.equal(nodes(app.tree).find(n => n.type === 'img').props.alt, 'PDF page 1 of 2');
+    button('Next page').props.onClick();
+    await app.flush(() => nodes(app.tree).some(n => n.props.alt === 'PDF page 2 of 2'));
+    assert.equal(button('Next page').props.disabled, true);
+    assert.deepEqual(app.revoked, [app.created[0].url]);
+    assert.equal(app.created[1].blob.type, 'image/jpeg');
+    assert.deepEqual(new Uint8Array(await app.created[1].blob.arrayBuffer()), jpeg);
+    app.unmount();
+    assert.deepEqual(app.revoked, app.created.map(v => v.url));
+  } finally { app.close(); }
+});
+
+test('a PDF response with a different source identity never becomes an image URL', async () => {
+  const file = attachment('old.pdf', utf8('original'));
+  const app = host(file, () => stream([utf8('unsafe')], { 'content-type': 'image/jpeg', 'X-Source-SHA256': '0'.repeat(64), 'X-PDF-Page': '1', 'X-PDF-Pages': '1', 'X-PDF-Page-Bytes': '6' }).response, PdfPreview);
+  try {
+    await app.ready();
+    assert.match(text(app.tree), /Download the original/);
+    assert.equal(app.created.length, 0);
+  } finally { app.close(); }
+});
+
+test('read-only native PDF navigation binds later pages to the first artifact digest', async () => {
+  const source = { epoch: 'e', conversationId: 'c', nativeId: 'n', messageId: 'm', messageHash: 'a'.repeat(64), artifactId: 'old-pdf' };
+  const original = attachment('archive.pdf', utf8('document')), jpeg = Uint8Array.from([255, 216, 255, 217]);
+  const app = host(original, (url, init) => {
+    const endpoint = new URL(url, 'http://localhost');
+    assert.equal(endpoint.pathname, '/api/assistant/artifact/read');
+    assert.deepEqual(JSON.parse(String(init.body)), source);
+    assert.equal(init.method, 'POST');
+    const page = endpoint.searchParams.get('pdfPage');
+    assert.equal(endpoint.searchParams.get('sha256'), page === '1' ? null : original.sha256);
+    return stream([jpeg], { 'content-type': 'image/jpeg', 'X-Source-SHA256': page === '1' ? original.sha256 : '0'.repeat(64), 'X-PDF-Page': page!, 'X-PDF-Pages': '2', 'X-PDF-Page-Bytes': String(jpeg.length) }).response;
+  }, () => PdfPreview({ artifact: source }));
+  try {
+    await app.ready();
+    nodes(app.tree).find(n => n.type === 'button' && text(n) === 'Next page').props.onClick();
+    await app.flush(() => nodes(app.tree).some(n => n.props.role === 'alert'));
+    assert.equal(app.created.length, 1);
+    assert.match(text(app.tree), /could not be opened/);
+  } finally { app.close(); }
 });

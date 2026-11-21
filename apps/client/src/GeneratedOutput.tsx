@@ -23,6 +23,7 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
   const output = attachment.artifactId ? savedMessageOutput(controller.outputs, conversation, message, attachment.artifactId) : undefined;
   const file = output?.file ?? (attachment.availability !== 'unavailable' ? attachment.localFile : undefined);
   const image = attachment.type === 'image' || attachment.mimeType?.startsWith('image/');
+  const pdf = /\.pdf$/i.test(file?.name ?? attachment.name) || attachment.mimeType === 'application/pdf';
   useEffect(() => {
     setPreview(''); setLoading(false); setError('');
     return () => { pending.current?.abort(); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; };
@@ -59,33 +60,33 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
     catch (reason) { if (scope.live) setError(reason instanceof Error ? reason.message : 'The output save was not confirmed.'); }
     finally { scope.busy = false; if (scope.live) setBusy(false); }
   };
-  const useImage = async (action: 'view' | 'download' | 'refine') => {
+  const useOutputFile = async (action: 'view' | 'download' | 'refine') => {
     if (!scope.live || scope.busy || action === 'refine' && !scope.canRefine) return;
     scope.busy = true; setBusy(true); setError('');
     try {
       const kept = output ?? (attachment.artifactId ? await controller.saveArtifact(conversation, message, attachment) : undefined);
       if (!scope.live || action === 'refine' && !scope.canRefine) return;
       const original = kept?.file ?? file;
-      if (!original) throw new Error('The original image could not be retrieved. Please retry.');
+      if (!original) throw new Error('The original file could not be retrieved. Please retry.');
       if (action === 'refine') { if (!kept) throw new Error('Save this output before refining it.'); await refine(kept); }
       else if (action === 'view') open?.(original, kept);
       else { const link = document.createElement('a'); link.href = `/api/attachments/${original.id}`; link.download = original.name; link.click(); }
-    } catch (reason) { if (scope.live) setError(reason instanceof Error ? reason.message : 'The image action was not confirmed. Please retry.'); }
+    } catch (reason) { if (scope.live) setError(reason instanceof Error ? reason.message : 'The file action was not confirmed. Please retry.'); }
     finally { scope.busy = false; if (scope.live) setBusy(false); }
   };
   return <section ref={container} className={`generated-output ${image ? 'generated-image' : ''}`} aria-label={`Generated output: ${attachment.name}`}>
     <div className={image ? 'sr-only' : 'generated-output-title'}>{!image && <File size={20}/>}<strong title={attachment.name}>{attachment.name}</strong>{!image && output && <span className="metadata">v{output.version}</span>}</div>
     {image && loading && <p className="metadata" role="status">Loading image…</p>}
-    {preview && <button type="button" className="generated-image-open" aria-label={`View image: ${attachment.name}`} disabled={!open || busy} onClick={() => void useImage('view')}><img className="generated-output-image" src={preview} alt={attachment.name} onError={() => { setError('The image could not be displayed. Its original remains available to download.'); setPreview(''); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; }}/></button>}
+    {preview && <button type="button" className="generated-image-open" aria-label={`View image: ${attachment.name}`} disabled={!open || busy} onClick={() => void useOutputFile('view')}><img className="generated-output-image" src={preview} alt={attachment.name} onError={() => { setError('The image could not be displayed. Its original remains available to download.'); setPreview(''); if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; }}/></button>}
     {image ? <div className="generated-output-actions">
-      {open && <button className="text-button" disabled={busy || !file && attachment.availability === 'unavailable'} onClick={() => void useImage('view')}>View image</button>}
-      {file ? <a className="output-download text-button" download={file.name} href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a> : <button className="text-button" disabled={busy || attachment.availability === 'unavailable'} onClick={() => void useImage('download')}><Download size={16}/>Download</button>}
-      {(output || attachment.artifactId) && <button className="text-button" disabled={busy || blocked || conversation.archived || !file && attachment.availability === 'unavailable'} onClick={() => void useImage('refine')}>Refine</button>}
+      {open && <button className="text-button" disabled={busy || !file && attachment.availability === 'unavailable'} onClick={() => void useOutputFile('view')}>View image</button>}
+      {file ? <a className="output-download text-button" download={file.name} href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a> : <button className="text-button" disabled={busy || attachment.availability === 'unavailable'} onClick={() => void useOutputFile('download')}><Download size={16}/>Download</button>}
+      {(output || attachment.artifactId) && <button className="text-button" disabled={busy || blocked || conversation.archived || !file && attachment.availability === 'unavailable'} onClick={() => void useOutputFile('refine')}>Refine</button>}
       {output && output.version > 1 && <span className="generated-image-version">v{output.version}</span>}
       {output?.file && <details className="output-action-disclosure"><summary>More</summary><div className="output-action-menu"><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/></div></details>}
       {!preview && !loading && <button className="text-button" disabled={!file && attachment.availability === 'unavailable'} onClick={() => void loadImage()}>Retry preview</button>}
     </div> : <div className="generated-output-actions">
-      {file && open && <button onClick={() => open(file, output)}>Open file</button>}
+      {open && (file || pdf && attachment.artifactId) && <button disabled={busy || !file && (blocked || attachment.availability === 'unavailable')} onClick={() => file ? open(file, output) : void useOutputFile('view')}>{pdf ? 'Open PDF' : 'Open file'}</button>}
       <details className="output-action-disclosure"><summary>More</summary><div className="output-action-menu">
         {file && <>{image && open && <button onClick={() => open(file, output)}>Open file</button>}<a className="output-download" href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a></>}
         {output?.file ? <><button disabled={busy || blocked || conversation.archived} onClick={() => void refine(output)}>Refine</button><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/><span className="metadata">Original version kept</span></> : attachment.artifactId && <button disabled={busy || blocked || !file && attachment.availability === 'unavailable'} onClick={() => void save()}><Download size={16}/>{busy ? 'Saving output…' : 'Save output'}</button>}

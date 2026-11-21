@@ -115,6 +115,7 @@ export class AssistantService {
   private earlyEvents = new Map<string, EventFrame[]>();
   private closed = false;
   private officeReader = new OfficeReader();
+  private conversationSearch: ConversationSearch;
   private settingRequests = new Map<string, string>();
   private queueTimer?: ReturnType<typeof setInterval>;
   private historyReads = new Map<string, Promise<ConversationHistory>>();
@@ -209,6 +210,10 @@ export class AssistantService {
     this.plans = new AssistantPlans(store, { conversation: id => this.conversation(id), operation: id => this.operation(id), operations: () => this.operations(), assertReady: conversation => { this.assertConnection(conversation); if (conversation.archived || conversation.deleted || conversation.pendingSettings || this.voiceBusy(conversation.id)) throw new Fault(409, 'plan_unavailable', 'Restore and reconnect this chat before continuing its plan.'); }, save: operation => this.saveOperation(operation), dispatch: id => { void this.dispatch(id); } });
     this.removals = new ConversationRemovals(store, gateway, id => this.voiceBusy(id));
     this.artifactReader = new ArtifactReader(gateway, artifactExchange);
+    this.conversationSearch = new ConversationSearch(store, gateway,
+      () => this.conversations().filter(c => !this.removals.pending(c.id) && !this.removals.removed(c.id)),
+      (c, h) => ({ ...h, messages: this.authoredMessages(c, h.nativeId, h.messages) }),
+      (c, offset) => this.readHistory(c.id, { offset, nativeId: c.nativeId!, readOnly: true, searchOnly: true }));
     this.pins = new MessagePins(store, id => this.conversation(id), id => this.cachedHistory(id));
     this.memory = new AssistantMemory(store, id => this.conversation(id), id => this.cachedHistory(id));
     this.continuations = new ConversationContinuation(store, gateway, { read: id => this.conversation(id), save: conversation => this.saveConversation(conversation), savedHistory: this.savedHistory(), assertIdle: conversation => {
@@ -734,7 +739,7 @@ export class AssistantService {
       return this.saveConversation({ ...this.conversation(branch.id), state: !dispatched || e instanceof GatewayClientRequestError ? 'failed' : 'unknown', error: e instanceof Fault ? e.message : e instanceof GatewayClientRequestError ? 'The runtime rejected this branch. The original chat and revised draft are kept.' : 'Branch creation is unconfirmed. Its revised draft is kept; the original chat was not replaced.' });
     }
   }
-  search(raw: unknown) { return new ConversationSearch(this.store, this.gateway, () => this.conversations(), (c, h) => ({ ...h, messages: this.authoredMessages(c, h.nativeId, h.messages) })).search(raw); }
+  search(raw: unknown) { return this.conversationSearch.search(raw); }
   async browse(raw: unknown): Promise<ConversationHistory> {
     const input = browseConversationSchema.parse(raw);
     if (input.epoch !== this.store.epoch) throw new Fault(409, 'epoch_changed', 'The workspace changed. Reopen the source from a current search.');
@@ -806,13 +811,13 @@ export class AssistantService {
   exportRetainedTranscript(device: string, input: unknown) {
     return this.savedHistory().export(device, input, id => { this.removals.assertAvailable(id); return this.conversation(id); });
   }
-  private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; resume?: boolean; inputRunIds?: string[] }): Promise<ReconciliationHistory> {
+  private async readHistory(id: string, options: { offset?: number; messageId?: string; nativeId?: string; readOnly?: boolean; searchOnly?: boolean; resume?: boolean; inputRunIds?: string[] }): Promise<ReconciliationHistory> {
     if (options.readOnly && this.store.updateMaintenanceHeld) throw new Fault(409, 'update_maintenance', 'Saved history refresh is paused while the update is prepared.');
     let conversation = this.conversation(id);
     const epoch = this.store.epoch;
     if (conversation.forkSource && !conversation.forkSource.resolved) throw new Fault(409, 'fork_unconfirmed', 'The runtime has not confirmed this branch identity. The original chat and revised draft are kept.');
     this.assertHistoryConnection(conversation);
-    if (!this.subscribed.has(conversation.nativeKey) && this.gateway.status().methods.includes('sessions.messages.subscribe')) {
+    if (!options.searchOnly && !this.subscribed.has(conversation.nativeKey) && this.gateway.status().methods.includes('sessions.messages.subscribe')) {
       await this.gateway.request('sessions.messages.subscribe', { key: conversation.nativeKey });
       this.assertHistoryConnection(conversation);
       this.subscribed.add(conversation.nativeKey);
@@ -878,7 +883,7 @@ export class AssistantService {
     }
     const complete = { ...history, nativeSettings, leafEntryId: history.leafEntryId ?? (typeof info.activeLeafEntryId === 'string' ? info.activeLeafEntryId : undefined) };
     if (!options.readOnly) this.store.internalWrite(`assistant:history:${id}`, complete);
-    if (!this.store.updateMaintenanceHeld) {
+    if (!options.searchOnly && !this.store.updateMaintenanceHeld) {
       const binding = nativeId === conversation.nativeId ? conversation : this.savedHistory().target(conversation, nativeId);
       if (binding && this.savedHistory().observe({ ...conversation, ...binding }, complete, { source: 'native' })) this.historyVersions[id] = (this.historyVersions[id] ?? 0) + 1;
     }

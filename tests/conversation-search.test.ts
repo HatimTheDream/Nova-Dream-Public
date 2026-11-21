@@ -8,16 +8,17 @@ import { Store } from '../apps/service/store.js';
 import { ConversationSearch } from '../apps/service/conversation-search.js';
 import { SavedHistory } from '../apps/service/saved-history.js';
 import type { AssistantTransport } from '../apps/service/gateway.js';
-import type { AssistantConnection, Conversation } from '../packages/domain/assistant.js';
+import type { AssistantConnection, Conversation, ConversationHistory } from '../packages/domain/assistant.js';
 
 const conversation = (generation: string, patch: Partial<Conversation> = {}): Conversation => ({ id: randomUUID(), revision: 1, title: 'Fixture conversation', projectId: null, archived: false, model: null, thinking: null, createdAt: '', updatedAt: '', connectionGeneration: generation, nativeKey: `e3:${randomUUID()}`, nativeId: randomUUID(), state: 'ready', ...patch });
-async function fixture(run: (f: { store: Store; service: ConversationSearch; rows: Conversation[]; status: AssistantConnection; calls: {method: string;params: any}[]; reply: { value: (params: any) => Promise<any> } }) => Promise<void>) {
+async function fixture(run: (f: { store: Store; service: ConversationSearch; rows: Conversation[]; history: { read: (c: Conversation, offset: number) => Promise<ConversationHistory> }; status: AssistantConnection; calls: {method: string;params: any}[]; reply: { value: (params: any) => Promise<any> } }) => Promise<void>) {
   const path = mkdtempSync(join(tmpdir(), 'edition3-search-')), store = new Store(path);
   const status: AssistantConnection = { state: 'ready', generation: randomUUID(), methods: ['sessions.search'], grantedScopes: ['operator.read'], modelAuthReady: false, message: 'Fixture' };
   const rows: Conversation[] = [], calls: {method:string;params:any}[] = [];
   const reply = { value: async (_params: any): Promise<any> => ({ results: [], indexing: false, truncated: false }) };
   const gateway: AssistantTransport = { status: () => structuredClone(status), request: async (method, params) => { calls.push({method,params}); return reply.value(params); }, subscribe: () => () => {}, models: async () => [], attachmentPolicy: () => ({}) };
-  try { await run({store, rows, status, calls, reply, service:new ConversationSearch(store,gateway,()=>rows)}); } finally { store.close(); rmSync(path,{recursive:true,force:true}); }
+  const history = { read: async (_c: Conversation, _offset: number): Promise<ConversationHistory> => { throw Error('Unexpected history read'); } };
+  try { await run({store, rows, status, calls, reply, history, service:new ConversationSearch(store,gateway,()=>rows,undefined,(c, offset) => history.read(c, offset))}); } finally { store.close(); rmSync(path,{recursive:true,force:true}); }
 }
 const hit = (c: Conversation, patch = {}) => ({ sessionKey:c.nativeKey, sessionId:c.nativeId!, messageId:randomUUID(), role:'assistant', timestamp:1234, snippet:'An exact fixture phrase',score:1,...patch });
 test('search limits native scope to matching app conversations and rejects foreign hits', () => fixture(async f => {
@@ -67,4 +68,60 @@ test('a failed runtime search retains local results with unknown wider coverage'
   f.reply.value = async () => { throw Error('Disconnected'); };
   const result = await f.service.search({ epoch: f.store.epoch, query: 'phrase', scope: 'all' });
   assert.equal(result.results.length, 1); assert.equal(result.indexing, null); assert.equal(result.searchedConversations, 1);
+}));
+
+const savedMessages = (count: number) => Array.from({ length: count }, (_, index) => ({
+  id: `message-${String(index).padStart(3, '0')}`, role: 'user' as const, text: `Needle ${index}`, textHash: 'a'.repeat(64), attachments: [],
+  createdAt: '2026-01-01T01:23:45Z',
+}));
+test('saved search traverses several windows offline, preserves tied identities and stops at the final page', () => fixture(async f => {
+  const chats = [conversation('old'), conversation('old')], saved = new SavedHistory(f.store);
+  f.rows.push(...chats); f.status.state = 'unconfigured'; delete f.status.generation;
+  for (const chat of chats) saved.observe(chat, { conversationId: chat.id, nativeId: chat.nativeId!, messages: savedMessages(68), hasMore: false, activeRunIds: [] }, { complete: true });
+  const input = { epoch: f.store.epoch, space: 'chat', scope: 'all', query: 'needle' };
+  let page = await f.service.search(input);
+  const hits = [...page.results], lengths = [hits.length]; assert.ok(page.nextCursor);
+  await assert.rejects(f.service.search({ ...input, query: 'different', cursor: page.nextCursor }), /filters changed/);
+  while (page.nextCursor) {
+    assert.ok(lengths.length < 7, 'pages must progress');
+    page = await f.service.search({ ...input, cursor: page.nextCursor });
+    hits.push(...page.results); lengths.push(page.results.length);
+  }
+  assert.deepEqual(lengths, [25,25,25,25,25,11]); assert.equal(page.limited, false);
+  assert.equal(new Set(hits.map(h => JSON.stringify([h.conversationId, h.messageId]))).size, 136);
+  assert.equal(f.calls.length, 0);
+  const match = hits[111], chat = chats.find(c => c.id === match.conversationId)!;
+  assert.ok(saved.read(chat, { nativeId: match.nativeId, messageId: match.messageId })?.messages.some(m => m.id === match.messageId && m.role === match.role));
+}));
+test('a capped native index continues one exact current history at a time without duplicate index hits', () => fixture(async f => {
+  const c = conversation(f.status.generation!), other = conversation(f.status.generation!, { archived: true });
+  f.rows.push(c, other); f.status.methods.push('chat.history');
+  const messages = savedMessages(61), calls: number[] = [];
+  f.reply.value = async () => ({ results: messages.slice(0,25).map(m => hit(c, { messageId: m.id, role: m.role })), indexing: false, truncated: true });
+  f.history.read = async (row, offset) => {
+    assert.equal(row.id, c.id); calls.push(offset);
+    return { conversationId: c.id, nativeId: c.nativeId!, messages: messages.slice(offset, offset + 50), hasMore: offset === 0, nextOffset: offset === 0 ? 50 : undefined, offset, totalMessages: 61, activeRunIds: [] };
+  };
+  const input = { epoch: f.store.epoch, query: 'needle', scope: 'active', space: 'chat' };
+  const first = await f.service.search(input);
+  assert.deepEqual(calls, []); assert.equal(first.results.length, 25);
+  const second = await f.service.search({ ...input, cursor: first.nextCursor });
+  const third = await f.service.search({ ...input, cursor: second.nextCursor });
+  assert.equal(f.calls.length, 1); assert.deepEqual(calls, [0,50]);
+  assert.deepEqual([second.results.length, third.results.length], [25,11]);
+  assert.equal(new Set([...first.results, ...second.results, ...third.results].map(h => h.messageId)).size, 61);
+  assert.equal(third.nextCursor, null); assert.equal(third.nativeLimited, true);
+  f.status.grantedScopes = [];
+  await assert.rejects(f.service.search({ ...input, cursor: first.nextCursor }), /connection changed/);
+  f.status.grantedScopes = ['operator.read']; c.archived = true;
+  await assert.rejects(f.service.search({ ...input, cursor: first.nextCursor }), /conversations in this search changed/);
+  assert.deepEqual(calls, [0,50]);
+}));
+test('removal between saved pages invalidates the token before a cached snippet can be returned', () => fixture(async f => {
+  const c = conversation(f.status.generation!); f.rows.push(c);
+  new SavedHistory(f.store).observe(c, { conversationId: c.id, nativeId: c.nativeId!, messages: savedMessages(30), hasMore: false, activeRunIds: [] }, { complete: true });
+  const input = { epoch: f.store.epoch, query: 'needle', scope: 'active' };
+  const first = await f.service.search(input); assert.ok(first.nextCursor);
+  f.store.internalWrite(`assistant:removed:${c.id}`, true);
+  await assert.rejects(f.service.search({ ...input, cursor: first.nextCursor }), /conversations in this search changed/);
 }));

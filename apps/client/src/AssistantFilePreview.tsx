@@ -3,13 +3,16 @@ import { useEffect, useRef, useState } from 'react';
 import { attachmentSchema, type Attachment } from '../../../packages/domain/contracts';
 import { ReplyText } from './ReplyText';
 import { readPreviewBytes } from './assistant-preview-reader';
+import { PdfPreview } from './PdfPreview';
 
 export function AssistantFilePreview({ file }: { file: Attachment }) {
   const identity = JSON.stringify([file.id, file.sha256, file.size, file.name]);
   const latest = useRef(identity); latest.current = identity;
   const attempt = useRef<object | undefined>(undefined);
   const [content, setContent] = useState<{ identity: string; image?: string; imageError?: () => void; text?: string; shortened?: boolean; error?: string }>();
+  const pdf = /\.pdf$/i.test(file.name);
   useEffect(() => {
+    if (pdf) return;
     const abort = new AbortController(), signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30000)]), owner = {};
     attempt.current = owner;
     let objectUrl = ''; setContent(undefined);
@@ -42,6 +45,7 @@ export function AssistantFilePreview({ file }: { file: Attachment }) {
     })();
     return () => { abort.abort(); revoke(); };
   }, [identity]);
+  if (pdf) return <PdfPreview key={identity} file={file}/>;
   const shown = content?.identity === identity ? content : undefined;
   return <div className="assistant-file-preview">{shown?.error ? <p role="alert">{shown.error}</p> : !shown ? <LoadingRing label="Opening file…"/> : shown.image ? <img src={shown.image} alt={file.name} onError={shown.imageError}/> : shown.text !== undefined ? <>{/\.md$/i.test(file.name) ? <ReplyText text={shown.text} role="assistant"/> : <pre>{shown.text}</pre>}{shown.shortened && <p className="metadata">Preview shortened. Download includes the full file.</p>}</> : <p className="metadata">Preview is unavailable for this format. Download the original file to open it in its app.</p>}</div>;
 }

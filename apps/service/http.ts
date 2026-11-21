@@ -32,6 +32,7 @@ import { WorkspaceBackups } from './workspace-backups.js';
 import { importMaxBytes } from '../../packages/domain/workspace-import.js';
 import { ManagedNativeBackup, type NativeBackup } from './native-backup.js';
 import { ModuleActions } from './module-actions.js';
+import { SourceReader } from './source-reader.js';
 import { CompanionDownloads } from './companion-downloads.js';
 import { Companions } from './companions.js';
 import { ContactDirectory } from './contact-directory.js';
@@ -208,7 +209,8 @@ export async function startServer(options: { directory: string; port: number; pr
   const companions = new Companions(store);
   const companionDownloads = new CompanionDownloads(process.env.E3_COMPANION_DOWNLOADS);
   const hostBrowser = new HostBrowser(store, gateway, gateway instanceof Gateway ? () => new Gateway(store, options.version, undefined, 'browser-control') : undefined, enabled => { if(!runtime) throw new Fault(409,'browser_runtime','Use the managed Assistant for host browsing.'); return runtime.configureBrowser(enabled); });
-  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions,hostBrowser,homeLibrary,homeFeed,agentActivity,hubMeetings,agentHub,agentRoutines,contentWorkspace});
+  const sourceReader = new SourceReader(store);
+  const moduleActions = new ModuleActions({store,assistant,gateway,accounts,calendar,calendarWrites,crm:contactCrm,mail,mailDelivery,mailTriage,assignments,companions,hostBrowser,homeLibrary,homeFeed,agentActivity,hubMeetings,agentHub,agentRoutines,contentWorkspace}, sourceReader);
   const conversationCleanup = new ConversationCleanup(store, assistant);
   const moduleToken = randomBytes(32).toString('hex');
   const runtime = gateway instanceof Gateway ? new ManagedRuntime(store, gateway, 45000, () => ({url:ownOrigin+'/workspace',token:moduleToken})) : undefined;
@@ -281,6 +283,20 @@ export async function startServer(options: { directory: string; port: number; pr
       }
       if (status === 200 && request.method === 'GET' && (request.url ?? '').split('?')[0] === '/api/snapshot') headers['X-Nova-Body-Bytes'] = String(Buffer.byteLength(text));
       response.writeHead(status, headers); response.end(text);
+    };
+    const sendPdfPage = async (pdf: Buffer, sha256: string, page: number) => {
+      const abort = new AbortController(), disconnected = () => abort.abort();
+      response.once('close', disconnected);
+      try {
+        if (response.destroyed) abort.abort();
+        const result = await sourceReader.readBinaryPage(pdf, true, page, 'image', abort.signal);
+        reauthorize.get(request)!();
+        const image = result.image;
+        if (!image) throw new Fault(400, 'source_unreadable', 'This PDF page could not be displayed.');
+        const bytes = Buffer.from(image.data, 'base64');
+        response.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': bytes.length, 'Cache-Control': 'no-store', 'Content-Security-Policy': "sandbox; default-src 'none'", 'X-PDF-Page': result.page, 'X-PDF-Pages': result.pages, 'X-PDF-Page-Bytes': bytes.length, 'X-Source-SHA256': sha256 });
+        return response.end(bytes);
+      } finally { response.removeListener('close', disconnected); }
     };
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -718,6 +734,14 @@ export async function startServer(options: { directory: string; port: number; pr
         }
         const match = /^\/api\/attachments\/([a-z0-9-]{36})$/.exec(url.pathname);
         if (match && request.method === 'GET') {
+          if (url.searchParams.has('pdfPage')) {
+            const query = z.object({ pdfPage: z.coerce.number().int().min(1).max(1000), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.coerce.number().int().nonnegative() }).strict().parse(Object.fromEntries(url.searchParams));
+            const file = store.blobMetadata(match[1]);
+            if (query.sha256 !== file.sha256 || query.size !== file.size) throw new Fault(409, 'attachment_changed', 'The saved PDF version could not be verified.');
+            if (!/\.pdf$/i.test(file.name)) throw new Fault(400, 'source_format', 'Choose a saved PDF.');
+            const saved = store.download(file.id);
+            return await sendPdfPage(saved.bytes, file.sha256, query.pdfPage);
+          }
           const file = store.download(match[1]);
           const preview = url.searchParams.get('preview') === '1' ? imagePreviewType(file.bytes) : undefined;
           response.writeHead(200, { 'Content-Type': preview ?? 'application/octet-stream', 'Content-Disposition': `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.metadata.name)}`, 'Content-Length': file.bytes.length, 'Cache-Control': 'no-store', 'Content-Security-Policy': "sandbox; default-src 'none'" });
@@ -837,7 +861,12 @@ export async function startServer(options: { directory: string; port: number; pr
         if (url.pathname === '/api/assistant/outputs' && request.method === 'POST') return json(200, assistant.saveOutput(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/artifact/save' && request.method === 'POST') return json(200, await assistant.saveArtifact(device, await commandBody(request)));
         if (url.pathname === '/api/assistant/artifact/read' && request.method === 'POST') {
+          const pdfQuery = url.searchParams.has('pdfPage') ? z.object({ pdfPage: z.coerce.number().int().min(1).max(1000), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict().parse(Object.fromEntries(url.searchParams)) : undefined;
           const file = await assistant.readArtifact(await commandBody(request));
+          if (pdfQuery) {
+            if (pdfQuery.sha256 && pdfQuery.sha256 !== file.sha256) throw new Fault(409, 'attachment_changed', 'The original PDF changed. Reopen it to view its current pages.');
+            return await sendPdfPage(file.bytes, file.sha256, pdfQuery.pdfPage);
+          }
           const preview = imagePreviewType(file.bytes);
           response.writeHead(200, { 'Content-Type': preview ?? 'application/octet-stream', 'Content-Disposition': `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'Content-Length': file.bytes.length, 'Cache-Control': 'no-store', 'Content-Security-Policy': "sandbox; default-src 'none'", 'X-Artifact-SHA256': file.sha256 });
           return response.end(file.bytes);

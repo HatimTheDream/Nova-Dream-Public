@@ -4,10 +4,12 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, request as httpRequest } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { startServer } from '../apps/service/http.js';
 import { Store } from '../apps/service/store.js';
+import { sourcePdf } from './fixtures/source-files';
+import sharp from 'sharp';
 import { emptyDraft, type Command, type Snapshot, type Task } from '../packages/domain/contracts.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'edition3-api-'));
@@ -47,6 +49,60 @@ test('saved image preview returns bounded raster bytes while active formats rema
   assert.equal(download.headers.get('content-type'), 'application/octet-stream'); assert.match(download.headers.get('content-disposition')!, /^attachment;/);
   assert.equal(download.headers.get('content-security-policy'), "sandbox; default-src 'none'"); await download.arrayBuffer();
   assert.equal((await fetch(`${service.origin}/api/attachments/${image.id}?preview=1`)).status, 401);
+});
+
+test('authenticated PDF preview returns the requested saved page as inert pixels and preserves the original', async () => {
+  const original = sourcePdf();
+  const save = (name: string, bytes: Buffer) => service.store.upload(a.device, randomUUID(), service.store.epoch, name, bytes.toString('base64'));
+  const file = save('two-pages.pdf', original);
+  const url = (page: number, saved = file, hash = saved.sha256) => `${service.origin}/api/attachments/${saved.id}?pdfPage=${page}&sha256=${hash}&size=${saved.size}`;
+  const init = { headers: { Cookie: a.cookie } };
+  assert.equal((await fetch(url(1))).status, 401);
+  assert.equal((await fetch(url(1, file, '0'.repeat(64)), init)).status, 409);
+  assert.equal((await fetch(url(0), init)).status, 400);
+  assert.equal((await fetch(url(1, save('fake.pdf', Buffer.from('no document here'))), init)).status, 400);
+  assert.equal((await fetch(url(1, save('page.html', original)), init)).status, 400);
+  for (const number of [1, 2]) {
+    const response = await fetch(url(number), init);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/jpeg');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(response.headers.get('x-source-sha256'), file.sha256);
+    assert.equal(response.headers.get('x-pdf-page'), String(number));
+    assert.equal(response.headers.get('x-pdf-pages'), '2');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(bytes.length, Number(response.headers.get('x-pdf-page-bytes')));
+    const { data, info } = await sharp(bytes).raw().toBuffer({ resolveWithObject: true });
+    const offset = (Math.floor(info.height * 0.7) * info.width + Math.floor(info.width * 0.7)) * info.channels;
+    assert.equal(data[offset] < 30 && data[offset+1] > 150 && data[offset+2] > 200, number === 2);
+  }
+  const download = await fetch(`${service.origin}/api/attachments/${file.id}`, init);
+  assert.match(download.headers.get('content-disposition')!, /^attachment;/);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), original);
+});
+
+test('archived native PDF pages use the authenticated artifact reference without saving an output', async t => {
+  const original = sourcePdf(), sha256 = createHash('sha256').update(original).digest('hex');
+  const source = { epoch: service.store.epoch, conversationId: randomUUID(), nativeId: 'historical', messageId: 'message', messageHash: 'f'.repeat(64), artifactId: 'pdf-result' };
+  let reads = 0;
+  t.mock.method(service.assistant, 'readArtifact', async (request: unknown) => {
+    assert.deepEqual(request, source); reads++;
+    return { bytes: original, sha256, name: 'archive.pdf', mimeType: 'application/pdf', type: 'file' };
+  });
+  t.mock.method(service.assistant, 'saveArtifact', () => assert.fail('Reading history must not save an artifact'));
+  const url = `${service.origin}/api/assistant/artifact/read?pdfPage=2`;
+  const init = { method: 'POST', body: JSON.stringify(source), headers: { 'X-Edition3-Client': '1', 'Content-Type': 'application/json' } };
+  assert.equal((await fetch(url, init)).status, 401);
+  assert.equal(reads, 0);
+  const authorized = { ...init, headers: { ...init.headers, Cookie: a.cookie } };
+  assert.equal((await fetch(url + '&sha256=' + '0'.repeat(64), authorized)).status, 409);
+  const page = await fetch(url + '&sha256=' + sha256, authorized);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('x-source-sha256'), sha256);
+  assert.equal(page.headers.get('x-pdf-page'), '2');
+  const info = await sharp(Buffer.from(await page.arrayBuffer())).metadata();
+  assert.equal(info.format, 'jpeg');
+  assert.equal(reads, 2);
 });
 
 test('workspaces sharing a browser host keep distinct sessions and retain legacy device identity', async () => {

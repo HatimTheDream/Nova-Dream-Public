@@ -54,10 +54,8 @@ export class ModuleActions {
  private operations:Record<string,Operation>;
  private flights=new Map<string,Promise<ModuleAction>>();
  private closed=false;
- private reader:SourceReader;
- constructor(private s:ModuleServices){
+ constructor(private s:ModuleServices, private reader = new SourceReader(s.store)){
   const {store,accounts,calendar,calendarWrites,crm,mail,mailDelivery,mailTriage,assignments}=s;
-  this.reader=new SourceReader(store);
   const envelope=(a:ModuleAction)=>({...a.input,epoch:a.epoch,requestId:a.id});
   this.operations={
    ...createConversationOperations(s),
