@@ -1,7 +1,7 @@
 name: Operator continuation quality
 on:
   push:
-    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1', 'operator/browser-postinstall-recovery-r1', 'operator/prepackage-dependency-correction']
+    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1', 'operator/browser-postinstall-recovery-r1', 'operator/prepackage-dependency-correction', 'operator/same-schema-returned-rehearsal']
 permissions:
   contents: read
 concurrency:
@@ -105,5 +105,6 @@ jobs:
           python3 -B tests/release-full-runtime-capacity.test.py -v
           python3 -B tests/release-runtime-retained-proof.test.py -v
           sudo -n "$(command -v python3)" -I -B tests/release-startup-retained-proof.test.py -v
+          python3 -B tests/release-same-schema-returned-proof.test.py -v
           python3 -B tests/release-host-preflight.test.py -v
           python3 -B tests/release-operator-ci.test.py -v
