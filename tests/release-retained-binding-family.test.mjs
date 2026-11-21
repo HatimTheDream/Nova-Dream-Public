@@ -8,6 +8,7 @@ import {
   RETAINED_BINDINGS_STARTUP_HELPERS as currentHelpers,
   RETAINED_BINDINGS_STARTUP_SOURCES as currentSources,
   RETAINED_WINDOW_STARTUP_SOURCES as windowSources,
+  COMPLETE_CAPTURE_STARTUP_HELPERS, buildStartupRetainedProgram,
   reviewedSameSchemaHelperFamilies, reviewedStartupSources, startupRetainedRequest,
 } from '../scripts/release-delivery-startup-retained.mjs';
 
@@ -29,5 +30,26 @@ test('the retained bindings qualifier and its predecessor have separately regist
     assert.throws(()=>startupRetainedRequest(options),/parked-original-warm-evidence-required/);
     const crossed={...sources,'produce-startup-inputs.py':opposite['produce-startup-inputs.py']};
     assert.throws(()=>startupRetainedRequest(options,crossed),/parked-startup-source-family-changed/);
+  }
+});
+
+test('parked collector binds the original and continued donor independently of the current release',()=>{
+  const id='11111111-1111-4111-8111-111111111111', hash='1'.repeat(64);
+  const ref={path:'/fixture/proof.json',sha256:hash};
+  const warmAntecedent={format:2,kind:'verified-supplemental-warm-antecedent',operationId:id,
+    continuationOperationId:id,jobId:id,epoch:id,originalInvocation:'a'.repeat(32),successorInvocation:'b'.repeat(32),
+    priorCandidateId:hash,baselineSha256:hash,nativeOutputSha256:hash,projectionSha256:hash,
+    consumptionSha256:hash,independentReviewSha256:hash};
+  for(const role of ['parent','producer','warmSource','disposableRoles','seedReplicas','chain','outsideClosure',
+    'originalFailedStderr','protectedCustody','terminal'])warmAntecedent[role]=ref;
+  for(const [family,formal] of [[previousSources,previousHelpers],[currentSources,currentHelpers],[windowSources,currentHelpers]]){
+    const request={format:1,kind:'collect-actual-retained-startup-proof',warmAntecedent,
+      parent:{path:'/fixture/evidence/parent-verified.json',sha256:hash},
+      producer:{path:'/fixture/qualified-startup.py',sha256:family['qualified-startup.py']}};
+    const program=buildStartupRetainedProgram(request);
+    const payload=JSON.parse(Buffer.from(/v=json.loads\(base64.b64decode\('([^']+)'/.exec(program)[1],'base64'));
+    assert.deepEqual(payload.donorHelpers,{original:COMPLETE_CAPTURE_STARTUP_HELPERS,effective:previousHelpers});
+    assert.deepEqual(payload.sameSchemaHelpers,formal);
+    assert.throws(()=>buildStartupRetainedProgram({...request,donorHelpers:payload.donorHelpers}),/parked-request-original-paths/);
   }
 });

@@ -91,7 +91,7 @@ function targetInput(descriptor) {
 export function deliveryAdapterSourceFiles() {
   // Include implementation and all directly delegated authority/validation code.
   const files = ['release-delivery-adapters.mjs', 'release-delivery-ci-adapter.mjs', 'release-delivery-ci.py', 'release-ci-primitives.py', 'release-delivery-install.mjs', 'release-delivery-artifact-adapter.mjs', 'release-delivery-artifacts.py', 'release-artifact-primitives.py',
-    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-delivery-dependency-correction.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
+    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-delivery-dependency-correction.mjs', 'release-delivery-startup-proof-correction.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
@@ -201,9 +201,10 @@ export function withBrowserPreparation(adapter, prepare) {
 }
 /** Failure evidence stays in the private journal; qualification predicates are unchanged. */
 export async function collectStartupWithDiagnostics(context,{transport,options,run=runInstallTransport,clock=Date.now,receiptStore=storeReceipt}) {
-  let raw,programSha256;
-  try{return await createStartupRetainedCollector({transport,options,clock,run:async(target,program,args)=>{programSha256=sha256(program);raw=await run(target,program,args);return raw;}})();}
-  catch(error){
+  let raw,programSha256,proof;
+  try{
+    proof=await createStartupRetainedCollector({transport,options,clock,run:async(target,program,args)=>{programSha256=sha256(program);raw=await run(target,program,args);return raw;}})();
+  }catch(error){
     if(context?.journal&&programSha256){
       const stdout=Buffer.from(raw?.stdout??''),stderr=Buffer.from(raw?.stderr??''),reason=/^[a-z][a-z0-9-]{0,99}$/.test(error?.message??'')?error.message:'startup-transport-response-rejected';
       const proof={format:1,kind:'operator-startup-transport-failure',operationId:context.descriptor.operation.id,programSha256,transport,receivedAtMilliseconds:clock(),reason,
@@ -214,6 +215,12 @@ export async function collectStartupWithDiagnostics(context,{transport,options,r
     }
     throw error;
   }
+  if(context?.onStartupObservation){
+    const stdout=Buffer.from(raw.stdout,'utf8');
+    context.onStartupObservation({format:1,kind:'verified-operator-startup-proof',operationId:context.descriptor.operation.id,
+      programSha256,transport,receivedAtMilliseconds:clock(),stdoutSha256:sha256(stdout),stdoutRawBase64:stdout.toString('base64')});
+  }
+  return proof;
 }
 export function createDeliveryRegistry({ command = fixedCommand, run = runInstallTransport, receiptStore = storeReceipt, clock = Date.now, monotonic, wait } = {}) {
   // Keep the old document alive before publication. This is an owned browser
@@ -292,11 +299,11 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     },
     publicationContinuationPlan: context => planFullPublicationContinuation(context,publicationPlanOptions(context)),
     verifyPublicationContinuationPlan: (ref,context) => verifyFullPublicationContinuationPlan(ref,context,publicationPlanOptions(context)),
-    continuationFacts: async (descriptor,{journal}={}) => {
+    continuationFacts: async (descriptor,{journal,verifiedStartup}={}) => {
       need(journal,'continuation-observation-journal-required');
       const {target,transport}=targetInput(descriptor);
       need(target.full?.dependencyTransport?.format===6,'continuation-qualified-application-route-required');
-      const proof=await collectStartupWithDiagnostics({journal,descriptor},{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore});
+      const proof=verifiedStartup??await collectStartupWithDiagnostics({journal,descriptor},{transport:target.transport,options:target.full.dependencyTransport.startupQualification,run,clock,receiptStore});
       const spec=fullFactsSpec(descriptor,target.full.host,descriptor.operation.id,null,proof.qualificationBinding.applicationTransition??proof.qualificationBinding.sameSchemaQualification??null,fullHelpersForBinding(proof.qualificationBinding));
       const response=await run(transport,buildFullHostProgram('collect-facts.py',spec),{captureDiagnostics:true});
       const stdout=Buffer.from(response.stdout??''),stderr=Buffer.from(response.stderr??'');

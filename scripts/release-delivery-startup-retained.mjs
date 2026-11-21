@@ -297,8 +297,12 @@ export function buildStartupRetainedProgram(request){
     warmAuthoritySchema.parse(request.warmAntecedent);
   }else need(same(request,startupRetainedRequest({format:1,parent:request.parent,producer:request.producer})),'startup-collector-request-changed');
   const source=readFileSync(new URL('./release-startup-retained-proof.py',import.meta.url));
-  const payload=encoded({source:source.toString('base64'),sha256:sha256(source),request,sources,...(sameSchemaSources(sources)?{sameSchemaHelpers:helpersForStartupSources(sources)}:{})}).toString('base64');
-  return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'))},separators=(',',':')))\n`;
+  const payload=encoded({
+    source:source.toString('base64'),sha256:sha256(source),request,sources,
+    ...(sameSchemaSources(sources)?{sameSchemaHelpers:helpersForStartupSources(sources)}:{}),
+    ...(parkedVersion(sources)?{donorHelpers:{original:COMPLETE_CAPTURE_STARTUP_HELPERS,effective:PARKED_CAPTURE_STARTUP_HELPERS}}:{}),
+  }).toString('base64');
+  return `import base64,hashlib,json,signal,resource\nv=json.loads(base64.b64decode('${payload}',validate=True));s=base64.b64decode(v['source'],validate=True)\nassert hashlib.sha256(s).hexdigest()==v['sha256']\nresource.setrlimit(resource.RLIMIT_AS,(512*1024**2,512*1024**2));signal.alarm(110)\nn={'__name__':'fixed_startup_retained_consumer'};exec(compile(s,'fixed-startup-retained-consumer','exec'),n)\nprint(json.dumps({'ok':True,'value':n['invoke'](v['request'],v['sources'],v.get('sameSchemaHelpers'),v.get('donorHelpers'))},separators=(',',':')))\n`;
 }
 
 function verifyDeferredCaptureHistory(proof,binding,complete=false){

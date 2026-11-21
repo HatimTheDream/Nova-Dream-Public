@@ -253,7 +253,23 @@ PARKED_RELEASES = {
     '896b22918d9e0c184b6942e4d1c13f95e06d86ce1845fab2bbc41a85ebedbfac': '2.28.50',
 }
 
-def read_split_warm_donor(authority,loan,plan,review,history,document):
+def verify_split_helper_bindings(parent,chain,donor_helpers):
+    original_binding=parent['originalQualificationBinding']
+    effective=parent['qualificationBinding']
+    need(isinstance(donor_helpers,dict) and set(donor_helpers)=={'original','effective'}
+         and original_binding['helpers']==donor_helpers['original']
+         and effective['helpers']==donor_helpers['effective']
+         and original_binding['helpers']==parent['originalNativeHelpers']['sha256']
+         and parent['effectiveNativeHelpers']['sha256']==effective['helpers']
+         and chain['originalNativeHelpers']==parent['originalNativeHelpers']
+         and chain['effectiveNativeHelpers']==parent['effectiveNativeHelpers']
+         and len(original_binding['helpers'])==len(effective['helpers'])==11
+         and {**original_binding['helpers'],'recovery.py':effective['helpers']['recovery.py']}==effective['helpers']
+         and original_binding['helpers']['recovery.py']!=effective['helpers']['recovery.py']
+         and {**original_binding,'helpers':effective['helpers']}==effective,'unrelated-or-unchanged-combined-helper')
+
+
+def read_split_warm_donor(authority,loan,plan,review,history,document,donor_helpers):
     keys={'format','kind','operationId','continuationOperationId','originalInvocation','successorInvocation',
           'jobId','priorCandidateId','epoch','baselineSha256','parent','producer','warmSource','disposableRoles',
           'seedReplicas','chain','outsideClosure','originalFailedStderr','protectedCustody','terminal',
@@ -291,8 +307,6 @@ def read_split_warm_donor(authority,loan,plan,review,history,document):
        for k in ('parent','chain','outsideClosure','disposableRoles','warmSource','seedReplicas','terminal','protectedCustody')}
     parent,chain,closed,roles,warm,seeds,terminal,custody=(v[k] for k in
         ('parent','chain','outsideClosure','disposableRoles','warmSource','seedReplicas','terminal','protectedCustody'))
-    original_binding=parent['originalQualificationBinding']
-    effective=parent['qualificationBinding']
     intervening=chain['priorFailedContinuations']
     need(parent['priorFailedContinuations']==intervening and set(intervening)=={'continuation','firstObserver','configurationObserver'}
          and intervening['continuation']['operationId']==custody_owner and all(v['passed'] is False for v in intervening.values())
@@ -300,15 +314,7 @@ def read_split_warm_donor(authority,loan,plan,review,history,document):
          and parent['newServiceAttempts']==chain['newServiceAttempts']==[2,3]
          and parent['firstPreservation']==chain['firstPreservation']==parent['scenarios'][0]['preservation'],
          'combined-first-check-or-retained-failure-changed')
-    need(effective['helpers']==plan['qualificationBinding']['helpers']
-         and original_binding['helpers']==parent['originalNativeHelpers']['sha256']
-         and parent['effectiveNativeHelpers']['sha256']==effective['helpers']
-         and chain['originalNativeHelpers']==parent['originalNativeHelpers']
-         and chain['effectiveNativeHelpers']==parent['effectiveNativeHelpers']
-         and len(original_binding['helpers'])==len(effective['helpers'])==11
-         and {**original_binding['helpers'],'recovery.py':effective['helpers']['recovery.py']}==effective['helpers']
-         and original_binding['helpers']['recovery.py']!=effective['helpers']['recovery.py']
-         and {**original_binding,'helpers':effective['helpers']}==effective,'unrelated-or-unchanged-combined-helper')
+    verify_split_helper_bindings(parent,chain,donor_helpers)
     need(parent['kind']=='qualified-startup-continuation-parent' and parent['operationId']==chain['operationId']==op and
          parent['continuationOperationId']==chain['continuationOperationId']==cont and parent['passed'] is True and
          parent['originalInvocationPassed'] is chain['originalInvocationPassed'] is False and parent['originalAttemptOneReused'] is True and
@@ -349,7 +355,7 @@ def read_split_warm_donor(authority,loan,plan,review,history,document):
     return parent,roles,warm,seeds
 
 
-def parked_seed_antecedent(parent, plan, review, child, history, authority, document, version):
+def parked_seed_antecedent(parent, plan, review, child, history, authority, document, version, donor_helpers):
     """Join the independently observed warm trial to this operation's borrowed read-only seed."""
     loan = parent['parkedSeedLoan']
     fields = {'format', 'kind', 'donorOperationId', 'sourceManifestSha256', 'parent', 'warmSource',
@@ -357,7 +363,7 @@ def parked_seed_antecedent(parent, plan, review, child, history, authority, docu
     need(set(loan) == fields and loan['format'] == 1 and loan['kind'] == 'borrowed-original-parked-workspace'
          and 'parkedSeedLoan' not in plan and 'parkedSeedLoanSha256' not in parent
          and sha(encoded(loan)) == plan['parkedSeedLoanSha256'], 'parked-seed-original-binding-changed')
-    donor,roles,warm,seeds=read_split_warm_donor(authority,loan,plan,review,history,document)
+    donor,roles,warm,seeds=read_split_warm_donor(authority,loan,plan,review,history,document,donor_helpers)
     op=authority['operationId']
     root='/mnt/nova-data/qualified-startup-inputs-'+op
     formal_ref = review['seedReplicas']
@@ -397,7 +403,7 @@ def parked_seed_antecedent(parent, plan, review, child, history, authority, docu
             'loanSha256':plan['parkedSeedLoanSha256']}
 
 
-def consume(request, read, sources, same_schema_helpers=None):
+def consume(request, read, sources, same_schema_helpers=None, donor_helpers=None):
     need(isinstance(sources, dict) and set(sources) == set(SOURCES)
          and all(isinstance(v, str) and HASH.fullmatch(v) and v != '0' * 64 for v in sources.values()),
          'reviewed-startup-producer-required')
@@ -600,7 +606,7 @@ def consume(request, read, sources, same_schema_helpers=None):
         need(plan['deferredCaptureHistory'] == parked_history, 'deferred-history-plan-binding-changed')
         deferred_history = parked_history
         if parked:
-            loan = parked_seed_antecedent(parent,plan,review,child,parked_history,request['warmAntecedent'],document,version)
+            loan = parked_seed_antecedent(parent,plan,review,child,parked_history,request['warmAntecedent'],document,version,donor_helpers)
         elif complete_capture:
             warm_receipt = consume_warm_origin(parent,plan,review,fixture,document,worker,parked_history)
             deferred_history=warm_receipt['history']
@@ -1748,10 +1754,10 @@ def validate_replica_observation_receipt(proof, plan, startup_start):
                 'An unqualified configuration observation projection was requested.')
 
 
-def invoke(request, sources, same_schema_helpers=None):
+def invoke(request, sources, same_schema_helpers=None, donor_helpers=None):
     need(os.name == 'posix' and os.geteuid() == 0, 'root-linux-readonly-startup-proof-required')
     reader = ProtectedReader()
-    result = consume(request, reader, sources, same_schema_helpers)
+    result = consume(request, reader, sources, same_schema_helpers, donor_helpers)
     worker_closed(result['workerIdentity'])
     reader.unchanged()
     result['workerClosed'] = True

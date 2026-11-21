@@ -14,6 +14,7 @@ import { fullFactsSpec, verifyFullFacts } from './release-delivery-full-host.mjs
 import { verifyPublicationBrowserContinuation, verifyBrowserWindowRecoveryReadiness, assertBrowserWindowRecoveryUnmaterialized } from './release-delivery-browser-continuation.mjs';
 import { configuredBrowserWindowRecoveryStorageReadiness, verifyBrowserWindowRecoveryStorageReadiness } from './release-storage-default.mjs';
 
+import { originalStartupFailure, startupCorrectionBranch, startupCorrectionGrant, startupCorrectionRequest, verifyOriginalStartupProgram, verifyCorrectedStartupProof } from './release-delivery-startup-proof-correction.mjs';
 import { correctionRequestKind, correctionGrantKind, correctionBranch, correctedDependencyTarget, dependencyCorrectionSchema, requireCorrectionExit } from './release-delivery-dependency-correction.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
@@ -38,6 +39,14 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
  automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required');
 
 
+const startupSources=pair(source.extend({branch:z.literal(startupCorrectionBranch)}));
+const startupRequest=continuationRequestSchema.omit({durationMs:true}).extend({
+ kind:z.literal(startupCorrectionRequest),operatorSources:startupSources,startupFailure:ref
+});
+const startupGrant=z.object({...continuationGrantSchema.shape,kind:z.literal(startupCorrectionGrant),startupFailure:ref,startupProof:ref,
+ operator:continuationGrantSchema.shape.operator.extend({sources:startupSources})
+}).strict().refine(p=>p.issuedAtMs>=p.originalCreatedAtMs&&p.expiresAtMs>p.issuedAtMs&&p.expiresAtMs===p.originalCreatedAtMs+p.originalBudgetMs,
+ 'startup-correction-original-deadline-required');
 const correctionSources=pair(source.extend({branch:z.literal(correctionBranch)}));
 const browserWindowPolicy=z.object({kind:z.literal('one-prior-then-two-targets'),priorCandidateId:hash,targetCandidateId:hash}).strict().optional();
 const correctionRequest=continuationRequestSchema.omit({durationMs:true}).extend({
@@ -47,8 +56,8 @@ const correctionGrant=z.object({...continuationGrantSchema.shape,kind:z.literal(
  operator:continuationGrantSchema.shape.operator.extend({sources:correctionSources}),browserWindowPolicy
 }).strict().refine(value=>value.expiresAtMs>value.issuedAtMs&&value.expiresAtMs===value.originalCreatedAtMs+value.originalBudgetMs,
  'dependency-correction-original-deadline-required');
-export const prepackageRequestSchema=z.discriminatedUnion('kind',[continuationRequestSchema,correctionRequest]);
-export const prepackageGrantSchema=z.union([continuationGrantSchema,correctionGrant]);
+export const prepackageRequestSchema=z.discriminatedUnion('kind',[continuationRequestSchema,correctionRequest,startupRequest]);
+export const prepackageGrantSchema=z.union([continuationGrantSchema,correctionGrant,startupGrant]);
 
 /** One bounded continuation of the already reserved publication phase. */
 export const PUBLICATION_CONTINUATION_PREREQUISITES=Object.freeze([...PREWRITE_PREREQUISITES,'package','sign','capacity','recovery']);
@@ -283,8 +292,8 @@ function history(journal,id,through=null){
 export function continuationSnapshot(journal,id,now,{assertAbsent=absentOwner,request=null}={}){
  const retained=journal.loadDelivery(id),d=retained.descriptor;
  need(retained.state==='active'&&!journal.deliveryDisposition(id),'continuation-original-active-operation-required');
- const correction=request?.kind===correctionRequestKind,deadline=retained.created_at+d.observationBudgetMs;
- if(correction)need(Number.isSafeInteger(now)&&now>=retained.created_at&&now<deadline,'dependency-correction-original-budget-expired');
+ const correction=request?.kind===correctionRequestKind,startup=request?.kind===startupCorrectionRequest,deadline=retained.created_at+d.observationBudgetMs;
+ if(correction||startup)need(Number.isSafeInteger(now)&&now>=retained.created_at&&now<deadline,startup?'startup-correction-original-budget-expired':'dependency-correction-original-budget-expired');
  else need(Number.isSafeInteger(now)&&now>deadline,'continuation-original-budget-not-expired');
  const names=journal.db.prepare('SELECT phase FROM delivery_phases WHERE operation_id=? ORDER BY phase').all(id).map(x=>x.phase);
  need(same(names,[...PREWRITE_PREREQUISITES].sort()),'continuation-downstream-reservation-present');
@@ -296,11 +305,11 @@ export function continuationSnapshot(journal,id,now,{assertAbsent=absentOwner,re
  need(!readdirSync(journal.directory).some(n=>/^(delivery-package-|delivery-signature-|delivery-full-|dependency-)/.test(n)),'continuation-downstream-output-present');
  let ownerPids=[];
  if(request){
-  need(request.operationId===id,'continuation-request-operation-changed');verifyOriginalContinuationGraph(request,d);
+  need(request.operationId===id,'continuation-request-operation-changed');const originalGraph=verifyOriginalContinuationGraph(request,d);
   const original=json(request.owner.request),root=resolve(request.owner.request.path,'..'),target=json(d.target),dirs=[];
   need(original.operationId===id&&same(original.node,target.artifactTools.node),'continuation-original-storage-request-changed');
+  if(correction||startup)need(request.owner.attempts.length===1,startup?'startup-correction-single-closed-attempt-required':'dependency-correction-single-closed-attempt-required');
   if(correction){
-   need(request.owner.attempts.length===1,'dependency-correction-single-closed-attempt-required');
    const prior=Object.fromEntries(phases.map(p=>[p.phase,p.current.output]));
    correctedDependencyTarget(target,d,prior,request.correction);
    const policy=request.browserWindowPolicy;
@@ -321,9 +330,12 @@ export function continuationSnapshot(journal,id,now,{assertAbsent=absentOwner,re
    for(const r of [launcher.node,launcher.entry,launcher.runner,launcher.config])readEvidenceFile(r,{maximum:128*1024**2});
    const tail=launcher.mode==='resume'?id:join(resolve(journal.directory,'..'),'request-'+id,'descriptor.json');
    need(same(intent.request,request.owner.request)&&intent.sameReleaseOperation===true&&same(intent.argv,[launcher.node.path,launcher.entry.path,launcher.mode,journal.directory,tail]),'continuation-original-child-argv-changed');
-   if(correction){
+   if(correction||startup){
     need(launcher.mode==='start'&&dir===join(root,'observations','observation-0001'),'dependency-correction-original-first-attempt-required');
-    requireCorrectionExit(status,exit,closed,now);
+    if(startup){
+     const failure=originalStartupFailure({journal,descriptor:d,target,failure:request.startupFailure,status,exit,closed,createdAt:retained.created_at,now});
+     verifyOriginalStartupProgram(originalGraph,request.historical.root,target.full.dependencyTransport.startupQualification,failure,d);
+    }else requireCorrectionExit(status,exit,closed,now);
    }else{
     need(closed.originalChildClosed===true&&closed.returnCode===2&&closed.logBoundExceeded===false&&closed.automaticNewOperationPermitted===false&&exit.returnCode===2
      &&Number.isSafeInteger(exit.finishedAtMilliseconds)&&exit.finishedAtMilliseconds<=now,'continuation-original-owner-not-closed');
@@ -334,7 +346,7 @@ export function continuationSnapshot(journal,id,now,{assertAbsent=absentOwner,re
   const actual=readdirSync(join(root,'observations')).filter(n=>/^observation-[0-9]{4,}$/.test(n)).map(n=>join(root,'observations',n));
   need(new Set(dirs).size===dirs.length&&same([...dirs].sort(),actual.sort()),'continuation-unclassified-original-owner');
   const latest=request.owner.attempts.find(a=>resolve(a.intent.path,'..')===[...dirs].sort().at(-1)),status=json(latest.stdout);
-  if(!correction){
+  if(!correction&&!startup){
    need(status.observationBudgetExpired===true,'continuation-original-expired-result-required');
    const states=rows=>rows.map(({phase,state,key,externalId,reason})=>({phase,state,key,externalId,reason}));
    need(same(states(status.phases),states(journal.deliveryStatus(id,now).phases)),'continuation-original-owner-result-changed');
@@ -578,13 +590,22 @@ export async function reconcileExpiredPrepackage(journal,id,requestRef,{clock=Da
  }
  const prior=Object.fromEntries(PREWRITE_PREREQUISITES.map(p=>[p,journal.deliveryPhase(id,p).current.output]));
  await withVerificationPass({},async scope=>{for(const phase of PREWRITE_PREREQUISITES){const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior),context={...scope,journal,descriptor:d,prior,intent,input:intent.input};need(adapter,'continuation-current-verifier-missing');await adapter.validate(context);await adapter.verify(intent.current,context);}},{readOnly:true});
- need((await registry.phasePreflight('package',d,prior,{journal,dependencyCorrection:request.correction})).length===0,'continuation-package-prerequisite-unavailable');
- const facts=await registry.continuationFacts(d,{journal});const hostFacts=save(journal,'current-idle-host',facts);
+ const startup=request.kind===startupCorrectionRequest;
+ let startupProof,verifiedStartup;
+ const context={journal,dependencyCorrection:request.correction};
+ if(startup)context.onStartupObservation=record=>{
+  need(!startupProof,'startup-correction-duplicate-read');
+  startupProof=save(journal,'startup-proof',record);
+  verifiedStartup=verifyCorrectedStartupProof({journal,descriptor:d,target,prior,reference:startupProof,since:before.originalCreatedAtMs,now:clock()});
+ };
+ need((await registry.phasePreflight('package',d,prior,context)).length===0,'continuation-package-prerequisite-unavailable');
+ if(startup)need(verifiedStartup,'startup-correction-current-observation-required');
+ const facts=await registry.continuationFacts(d,{journal,verifiedStartup});const hostFacts=save(journal,'current-idle-host',facts);
  const at=clock(),after=continuationSnapshot(journal,id,at,{request,assertAbsent});need(same(before,after),'continuation-original-history-changed');
  const correction=request.kind===correctionRequestKind;
- const proof=prepackageGrantSchema.parse({format:1,kind:correction?correctionGrantKind:'nova-expired-prepackage-continuation',operationId:id,...after,request:requestRef,operator,hostFacts,
-  ...(correction?{correction:request.correction}:{}),...(request.browserWindowPolicy?{browserWindowPolicy:request.browserWindowPolicy}:{}),
-  issuedAtMs:at,expiresAtMs:correction?after.originalCreatedAtMs+after.originalBudgetMs:at+request.durationMs,
+ const proof=prepackageGrantSchema.parse({format:1,kind:startup?startupCorrectionGrant:correction?correctionGrantKind:'nova-expired-prepackage-continuation',operationId:id,...after,request:requestRef,operator,hostFacts,
+  ...(startup?{startupFailure:request.startupFailure,startupProof}:{}),...(correction?{correction:request.correction}:{}),...(request.browserWindowPolicy?{browserWindowPolicy:request.browserWindowPolicy}:{}),
+  issuedAtMs:at,expiresAtMs:(startup||correction)?after.originalCreatedAtMs+after.originalBudgetMs:at+request.durationMs,
   automaticRenewal:false,originalHistoryPreserved:true});
  return journal.recordOperatorContinuation(id,proof,at,{assertAbsent});
 }
@@ -708,7 +729,7 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
  need(p.descriptorSha256===d.descriptor_hash&&p.originalAdapterIdentity===d.descriptor.adapterIdentity&&p.targetIdentity===d.descriptor.targetIdentity
   &&p.originalCreatedAtMs===d.created_at&&p.originalBudgetMs===d.descriptor.observationBudgetMs
   &&p.originalTimelineSha256===sha256(canonical(d.descriptor.timeline))&&same(history(journal,id,p.eventHighWaterMark),{eventHighWaterMark:p.eventHighWaterMark,historySha256:p.historySha256}),'continuation-original-descriptor-changed');
- const request=(publicationGrant?publicationContinuationRequestSchema:prepackageRequestSchema).parse(json(p.request));verifyOriginalContinuationGraph(request,d.descriptor);
+ const request=(publicationGrant?publicationContinuationRequestSchema:prepackageRequestSchema).parse(json(p.request));const originalGraph=verifyOriginalContinuationGraph(request,d.descriptor);
  if(publicationGrant){
   const phase=journal.deliveryPhase(id,'publication');need(phase?.key===p.publication.key&&phase.inputSha256===p.publication.inputSha256,'publication-continuation-reservation-changed');
   need(same(p.admission,request.admission)&&same(p.browser,request.browser)&&same(p.publication,request.publication)&&same(p.successor,request.successor)&&same(p.browserWindowRecovery,request.browserWindowRecovery),'publication-continuation-request-changed');
@@ -732,6 +753,14 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
   need(request.kind===correctionRequestKind&&same(p.correction,request.correction)&&same(p.browserWindowPolicy,request.browserWindowPolicy)&&p.expiresAtMs===d.created_at+d.descriptor.observationBudgetMs,
    'dependency-correction-original-authority-changed');
   const original=request.owner.attempts[0];requireCorrectionExit(json(original.stdout),json(original.exit),json(original.childResult),p.issuedAtMs);
+ }else if(p.kind===startupCorrectionGrant){
+  need(request.kind===startupCorrectionRequest&&same(p.startupFailure,request.startupFailure)&&request.owner.attempts.length===1,'startup-correction-original-authority-changed');
+  const original=request.owner.attempts[0],target=json(d.descriptor.target);
+  const failure=originalStartupFailure({journal,descriptor:d.descriptor,target,failure:p.startupFailure,status:json(original.stdout),
+   exit:json(original.exit),closed:json(original.childResult),createdAt:d.created_at,now:p.issuedAtMs});
+  verifyOriginalStartupProgram(originalGraph,request.historical.root,target.full.dependencyTransport.startupQualification,failure,d.descriptor);
+  const prior=Object.fromEntries(['route','artifacts'].map(phase=>[phase,journal.deliveryPhase(id,phase).current.output]));
+  verifyCorrectedStartupProof({journal,descriptor:d.descriptor,target,prior,reference:p.startupProof,since:failure.receivedAtMilliseconds,now:p.issuedAtMs});
  }else need(p.expiresAtMs-p.issuedAtMs===request.durationMs,'continuation-request-authority-changed');
  for(const row of p.prerequisites){const original=journal.deliveryPhase(id,row.phase);need(original?.state==='completed'&&original.validation?.state!=='failed'&&original.key===row.key&&original.inputSha256===row.inputSha256&&sha256(canonical(original.current))===row.observationSha256,'continuation-original-prerequisite-changed');}
  for(const side of ['private','public']){const ci=verifyOperatorCi(json(p.operator.ci[side]),p.operator.sources[side]);need(ci.run.id===request.ciRuns[side],'continuation-request-ci-changed');}

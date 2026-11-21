@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
+import { startupCorrectionEvent, startupCorrectionGrant } from './release-delivery-startup-proof-correction.mjs';
 import { correctionGrantKind } from './release-delivery-dependency-correction.mjs';
 import { prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
@@ -98,8 +99,9 @@ export const deliveryJournalMethods = {
     const row=this.db.prepare('SELECT * FROM delivery_operator_continuations WHERE operation_id=?').get(id);if(!row)return null;
     const proof=operatorGrantSchema.parse(decoded(row.proof_json,row.proof_hash));need(proof.operationId===id&&proof.successor===undefined&&proof.browserWindowRecovery===undefined,'continuation-stored-operation-changed');
     const saved={proof,sha256:row.proof_hash,recordedAtMs:row.at_ms};
-    if(proof.kind!==correctionGrantKind)return saved;
-    const [record,...rest]=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='prepackage-dependency-input-corrected'").all(id);
+    if(proof.kind!==correctionGrantKind&&proof.kind!==startupCorrectionGrant)return saved;
+    const kind=proof.kind===startupCorrectionGrant?startupCorrectionEvent:'prepackage-dependency-input-corrected';
+    const [record,...rest]=this.db.prepare('SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind=?').all(id,kind);
     const expected={grantSha256:saved.sha256,originalBudgetExpired:false,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs};
     need(record&&!rest.length&&record.at_ms===row.at_ms&&canonical(decoded(record.payload_json,record.payload_hash))===canonical(expected),'dependency-correction-original-event-changed');
     return {...saved,eventId:record.id};
@@ -152,9 +154,9 @@ export const deliveryJournalMethods = {
         CREATE TRIGGER IF NOT EXISTS continuation_no_update BEFORE UPDATE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;
         CREATE TRIGGER IF NOT EXISTS continuation_no_delete BEFORE DELETE ON delivery_operator_continuations BEGIN SELECT RAISE(ABORT,'immutable-operator-continuation'); END;`);
       const v=encoded(proof);this.db.prepare('INSERT INTO delivery_operator_continuations VALUES(?,?,?,?)').run(id,now,v.text,v.hash);
-      const correction=proof.kind===correctionGrantKind;
-      const eventKind=correction?'prepackage-dependency-input-corrected':publication?'expired-publication-continuation-granted':'expired-prepackage-continuation-granted';
-      event(this,id,eventKind,{grantSha256:v.hash,originalBudgetExpired:!correction,originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs},now);
+      const startup=proof.kind===startupCorrectionGrant,correction=proof.kind===correctionGrantKind;
+      const eventKind=startup?startupCorrectionEvent:correction?'prepackage-dependency-input-corrected':publication?'expired-publication-continuation-granted':'expired-prepackage-continuation-granted';
+      event(this,id,eventKind,{grantSha256:v.hash,originalBudgetExpired:!(correction||startup),originalHistoryPreserved:true,expiresAtMs:proof.expiresAtMs},now);
       verifyContinuationGrant(this,id,{now,effect:true,assertAbsent});
       return this.deliveryOperatorContinuation(id);
     });

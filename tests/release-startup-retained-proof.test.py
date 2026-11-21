@@ -20,6 +20,27 @@ fixture = fixture_module.fixture
 
 
 class Checks(unittest.TestCase):
+    def test_split_donor_helper_roles_are_exact(self):
+        from copy import deepcopy
+        names = subject.HELPERS + subject.APPLICATION_HELPERS
+        original = {name: 'a' * 64 for name in names}
+        effective = {**original, 'recovery.py': 'b' * 64}
+        expected = {'original': original, 'effective': effective}
+
+        def verify(before, after, policy):
+            records = {'originalNativeHelpers': {'sha256': before}, 'effectiveNativeHelpers': {'sha256': after}}
+            parent = {**records, 'originalQualificationBinding': {'helpers': before},
+                      'qualificationBinding': {'helpers': after}}
+            subject.verify_split_helper_bindings(parent, deepcopy(records), policy)
+
+        verify(original, effective, expected)
+        altered = {**effective, 'install.py': 'c' * 64}
+        for before, after, policy in [(effective, original, expected), (original, altered, expected),
+                                       (original, effective, {'original': effective, 'effective': original}),
+                                       (original, effective, None)]:
+            with self.subTest(before=before, after=after), self.assertRaisesRegex(RuntimeError, 'combined-helper'):
+                verify(before, after, policy)
+
     def consume_outer_profile(self, runtime, *, current, changes=None):
         # Bind the existing synthetic source-byte boundary to the registered parent.
         original_sha = fixture_module.sha
