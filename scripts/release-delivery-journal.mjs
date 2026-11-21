@@ -9,7 +9,8 @@ import { deriveFailedDisposition, failedDispositionSchema } from './release-deli
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
 import { startupCorrectionEvent, startupCorrectionGrant } from './release-delivery-startup-proof-correction.mjs';
 import { correctionGrantKind } from './release-delivery-dependency-correction.mjs';
-import { prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import {completionGrantKind,completionEventKind} from './release-delivery-completion-correction.mjs';
+import { completionGrantSchema, completionRequestSchema, currentCompletionSnapshot, prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallCorrectionSchema, postinstallCorrectionSnapshot, verifyPostinstallCorrectionEvidence, currentPostinstallRecovery, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
 
@@ -118,6 +119,14 @@ export const deliveryJournalMethods = {
   deliveryOperatorContinuation(id) {
     const previous=this.deliveryStorageSuccessorContinuation(id);
     const rows=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='publication-browser-window-recovery-granted' ORDER BY id").all(id);
+    const corrections=this.db.prepare('SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind=?').all(id,completionEventKind);
+    need(corrections.length<=1&&!(corrections.length&&rows.length),'completion-grant-collision');
+    if(corrections.length){
+      const row=corrections[0],proof=completionGrantSchema.parse(decoded(row.payload_json,row.payload_hash));
+      need(previous?.proof.kind===startupCorrectionGrant&&proof.operationId===id&&proof.predecessorGrantSha256===previous.sha256&&row.at_ms===proof.issuedAtMs
+       &&row.at_ms>=previous.recordedAtMs&&proof.expiresAtMs===previous.proof.expiresAtMs,'completion-grant-predecessor-changed');
+      return {proof,sha256:row.payload_hash,recordedAtMs:row.at_ms,eventId:row.id};
+    }
     need(rows.length<=1,'browser-window-recovery-duplicate');if(!rows.length)return previous;
     const row=rows[0],proof=publicationContinuationGrantSchema.parse(decoded(row.payload_json,row.payload_hash));
     need(previous?.proof.successor&&!previous.proof.browserWindowRecovery&&proof.operationId===id&&proof.browserWindowRecovery?.predecessorGrantSha256===previous.sha256
@@ -127,6 +136,19 @@ export const deliveryJournalMethods = {
   deliveryOperatorContinuationBySha256(id,digest) {
     for(const saved of [this.deliveryOriginalOperatorContinuation(id),this.deliveryStorageSuccessorContinuation(id),this.deliveryOperatorContinuation(id)])if(saved?.sha256===digest)return saved;
     return null;
+  },
+  recordCompletionCorrection(id,raw,now=Date.now(),{assertAbsent}={}){
+    need(!this.readOnly,'continuation-readonly-journal');const proof=completionGrantSchema.parse(raw);
+    return this.transaction(()=>{
+      const current=this.deliveryOperatorContinuation(id);
+      if(current?.proof.kind===completionGrantKind){need(canonical(current.proof)===canonical(proof),'completion-already-granted');return current;}
+      need(current?.sha256===proof.predecessorGrantSha256&&now===proof.issuedAtMs,'completion-original-predecessor-required');
+      const request=completionRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      const snapshot=currentCompletionSnapshot(this,id,now,request,assertAbsent);
+      need(Object.keys(snapshot).every(k=>canonical(snapshot[k])===canonical(proof[k])),'completion-snapshot-changed-before-grant');
+      event(this,id,completionEventKind,proof,now);
+      return verifyContinuationGrant(this,id,{now,effect:true,assertAbsent});
+    });
   },
   recordBrowserWindowRecovery(id,raw,now=Date.now(),{assertAbsent}={}) {
     need(!this.readOnly,'continuation-readonly-journal');const proof=publicationContinuationGrantSchema.parse(raw);

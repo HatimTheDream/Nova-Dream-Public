@@ -20,6 +20,8 @@ import { correctionRequestKind, correctionGrantKind, correctionBranch, corrected
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/),path=z.string().min(1).max(4096).refine(isAbsolute);
+import { completionGrantKind, completionPrerequisites, completionSchemas, completionSnapshot, verifyCompletionHistory, readCompletion } from './release-delivery-completion-correction.mjs';
+import { publicationOptionsForCompletion } from './release-completion-publication-ledger.mjs';
 const ref=z.object({path,sha256:hash}).strict();
 const source=z.object({root:path,repository:z.string(),branch:z.literal('codex/operator-continuation-31'),commit}).strict();
 const pair=s=>z.object({private:s,public:s}).strict();
@@ -39,6 +41,7 @@ export const continuationGrantSchema=z.object({format:z.literal(1),kind:z.litera
  automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=14400000,'finite-continuation-window-required');
 
 
+export const {request:completionRequestSchema,grant:completionGrantSchema}=completionSchemas({ref,source,continuationRequestSchema,continuationGrantSchema});
 const startupSources=pair(source.extend({branch:z.literal(startupCorrectionBranch)}));
 const startupRequest=continuationRequestSchema.omit({durationMs:true}).extend({
  kind:z.literal(startupCorrectionRequest),operatorSources:startupSources,startupFailure:ref
@@ -611,6 +614,45 @@ export async function reconcileExpiredPrepackage(journal,id,requestRef,{clock=Da
 }
 
 /** A reviewed read-only plan and a separate finite grant intent are mandatory. */
+export function currentCompletionSnapshot(journal,id,now,request,assertAbsent=absentOwner){
+ return completionSnapshot(journal,id,now,request,journal.deliveryOriginalOperatorContinuation(id),assertAbsent,history);
+}
+export async function reconcileReturnedCompletion(journal,id,requestRef,{clock=Date.now,assertAbsent=absentOwner,command,registry}={}){
+ const request=completionRequestSchema.parse(json(requestRef)),current=journal.deliveryOperatorContinuation(id),d=journal.loadDelivery(id).descriptor;
+ if(current?.proof.kind===completionGrantKind){
+  need(same(current.proof.request,requestRef),'completion-different-existing-grant');
+  await verifyContinuationStorageAuthority({journal,operationId:id,now:clock()});return current;
+ }
+ need(current?.proof.kind===startupCorrectionGrant&&current.sha256===request.predecessorGrantSha256,'completion-original-startup-grant-required');
+ verifyStoredContinuationGrant(journal,id,current,{now:clock(),effect:false,assertAbsent});
+ const before=currentCompletionSnapshot(journal,id,clock(),request,assertAbsent);
+ const A=await import('./release-delivery-adapters.mjs');command??=A.fixedCommand;registry??=A.createDeliveryRegistry({command,clock});
+ const operator=await qualifyOperatorSources(request,d,{command}),target=json(d.target);operator.ci={};
+ for(const side of ['private','public']){
+  const source=operator.sources[side],previous=current.proof.operator.sources[side],runId=request.ciRuns[side];
+  need(source.commit!==previous.commit&&source.repository===previous.repository,'completion-operator-ancestry-required');
+  await command(target.sourceTools.git.path,['-C',source.root,'merge-base','--is-ancestor',previous.commit,source.commit],{gitExecPath:target.sourceTools.gitExecPath});
+  const input=save(journal,'operator-ci-request-'+side,{format:1,source,runId,tools:target.sourceTools});
+  const answer=JSON.parse(await command(target.sourceTools.python.path,[fileURLToPath(new URL('release-operator-ci.py',import.meta.url)),'--request',input.path,'--request-sha256',input.sha256],{maximum:8*1024**2,timeoutMs:180000}));
+  need(answer.run.id===runId,'completion-operator-ci-id-changed');operator.ci[side]=save(journal,'operator-ci-'+side,verifyOperatorCi(answer,source));
+ }
+ const prior=Object.fromEntries(completionPrerequisites.map(n=>[n,journal.deliveryPhase(id,n).current.output]));
+ await withVerificationPass({},async scope=>{
+  for(const phase of [...completionPrerequisites,'recovery']){
+   const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior,{journal}),context={...scope,journal,descriptor:d,prior,intent,input:intent.input};
+   need(adapter,'completion-original-verifier-required');await adapter.validate(context);
+   if(phase!=='recovery')await adapter.verify(intent.current,context);
+  }
+ },{readOnly:true});
+ publicationOptionsForCompletion(d,target,{journal,publicationLedger:request.publicationLedger,ownerRequest:request.owner.request});
+ const {value,response}=await registry.completionReadback(d,{journal,roster:request.roster});
+ const completionResponse=save(journal,'returned-completion-response',response),normalizedCompletion=save(journal,'returned-completion',value);
+ const at=clock(),after=currentCompletionSnapshot(journal,id,at,request,assertAbsent);need(same(before,after),'completion-original-history-changed');
+ const proof=completionGrantSchema.parse({format:1,kind:completionGrantKind,operationId:id,...after,request:requestRef,operator,
+  predecessorGrantSha256:current.sha256,diagnostic:request.diagnostic,publicationLedger:request.publicationLedger,completionResponse,normalizedCompletion,
+  issuedAtMs:at,expiresAtMs:current.proof.expiresAtMs,automaticRenewal:false,originalHistoryPreserved:true});
+ return journal.recordCompletionCorrection(id,proof,at,{assertAbsent});
+}
 export function verifyPublicationContinuationAdmission(request,operator,snapshot,now){
  const a=publicationAdmission.parse(request.admission),plan=json(a.plan),review=json(a.review),intent=json(a.intent);
  need(plan.format===1&&plan.kind==='nova-publication-continuation-plan'&&plan.operationId===request.operationId
@@ -716,6 +758,18 @@ export function verifyContinuationGrant(journal,id,{now=Date.now(),effect=false,
  return verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent});
 }
 function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent=absentOwner}){
+ if(saved.proof.kind===completionGrantKind){
+  const p=completionGrantSchema.parse(saved.proof),req=completionRequestSchema.parse(json(p.request));
+  const previous=journal.deliveryOriginalOperatorContinuation(id);
+  need(previous?.proof.kind===startupCorrectionGrant&&previous.sha256===p.predecessorGrantSha256,'completion-original-startup-grant-required');
+  verifyStoredContinuationGrant(journal,id,previous,{now,effect:false,assertAbsent});
+  verifyCompletionHistory(journal,id,p,req,previous,history);readCompletion(journal,id,p,req);
+  for(const side of ['private','public']){
+   const ci=verifyOperatorCi(json(p.operator.ci[side]),p.operator.sources[side]);need(ci.run.id===req.ciRuns[side],'completion-operator-ci-changed');
+  }
+  need(saved.recordedAtMs===p.issuedAtMs&&(!effect||(now>=p.issuedAtMs&&now<p.expiresAtMs)),'continuation-window-expired');
+  if(effect)verifyContinuationTimeline(journal,id,previous.recordedAtMs,now);return saved;
+ }
  if(saved.proof.kind==='nova-pre-journal-dispatch-reconciliation'){
   const {proof:p}=verifyPreJournalProof(saved.proof,{now}),d=journal.loadDelivery(id);
   need(p.operationId===id&&p.descriptorSha256===d.descriptor_hash&&p.originalAdapterIdentity===d.descriptor.adapterIdentity
@@ -820,6 +874,7 @@ export async function verifyContinuationStorageAuthority({journal,operationId,en
  const expires=initialized?d.created_at+d.descriptor.observationBudgetMs:p.expiresAtMs,issued=initialized?d.created_at:p.issuedAtMs;
  return {grantSha256:saved.sha256,operatorAdapterIdentity:p.operator.adapterIdentity,operatorEntry:reference(actual),operatorRoots:roots,operatorSources:p.operator.sources,
   expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,...(p.successor?{completedOriginalStorage:p.successor.completedOriginalStorage}:browserRecovery?{completedOriginalStorage:browserRecovery.proof.successor.completedOriginalStorage,browserWindowRecovery:p.browserWindowRecovery,browserReservation:p.browserReservation,historicalStorageAdmission:journal.deliveryPublicationContinuationAdmission(operationId)}:{}),
+  ...(p.kind===completionGrantKind?{recoveryCompletion:{predecessorGrantSha256:p.predecessorGrantSha256,recovery:{key:p.recovery.key,inputSha256:p.recovery.inputSha256},normalizedCompletion:p.normalizedCompletion,storageAdmission:p.storageAdmission}}:{}),
   newEffectsAllowed:now>=issued&&now<expires,continuationStarted:p.kind==='nova-expired-publication-continuation'
    ?Boolean(journal.deliveryPublicationContinuationAdmission(operationId)):initialized||Boolean(journal.deliveryPhase(operationId,'package'))};
 }

@@ -36,6 +36,8 @@ import {browserOptionsSchema, prepareDeliveryBrowser, createBrowserAcceptanceAda
 import {ordinaryWindowQualification} from './release-delivery-browser-qualification.mjs';
 
 import {verifyBrowserWindowRecoveryReadiness} from './release-delivery-browser-continuation.mjs';
+import {completedRehearsalTransport,completionGrantKind,completionValues,collectReturnedResponse,verifyReturnedReservation} from './release-delivery-completion-correction.mjs';
+import {publicationOptionsForCompletion} from './release-completion-publication-ledger.mjs';
 import {verifyContinuationStorageAuthority} from './release-delivery-continuation.mjs';
 
 const need = (v, code) => { if (!v) throw Error(code); };
@@ -91,7 +93,7 @@ function targetInput(descriptor) {
 export function deliveryAdapterSourceFiles() {
   // Include implementation and all directly delegated authority/validation code.
   const files = ['release-delivery-adapters.mjs', 'release-delivery-ci-adapter.mjs', 'release-delivery-ci.py', 'release-ci-primitives.py', 'release-delivery-install.mjs', 'release-delivery-artifact-adapter.mjs', 'release-delivery-artifacts.py', 'release-artifact-primitives.py',
-    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-delivery-dependency-correction.mjs', 'release-delivery-startup-proof-correction.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
+    'release-delivery-package.mjs', 'release-delivery-full.mjs', 'release-delivery-dependencies.mjs', 'release-verification-pass.mjs', 'release-observation-clock.mjs', 'release-delivery-dependency-transport.mjs', 'release-delivery-dependency-correction.mjs', 'release-delivery-startup-proof-correction.mjs', 'release-delivery-completion-correction.mjs', 'release-returned-completion-proof.mjs', 'full-host-primitives/collect-returned-completion.py', 'release-completion-publication-ledger.mjs', 'release-dependency-local-worker.py', 'release-dependency-metadata-successor.py', 'release-delivery-runtime-qualification.mjs', 'release-runtime-qualification.py', 'release-delivery-runtime-retained.mjs', 'release-runtime-retained-proof.py', 'release-delivery-host-preflight.mjs', 'full-host-primitives/preflight.py', 'release-runtime-artifact.mjs', 'update-bundle.mjs', 'update-manifest.mjs', 'frontend-package.mjs', 'frontend-contract.mjs', 'candidate.mjs',
     'release-delivery-frontend.mjs', 'release-delivery-frontend.py', 'release-frontend-publication-primitives.py', 'release-frontend-github-primitives.py',
     'release-delivery-frontend-stage.mjs', 'release-frontend-stage.py', 'release-delivery-frontend-plan.mjs', 'release-frontend-plan.py', 'release-delivery-frontend-executor.mjs', 'release-frontend-executor.py', 'release-delivery-frontend-refresh.mjs', 'release-frontend-refresh.py',
     'release-delivery-frontend-readiness.mjs', 'release-frontend-readiness.py',
@@ -270,10 +272,11 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     }
     return (['application','presentation'].includes(descriptor.operation.changeClass)||(descriptor.operation.changeClass==='runtime'&&target.full.dependencyTransport.format===3))?[]:['full-changed-recovery-qualification-capability-required'];
   };
+  const returnedRun=(target,descriptor,journal,recoveryOnly=false)=>completedRehearsalTransport({journal,descriptor,run,clock,transportRef:target.transport,recoveryOnly});
   const installationAdmission = (target,descriptor) => {
     need(canonical(target.full.host.hostConfiguration)===canonical(target.assistantHost.hostConfig),'full-assistant-host-configuration-changed');
     const admission=createFullInstallationAdmission({collectCapacity:context=>collectFullOnlineCapacity(context,
-      {transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run,clock}),storeReceipt:receiptStore,clock});
+      {transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run:returnedRun(target,descriptor,context.journal),clock}),storeReceipt:receiptStore,clock});
     const protectedAssets=context=>{
       const row=context.journal.deliveryPhase(descriptor.operation.id,'publication');
       need(row?.state==='completed'&&row.validation?.state!=='failed'&&row.key===context.prior.publication?.key
@@ -299,6 +302,10 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
     },
     publicationContinuationPlan: context => planFullPublicationContinuation(context,publicationPlanOptions(context)),
     verifyPublicationContinuationPlan: (ref,context) => verifyFullPublicationContinuationPlan(ref,context,publicationPlanOptions(context)),
+    completionReadback: (descriptor,{journal,roster})=>{
+      const {target,transport}=targetInput(descriptor);
+      return collectReturnedResponse({transport,transportRef:target.transport,descriptor,run,clock,roster,values:completionValues(journal,descriptor.operation.id)});
+    },
     continuationFacts: async (descriptor,{journal,verifiedStartup}={}) => {
       need(journal,'continuation-observation-journal-required');
       const {target,transport}=targetInput(descriptor);
@@ -376,12 +383,23 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       }
       if (phase === 'sign' && prior.route?.route === 'full') { const { target } = targetInput(descriptor); return target.full && target.bases ? createFullSignAdapter({ signing: target.full.signing, feed: target.full.feed, base: target.bases.private, storeReceipt:receiptStore }) : null; }
       if (phase === 'capacity' && prior.route?.route === 'full') { const {target}=targetInput(descriptor);return target.full?.host ? createFullCapacityAdapter({transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run,clock}) : null; }
-      if (phase === 'recovery' && prior.route?.route === 'full') { const {target}=targetInput(descriptor);return target.full?.host ? createFullRehearsalAdapter({transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run,clock}) : null; }
+      if (phase === 'recovery' && prior.route?.route === 'full') {
+        const {target}=targetInput(descriptor);if(!target.full?.host)return null;
+        const adapter=createFullRehearsalAdapter({transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run:returnedRun(target,descriptor,journal,true),clock});
+        if(journal?.deliveryOperatorContinuation?.(descriptor.operation.id)?.proof.kind!==completionGrantKind)return adapter;
+        const deny=async()=>{throw Error('completion-new-rehearsal-effect-denied');};
+        return {...adapter,execute:deny,observe:async context=>{
+          verifyReturnedReservation(context);
+          return adapter.observe({...context,beforeNewEffect:deny});
+        }};
+      }
       if (phase === 'publication' && prior.route?.route === 'full') {
         const {target}=targetInput(descriptor),releaseIds=Object.fromEntries(['private','public'].map(side=>[side,prior[side+'-ci']?.release?.id]));
-        return target.full?.host && target.sourceTools && target.artifactTools && target.bases && Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0)
-          ? publicationBrowser(createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,
-            transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run,clock}),target) : null;
+        const p=journal?.deliveryOperatorContinuation?.(descriptor.operation.id)?.proof;
+        const full=p?.kind===completionGrantKind?publicationOptionsForCompletion(descriptor,target,{journal,publicationLedger:p.publicationLedger,ownerRequest:JSON.parse(readEvidenceFile(p.request)).owner.request}):target.full;
+        return full?.host && target.sourceTools && target.artifactTools && target.bases && Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0)
+          ? publicationBrowser(createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:full,
+            transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run:returnedRun(target,descriptor,journal),clock}),target) : null;
       }
       if (phase === 'installation' && prior.route?.route === 'full') {
         const { target }=targetInput(descriptor);return target.assistantHost && target.full?.host ? createCoordinatorInstallationAdapter({clock,

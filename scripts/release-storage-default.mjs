@@ -178,7 +178,13 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   verifyCapacityProof(dispatch.storageResult, storageInput, budget);
   let continuedDispatch=null;
   if(continuation){
-    const historicalGrant=continuation.browserWindowRecovery?.predecessorGrantSha256??continuation.grantSha256;
+    const historicalGrant=continuation.recoveryCompletion?.predecessorGrantSha256??continuation.browserWindowRecovery?.predecessorGrantSha256??continuation.grantSha256;
+    if(continuation.recoveryCompletion){
+      const {storageAdmission}=continuation.recoveryCompletion,previous=document(reference(storageAdmission.session));
+      need(same(storageAdmission.dispatch,session.continuationDispatch)&&same(previous.continuationDispatch,session.continuationDispatch)
+        &&previous.operatorContinuation?.grantSha256===historicalGrant&&same(previous.request,session.request)
+        &&previous.operationId===session.operationId&&previous.mode==='resume'&&continuation.continuationStarted,'completion-historical-storage-dispatch-required');
+    }
     if(continuation.browserWindowRecovery)need(same(session.continuationDispatch,continuation.browserWindowRecovery.storageAdmission.dispatch)&&same(publicationAdmission?.dispatch,session.continuationDispatch)&&publicationAdmission?.grantSha256===historicalGrant,'browser-window-storage-historical-dispatch-required');
     const r=reference(session.continuationDispatch),c=document(r),base=join(root,'continuations',historicalGrant);
     need(/^admission-[0-9]{4,}[\\/]release-dispatch\.json$/.test(relative(base,r.path))&&same(c.originalDispatch,session.dispatch)
@@ -238,7 +244,7 @@ export async function verifyStorageSession(args, entry, { env = process.env, clo
   if (session.mode === 'start'&&!preJournalProof) need(finishedAt <= dispatch.storageResult.observationExpiresAtMilliseconds
     && dispatch.startedAtMilliseconds <= finishedAt + 5000, 'fresh-storage-required-before-start');
   if(continuation&&!continuation.continuationStarted)need(finishedAt<continuation.expiresAtMs&&finishedAt<=continuedDispatch.storageResult.observationExpiresAtMilliseconds,'storage-continuation-first-admission-expired');
-  if(continuation?.browserWindowRecovery)need(continuation.newEffectsAllowed&&finishedAt<continuation.expiresAtMs,'continuation-window-expired');
+  if(continuation?.recoveryCompletion||continuation?.browserWindowRecovery)need(continuation.newEffectsAllowed&&finishedAt<continuation.expiresAtMs,'continuation-window-expired');
   if(publicationContinuation&&!publicationAdmission){
     const {ReleaseJournal}=await import('./release-coordinate.mjs'),journal=new ReleaseJournal(initialization.journalDirectory,{create:false});
     try{const at=clock();journal.recordPublicationContinuationAdmission(session.operationId,{format:1,kind:'nova-publication-continuation-storage-admission',
@@ -290,7 +296,7 @@ export function configuredBrowserWindowRecoveryStorageReadiness({journal,operati
  * this child. This permit cannot launch a delivery or bypass storage admission. */
 export async function verifyReconciliationSession(args,entry,{env=process.env,clock=Date.now}={}){
   const loaded=storageDefaultConfiguration({env}),{config}=loaded,c=config.operatorContinuation;
-  const mode=args[0],sessionKind={ 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session', 'plan-publication-continuation':'nova-storage-publication-reconciliation-session', 'plan-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session', 'reconcile-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session' }[mode];
+  const mode=args[0],sessionKind={ 'reconcile-completion':'nova-storage-recovery-completion-reconciliation-session', 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session', 'plan-publication-continuation':'nova-storage-publication-reconciliation-session', 'plan-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session', 'reconcile-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session' }[mode];
   need(!['plan-browser-recovery','reconcile-browser-recovery'].includes(mode)||config.postinstallBrowserRecovery===true,'storage-postinstall-configuration-required');
   need(c&&sessionKind&&args.length===4&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
   const sr=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),s=document(sr),root=join(canonical(config.operationsRoot),'release-'+c.operationId);
@@ -328,8 +334,8 @@ function runRunner(executable, args) {
 
 export async function routeStorageDelivery(args, entry, { env = process.env, launch = runRunner } = {}) {
   if(args[0]==='plan-publication-continuation'&&args.length===4&&!document(inputReference(resolve(args[3]))).browserWindowRecovery)return {handled:false};
-  const reconcile=['reconcile-prepackage','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0]);
-  if (!['start', 'resume','reconcile-prepackage','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0])) return { handled: false };
+  const reconcile=['reconcile-prepackage','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0]);
+  if (!['start', 'resume','reconcile-prepackage','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
     if(reconcile)await verifyReconciliationSession(args,entry,{env});
     else {const permit=await verifyStorageSession(args, entry, { env });return {handled:false,...(permit.preJournalProof?{preJournalProof:permit.preJournalProof}:{})};}

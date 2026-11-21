@@ -1,7 +1,7 @@
 name: Operator continuation quality
 on:
   push:
-    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1', 'operator/browser-postinstall-recovery-r1', 'operator/prepackage-dependency-correction', 'operator/prepackage-startup-proof']
+    branches: ['codex/operator-continuation-31', 'operator/prejournal-c494-r1', 'operator/prejournal-c494-r2', 'operator/publication-continuation-r1', 'operator/publication-storage-successor-r1', 'operator/browser-window-recovery-r1', 'operator/browser-postinstall-recovery-r1', 'operator/prepackage-dependency-correction', 'operator/prepackage-startup-proof', 'operator/recovery-completion-reader']
 permissions:
   contents: read
 concurrency:
@@ -23,6 +23,8 @@ jobs:
       - name: Verify Linux update recovery
         timeout-minutes: 30
         run: |
+          node --test tests/release-delivery-completion-correction.test.mjs tests/release-returned-completion-proof.test.mjs tests/release-completion-publication-ledger.test.mjs
+          python3 -B tests/release-returned-completion-proof.test.py -v
           python3 -B tests/release-install-request.test.py -v
           python3 -B tests/release-prestage-no-start.test.py -v
           python3 -B tests/release-prestage-restored.test.py -v
