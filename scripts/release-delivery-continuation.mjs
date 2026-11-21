@@ -536,6 +536,7 @@ export function publicationContinuationSnapshot(journal,id,now,{assertAbsent=abs
   prerequisites:phases.map(p=>({phase:p.phase,key:p.key,inputSha256:p.inputSha256,observationSha256:sha256(canonical(p.current))})),ownerPids};
 }
 
+export {save as saveContinuationEvidence};
 function save(journal,name,value){
  const dir=join(journal.directory,'delivery-continuation-evidence');mkdirSync(dir,{recursive:true,mode:0o700});
  const b=Buffer.from(canonical(value)+'\n'),p=join(dir,name+'-'+sha256(b)+'.json');

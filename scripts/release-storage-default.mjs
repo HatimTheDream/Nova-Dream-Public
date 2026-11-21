@@ -296,7 +296,7 @@ export function configuredBrowserWindowRecoveryStorageReadiness({journal,operati
  * this child. This permit cannot launch a delivery or bypass storage admission. */
 export async function verifyReconciliationSession(args,entry,{env=process.env,clock=Date.now}={}){
   const loaded=storageDefaultConfiguration({env}),{config}=loaded,c=config.operatorContinuation;
-  const mode=args[0],sessionKind={ 'reconcile-completion':'nova-storage-recovery-completion-reconciliation-session', 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session', 'plan-publication-continuation':'nova-storage-publication-reconciliation-session', 'plan-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session', 'reconcile-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session' }[mode];
+  const mode=args[0],sessionKind={ 'reconcile-browser-receipt':'nova-storage-browser-receipt-reconciliation-session', 'reconcile-completion':'nova-storage-recovery-completion-reconciliation-session', 'reconcile-prepackage':'nova-storage-prepackage-reconciliation-session', 'reconcile-publication':'nova-storage-publication-reconciliation-session', 'plan-publication-continuation':'nova-storage-publication-reconciliation-session', 'plan-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session', 'reconcile-browser-recovery':'nova-storage-postinstall-browser-reconciliation-session' }[mode];
   need(!['plan-browser-recovery','reconcile-browser-recovery'].includes(mode)||config.postinstallBrowserRecovery===true,'storage-postinstall-configuration-required');
   need(c&&sessionKind&&args.length===4&&args[2]===c.operationId&&absolute(args[1])===absolute(c.journalDirectory),'storage-reconciliation-scope-changed');
   const sr=inputReference(env.NOVA_RELEASE_STORAGE_SESSION),s=document(sr),root=join(canonical(config.operationsRoot),'release-'+c.operationId);
@@ -334,8 +334,8 @@ function runRunner(executable, args) {
 
 export async function routeStorageDelivery(args, entry, { env = process.env, launch = runRunner } = {}) {
   if(args[0]==='plan-publication-continuation'&&args.length===4&&!document(inputReference(resolve(args[3]))).browserWindowRecovery)return {handled:false};
-  const reconcile=['reconcile-prepackage','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0]);
-  if (!['start', 'resume','reconcile-prepackage','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0])) return { handled: false };
+  const reconcile=['reconcile-prepackage','reconcile-browser-receipt','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0]);
+  if (!['start', 'resume','reconcile-prepackage','reconcile-browser-receipt','reconcile-completion','reconcile-publication','plan-publication-continuation','plan-browser-recovery','reconcile-browser-recovery'].includes(args[0])) return { handled: false };
   if (env.NOVA_RELEASE_STORAGE_SESSION !== undefined) {
     if(reconcile)await verifyReconciliationSession(args,entry,{env});
     else {const permit=await verifyStorageSession(args, entry, { env });return {handled:false,...(permit.preJournalProof?{preJournalProof:permit.preJournalProof}:{})};}
@@ -362,6 +362,12 @@ export async function routeStorageDelivery(args, entry, { env = process.env, lau
     throw Error(typeof value?.reason === 'string' && /^[a-z][a-z0-9-]{0,159}$/.test(value.reason) ? value.reason
       : mode === 'plan-browser-recovery' ? 'storage-postinstall-plan-result-invalid' : 'storage-browser-window-plan-result-invalid');
   if(mode==='plan-browser-recovery'){const p=document(reference(value?.plan));need(code===0&&same(p,value.value)&&p.kind==='nova-postinstall-browser-recovery-plan'&&p.operationId===args[2]&&p.readOnly===true&&p.hostEffects===false&&p.journalWrites===false,'storage-postinstall-plan-result-invalid');return {handled:true,result:value};}
+  if(mode==='reconcile-browser-receipt'&&code===0){
+    const request=inputReference(resolve(args[3])),receipt=document(reference(value?.release?.browserReceiptCollection));
+    need(receipt.kind==='original-browser-receipt-collection'&&receipt.operationId===args[2]&&same(receipt.request,request)
+      &&receipt.browserStarted===false&&receipt.installationStarted===false&&value.release?.successor?.browserAccepted===true,
+      'storage-original-browser-collection-required');
+  }
   if(mode==='reconcile-browser-recovery'){
     const {postinstallCoverage}=await import('./release-delivery-postinstall-recovery.mjs');
     const coverage=postinstallCoverage(value?.release);need(same(coverage,postinstallCoverage(value))&&coverage.acceptanceScope,'storage-postinstall-result-scope-required');
