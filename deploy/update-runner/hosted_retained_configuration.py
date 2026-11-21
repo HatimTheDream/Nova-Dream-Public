@@ -186,6 +186,27 @@ def retained_runtime_entry(before, physical_package):
     return name, (host_identity, hashlib.sha256(raw_host).hexdigest(), selector_identity, files)
 
 
+def verify_same_schema_bindings(snapshot, selected, prior, returned, returned_path, node, key):
+    """Only the immutable prior configuration can predate conversations in the stopped store."""
+    import recovery as r
+    current = returned['plugins']['entries']['edition3-workspace']['config']['sessionBindings']
+    require(type(prior) is list and type(current) is list and len(prior) <= len(current) <= 100000,
+            'The prior or returned session binding list is invalid.')
+    r.verified_session_bindings(snapshot, selected, returned_path, node, key)
+    require(r.bounded_json(returned_path, 4 * 1024 * 1024) == returned,
+            'The returned configuration changed during session binding verification.')
+    # The native verifier checks the complete returned file against the encrypted store.
+    # Match whole objects in order so a stale snapshot cannot introduce or reorder a grant.
+    remaining = iter(current)
+    seen = set()
+    for binding in prior:
+        require(any(binding == candidate for candidate in remaining),
+                'The prior session bindings are not an ordered subset of the verified returned bindings.')
+        identity = (binding['nativeKey'], binding['nativeId'])
+        require(identity not in seen, 'The prior configuration contains a duplicate session binding.')
+        seen.add(identity)
+
+
 def derive_same_schema_configuration(snapshot, live, selected, *, node, app_releases, session_binding_key,
                                      startup_window, catalog_runtime_root, authority):
     """Derive retained BEFORE with its prior builder and AFTER with its selected builder."""
@@ -240,14 +261,16 @@ def derive_same_schema_configuration(snapshot, live, selected, *, node, app_rele
     runtime_entry, runtime_authority = retained_runtime_entry(before, catalog_runtime_root)
     script = Path(__file__).with_name('local-retained-configuration.mjs')
     old_bridge = before.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
-    for position, (observed, path) in enumerate(((before, old_path), (after, new_path))):
+    for position, observed in enumerate((before, after)):
         bridge = observed.get('plugins', {}).get('entries', {}).get('edition3-workspace', {}).get('config', {})
         require(type(bridge) is dict and bridge.get('url') == old_bridge.get('url')
                 and type(bridge.get('url')) is str and re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}/workspace', bridge['url'])
                 and type(bridge.get('token')) is str and re.fullmatch('[a-f0-9]{64}', bridge['token'])
                 and type(bridge.get('sessionBindings')) is list and len(bridge['sessionBindings']) <= 100000,
                 'The retained module bridge or session binding contract changed.')
-        r.verified_session_bindings(snapshot, selected, path, executable, session_binding_key)
+        if position == 1:
+            verify_same_schema_bindings(snapshot, selected, old_bridge['sessionBindings'], after, new_path,
+                                        executable, session_binding_key)
         arguments = observed.get('browser', {}).get('extraArgs', [])
         match = re.fullmatch(r'--proxy-server=(http://127\.0\.0\.1:([0-9]{1,5}))', arguments[0]) if arguments and type(arguments[0]) is str else None
         require(match is not None and 0 < int(match[2]) < 65536, 'The owned browser proxy contract changed.')

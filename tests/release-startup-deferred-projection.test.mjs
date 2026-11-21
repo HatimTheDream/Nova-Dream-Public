@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import {sha256} from '../scripts/release-plan.mjs';
 import {DEFERRED_CAPTURE_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_HELPERS,
   COMPLETE_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_HELPERS,PARKED_CAPTURE_STARTUP_HELPERS,
   verifyStartupRetainedProjection} from '../scripts/release-delivery-startup-retained.mjs';
-import {startupCommandFixture} from '../support/startup-command-fixture.mjs';
+import {startupCommandFixture,helperBytes} from '../support/startup-command-fixture.mjs';
 
 const digest=v=>sha256(Buffer.from(JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?
   Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x)));
@@ -154,10 +153,9 @@ test('complete capture binds each held prior and retired, staged, or released cl
   }
 });
 
-test('the current parked producer uses the exact shipping helper bytes',()=>{
+test('the previously shipped parked producer retains its exact helper bytes',()=>{
   for(const [name,expected] of Object.entries(PARKED_CAPTURE_STARTUP_HELPERS)){
-    const file=new URL('../deploy/update-runner/'+name,import.meta.url);
-    assert.equal(sha256(readFileSync(file)),expected,name);
+    assert.equal(sha256(helperBytes(name,expected)),expected,name);
   }
   assert.notEqual(PARKED_CAPTURE_STARTUP_HELPERS['recovery.py'],COMPLETE_CAPTURE_STARTUP_HELPERS['recovery.py']);
 });

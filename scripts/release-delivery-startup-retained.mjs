@@ -137,7 +137,7 @@ export function readParkedWarmAuthority(evidence){
     consumptionSha256:seal.consumption.sha256,independentReviewSha256:seal.independentReview.sha256});
 }
 
-function verifyParkedLoan(proof,request,binding){
+function verifyParkedLoan(proof,request,binding,version){
   const a=warmAuthoritySchema.parse(request.warmAntecedent), l=proof.parkedSeedAntecedent;
   const root='/mnt/nova-data/qualified-startup-inputs-'+a.operationId;
   const seed=proof.references['parkedLoan/seedReplicas'];
@@ -151,7 +151,7 @@ function verifyParkedLoan(proof,request,binding){
     sourceManifestSha256:a.baselineSha256,warmJobId:a.jobId,nativeOutputSha256:a.nativeOutputSha256,
     projectionSha256:a.projectionSha256,seedReceiptSha256:seed.sha256,formalSeedReceiptSha256:formal.sha256,loanSha256:l.loanSha256};
   need(same(l,expected)&&new Set([a.operationId,a.continuationOperationId,proof.qualificationOperationId]).size===3&&a.priorCandidateId===binding.prior.candidateId
-    &&binding.prior.version==='2.28.39'&&Object.values(binding.targets).every(t=>t.version==='2.28.48')
+    &&binding.prior.version==='2.28.39'&&Object.values(binding.targets).every(t=>t.version===version)
     &&a.epoch===binding.workspaceEpoch&&a.baselineSha256===proof.deferredCaptureHistory.sourceManifestSha256
     &&proof.deferredCaptureHistory.kind==='signed-prior-capture-windows'
     &&properOriginalCaptureRefs(proof,a),'parked-seed-formal-antecedent-mismatch');
@@ -188,7 +188,15 @@ export const COMPLETE_CAPTURE_STARTUP_SOURCES=Object.freeze({...DEFERRED_CAPTURE
   'qualified-parent.py':'87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66'});
 export const PARKED_CAPTURE_STARTUP_SOURCES=Object.freeze({"contracts.py":"013ea5762fee279ddc614d90e201744b332484f2eb11768c8e4212663da2be4a","produce-startup-inputs.py":"0032c2633b1119a2b15a069e61b357d01bbe83fbbead1d3ea66d2c0e78f96f5a","qualified-parent.py":"87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66","qualified-startup.py":"7e36af529fb353224722c6db2a2d9c2ea068f490913e2d4bef3c2ae487734e69"});
 const WARM_ANTECEDENT_SOURCES=Object.freeze({"qualified-startup.py":"993ec3498edbadeb6f730012f709bb63638b607aeb82b2145da0683384d98e18","qualified-parent.py":"87dfd58860bf166219e0a73cab36c0ce8682a0aa3722cd53d05b6c9abafbed66","produce-startup-inputs.py":"4cf7e44d800c1c0032f5c4f770d2f6e68f2609c205462e083277597a27fdd68d","contracts.py":"ec2d4f7942d291c617cc69d57b8492fe9484db9b9495ca1b8c29510f8f608145"});
-const sameSchemaSourceFamilies=[PARKED_CAPTURE_STARTUP_SOURCES,SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_SOURCES];
+export const RETAINED_BINDINGS_STARTUP_SOURCES=Object.freeze({...PARKED_CAPTURE_STARTUP_SOURCES,
+  'produce-startup-inputs.py':'3bd0f9e1dae5d233df062a80404c643c24507a9f310d7ae2a8670177ca4f57b7',
+  'qualified-startup.py':'9cff2dd7717c5e9d0c5c41421f43a625ae3be6e7f5e6d2307d394d7ff1777f43'});
+const parkedReleases=[
+  [PARKED_CAPTURE_STARTUP_SOURCES,'2.28.48'],
+  [RETAINED_BINDINGS_STARTUP_SOURCES,'2.28.49'],
+];
+const parkedVersion=sources=>parkedReleases.find(([family])=>same(family,sources))?.[1];
+const sameSchemaSourceFamilies=[...parkedReleases.map(([family])=>family),SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_SOURCES];
 const sameSchemaSources=sources=>sameSchemaSourceFamilies.some(v=>v!==null&&same(sources,v));
 export const SAME_SCHEMA60_STARTUP_HELPERS=Object.freeze({"install.py":"b4cf0ee98ebb80723dba69425f55409adecf7f3d7427d42b53c037251f4b6200","recovery.py":"b4c59da8ee92a1ddf2bbaef4139635494123eab2b299e7e6ea5e627629652ee4","operator_rehearsal.py":"081d4f928b6800ff05dd5a0dbfc3416031425a0c892c5186d994533ca42b1b21","app_dependencies.py":"e7f2617ed8d05b7d83da62e857822b737ff3a1c47b6704af5d3e1783e043b290","codex_log_retention.py":"bc6b09a2b99a9667c9c8fac63f2665362aa3e14b8db10d6be12652250ae2a1f4","workspace_key.py":"e97ae151ff8208c6831e93ef3281e1b1dbff99f4eea4679aa7f6a8ed06c412d2","verify-session-bindings.mjs":"1d51c2af378f27f21c9580a367779ab9192c159c600f02938d780a5de467c5c0","hosted_retained_configuration.py":"a65dff849aa242a0c8eeb51f86ad2cd1cf36a62229169e0197947492d372f55e","local-retained-configuration.mjs":"ec8c0caefbd7bd14cd032755c1351d332dcc00fdd4c1454264678945e1353b56","hosted_retained_catalog.py":"59b33ec350f640d2b8fe2d493e22756f557910ebf2a8cccd107998c9314b9328","hosted-retained-catalog.mjs":"431d5f2741e46a8b2258b6eab22786d369d570c6ec5824434ef0dd2dd4b5f1db"});
 export const HISTORICAL_SCHEMA60_HELPERS=Object.freeze({...SAME_SCHEMA60_STARTUP_HELPERS,
@@ -204,7 +212,12 @@ export const COMPLETE_CAPTURE_STARTUP_HELPERS=Object.freeze({...DEFERRED_CAPTURE
   'recovery.py':'4d6696f7ae03863a66a5e28e1e0aa25dbdc673c7fb97ce401894e0cd7182e787',
   'operator_rehearsal.py':'013dee562963009ab812c5d7d8d1c327783be522b9d95a1e31a966ed46e0d93f'});
 export const PARKED_CAPTURE_STARTUP_HELPERS=Object.freeze({...COMPLETE_CAPTURE_STARTUP_HELPERS,'recovery.py':"c316469b114f6beb232cd3fb784b733d7bc13b0696c33523d0ec6cba6ae37c1f"});
+export const RETAINED_BINDINGS_STARTUP_HELPERS=Object.freeze({...PARKED_CAPTURE_STARTUP_HELPERS,
+  'install.py':'b277ec67598a3a189278eeaca298516b061f9a1ff94569714c9779c8a91b0978',
+  'hosted_retained_configuration.py':'7f7e5e3c7730f90e116d38da1ef1c19acab0e437ca26dfc1ff832309dc777a4d',
+  'operator_rehearsal.py':'5ec3bc4bc86cdfcafeddbc36d98b247ecd52fed945da6c1c8dbb812e5c12338d'});
 function helpersForStartupSources(sources){
+  if(same(sources,RETAINED_BINDINGS_STARTUP_SOURCES))return RETAINED_BINDINGS_STARTUP_HELPERS;
   if(same(sources,PARKED_CAPTURE_STARTUP_SOURCES))return PARKED_CAPTURE_STARTUP_HELPERS;
   if(same(sources,COMPLETE_CAPTURE_STARTUP_SOURCES)||same(sources,WARM_ANTECEDENT_SOURCES))return COMPLETE_CAPTURE_STARTUP_HELPERS;
   if(same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES))return DEFERRED_CAPTURE_STARTUP_HELPERS;
@@ -260,19 +273,21 @@ export const startupQualificationBindingSchema=z.object({format:z.literal(1),kin
 function sourcesReviewed(sources){
   need(same(Object.keys(sources).sort(),Object.keys(QUALIFIED_STARTUP_SOURCES).sort())
     &&Object.values(sources).every(v=>hash.safeParse(v).success&&v!=='0'.repeat(64)),'reviewed-startup-producer-required');
+  const registered=parkedReleases.find(([family])=>family['qualified-startup.py']===sources['qualified-startup.py']);
+  if(registered)need(same(registered[0],sources),'parked-startup-source-family-changed');
 }
 export function startupRetainedRequest(options,sources=undefined){
   const v=startupQualificationOptionsSchema.parse(options);sources??=reviewedStartupSources(v.producer);sourcesReviewed(sources);
   need(v.producer.sha256===sources['qualified-startup.py']&&v.producer.path.endsWith('/qualified-startup.py')
     &&v.parent.path.endsWith('/evidence/parent-verified.json'),'reviewed-startup-producer-required');
   need(!same(sources,WARM_ANTECEDENT_SOURCES),'warm-test-cannot-be-a-release-proof');
-  const parked=same(sources,PARKED_CAPTURE_STARTUP_SOURCES);
+  const parked=Boolean(parkedVersion(sources));
   need(parked===Object.hasOwn(v,'warmEvidence'),'parked-original-warm-evidence-required');
   return{format:1,kind:'collect-actual-retained-startup-proof',parent:v.parent,producer:v.producer,...(parked?{warmAntecedent:readParkedWarmAuthority(v.warmEvidence)}:{})};
 }
 export function buildStartupRetainedProgram(request){
   const sources=reviewedStartupSources(request.producer);
-  if(same(sources,PARKED_CAPTURE_STARTUP_SOURCES)){
+  if(parkedVersion(sources)){
     need(same(Object.keys(request).sort(),['format','kind','parent','producer','warmAntecedent'])&&request.format===1&&request.kind==='collect-actual-retained-startup-proof'
       &&hostRef.parse(request.parent).path.endsWith('/evidence/parent-verified.json')&&hostRef.parse(request.producer).path.endsWith('/qualified-startup.py'),'parked-request-original-paths-required');
     warmAuthoritySchema.parse(request.warmAntecedent);
@@ -589,14 +604,15 @@ function verifyRetainedProjection(v,request,sources,antecedentOnly){
   const noStaging=binding.sameSchemaQualification&&captureOnly('captureObservation');
   const continuity=binding.sameSchemaQualification&&captureOnly('captureContinuity');
   const transition=binding.sameSchemaQualification&&captureOnly('captureTransition');
-  const parked=same(sources,PARKED_CAPTURE_STARTUP_SOURCES);
+  const version=parkedVersion(sources);
+  const parked=Boolean(version);
   const complete=antecedentOnly||parked||same(sources,COMPLETE_CAPTURE_STARTUP_SOURCES);
   const newFamily=complete||same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES);
   const deferred=newFamily&&v.scenarios.some(s=>Object.hasOwn(s,'captureDeferred'));
   need(newFamily===Object.hasOwn(v,'deferredCaptureHistory'),'deferred-capture-history-source-changed');
   if(newFamily)verifyDeferredCaptureHistory(v,binding,complete&&!parked);
   need(parked===Object.hasOwn(v,'parkedSeedAntecedent')&&parked===Object.hasOwn(request,'warmAntecedent'),'parked-antecedent-binding-required');
-  if(parked)verifyParkedLoan(v,request,binding);
+  if(parked)verifyParkedLoan(v,request,binding,version);
   if(binding.sameSchemaQualification){
     need(v.baselineLineage==='verified-closed-schema60-target-retained'&&same(binding.helpers,helpersForStartupSources(sources)),'same-schema-capture-source-required');
     need(noStaging||continuity||transition||captureOnly('captureRetirement')||deferred,'same-schema-capture-branch-changed');

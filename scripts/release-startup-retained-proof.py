@@ -247,6 +247,10 @@ def consume_home_capture(review, document, sources, same_schema=False):
 
 
 PARKED_CAPTURE_PRODUCER = '7e36af529fb353224722c6db2a2d9c2ea068f490913e2d4bef3c2ae487734e69'
+PARKED_RELEASES = {
+    PARKED_CAPTURE_PRODUCER: '2.28.48',
+    '9cff2dd7717c5e9d0c5c41421f43a625ae3be6e7f5e6d2307d394d7ff1777f43': '2.28.49',
+}
 
 def read_split_warm_donor(authority,loan,plan,review,history,document):
     keys={'format','kind','operationId','continuationOperationId','originalInvocation','successorInvocation',
@@ -344,7 +348,7 @@ def read_split_warm_donor(authority,loan,plan,review,history,document):
     return parent,roles,warm,seeds
 
 
-def parked_seed_antecedent(parent, plan, review, child, history, authority, document):
+def parked_seed_antecedent(parent, plan, review, child, history, authority, document, version):
     """Join the independently observed warm trial to this operation's borrowed read-only seed."""
     loan = parent['parkedSeedLoan']
     fields = {'format', 'kind', 'donorOperationId', 'sourceManifestSha256', 'parent', 'warmSource',
@@ -383,7 +387,7 @@ def parked_seed_antecedent(parent, plan, review, child, history, authority, docu
          and all(copy.get(k) is True for k in ('passed','fsyncCompleted','sourceUnchanged','independentInodes')),
          'parked-seed-physical-provenance-changed')
     need(parent['priorCandidateId'] == donor['priorCandidateId'] == authority['priorCandidateId']
-         and parent['targetCandidateId'] != donor['targetCandidateId'] and review['target']['version'] == '2.28.48'
+         and parent['targetCandidateId'] != donor['targetCandidateId'] and review['target']['version'] == version
          and not any('warmSource' in x for x in (parent,child)), 'parked-formal-scenarios-must-be-original')
     return {'kind':'verified-parked-seed-antecedent', 'operationId':op, 'continuationOperationId':authority['continuationOperationId'], 'workspace':workspace,
             'sourceManifestSha256':loan['sourceManifestSha256'], 'warmJobId':authority['jobId'],
@@ -396,7 +400,7 @@ def consume(request, read, sources, same_schema_helpers=None):
     need(isinstance(sources, dict) and set(sources) == set(SOURCES)
          and all(isinstance(v, str) and HASH.fullmatch(v) and v != '0' * 64 for v in sources.values()),
          'reviewed-startup-producer-required')
-    need(isinstance(request, dict) and set(request) == ({'format', 'kind', 'parent', 'producer'} | ({'warmAntecedent'} if sources['qualified-startup.py'] == PARKED_CAPTURE_PRODUCER else set()))
+    need(isinstance(request, dict) and set(request) == ({'format', 'kind', 'parent', 'producer'} | ({'warmAntecedent'} if sources['qualified-startup.py'] in PARKED_RELEASES else set()))
          and request['format'] == 1 and request['kind'] == 'collect-actual-retained-startup-proof',
          'startup-proof-request-invalid')
     reference(request['parent']); reference(request['producer'])
@@ -451,7 +455,7 @@ def consume(request, read, sources, same_schema_helpers=None):
     profile = document('effectiveProfile', parent['effectiveProfile'])
     properties = profile.get('properties', {})
     runtime = ('7800000000', '2h 10min', '2h10min') if sources['qualified-parent.py'] == LIFECYCLE_PARENT else ('4200000000', '1h 10min', '1h10min')
-    if runner_sha in (COMPLETE_CAPTURE_PRODUCER, PARKED_CAPTURE_PRODUCER):
+    if runner_sha == COMPLETE_CAPTURE_PRODUCER or runner_sha in PARKED_RELEASES:
         runtime = ('9000000000','2h 30min','2h30min')
         need(review['maximumChildSeconds']==6600,'warm-startup-child-budget-changed')
     need(profile.get('unit') == 'nova-qa-qualified-' + op + '.service'
@@ -576,11 +580,12 @@ def consume(request, read, sources, same_schema_helpers=None):
     transition_preceding = None
     capture_history = None
     deferred_history = None
-    parked = runner_sha == PARKED_CAPTURE_PRODUCER
+    parked = runner_sha in PARKED_RELEASES
     complete_capture = parked or runner_sha == COMPLETE_CAPTURE_PRODUCER
     if complete_capture:
-        need(parent.get('purpose') == plan.get('purpose') ==
-             ('qualified-parked-retained-workspace-release-2.28.48' if parked else 'qualified-retained-workspace-release-2.28.48') and review['target']['version'] == '2.28.48',
+        version = PARKED_RELEASES[runner_sha] if parked else '2.28.48'
+        purpose = ('qualified-parked-retained-workspace-release-' if parked else 'qualified-retained-workspace-release-') + version
+        need(parent.get('purpose') == plan.get('purpose') == purpose and review['target']['version'] == version,
              'qualified-retained-release-scope-changed')
     if runner_sha == DEFERRED_CAPTURE_PRODUCER or complete_capture:
         need(same_schema, 'deferred-source-needs-same-schema-marker')
@@ -594,7 +599,7 @@ def consume(request, read, sources, same_schema_helpers=None):
         need(plan['deferredCaptureHistory'] == parked_history, 'deferred-history-plan-binding-changed')
         deferred_history = parked_history
         if parked:
-            loan = parked_seed_antecedent(parent,plan,review,child,parked_history,request['warmAntecedent'],document)
+            loan = parked_seed_antecedent(parent,plan,review,child,parked_history,request['warmAntecedent'],document,version)
         elif complete_capture:
             warm_receipt = consume_warm_origin(parent,plan,review,fixture,document,worker,parked_history)
             deferred_history=warm_receipt['history']

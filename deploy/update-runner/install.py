@@ -1300,8 +1300,9 @@ class Driver:
                         'The returned source has no verified native startup.')
                 evidence = folder / 'rehearsal.json'
                 protected(evidence, private=True)
+                detail = read_json(evidence)
                 require(digest(evidence) == acceptance['evidenceSha256']
-                        and read_json(evidence)['nativeCaptureSourceSha256'] == digest(native),
+                        and detail['nativeCaptureSourceSha256'] == digest(native),
                         'Returned source startup is detached from its rehearsal.')
                 output = pathlib.Path(document['output'])
                 require(output.name == 'rehearsal-' + job,
@@ -1316,8 +1317,11 @@ class Driver:
                 require(document['returnedRoot'] == list(capture_physical_root(self.data))
                         and returned['process'] == self.startup_process_identity(),
                         'The returned workspace or its accepted process was replaced.')
-                return job, output, 3, {'type': 'returned-rehearsal', 'path': str(native), 'sha256': digest(native),
-                                        'originalSource': document['originalSource']}
+                source = {'type': 'returned-rehearsal', 'path': str(native), 'sha256': digest(native),
+                          'originalSource': document['originalSource']}
+                if detail.get('manualResumption') is True and source['originalSource'] is not None:
+                    source['manualReturn'] = self.manual_capture_copy(job, output, document, detail, lease, evidence_path)
+                return job, output, 3, source
         latest = self.recovery_root / 'latest-update.json'
         protected(latest, private=True)
         pointer = read_json(latest, 4096)
@@ -1343,6 +1347,44 @@ class Driver:
                 and all(result.get(flag) is True for flag in ('savedWorkVerified','accountsVerified','recoveryVerified','healthVerified')),
                 'The original candidate installation was not accepted.')
         return job, output, 2, {'type': 'accepted-installation', 'path': str(receipt), 'sha256': digest(receipt)}
+
+    def manual_capture_copy(self, job, directory, native, detail, lease, acceptance_path):
+        """Bind the immutable pre-hold origin and its copy in a completed manual return."""
+        ref = native['originalSource']
+        require(type(ref) is dict and set(ref) == {'path','sha256'}, 'Invalid manually returned capture reference.')
+        original = pathlib.Path(ref['path'])
+        archived = directory / 'held-prior-native-capture.json'
+        require(original.name == archived.name and original.parent.name == 'rehearsal-' + job
+                and directory == original.parent.parent / ('verified-original-return-' + job) / original.parent.name,
+                'The manual capture does not have its original and distinct return directories.')
+        for path in (original, archived):
+            protected(path, private=True)
+            info = path.stat()
+            require(info.st_nlink == 1 and 0 < info.st_size <= 1024**2 and digest(path) == ref['sha256'],
+                    'The original or archived manual capture changed.')
+        require(not original.samefile(archived), 'The manual capture needs an independent archived copy.')
+        epoch = self.expected_prior['workspaceEpoch']
+        physical = dict(zip(('device','inode'),native['returnedRoot'][:2]))
+        require(detail.get('kind') == 'operator-rehearsal-evidence' and detail.get('outcome') == 'rehearsed'
+                and detail.get('leaseId') == job and detail.get('candidateId') == self.prior_id and detail.get('workspaceEpoch') == epoch
+                and detail.get('manualResumption') is True and detail.get('automaticRehearsalPassed') is False
+                and detail.get('deliveryQualification') is False
+                and detail.get('sourceRootIdentity') == detail.get('returnedRootIdentity') == physical,
+                'The manual capture lacks its authenticated returned-original evidence.')
+        finished = directory / 'completed.json'
+        protected(finished, private=True)
+        result = read_json(finished, 16384)
+        require(type(result.get('format')) is int and result['format'] == 1 and result.get('kind') == 'original-incumbent-manually-returned-and-released'
+                and result.get('leaseId') == job and result.get('candidateId') == self.prior_id and result.get('workspaceEpoch') == epoch
+                and result.get('sourceRoot') == physical and result.get('startup3') == self.startup_process_binding()
+                and result.get('actualAttempts') == [1,2,3] and all(type(n) is int for n in result['actualAttempts'])
+                and result.get('activePriorVersion') == self.release['compatibility']['fromNovaVersion']
+                and all(result.get(k) is True for k in ('actualReady','leaseReleased','originalWorkerStillFailed','manualResumption','ordinarySavedAndNativeVerified'))
+                and result.get('effectiveHeld') is False and result.get('deliveryQualification') is False
+                and lease.get('proofSha256') == result.get('nativeProofSha256') == digest(acceptance_path),
+                'The manual capture does not belong to the accepted original process, lease and workspace.')
+        return {'completed': {'path': str(finished),'sha256': digest(finished)},
+                'archivedSource': {'path': str(archived),'sha256': ref['sha256']}}
 
     def observes_prior_capture(self):
         return (getattr(self, 'same_schema_qualification', None) is not None and self.active_engine == '2026.9.8'
@@ -1395,7 +1437,7 @@ class Driver:
         original_intervals = intervals[1:] if source['type'] == 'returned-rehearsal' else intervals
         inherited = {}
         if source.get('originalSource') is not None:
-            previous = source['originalSource']
+            previous = source.get('manualReturn', {}).get('archivedSource', source['originalSource'])
             path = directory / 'held-prior-native-capture.json'
             protected(path, private=True)
             require(set(previous) == {'path','sha256'} and path == pathlib.Path(previous['path'])

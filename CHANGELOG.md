@@ -1,3 +1,8 @@
+## [2.28.49]
+
+- Hosted updates now preserve conversations added since the last saved configuration. After restart, Nova checks every regenerated session binding against the saved conversations.
+- During a rollback rehearsal, Nova verifies the restored original workspace separately from its temporary test copy. A later update can also verify the original workspace after an interrupted rehearsal was recovered.
+
 ## [2.28.48]
 
 - Hosted recovery now checks the native plugin files from the preceding shutdown when restarting or restoring a saved workspace. It can verify multiple temporary build directories left behind by the same plugin.

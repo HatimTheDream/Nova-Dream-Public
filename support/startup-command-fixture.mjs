@@ -23,10 +23,10 @@ const sameSchemaFixtures=new Map([
   [DEFERRED_CAPTURE_STARTUP_SOURCES['qualified-startup.py'],DEFERRED_CAPTURE_STARTUP_HELPERS],
   [COMPLETE_CAPTURE_STARTUP_SOURCES['qualified-startup.py'],COMPLETE_CAPTURE_STARTUP_HELPERS],
 ]);
-function helperBytes(name,expected){
+export function helperBytes(name,expected){
   const actual=readFileSync(new URL('../deploy/update-runner/'+name,import.meta.url));
   if(sha256(actual)===expected)return actual;
-  for(const file of ['historical-rehearsal-helpers.json','historical-deferred-helpers.json','historical-complete-helpers.json']){
+  for(const file of ['historical-rehearsal-helpers.json','historical-deferred-helpers.json','historical-complete-helpers.json','historical-binding-helpers.json']){
     const raw=historicalHelper(name,file,expected);
     if(raw)return raw;
   }

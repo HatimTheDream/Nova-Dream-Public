@@ -255,6 +255,18 @@ function main() {
   expect('read-only store dir still verifies (disposable copy)', r9.code === 0,
     'original never opened for writing');
 
+  // Exercise the hosted Python consumer with the same encrypted native database.
+  const history = ['a','b','c','d'].map(name => ({nativeKey: `key-${name}`, nativeId: randomUUID()}));
+  const historyStore = buildCustomFixture('historical', history.map(b => [PREFIX + b.nativeKey, b]));
+  const historyDb = new DatabaseSync(join(historyStore, 'workspace.sqlite'));
+  historyDb.exec('PRAGMA user_version=60');
+  historyDb.close();
+  writeFileSync(join(historyStore, 'edition3.identity'), 'private.novadream.edition3.preview\n');
+  const current = writeConfig('history-current', history);
+  const python = process.env.NOVA_TEST_PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3');
+  execFileSync(python, ['-I', '-B', join(HERE, 'retained-binding-history.py'), historyStore, current,
+    join(WORK, 'test.key'), process.execPath], {stdio: 'inherit', timeout: 60000});
+
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} expectations hold.`);
   rmSync(WORK, { recursive: true, force: true });

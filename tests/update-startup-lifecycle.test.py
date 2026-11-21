@@ -311,5 +311,82 @@ class PriorCaptureOriginTests(unittest.TestCase):
             self.assertEqual(recorded['priorEvidence']['selectedCatalogSha256'],recovery.deferred_digest(plugin))
 
 
+class ManualCaptureReturnTests(unittest.TestCase):
+    def test_independent_archive_is_bound_to_the_original_and_the_accepted_process(self):
+        job, epoch, candidate = 'a97cda6a-253d-48e2-aba7-5896f935d5cd', 'e', 'a' * 64
+        binding = {'invocationId':'b' * 32,'process':{'pid':9,'startTicks':111}}
+        with tempfile.TemporaryDirectory() as temp, patch.object(driver,'protected'):
+            base = pathlib.Path(temp).resolve()
+            name = 'rehearsal-' + job
+            original = base / name / 'held-prior-native-capture.json'
+            output = base / ('verified-original-return-' + job) / name
+            copied = output / original.name
+            folder = base / 'operator-maintenance' / job
+            for directory in (output, original.parent, folder):
+                directory.mkdir(parents=True)
+            def write(path, value):
+                path.write_text(json.dumps(value), encoding='utf-8')
+                return recovery.digest(path)
+            app = object.__new__(driver.Driver)
+            app.host, app.data = {'stateDirectory':str(base)}, base
+            app.prior_id, app.expected_prior = candidate, {'workspaceEpoch':epoch}
+            app.release = {'compatibility':{'fromNovaVersion':'2.28.39'}}
+            app.startup_process_identity = lambda: binding['process']
+            app.startup_process_binding = lambda: binding
+            physical = list(recovery.capture_physical_root(base))
+            root = dict(zip(('device','inode'),physical[:2]))
+            ref = {'path':str(original),'sha256':write(original,{'owner':[job,candidate,0],'epoch':epoch,'physicalRoot':physical})}
+            copied.write_bytes(original.read_bytes())
+            native = {'format':1,'leaseId':job,'candidateId':candidate,'epoch':epoch,'returnedRoot':physical,
+                      'output':str(output),'originalSource':ref}
+            detail = {'kind':'operator-rehearsal-evidence','outcome':'rehearsed','leaseId':job,'candidateId':candidate,
+                      'workspaceEpoch':epoch,'sourceRootIdentity':root,'returnedRootIdentity':root,
+                      'manualResumption':True,'deliveryQualification':False,'automaticRehearsalPassed':False,
+                      'nativeCaptureSourceSha256':write(folder/'native-capture-source.json',native)}
+            accepted = {'kind':'operator-maintenance-acceptance','outcome':'rehearsed','leaseId':job,'candidateId':candidate,
+                        'workspaceEpoch':epoch,'evidenceSha256':write(folder/'rehearsal.json',detail),
+                        'returnedAcceptanceSha256':write(folder/'returned-acceptance.json',{'epoch':epoch,
+                            'health':{'candidateId':candidate},'process':binding['process']}),
+                        **dict.fromkeys(('savedWorkVerified','recoveryVerified','healthVerified','accountsVerified'),True)}
+            lease = {'phase':'released','id':job,'candidateId':candidate,'workspaceEpoch':epoch,
+                     'proofSha256':write(folder/'acceptance.json',accepted)}
+            app.prior_capture_lease_before_enter = lease
+            complete = {'format':1,'kind':'original-incumbent-manually-returned-and-released','leaseId':job,'candidateId':candidate,
+                        'workspaceEpoch':epoch,'sourceRoot':root,'startup3':binding,'actualAttempts':[1,2,3],
+                        'activePriorVersion':'2.28.39','effectiveHeld':False,'deliveryQualification':False,
+                        'nativeProofSha256':lease['proofSha256'],**dict.fromkeys(('ordinarySavedAndNativeVerified','actualReady',
+                            'leaseReleased','originalWorkerStillFailed','manualResumption'),True)}
+            completed = output/'completed.json'
+            write(completed, complete)
+            def route():
+                return app.prior_capture_route()[3]
+            self.assertEqual(route()['originalSource'],ref)
+            self.assertEqual(route()['manualReturn']['archivedSource'],{**ref,'path':str(copied)})
+            for changes in ({'startup3':{**binding,'invocationId':'c'*32}},{'candidateId':'d'*64},{'workspaceEpoch':'other'},
+                            {'actualAttempts':[True,2,3]},{'sourceRoot':{**root,'inode':root['inode']+1}},
+                            {'deliveryQualification':True},{'manualResumption':False},{'nativeProofSha256':'c'*64}):
+                with self.subTest(changes=changes):
+                    write(completed,{**complete,**changes})
+                    with self.assertRaisesRegex(RuntimeError,'accepted original'):
+                        route()
+            write(completed,complete)
+            for path in (original,copied):
+                with self.subTest(path=path):
+                    saved = path.read_bytes()
+                    path.write_bytes(saved + b' ')
+                    with self.assertRaisesRegex(RuntimeError,'capture changed'):
+                        route()
+                    path.write_bytes(saved)
+            write(folder/'rehearsal.json',{**detail,'automaticRehearsalPassed':True})
+            with self.assertRaisesRegex(RuntimeError,'detached'):
+                route()
+            for changed in ({**detail,'automaticRehearsalPassed':True},{**detail,'leaseId':'another-job'},
+                            {**detail,'returnedRootIdentity':{**root,'inode':root['inode']+1}}):
+                with self.assertRaisesRegex(RuntimeError,'authenticated returned-original'):
+                    app.manual_capture_copy(job,output,native,changed,lease,folder/'acceptance.json')
+            with self.assertRaisesRegex(RuntimeError,'distinct return directories'):
+                app.manual_capture_copy(job,original.parent,native,detail,lease,folder/'acceptance.json')
+
+
 if __name__ == '__main__':
     unittest.main()

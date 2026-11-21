@@ -271,6 +271,105 @@ class RehearsalTests(unittest.TestCase):
         phases = [json.loads(p.read_text())['phase'] for p in sorted(instance.output.glob('phase-*.json'))]
         self.assertEqual(phases[-2:], ['trial-cleanup-intent','complete'])
 
+    def held_capture_rehearsal(self, fault=None):
+        instance = self.fixture()
+        instance.same_schema_qualification = {'format': 1, 'kind': 'schema-60-same-runtime',
+            'schemaVersion': 60, 'apiVersion': 1, 'agentVersion': '2026.9.8'}
+        instance.from_engine = instance.active_engine = '2026.9.8'
+        instance.release = {'compatibility': {'fromNovaVersion': instance.review['novaVersion']}}
+        history = {'kind': 'held-prior-capture-origin', 'jobId': instance.job_id}
+        def bind_source(stopped):
+            stopped()
+            held = instance.output/'held-prior-native-capture.json'
+            exclusive_json(held, {'selectedRelative': '.', 'windows': {}})
+            instance.held_capture_origin = (held, operator.digest(held))
+            instance.deferred_capture_history = history
+            instance.deferred_source_manifest = ('a'*64, 'b'*64)
+        instance.bind_same_schema_source = bind_source
+        def rebind(snapshot, live, selected, runtime, **bindings):
+            self.assertEqual((snapshot, live, selected, runtime), (instance.recovery/'workspace',
+                instance.data, pathlib.Path('.'), instance.prior_agent))
+            self.assertEqual(bindings, {'owner': (instance.job_id, instance.prior_id, 0),
+                'epoch': instance.before['epoch'], 'source_manifest_sha256': 'b'*64,
+                'held_ref': instance.held_capture_origin, 'windows': {}})
+            self.assertEqual(operator.root_identity(live), instance.source_root)
+            return history if fault != 'origin' else {}
+        self.fake('bind_held_capture_origin', rebind)
+        if fault == 'return-intent':
+            move_role = instance.move_role
+            def change_return_intent(source, target, expected, label):
+                move_role(source, target, expected, label)
+                if label == 'return-original':
+                    path = instance.output / ('phase-%03d.json' % (instance.sequence - 1))
+                    record = operator.read_json(path)
+                    record['source'] = str(instance.trial)
+                    path.write_text(json.dumps(record))
+            instance.move_role = change_return_intent
+        original_service = instance.service
+        def service(action):
+            if action == 'start':
+                instance.startup_attempt = getattr(instance, 'startup_attempt', 0) + 1
+                if instance.startup_attempt == 2:
+                    self.assertIsNone(instance.capture_retirement_previous)
+                    self.assertTrue((instance.output/'returned-original-capture.json').is_file())
+                if instance.startup_attempt == 3:
+                    self.assertEqual(instance.capture_retirement_previous['attempt'], 2)
+                    self.assertEqual(instance.capture_retirement_previous['physical'][1],
+                                     operator.capture_physical_root(instance.data))
+            original_service(action)
+        instance.service = service
+        def close_capture():
+            n=instance.startup_attempt
+            roots=(instance.recovery/'workspace', instance.data)
+            physical=tuple(operator.capture_physical_root(p) for p in roots)
+            outcome={'owner': [instance.job_id, instance.prior_id, n]}
+            path=instance.output/('startup-%d-capture-closed.json' % n)
+            doc={'jobId':instance.job_id,'candidateId':instance.prior_id,'attempt':n,
+                 'epoch':instance.before['epoch'],'physicalRoots':physical,
+                 'deferredCapture':outcome,'deferredCatalog':{}}
+            exclusive_json(path,doc)
+            instance.capture_retirement_previous={'roots':roots,'physical':physical,'epoch':doc['epoch'],
+                'runtime':instance.prior_agent,'candidate':instance.prior_id,'attempt':n,'deferredCapture':outcome,
+                'deferredCatalog':{},'receipt':(path,operator.digest(path))}
+            if n == 1 and fault == 'trial-inode':
+                instance.capture_retirement_previous['physical']=(physical[0],operator.capture_physical_root(instance.original))
+            if n == 1 and fault == 'closed-receipt':
+                path.write_text('{}')
+        instance.retained_native=close_capture
+        return instance
+
+    def test_returned_pristine_inode_has_independent_held_origin_then_carries_its_own_restart(self):
+        instance=self.held_capture_rehearsal()
+        instance.run_rehearsal()
+        proof=operator.read_json(instance.output/'returned-original-capture.json')
+        self.assertEqual(proof['trialCaptureSha256'],operator.digest(instance.output/'startup-1-capture-closed.json'))
+        self.assertNotEqual(proof['returnedPhysicalRoot'][:2],proof['trialPhysicalRoot'][:2])
+        self.assertEqual(instance.startup_attempt,3)
+
+    def test_original_return_refuses_wrong_trial_inode_before_restart(self):
+        instance=self.held_capture_rehearsal('trial-inode')
+        with self.assertRaisesRegex(RuntimeError,'closed trial capture'):
+            instance.run_rehearsal()
+        self.assertEqual(instance.startup_attempt,1)
+
+    def test_original_return_refuses_changed_closed_trial_receipt(self):
+        instance=self.held_capture_rehearsal('closed-receipt')
+        with self.assertRaisesRegex(RuntimeError,'closed trial capture'):
+            instance.run_rehearsal()
+        self.assertEqual(instance.startup_attempt,1)
+
+    def test_original_return_refuses_different_held_source(self):
+        instance=self.held_capture_rehearsal('origin')
+        with self.assertRaisesRegex(RuntimeError,'held capture provenance'):
+            instance.run_rehearsal()
+        self.assertEqual(instance.startup_attempt,1)
+
+    def test_original_return_refuses_wrong_role_in_move_intent(self):
+        instance=self.held_capture_rehearsal('return-intent')
+        with self.assertRaisesRegex(RuntimeError,'recorded rename intent'):
+            instance.run_rehearsal()
+        self.assertEqual(instance.startup_attempt,1)
+
     def test_qualified_rehearsal_reads_the_key_only_inside_its_closed_prior_scope(self):
         import recovery
         instance = self.fixture()

@@ -23,7 +23,8 @@ import uuid
 sys.dont_write_bytecode = True
 import app_dependencies
 from install import Driver, NoRedirect, STARTUP_FILES, protected, protected_configuration_files, protected_selector, read_json
-from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, digest, inventory, inode_ids,
+from recovery import (ALLOWANCE, RESERVE, InsufficientStorage, bind_held_capture_origin, capture_physical_root,
+                      digest, inventory, inode_ids,
                       native_preflight, native_saved_state, prepare_independent, require, saved_state,
                       snapshot_closed, sync_dir, verification_scratch, write_json)
 from recovery import APPLICATION_TRANSITION_HELPERS, validate_application_transition, validate_same_schema_qualification
@@ -509,6 +510,58 @@ class Rehearsal(Driver):
         require(root_identity(target) == expected, 'Renamed workspace root identity changed.')
         self.record(label + '-complete')
 
+    def verify_returned_original(self):
+        manifest = self.recovery / 'snapshot-manifest.json'
+        require(inventory(self.data)[0] == read_json(manifest, 64*1024**2),
+                'The returned original is not the preserved source.')
+        origin = getattr(self, 'held_capture_origin', None)
+        if origin is None:
+            return
+
+        # One same-version rehearsal switches physical workspaces between attempts 1 and 2.
+        # The trial's closure remains evidence for that inode, never for the returned original.
+        self.require_stopped()
+        snapshot = self.recovery / 'workspace'
+        lease = self.controller_hold()['lease']
+        before, trial, returned = map(capture_physical_root, (snapshot, self.trial, self.data))
+        require(self.same_schema_qualification is not None and self.startup_attempt == 1
+                and self.phase == 'return-original-complete' and lease['id'] == self.job_id and lease['phase'] == 'checking'
+                and self.prior_id == self.target_id and root_identity(self.data) == self.source_root
+                and root_identity(self.trial) == self.trial_root and returned[:2] != trial[:2]
+                and not os.path.lexists(self.original) and not os.path.lexists(self.restore),
+                'The held original has not returned from its verified rehearsal trial.')
+        rename = self.output / ('phase-%03d.json' % (self.sequence - 1))
+        intent = read_json(rename)
+        require(intent['phase'] == 'return-original-intent' and intent['leaseId'] == self.job_id
+                and intent['candidateId'] == self.prior_id and intent['workspaceEpoch'] == self.before['epoch']
+                and intent['source'] == str(self.original) and intent['destination'] == str(self.data)
+                and intent['expectedRoot'] == self.source_root and intent['snapshotManifestSha256'] == digest(manifest),
+                'The return of the original workspace lacks its recorded rename intent.')
+        previous = self.capture_retirement_previous
+        closed = self.output / 'startup-1-capture-closed.json'
+        receipt_sha = digest(closed)
+        checked = read_json(closed, 4*1024**2)
+        owner = [self.job_id, self.prior_id, 1]
+        require(previous['receipt'] == (closed, receipt_sha) and previous['roots'] == (snapshot, self.data)
+                and previous['physical'] == (before, trial) and previous['runtime'] == self.prior_agent
+                and (previous['candidate'], previous['attempt'], previous['epoch']) == (self.prior_id, 1, self.before['epoch'])
+                and [checked['jobId'], checked['candidateId'], checked['attempt']] == owner
+                and checked['epoch'] == self.before['epoch'] and checked['physicalRoots'] == [list(before), list(trial)]
+                and checked['deferredCapture'] == previous['deferredCapture'] and checked['deferredCapture']['owner'] == owner
+                and checked['deferredCatalog'] == previous['deferredCatalog'],
+                'The closed trial capture belongs to another workspace or startup.')
+        held = read_json(origin[0])
+        history = bind_held_capture_origin(snapshot, self.data, pathlib.Path(held['selectedRelative']), self.prior_agent,
+            owner=(self.job_id, self.prior_id, 0), epoch=self.before['epoch'],
+            source_manifest_sha256=self.deferred_source_manifest[1], held_ref=origin, windows=held['windows'])
+        require(history == self.deferred_capture_history, 'The returned original lost its held capture provenance.')
+        write_json(self.output / 'returned-original-capture.json', {
+            'format': 1, 'leaseId': self.job_id, 'candidateId': self.prior_id, 'workspaceEpoch': self.before['epoch'],
+            'returnIntentSha256': digest(rename), 'snapshotManifestSha256': intent['snapshotManifestSha256'],
+            'trialCaptureSha256': receipt_sha, 'heldSourceSha256': origin[1],
+            'trialPhysicalRoot': trial, 'returnedPhysicalRoot': returned})
+        self.capture_retirement_previous = None
+
     def proof(self, outcome, accepted):
         status = self.controller_hold()
         require(status.get('held') is True and status['lease']['phase'] == 'checking', 'Final operator acceptance requires an acknowledged held source.')
@@ -663,8 +716,7 @@ class Rehearsal(Driver):
                 self.record('trial-retention-verified')
                 self.move_role(self.data, self.trial, self.trial_root, 'retain-trial')
                 self.move_role(self.original, self.data, self.source_root, 'return-original')
-                require(inventory(self.data)[0] == read_json(self.recovery / 'snapshot-manifest.json', 64*1024**2),
-                        'The returned original is not the preserved source.')
+                self.verify_returned_original()
                 self.service('start'); self.wait_acceptance(self.prior_id, self.review['novaVersion'], restored_prior=True)
                 self.stop_for_retention(restored_prior=True); self.require_stopped()
                 with self.application_comparison(self.recovery / 'workspace', self.data, restored=True):
