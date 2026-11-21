@@ -61,10 +61,79 @@ def verify_browser_reservation(original,binding,grant):
          and original['startedAtMs']==reservation['startedAtMs'] and original['deadlineAtMs']==reservation['deadlineAtMs'],
          'browser-window-reservation-changed')
 
+def returned_browser_expiry(directory, before, active, state, owned, files, rows=None):
+    operation=before['binding']['operationId'];unit='nova-browser-'+operation+'.service'
+    deadline=before['deadlineAtMs'];now=time.time_ns()//1000000
+    need(active['operationId']==operation and active['originalSha256']==digest(canonical(before)+b'\n')
+         and active['deadlineAtMs']==deadline and before['startedAtMs']<=active['observedAtMs']<deadline<=now
+         and active['unit']==unit and active['controlGroup']=='/system.slice/'+unit and active['memberVerified'] is True
+         and active['killMode']=='control-group' and active['memoryHighBytes']==1476395008 and active['memoryMaxBytes']==2147483648
+         and active['bootId']==pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+         and re.fullmatch('[a-f0-9]{32}',active['invocationId']),'browser-expiry-original-owner-changed')
+    owner=files['worker-identity'];launch=files['launch-result']
+    need(files['prepared'] and not files['acceptance'] and owner['operationId']==operation and owner['originalSha256']==active['originalSha256']
+         and owner['pid']==active['mainPid'] and launch['returncode']==0 and '--unit='+unit[:-8] in launch['argv']
+         and active['runtimeMaxUsec']>0 and active['runtimeMaxUsec']%1000000==0
+         and '--property=RuntimeMaxSec='+str(active['runtimeMaxUsec']//1000000) in launch['argv']
+         and '--property=KillMode=control-group' in launch['argv'] and not os.path.lexists(directory/'accept-request.json')
+         and not os.path.lexists(directory/'close-request.json'),'browser-expiry-original-request-changed')
+    need(not owned and 'MainPID=0\n' in state and re.search(r'ActiveState=(inactive|failed)\n',state),'browser-expiry-unit-not-closed')
+    process=pathlib.Path('/proc')/str(active['mainPid'])/'stat'
+    try:need(int(process.read_text().rsplit(')',1)[1].split()[19])!=active['processStartTicks'],'browser-expiry-original-process-alive')
+    except (FileNotFoundError,ProcessLookupError):pass
+    cg=pathlib.Path('/sys/fs/cgroup')/active['controlGroup'].lstrip('/')
+    if cg.exists():
+        need('populated 0' in (cg/'cgroup.events').read_text().splitlines() and not (cg/'cgroup.procs').read_text().strip(),'browser-expiry-cgroup-still-populated')
+    fail=files['failed'];closed=files['closed']
+    if fail:need(fail.get('operationId')==operation and fail.get('reason')=='browser-original-deadline-exhausted'
+                 and deadline<=fail['atMs']<=now,'browser-expiry-different-worker-failure')
+    if closed:need(closed.get('operationId')==operation and closed['browserClosed'] is True and closed['tunnelClosed'] is True
+                   and deadline<=closed['atMs']<=now,'browser-expiry-different-worker-close')
+    proof={'active':active,'originalProcessClosed':True,'groupEmpty':True,'noAcceptanceRequest':True}
+    if fail and closed:
+        need(closed['atMs']>=fail['atMs'],'browser-expiry-close-order-changed')
+        return dict(proof,termination='worker-deadline')
+    if rows is None:
+        argv=['/usr/bin/journalctl','--no-pager','--output=json','--lines=80','--boot='+active['bootId'],'--unit='+unit,
+              '--since=@'+str((before['startedAtMs']-5000)//1000),'--until=@'+str((deadline+20000)//1000),'_PID=1']
+        output=subprocess.check_output(argv,timeout=12)
+        need(0<len(output)<=512*1024,'browser-expiry-journal-bounds')
+        rows=[json.loads(line) for line in output.splitlines()]
+    events=manager_timeout_entries(rows,active)
+    return dict(proof,termination='systemd-runtime-limit',events=events)
+
+def manager_timeout_entries(rows,active):
+    unit=active['unit'];deadline=active['deadlineAtMs'];runtime=active['runtimeMaxUsec']
+    start=active['activeEnterMonotonicUsec'];boot=active['bootId'].replace('-','')
+    events={};captured_start=False;needs_anchor=False
+    for row in rows:
+        message=row.get('MESSAGE','')
+        if row.get('_PID')!='1' or row.get('_BOOT_ID')!=boot or row.get('UNIT')!=unit or not isinstance(message,str):continue
+        inv=row.get('INVOCATION_ID') or row.get('OBJECT_SYSTEMD_INVOCATION_ID')
+        mono=int(row['__MONOTONIC_TIMESTAMP'])
+        if inv and mono>=start-1000000:need(inv==active['invocationId'],'browser-expiry-journal-invocation-changed')
+        if row.get('MESSAGE_ID')=='39f53479d3a045ac8e11786248231fbf':
+            anchors=[r for r in active.get('managerJournal',[]) if r.get('category')=='started' and r.get('UNIT')==unit
+                     and r.get('_PID')=='1' and r.get('INVOCATION_ID')==active['invocationId'] and r.get('_BOOT_ID')==boot]
+            need(not captured_start and inv==active['invocationId'] and any(r['__MONOTONIC_TIMESTAMP']==row['__MONOTONIC_TIMESTAMP']
+                 and r['__REALTIME_TIMESTAMP']==row['__REALTIME_TIMESTAMP'] for r in anchors),'browser-expiry-journal-start-changed')
+            captured_start=True
+        reason=message.removeprefix(unit+': ')
+        role='elapsed' if reason=='Service reached runtime time limit. Stopping.' else 'failed' if reason=="Failed with result 'timeout'." else None
+        if not role:continue
+        if not inv:needs_anchor=True
+        real=int(row['__REALTIME_TIMESTAMP']);mono=int(row['__MONOTONIC_TIMESTAMP'])
+        need(deadline*1000-5000000<=real<=deadline*1000+20000000 and start+runtime-5000000<=mono<=start+runtime+20000000
+             and role not in events,'browser-expiry-journal-time-changed')
+        events[role]={'realtimeUsec':real,'monotonicUsec':mono}
+    need((captured_start or not needs_anchor) and set(events)=={'elapsed','failed'} and events['elapsed']['monotonicUsec']<=events['failed']['monotonicUsec'],
+         'browser-expiry-authenticated-timeout-unavailable')
+    return events
+
 def main(data):
     import pwd
     need(os.geteuid()==0,'browser-remote-root-required')
-    mode=data['mode'];need(mode in ('readiness','plan','start','status','request','close','screenshot','cleanup'),'browser-remote-mode-invalid')
+    mode=data['mode'];need(mode in ('readiness','plan','start','status','request','close','screenshot','cleanup','expiry'),'browser-remote-mode-invalid')
     original=data['original'];binding=original['binding'];options=binding['options'];operation=str(uuid.UUID(binding['operationId']))
     need(operation==binding['operationId'] and options['mode']=='remote' and options['baseUrl']=='http://127.0.0.1:4383','browser-remote-input-invalid')
     need(re.fullmatch(r'[a-z][a-z0-9_-]{0,31}',options['user']) and re.fullmatch(r'/opt/[a-z][a-z0-9-]{1,63}',options['directoryRoot']),'browser-remote-scope-invalid')
@@ -75,7 +144,7 @@ def main(data):
     unit_state=lambda: subprocess.run(['systemctl','show',unit+'.service','--property=ActiveState,SubState,MainPID,ExecMainStatus'],capture_output=True,text=True,timeout=10).stdout
     if session!=operation:
         lineage=binding.get('browserPredecessor');grant=binding.get('publicationContinuation')
-        need(isinstance(lineage,dict) and set(lineage)=={'original','status'} and isinstance(grant,dict) and set(grant)==({'request','issuedAtMs','expiresAtMs','browserReservation'} if 'browserReservation' in grant else {'request','issuedAtMs','expiresAtMs'}),'browser-successor-lineage-invalid')
+        need(isinstance(lineage,dict) and set(lineage)=={'original','status'} and isinstance(grant,dict) and set(grant) in ({'request','issuedAtMs','expiresAtMs','browserReservation'},{'request','issuedAtMs','expiresAtMs'},{'request','issuedAtMs','expiresAtMs','returnedBrowser'}),'browser-successor-lineage-invalid')
         verify_browser_reservation(original,binding,grant)
         for ref in (lineage['original'],lineage['status'],grant['request']):need(isinstance(ref,dict) and set(ref)=={'path','sha256'} and re.fullmatch('[a-f0-9]{64}',ref['sha256']),'browser-successor-reference-invalid')
         predecessor=root/operation
@@ -86,7 +155,8 @@ def main(data):
         need(before['binding']==base and original['startedAtMs']>=before['deadlineAtMs'] and original['startedAtMs']>=grant['issuedAtMs'] and original['deadlineAtMs']<=grant['expiresAtMs'],'browser-successor-target-or-clock-changed')
         if mode in ('readiness','plan','start'):
             failed=json_file(predecessor/'failed.json');closed=json_file(predecessor/'closed.json')
-            need(failed and failed.get('operationId')==operation and failed.get('reason')=='browser-original-deadline-exhausted' and closed and closed.get('operationId')==operation and closed.get('browserClosed') is True and closed.get('tunnelClosed') is True and not json_file(predecessor/'acceptance.json'),'browser-successor-closed-predecessor-required')
+            if 'returnedBrowser' not in grant:
+                need(failed and failed.get('operationId')==operation and failed.get('reason')=='browser-original-deadline-exhausted' and closed and closed.get('operationId')==operation and closed.get('browserClosed') is True and closed.get('tunnelClosed') is True and not json_file(predecessor/'acceptance.json'),'browser-successor-closed-predecessor-required')
             old_unit='nova-browser-'+operation+'.service'
             old_state=subprocess.run(['systemctl','show',old_unit,'--property=ActiveState,MainPID'],capture_output=True,text=True,timeout=10).stdout
             need(re.search(r'ActiveState=(inactive|failed)\n',old_state) and 'MainPID=0\n' in old_state,'browser-successor-predecessor-unit-active')
@@ -94,6 +164,12 @@ def main(data):
                 if proc.name.isdigit():
                     try:need(old_unit not in (proc/'cgroup').read_text(),'browser-successor-predecessor-process-active')
                     except (FileNotFoundError,ProcessLookupError):pass
+            if 'returnedBrowser' in grant:
+                h=grant['returnedBrowser']
+                need(session==str(uuid.uuid5(uuid.UUID(operation),'returned-publication-browser')) and 'browserReservation' not in grant
+                     and h['prepared']['sha256']==digest((predecessor/'prepared.json').read_bytes()),'browser-expiry-returned-handoff-changed')
+                files={n:json_file(predecessor/(n+'.json')) for n in ('worker-identity','launch-result','prepared','failed','closed','acceptance')}
+                need(returned_browser_expiry(predecessor,before,h['expiry']['active'],old_state,[],files)==h['expiry'],'browser-expiry-returned-owner-changed')
     original_bytes=canonical(original)+b'\n'
     source={name:base64.b64decode(data['sources'][name]['base64'],validate=True) for name in NAMES}
     for name,value in source.items():need(len(value)<262144 and digest(value)==data['sources'][name]['sha256'],'browser-remote-worker-source-changed')
@@ -162,6 +238,10 @@ def main(data):
                 if (unit+'.service') in (proc/'cgroup').read_text():owned.append(int(proc.name))
             except (FileNotFoundError,ProcessLookupError,PermissionError):pass
     state=unit_state()
+    if mode=='expiry':
+        need(session==operation,'browser-expiry-original-session-required')
+        return {'state':'observed','operationId':operation,'files':files,'unitState':state,'ownedPids':owned,'originalSha256':plan['originalSha256'],
+                'expiry':returned_browser_expiry(path,original,data['active'],state,owned,files),'observedAtMs':int(time.time()*1000)}
     if mode=='cleanup':
         need(not owned and re.search(r'ActiveState=(inactive|failed)\n',state) and 'MainPID=0\n' in state and files['closed']
              and files['closed'].get('browserClosed') is True and not files['failed'],'browser-remote-cleanup-not-closed')

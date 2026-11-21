@@ -17,6 +17,8 @@ import { configuredBrowserWindowRecoveryStorageReadiness, verifyBrowserWindowRec
 import { correctionRequestKind, correctionGrantKind, correctionBranch, correctedDependencyTarget, dependencyCorrectionSchema, requireCorrectionExit } from './release-delivery-dependency-correction.mjs';
 
 import {completionGrantKind,completionPrerequisites,completionSchemas,completionSnapshot,verifyCompletionHistory,readCompletion,remainingRecoveryBudget} from './release-delivery-returned-rehearsal.mjs';
+import {assetGrantKind,publicationInputSchemas,publicationInputsSnapshot,verifyPublicationInputsHistory} from './release-delivery-publication-inputs-correction.mjs';
+import {planReservedPublicationAsset} from './release-publication-asset-reservation.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const hash=z.string().regex(/^[a-f0-9]{64}$/),commit=z.string().regex(/^[a-f0-9]{40}$/),path=z.string().min(1).max(4096).refine(isAbsolute);
@@ -96,7 +98,11 @@ export const preJournalGrantSchema=z.object({format:z.literal(1),kind:z.literal(
  issuedAtMs:z.number().int().nonnegative(),expiresAtMs:z.number().int().positive(),
  automaticRenewal:z.literal(false),originalHistoryPreserved:z.literal(true)}).strict().refine(v=>v.expiresAtMs>v.issuedAtMs&&v.expiresAtMs-v.issuedAtMs<=1800000,'finite-prejournal-window-required');
 export const {request:returnedRehearsalRequestSchema,grant:returnedRehearsalGrantSchema}=completionSchemas({ref,source,continuationRequestSchema,continuationGrantSchema});
-export const operatorGrantSchema=z.union([prepackageGrantSchema,preJournalGrantSchema,publicationContinuationGrantSchema,returnedRehearsalGrantSchema]);
+export const {request:publicationInputsRequestSchema,grant:publicationInputsGrantSchema}=publicationInputSchemas({reference:ref,digest:hash,source,baseRequest:continuationRequestSchema,baseGrant:continuationGrantSchema,publicationBrowser});
+export function publicationInputsCheckpoint(journal,id,now,request,assertAbsent=absentOwner){
+ return publicationInputsSnapshot(journal,id,request,journal.deliveryOriginalOperatorContinuation(id),{now,assertAbsent,history});
+}
+export const operatorGrantSchema=z.union([publicationInputsGrantSchema,prepackageGrantSchema,preJournalGrantSchema,publicationContinuationGrantSchema,returnedRehearsalGrantSchema]);
 export function returnedRehearsalSnapshot(journal,id,now,{request,assertAbsent=absentOwner}={}){
  return completionSnapshot(journal,id,now,request,journal.deliveryOperatorContinuation(id),assertAbsent,history);
 }
@@ -628,6 +634,46 @@ export async function reconcileReturnedRehearsal(journal,id,requestRef,{clock=Da
  return journal.recordOperatorContinuation(id,proof,at,{assertAbsent});
 }
 
+export async function reconcilePublicationInputs(journal,id,requestRef,{clock=Date.now,assertAbsent,command,registry}={}){
+ const request=publicationInputsRequestSchema.parse(json(requestRef)),previous=journal.deliveryOperatorContinuation(id);
+ if(previous?.proof.kind===assetGrantKind){
+  need(same(previous.proof.request,requestRef),'publication-asset-successor-already-granted');
+  verifyContinuationGrant(journal,id,{now:clock()});return previous;
+ }
+ need(previous?.proof.kind===completionGrantKind&&previous.sha256===request.predecessorGrantSha256,'returned-rehearsal-predecessor-required');
+ verifyContinuationGrant(journal,id,{now:clock()});
+ const before=publicationInputsCheckpoint(journal,id,clock(),request,assertAbsent),d=journal.loadDelivery(id).descriptor;
+ const A=await import('./release-delivery-adapters.mjs');command??=A.fixedCommand;registry??=A.createDeliveryRegistry({command,clock});
+ const operator=await qualifyOperatorSources(request,d,{command});operator.ci={};
+ const target=json(d.target);
+ for(const side of ['private','public']){
+  const previousSide=previous.proof.operator.sources[side],s=operator.sources[side];
+  need(s.repository===previousSide.repository&&s.commit!==previousSide.commit,'publication-successor-lineage-required');
+  await command(target.sourceTools.git.path,['-C',s.root,'merge-base','--is-ancestor',previousSide.commit,s.commit],{gitExecPath:target.sourceTools.gitExecPath});
+ }
+ for(const side of ['private','public']){
+  const s=operator.sources[side],runId=request.ciRuns[side];
+  const input=save(journal,'operator-ci-request-'+side,{format:1,source:s,runId,tools:target.sourceTools});
+  const result=JSON.parse(await command(target.sourceTools.python.path,[fileURLToPath(new URL('release-operator-ci.py',import.meta.url)),'--request',input.path,'--request-sha256',input.sha256],{maximum:8*1024**2,timeoutMs:180000}));
+  need(result.run.id===runId,'continuation-operator-ci-id-changed');operator.ci[side]=save(journal,'operator-ci-'+side,verifyOperatorCi(result,s));
+ }
+ const names=before.prerequisites.map(item=>item.phase),prior=Object.fromEntries(names.map(n=>[n,journal.deliveryPhase(id,n).current.output]));
+ await withVerificationPass({},async scope=>{
+  for(const phase of [...names,'publication']){
+   const intent=journal.deliveryPhase(id,phase),adapter=registry.adapter(phase,d,prior,{journal}),context={...scope,journal,descriptor:d,prior,intent,input:intent.input};
+   need(adapter,'publication-current-verifier-required');await adapter.validate(context);if(phase!=='publication')await adapter.verify(intent.current,context);
+  }
+ },{readOnly:true});
+ const present=await planReservedPublicationAsset({request:before.assetRequest,reservation:before.reservation,binding:request.localInputs,command});
+ need(same(present,json(request.assetPlan)),'publication-release-or-asset-changed-before-grant');
+ const at=clock(),after=publicationInputsCheckpoint(journal,id,at,request,assertAbsent);
+ need(same(before,after),'publication-original-journal-raced');
+ const proof=publicationInputsGrantSchema.parse({format:1,kind:assetGrantKind,operationId:id,...after,operator,request:requestRef,
+  predecessorGrantSha256:previous.sha256,localInputs:request.localInputs,assetPlan:request.assetPlan,
+  issuedAtMs:at,expiresAtMs:previous.proof.expiresAtMs,automaticRenewal:false,originalHistoryPreserved:true});
+ return journal.recordPublicationInputsCorrection(id,proof,at,{assertAbsent});
+}
+
 export function verifyPublicationContinuationAdmission(request,operator,snapshot,now){
  const a=publicationAdmission.parse(request.admission),plan=json(a.plan),review=json(a.review),intent=json(a.intent);
  need(plan.format===1&&plan.kind==='nova-publication-continuation-plan'&&plan.operationId===request.operationId
@@ -733,6 +779,18 @@ export function verifyContinuationGrant(journal,id,{now=Date.now(),effect=false,
  return verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent});
 }
 function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent=absentOwner}){
+ if(saved.proof.kind===assetGrantKind){
+  const p=publicationInputsGrantSchema.parse(saved.proof),req=publicationInputsRequestSchema.parse(json(p.request)),previous=journal.deliveryOriginalOperatorContinuation(id);
+  need(previous?.proof.kind===completionGrantKind,'returned-rehearsal-predecessor-required');
+  verifyStoredContinuationGrant(journal,id,previous,{now,effect:false,assertAbsent});
+  verifyPublicationInputsHistory(journal,id,p,req,previous,history);
+  for(const side of ['private','public']){
+   const ci=verifyOperatorCi(json(p.operator.ci[side]),p.operator.sources[side]);need(ci.run.id===req.ciRuns[side],'publication-inputs-operator-ci-changed');
+  }
+  need(!effect||(now>=p.issuedAtMs&&now<p.expiresAtMs),'continuation-window-expired');
+  if(effect)verifyContinuationTimeline(journal,id,previous.recordedAtMs,now);
+  return saved;
+ }
  if(saved.proof.kind===completionGrantKind){
   const p=returnedRehearsalGrantSchema.parse(saved.proof),req=returnedRehearsalRequestSchema.parse(json(p.request));
   verifyOriginalContinuationGraph(req,journal.loadDelivery(id).descriptor);
@@ -848,11 +906,14 @@ export async function verifyContinuationStorageAuthority({journal,operationId,en
  need(entry===null||resolve(entry)===resolve(actual),'continuation-current-operator-entry-changed');
  need([join(roots[0],'scripts/release-deliver.mjs'),join(roots[1],'scripts/release-deliver.mjs')].map(p=>resolve(p)).includes(fileURLToPath(new URL('release-deliver.mjs',import.meta.url))),'continuation-current-module-root-changed');
  const initialized=p.kind==='nova-pre-journal-dispatch-reconciliation',d=initialized?journal.loadDelivery(operationId):null;
+ const assetRecovery=p.kind===assetGrantKind?{predecessorGrantSha256:p.predecessorGrantSha256,storageAdmission:p.storageAdmission}:null;
  const browserRecovery=p.browserWindowRecovery?verifyBrowserWindowRecoveryPredecessor(journal,operationId,p.browserWindowRecovery,{now}):null;
  const expires=initialized?d.created_at+d.descriptor.observationBudgetMs:p.expiresAtMs,issued=initialized?d.created_at:p.issuedAtMs;
  return {grantSha256:saved.sha256,operatorAdapterIdentity:p.operator.adapterIdentity,operatorEntry:reference(actual),operatorRoots:roots,operatorSources:p.operator.sources,
-  expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,...(p.kind===completionGrantKind?{returnedRehearsalAdmission:p.storageAdmission}:{}),...(p.successor?{completedOriginalStorage:p.successor.completedOriginalStorage}:browserRecovery?{completedOriginalStorage:browserRecovery.proof.successor.completedOriginalStorage,browserWindowRecovery:p.browserWindowRecovery,browserReservation:p.browserReservation,historicalStorageAdmission:journal.deliveryPublicationContinuationAdmission(operationId)}:{}),
-  newEffectsAllowed:now>=issued&&now<expires,continuationStarted:p.kind===completionGrantKind?Boolean(journal.deliveryReturnedRehearsalAdmission(operationId)):p.kind==='nova-expired-publication-continuation'
+  expiresAtMs:expires,originalAdapterIdentity:p.originalAdapterIdentity,descriptorSha256:p.descriptorSha256,...(assetRecovery?{returnedRehearsalAdmission:journal.deliveryOriginalOperatorContinuation(operationId).proof.storageAdmission,
+   publicationAssetRecovery:assetRecovery,historicalStorageAdmission:journal.deliveryReturnedRehearsalAdmission(operationId)}:
+   p.kind===completionGrantKind?{returnedRehearsalAdmission:p.storageAdmission}:{}),...(p.successor?{completedOriginalStorage:p.successor.completedOriginalStorage}:browserRecovery?{completedOriginalStorage:browserRecovery.proof.successor.completedOriginalStorage,browserWindowRecovery:p.browserWindowRecovery,browserReservation:p.browserReservation,historicalStorageAdmission:journal.deliveryPublicationContinuationAdmission(operationId)}:{}),
+  newEffectsAllowed:now>=issued&&now<expires,continuationStarted:assetRecovery?true:p.kind===completionGrantKind?Boolean(journal.deliveryReturnedRehearsalAdmission(operationId)):p.kind==='nova-expired-publication-continuation'
    ?Boolean(journal.deliveryPublicationContinuationAdmission(operationId)):initialized||Boolean(journal.deliveryPhase(operationId,'package'))};
 }
 export async function assertDeliveryOperator(journal,id,registry,{clock=Date.now,effect=false}={}){

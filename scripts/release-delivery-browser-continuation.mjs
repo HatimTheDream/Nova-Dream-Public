@@ -1,9 +1,10 @@
 /** A linked browser attempt preserves the expired predecessor and never rewrites its clock. */
+import {createHash} from 'node:crypto';
 import {resolve,join} from 'node:path';
 import {existsSync,lstatSync,readdirSync} from 'node:fs';
 import {isDeepStrictEqual as same} from 'node:util';
 import {readEvidenceFile,sha256} from './release-plan.mjs';
-import {canonicalBrowser} from './release-delivery-browser-primitives.mjs';
+import {canonicalBrowser,verifyRetainedPreparation} from './release-delivery-browser-primitives.mjs';
 import {browserBinding} from './release-delivery-browser.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);};
 const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
@@ -33,7 +34,66 @@ export function verifyPublicationBrowserContinuation(browser,{descriptor,journal
  need(now>=records.prior.deadlineAtMs&&now>=records.status.observedAtMs,'browser-successor-prior-not-expired-or-status-future');
  return browser;
 }
+
+function returnedSessionId(id) {
+ const bytes=createHash('sha1').update(Buffer.from(id.replaceAll('-',''),'hex')).update('returned-publication-browser').digest();
+ bytes[6]=(bytes[6]&15)|80;bytes[8]=(bytes[8]&63)|128;
+ const h=bytes.toString('hex');
+ return [h.slice(0,8),h.slice(8,12),h.slice(12,16),h.slice(16,20),h.slice(20,32)].join('-');
+}
+
+function verifyReturnedPredecessor(browser, preparedRef, expected) {
+ need(exact(browser,['predecessor','status','successorSessionId'])&&ref(browser.predecessor)&&ref(browser.status)&&ref(preparedRef)
+   &&browser.successorSessionId===returnedSessionId(expected.operationId),'browser-returned-session-binding-changed');
+ const prior=read(browser.predecessor),status=read(browser.status),prepared=read(preparedRef),x=status.expiry,active=x?.active;
+ need(ref(status.activeIdentity)&&same(read(status.activeIdentity),active)&&same(prior.binding,expected)&&!expected.sessionId
+   &&same(status.files?.prepared,prepared)&&prior.deadlineAtMs===prior.startedAtMs+1800000&&expected.options.timeoutMs===1800000
+   &&status.state==='observed'&&status.operationId===expected.operationId&&status.originalSha256===browser.predecessor.sha256
+   &&status.observedAtMs>=prior.deadlineAtMs&&active?.operationId===expected.operationId&&active.originalSha256===browser.predecessor.sha256
+   &&active.deadlineAtMs===prior.deadlineAtMs&&active.observedAtMs>=prior.startedAtMs&&active.observedAtMs<prior.deadlineAtMs
+   &&active.unit==='nova-browser-'+expected.operationId+'.service'&&active.controlGroup==='/system.slice/'+active.unit&&active.memberVerified===true
+   &&active.killMode==='control-group'&&active.memoryMaxBytes===2147483648&&active.memoryHighBytes===1476395008
+   &&/^[a-f0-9]{32}$/.test(active.invocationId)&&Number.isSafeInteger(active.mainPid)&&active.mainPid===status.files['worker-identity']?.pid
+   &&Number.isSafeInteger(active.processStartTicks)&&active.processStartTicks>0
+   &&x.originalProcessClosed===true&&x.groupEmpty===true&&x.noAcceptanceRequest===true&&status.files.acceptance===null
+   &&/ActiveState=(inactive|failed)\n/.test(status.unitState)&&status.unitState.includes('MainPID=0\n')&&same(status.ownedPids,[]),
+   'browser-returned-original-closure-changed');
+ need(prepared.kind==='nova-pre-promotion-browser'&&expected.windowPolicy&&prepared.startedAtMs>=prior.startedAtMs
+   &&prepared.startedAtMs<=active.observedAtMs,'browser-returned-prior-document-required');
+ verifyRetainedPreparation(expected,prepared);
+ if(x.termination==='worker-deadline')verifyBrowserPredecessor(browser,expected);
+ else{
+  const ev=x.events;
+  need(x.termination==='systemd-runtime-limit'&&exact(ev,['elapsed','failed'])&&active.runtimeMaxUsec>0
+    &&ev.elapsed.monotonicUsec<=ev.failed.monotonicUsec&&ev.elapsed.realtimeUsec<=ev.failed.realtimeUsec
+    &&[ev.elapsed,ev.failed].every(e=>Number.isSafeInteger(e.realtimeUsec)&&Number.isSafeInteger(e.monotonicUsec)
+      &&e.realtimeUsec>=prior.deadlineAtMs*1000-5000000&&e.realtimeUsec<=prior.deadlineAtMs*1000+20000000
+      &&e.monotonicUsec>=active.activeEnterMonotonicUsec+active.runtimeMaxUsec-5000000&&e.monotonicUsec<=active.activeEnterMonotonicUsec+active.runtimeMaxUsec+20000000)
+    &&(!status.files.failed||(status.files.failed.operationId===expected.operationId&&status.files.failed.reason==='browser-original-deadline-exhausted'))
+    &&(!status.files.closed||(status.files.closed.operationId===expected.operationId&&status.files.closed.browserClosed===true&&status.files.closed.tunnelClosed===true)),
+    'browser-returned-authentic-runtime-limit-required');
+ }
+ return {prior,status};
+}
+
+export function verifyReturnedPublicationBrowser(browser,preparedRef,{descriptor,journal,now=Date.now()}) {
+ const dir=join(journal.directory,'browser-session');
+ need(browser?.predecessor?.path===join(dir,'original.json')&&preparedRef?.path===join(dir,'prepared.json'),'browser-returned-original-location-changed');
+ const target=read(descriptor.target),prior={};
+ for(const phase of ['route','sign']){const r=journal.deliveryPhase(descriptor.operation.id,phase);need(r?.state==='completed','browser-returned-prerequisite-required');prior[phase]=r.current.output;}
+ const base=browserBinding({descriptor,prior},target.browserTools,target.transport);
+ const {status}=verifyReturnedPredecessor(browser,preparedRef,base);
+ need(Number.isSafeInteger(now)&&now>=status.observedAtMs,'browser-returned-original-closure-in-future');
+ return browser;
+}
+
 export function linkedBrowserBinding(base,browser,grant){
+ if(grant.kind==='nova-returned-publication-inputs-grant'){
+  const {status}=verifyReturnedPredecessor(browser,grant.preparedBrowser,base);
+  need(same(grant.browser,browser)&&ref(grant.request)&&grant.issuedAtMs>=status.observedAtMs&&grant.expiresAtMs>grant.issuedAtMs,'browser-returned-grant-changed');
+  return {...base,sessionId:browser.successorSessionId,browserPredecessor:{original:browser.predecessor,status:browser.status},
+    publicationContinuation:{request:grant.request,issuedAtMs:grant.issuedAtMs,expiresAtMs:grant.expiresAtMs,returnedBrowser:{prepared:grant.preparedBrowser,expiry:status.expiry}}};
+ }
  verifyBrowserPredecessor(browser,base);
  need(grant.kind==='nova-expired-publication-continuation'&&same(grant.browser,browser)&&ref(grant.request)&&Number.isSafeInteger(grant.issuedAtMs)&&Number.isSafeInteger(grant.expiresAtMs)&&grant.expiresAtMs>grant.issuedAtMs,'browser-successor-grant-changed');
   if(grant.browserWindowRecovery)verifyBrowserWindowReservation(grant.browserReservation,{browser,issuedAtMs:grant.issuedAtMs,expiresAtMs:grant.expiresAtMs,timeoutMs:base.options.timeoutMs});
@@ -43,10 +103,16 @@ export function linkedBrowserBinding(base,browser,grant){
 export function verifyLinkedBrowserRecord(original){
  const b=original.binding;if(!b.sessionId)return original;
  const {sessionId,browserPredecessor,publicationContinuation,...base}=b;
- need(exact(browserPredecessor,['original','status'])&&exact(publicationContinuation,['request','issuedAtMs','expiresAtMs',...(publicationContinuation?.browserReservation?['browserReservation']:[])])&&ref(publicationContinuation.request),'browser-successor-record-invalid');
- const {prior}=verifyBrowserPredecessor({predecessor:browserPredecessor.original,status:browserPredecessor.status,successorSessionId:sessionId},base);
+ need(exact(browserPredecessor,['original','status'])&&exact(publicationContinuation,['request','issuedAtMs','expiresAtMs',...(publicationContinuation?.browserReservation?['browserReservation']:[]),...(publicationContinuation?.returnedBrowser?['returnedBrowser']:[])])&&ref(publicationContinuation.request),'browser-successor-record-invalid');
+ const lineage={predecessor:browserPredecessor.original,status:browserPredecessor.status,successorSessionId:sessionId},handoff=publicationContinuation.returnedBrowser;
+ const verified=handoff?verifyReturnedPredecessor(lineage,handoff.prepared,base):verifyBrowserPredecessor(lineage,base);
+ const {prior}=verified;
  need(Number.isSafeInteger(original.startedAtMs)&&original.startedAtMs>=prior.deadlineAtMs&&original.startedAtMs>=publicationContinuation.issuedAtMs&&original.deadlineAtMs===original.startedAtMs+b.options.timeoutMs&&original.deadlineAtMs<=publicationContinuation.expiresAtMs,'browser-successor-attempt-clock-changed');
  const request=read(publicationContinuation.request);
+ if(handoff){
+  need(!publicationContinuation.browserReservation&&request.kind==='nova-returned-publication-inputs-request'&&same(request.browser,lineage)
+    &&same(request.preparedBrowser,handoff.prepared)&&same(verified.status.expiry,handoff.expiry),'browser-returned-record-lineage-changed');
+ }
  if(publicationContinuation.browserReservation){
   const browser={predecessor:browserPredecessor.original,status:browserPredecessor.status,successorSessionId:sessionId};
   need(request.browserWindowRecovery&&request.operationId===b.operationId&&same(request.browser,browser),'browser-window-reservation-request-changed');

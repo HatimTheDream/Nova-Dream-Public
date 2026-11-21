@@ -123,8 +123,14 @@ export function completionSnapshot(journal,id,now,request,previous,assertAbsent,
   ...history(journal,id),snapshotSha256:sum([...phases,...substeps,r]),prerequisites:phases.map(phaseRef),packageSubsteps:substeps.map(phaseRef),ownerPids:owner.pids,
   recovery:{key:r.key,inputSha256:r.inputSha256,observationSha256:row.observation_hash,observationId:row.id,dispatch,launch},storageAdmission:{...owner.storageAdmission,remainingBudget:request.remainingBudget}};
 }
+function originalReturnedProof(journal,id){
+ const active=journal?.deliveryOperatorContinuation?.(id);
+ const prior=active?.proof.kind==='nova-returned-publication-inputs-grant'?journal.deliveryOriginalOperatorContinuation(id):null;
+ if(prior)need(prior.sha256===active.proof.predecessorGrantSha256&&prior.proof.kind===completionGrantKind,'publication-original-readback-grant-changed');
+ return (prior??active)?.proof;
+}
 export function verifyReturnedReservation(context){
- const {journal,descriptor,intent}=context,id=descriptor.operation.id,p=journal.deliveryOperatorContinuation(id)?.proof;
+ const {journal,descriptor,intent}=context,id=descriptor.operation.id,p=originalReturnedProof(journal,id);
  need(p?.kind===completionGrantKind&&intent.key===p.recovery.key&&intent.inputSha256===p.recovery.inputSha256,'completion-original-reservation-changed');
  const dispatch=stored(journal,intent.key,'full-rehearsal-dispatch.json'),launch=stored(journal,intent.key,'full-rehearsal-launch.json');
  need(same(dispatch,p.recovery.dispatch)&&same(launch,p.recovery.launch),'completion-original-rehearsal-references-changed');
@@ -182,7 +188,7 @@ export function readCompletion(journal,id,p,request){
 /** Receipts from the original launch fix all data paths. During recovery only
  * its read-only status and the bound completion reader may cross this transport. */
 export function completedRehearsalTransport({journal,descriptor,run,transportRef,clock,recoveryOnly=false}){
- const id=descriptor.operation.id,p=journal?.deliveryOperatorContinuation?.(id)?.proof;
+ const id=descriptor.operation.id,p=originalReturnedProof(journal,id);
  if(p?.kind!==completionGrantKind)return run;
  const req=json(p.request),values=completionValues(journal,id),original=buildFullHostProgram('collect-completion-template.py',{values});
  const status=buildFullHostProgram('observe-execute-template.py',{values});

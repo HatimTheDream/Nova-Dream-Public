@@ -12,7 +12,7 @@ import { assistantAcceptanceInput } from './release-delivery-assistant.mjs';
 import {verifyExistingReplyAcceptance,existingReplyCoverage} from './release-delivery-existing-reply.mjs';
 import {prepareRemoteBrowser,remoteBrowserAcceptance,remoteBrowserCall} from './release-delivery-browser-remote.mjs';
 import {verifyContinuationGrant} from './release-delivery-continuation.mjs';
-import {verifyPublicationBrowserContinuation,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
+import {verifyPublicationBrowserContinuation,verifyReturnedPublicationBrowser,linkedBrowserBinding,verifyLinkedBrowserRecord,browserWindowRecoveryProbe,assertBrowserWindowRecoveryUnmaterialized} from './release-delivery-browser-continuation.mjs';
 import {verifyRemoteBrowserMemory,verifyRetainedWindowPolicy,verifyRetainedPreparation} from './release-delivery-browser-primitives.mjs';
 import {ordinaryWindowQualification} from './release-delivery-browser-qualification.mjs';
 import {verifyFullBundledIdentity,verifyDocumentIdentity,verifyWindowPairEvidence,browserSelectorDiagnostics} from './release-delivery-browser-checks.mjs';
@@ -68,9 +68,9 @@ function directory(context) {
 function original(context,options,transport,now=Date.now()) {
   let dir=directory(context),binding=browserBinding(context,options,transport),linkedContinuation=null;
   const saved=context.journal.deliveryOperatorContinuation?.(context.descriptor.operation.id);
-  if(saved?.proof.kind==='nova-expired-publication-continuation'){
+  if(['nova-expired-publication-continuation','nova-returned-publication-inputs-grant'].includes(saved?.proof.kind)){
     const {proof}=verifyContinuationGrant(context.journal,context.descriptor.operation.id,{effect:false,now});
-    const browser=verifyPublicationBrowserContinuation(proof.browser,{descriptor:context.descriptor,journal:context.journal,now});
+    const browser=proof.kind==='nova-returned-publication-inputs-grant' ? verifyReturnedPublicationBrowser(proof.browser,proof.preparedBrowser,{descriptor:context.descriptor,journal:context.journal,now}) : verifyPublicationBrowserContinuation(proof.browser,{descriptor:context.descriptor,journal:context.journal,now});
     linkedContinuation=proof;binding=linkedBrowserBinding(binding,browser,proof);
     dir=validateJournalDirectory(join(dir,'successor-'+browser.successorSessionId),{create:true});
   }

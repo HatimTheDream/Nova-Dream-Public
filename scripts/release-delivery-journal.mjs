@@ -7,9 +7,10 @@ import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
+import {assetEvent,assetGrantKind} from './release-delivery-publication-inputs-correction.mjs';
 import {completionGrantKind,completionEventKind} from './release-delivery-returned-rehearsal.mjs';
 import { correctionGrantKind } from './release-delivery-dependency-correction.mjs';
-import { returnedStorageAdmissionSchema,returnedRehearsalGrantSchema,returnedRehearsalRequestSchema,returnedRehearsalSnapshot,prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
+import { publicationInputsGrantSchema,publicationInputsRequestSchema,publicationInputsCheckpoint,returnedStorageAdmissionSchema,returnedRehearsalGrantSchema,returnedRehearsalRequestSchema,returnedRehearsalSnapshot,prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';
 
 import { postinstallAuthoritySchema, postinstallRequestSchema, postinstallCorrectionSchema, postinstallCorrectionSnapshot, verifyPostinstallCorrectionEvidence, currentPostinstallRecovery, postinstallSnapshot, verifyPostinstallAdmission, postinstallCoverage, verifyScopedBrowserAcceptance } from './release-delivery-postinstall-recovery.mjs';
 
@@ -116,6 +117,14 @@ export const deliveryJournalMethods = {
   },
   deliveryOperatorContinuation(id) {
     const previous=this.deliveryStorageSuccessorContinuation(id);
+    const asset=this.db.prepare('SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind=? ORDER BY id').all(id,assetEvent);
+    need(asset.length<=1,'publication-inputs-successor-duplicate');
+    if(asset.length){
+      const row=asset[0],proof=publicationInputsGrantSchema.parse(decoded(row.payload_json,row.payload_hash));
+      need(previous?.proof.kind===completionGrantKind&&proof.kind===assetGrantKind&&proof.operationId===id&&proof.predecessorGrantSha256===previous.sha256
+        &&row.at_ms===proof.issuedAtMs&&proof.expiresAtMs===previous.proof.expiresAtMs,'publication-inputs-successor-lineage-changed');
+      return {proof,sha256:row.payload_hash,recordedAtMs:row.at_ms,eventId:row.id};
+    }
     const rows=this.db.prepare("SELECT id,at_ms,payload_json,payload_hash FROM delivery_events WHERE operation_id=? AND kind='publication-browser-window-recovery-granted' ORDER BY id").all(id);
     need(rows.length<=1,'browser-window-recovery-duplicate');if(!rows.length)return previous;
     const row=rows[0],proof=publicationContinuationGrantSchema.parse(decoded(row.payload_json,row.payload_hash));
@@ -126,6 +135,21 @@ export const deliveryJournalMethods = {
   deliveryOperatorContinuationBySha256(id,digest) {
     for(const saved of [this.deliveryOriginalOperatorContinuation(id),this.deliveryStorageSuccessorContinuation(id),this.deliveryOperatorContinuation(id)])if(saved?.sha256===digest)return saved;
     return null;
+  },
+  recordPublicationInputsCorrection(id,raw,now=Date.now(),{assertAbsent}={}) {
+    need(!this.readOnly,'continuation-readonly-journal');
+    const proof=publicationInputsGrantSchema.parse(raw);
+    return this.transaction(()=>{
+      const previous=this.deliveryOperatorContinuation(id);
+      if(previous?.proof.kind===assetGrantKind){need(canonical(previous.proof)===canonical(proof),'publication-inputs-grant-changed');return previous;}
+      need(previous?.proof.kind===completionGrantKind&&previous.sha256===proof.predecessorGrantSha256&&proof.operationId===id
+        &&proof.issuedAtMs===now&&now<previous.proof.expiresAtMs,'publication-asset-original-live-grant-required');
+      const request=publicationInputsRequestSchema.parse(JSON.parse(readEvidenceFile(proof.request)));
+      const snapshot=publicationInputsCheckpoint(this,id,now,request,assertAbsent);
+      need(Object.keys(snapshot).every(k=>canonical(snapshot[k])===canonical(proof[k])),'publication-asset-snapshot-changed-before-record');
+      event(this,id,assetEvent,proof,now);
+      verifyContinuationGrant(this,id,{now,effect:true,assertAbsent});return this.deliveryOperatorContinuation(id);
+    });
   },
   recordBrowserWindowRecovery(id,raw,now=Date.now(),{assertAbsent}={}) {
     need(!this.readOnly,'continuation-readonly-journal');const proof=publicationContinuationGrantSchema.parse(raw);

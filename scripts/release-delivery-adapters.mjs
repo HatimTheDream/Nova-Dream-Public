@@ -24,6 +24,7 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
+import {assetGrantKind,originalAssetRecovery} from './release-delivery-publication-inputs-correction.mjs';
 import {completedRehearsalTransport,completionGrantKind,completionValues,collectReturnedResponse,verifyReturnedReservation} from './release-delivery-returned-rehearsal.mjs';
 import { fullHostOptionsSchema, FULL_HELPERS, fullHelpersForBinding, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter,planFullPublicationContinuation,verifyFullPublicationContinuationPlan } from './release-delivery-full-publication.mjs';
@@ -104,7 +105,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-existing-reply.mjs', 'release-assistant-existing-reply.py', 'release-delivery-assistant-full.mjs', 'release-delivery-installed-identity.mjs', 'release-delivery-full-coordinator.mjs', 'release-installed-identity.py', '../deploy/update-runner/request_install.py',
     'release-delivery-install-admission.mjs', 'release-delivery-full-host.mjs',
     'full-host-primitives/collect-facts.py', 'full-host-primitives/metadata-stage.py', 'full-host-primitives/launch-plan-template.py', 'full-host-primitives/observe-plan-template.py',
-    'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/collect-returned-completion.py','release-delivery-returned-rehearsal.mjs','release-same-schema-returned-proof.mjs','full-host-primitives/collect-same-schema-returned-completion.py', 'full-host-primitives/online-capacity.py',
+    'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/collect-returned-completion.py','release-delivery-returned-rehearsal.mjs','release-delivery-publication-inputs-correction.mjs','release-publication-asset-reservation.mjs','release-publication-asset-reservation.py','release-publication-local-inputs.mjs','release-same-schema-returned-proof.mjs','full-host-primitives/collect-same-schema-returned-completion.py', 'full-host-primitives/online-capacity.py',
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
     'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',
@@ -378,7 +379,7 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       if (phase === 'recovery' && prior.route?.route === 'full') {
         const {target}=targetInput(descriptor);if(!target.full?.host)return null;
         const adapter=createFullRehearsalAdapter({transport:target.transport,options:target.full.host,storeReceipt:receiptStore,run:returnedRun(target,descriptor,journal,true),clock});
-        if(journal?.deliveryOperatorContinuation?.(descriptor.operation.id)?.proof.kind!==completionGrantKind)return adapter;
+        if(![completionGrantKind,assetGrantKind].includes(journal?.deliveryOperatorContinuation?.(descriptor.operation.id)?.proof.kind))return adapter;
         const deny=async()=>{throw Error('completion-new-rehearsal-effect-denied');};
         return {...adapter,execute:deny,observe:async context=>{
           verifyReturnedReservation(context);
@@ -387,9 +388,13 @@ export function createDeliveryRegistry({ command = fixedCommand, run = runInstal
       }
       if (phase === 'publication' && prior.route?.route === 'full') {
         const {target}=targetInput(descriptor),releaseIds=Object.fromEntries(['private','public'].map(side=>[side,prior[side+'-ci']?.release?.id]));
-        return target.full?.host && target.sourceTools && target.artifactTools && target.bases && Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0)
-          ? publicationBrowser(createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,
-            transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run:returnedRun(target,descriptor,journal),clock}),target) : null;
+        if(!target.full?.host||!target.sourceTools||!target.artifactTools||!target.bases||!Object.values(releaseIds).every(id=>Number.isSafeInteger(id)&&id>0))return null;
+        const publicationInputRecovery=originalAssetRecovery(journal?.deliveryOperatorContinuation?.(descriptor.operation.id)?.proof);
+        if(publicationInputRecovery)need(target.browserCapability==='available'&&target.browserTools?.mode==='remote','browser-successor-remote-only');
+        const adapter=createFullPublicationAdapter({tools:{...target.sourceTools,node:target.artifactTools.node},releaseIds,options:target.full,
+          publicationInputRecovery,prepareBeforeFeed:publicationInputRecovery?context=>prepareDeliveryBrowser(context,{options:target.browserTools,transport:target.transport,clock,run}):undefined,
+          transport:target.transport,base:target.bases.private,command,storeReceipt:receiptStore,run:returnedRun(target,descriptor,journal),clock});
+        return publicationInputRecovery?adapter:publicationBrowser(adapter,target);
       }
       if (phase === 'installation' && prior.route?.route === 'full') {
         const { target }=targetInput(descriptor);return target.assistantHost && target.full?.host ? createCoordinatorInstallationAdapter({clock,

@@ -10,6 +10,8 @@ import { buildFullCoordinatorDescriptor } from './release-delivery-install.mjs';
 import { validateJournalDirectory } from './release-coordinate.mjs';
 import {verifyRuntimeArtifact,runtimeTransition} from './release-runtime-artifact.mjs';
 import { advanceFullPrestage,verifyFullProtectedAssets,planFullPrestageContinuation,verifyFullPrestageContinuation } from './release-delivery-full-prestage.mjs';
+import { projectPublicationRequest } from './release-publication-local-inputs.mjs';
+import { runReservedPublicationAsset } from './release-publication-asset-reservation.mjs';
 import { withVerificationPass,verificationOnce,verificationEffect } from './release-verification-pass.mjs';
 
 const need=(v,r)=>{if(!v)throw Error(r);};
@@ -83,14 +85,16 @@ export function pairedFullPublicationReceipt(input,repositories,readback){
  }
  return{format:1,repositories,publicFeedReadVerified:true,publicFeedSha256:readback.publicFeedSha256,sequence:readback.sequence,applicationInstalled:false};
 }
-export function createFullPublicationAdapter({tools,releaseIds,options,transport,base,command,storeReceipt,run,clock=Date.now}){
+export function createFullPublicationAdapter({tools,releaseIds,options,transport,base,command,storeReceipt,run,clock=Date.now,publicationInputRecovery=null,prepareBeforeFeed=null}){
  const expected=c=>fullPublicationInput({...c,tools,releaseIds,options});
  const validate=c=>withVerificationPass(c,c=>{need(same(c.input,expected(c)),'full-publication-input-changed');return verifyFullPublicationInput(c.input,c.descriptor,clock(),c);},{readOnly:true});
  const python=async(c,name,mode,request,requestName)=>{
   const ref=save(c,storeReceipt,requestName,request);readEvidenceFile(tools.python,{maximum:128*1024**2});
   need(same(request.helperHashes,fullPublicationHelpers()),'full-publication-execution-helper-changed');
   need(request.ledgerDirectory===options.publicationLedgerDirectory,'full-publication-ledger-authority-changed');fullPublicationLedgerDirectory(request.ledgerDirectory);
-  let response;try{response=JSON.parse(await command(tools.python.path,['-B',fileURLToPath(new URL(name,import.meta.url)),mode,'--request',ref.path,'--request-sha256',ref.sha256],{maximum:1024**2,timeoutMs:600000,acceptJsonFailure:true,gitExecPath:tools.gitExecPath}));}
+  const projected=publicationInputRecovery?projectPublicationRequest(request,publicationInputRecovery.binding):request;
+  const native=projected===request?ref:save(c,storeReceipt,requestName.replace(/\.json$/,'-projected.json'),projected);
+  let response;try{response=JSON.parse(await command(tools.python.path,['-B',fileURLToPath(new URL(name,import.meta.url)),mode,'--request',native.path,'--request-sha256',native.sha256],{maximum:1024**2,timeoutMs:600000,acceptJsonFailure:true,gitExecPath:tools.gitExecPath}));}
   catch(error){const diagnostic={name:String(error.name),message:String(error.message).slice(0,1000),request:ref,originalOutcomeUncertain:true};return output('uncertain','full-original-publication-response-unavailable',c,{diagnostic:save(c,storeReceipt,'full-publication-diagnostic-'+sha256(encoded(diagnostic))+'.json',diagnostic)});}
   need(['completed','uncertain','failed'].includes(response?.state),'full-publication-child-response-invalid');return response;
  };
@@ -109,7 +113,18 @@ export function createFullPublicationAdapter({tools,releaseIds,options,transport
     // child dispatch after a lost call never authorizes a second execution.
     const dispatchName='full-asset-'+spec.role+'-dispatch.json',reserved=retained(c,dispatchName);
     const action=reserved?'observe':mode;if(!reserved){await fresh(c);save(c,storeReceipt,dispatchName,{format:1,operationId:input.operationId,key:c.intent.key,role:spec.role,outputDirectory,automaticReplayPermitted:false});}
-    const value=await python(c,'release-delivery-full-publication.py',action,{...common,spec,outputDirectory},'full-asset-'+spec.role+'-request.json');
+    const request={...common,spec,outputDirectory}, requestName='full-asset-'+spec.role+'-request.json';
+    const invoke=()=>python(c,'release-delivery-full-publication.py',action,request,requestName);
+    let value;
+    if(publicationInputRecovery && spec.role==='app'){
+      const historical=retained(c,requestName);
+      need(reserved && historical && same(historical.value,request) && same(historical.ref,publicationInputRecovery.assetRequest)
+        && same(reserved.ref,publicationInputRecovery.reservation),'reserved-original-app-authority-changed');
+      const projected=projectPublicationRequest(request,publicationInputRecovery.binding);
+      save(c,storeReceipt,requestName.replace(/\.json$/,'-projected.json'),projected);
+      value=await runReservedPublicationAsset({...publicationInputRecovery,request:historical.ref,command,clock,
+        beforeNewEffect:()=>fresh(c),observe:invoke});
+    }else value=await invoke();
     if(value.state!=='completed')return output(value.state,value.reason,c,value.output,value.receipt);
     need(value.externalId===releaseIds.private+':'+c.intent.key,'full-asset-external-id-changed');verifyFullPublishedAsset(value.output,spec,c);assets.push(value.output);
    }
@@ -121,6 +136,10 @@ export function createFullPublicationAdapter({tools,releaseIds,options,transport
   if(staged.state!=='completed')return output(staged.state,staged.reason??'full-original-protected-staging-unsettled',c,staged.output??null,staged.receipt??null);
   const protectedStage={receipt:staged.receipt,output:staged.output};
   verifyFullProtectedAssets(protectedStage,{operationId:input.operationId,publicationKey:c.intent.key,bundle:input.signed.bundle,dependencies:input.signed.dependencies,runtime:input.signed.runtime});
+  if(publicationInputRecovery){
+   need(typeof prepareBeforeFeed==='function','browser-returned-pre-promotion-setup-required');
+   await prepareBeforeFeed(c);
+  }
   const repositories=[];
   for(const side of ['private','public']){
    let committed=null;
