@@ -92,13 +92,13 @@ export function GeneratedOutput({ open, attachment, message, conversation, contr
       {!preview && !loading && <button className="text-button" disabled={!file && attachment.availability === 'unavailable'} onClick={() => void loadImage()}>Retry preview</button>}
     </div> : <div className="generated-output-actions">
       {file && open && <button onClick={() => open(file, output)}>{pdf ? 'Open PDF' : 'Open file'}</button>}
-      {!file && pdf && attachment.artifactId && <button aria-expanded={openedPdf === actionKey} disabled={attachment.availability === 'unavailable'} onClick={() => setOpenedPdf(openedPdf === actionKey ? '' : actionKey)}>{openedPdf === actionKey ? 'Close PDF' : 'Open PDF'}</button>}
+      {!file && pdf && attachment.artifactId && <button aria-expanded={openedPdf === actionKey} disabled={!nativeId || attachment.availability === 'unavailable'} onClick={() => setOpenedPdf(openedPdf === actionKey ? '' : actionKey)}>{openedPdf === actionKey ? 'Close PDF' : 'Open PDF'}</button>}
       <details className="output-action-disclosure"><summary>More</summary><div className="output-action-menu">
         {file && <>{image && open && <button onClick={() => open(file, output)}>Open file</button>}<a className="output-download" href={`/api/attachments/${file.id}`}><Download size={16}/>Download</a></>}
         {output?.file ? <><button disabled={busy || blocked || conversation.archived} onClick={() => void refine(output)}>Refine</button><UseOutputInContent key={`${contentActions.snapshot.epoch}:${output.id}:${output.version}`} output={output} {...contentActions}/><span className="metadata">Original version kept</span></> : attachment.artifactId && <button disabled={busy || blocked || !file && attachment.availability === 'unavailable'} onClick={() => void save()}><Download size={16}/>{busy ? 'Saving output…' : 'Save output'}</button>}
       </div></details>
     </div>}
-    {!file && pdf && attachment.artifactId && openedPdf === actionKey && <Suspense fallback={<LoadingRing label="Opening PDF page…"/>}><PdfPreview key={actionKey} artifact={{ ...source, artifactId: attachment.artifactId }}/></Suspense>}
+    {!file && pdf && nativeId && attachment.artifactId && openedPdf === actionKey && <Suspense fallback={<LoadingRing label="Opening PDF page…"/>}><PdfPreview key={actionKey} artifact={{ ...source, nativeId, artifactId: attachment.artifactId }}/></Suspense>}
     {error && <p className="field-error" role="alert">{error}</p>}
   </section>;
 }

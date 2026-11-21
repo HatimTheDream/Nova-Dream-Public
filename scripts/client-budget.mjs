@@ -187,7 +187,10 @@ import assert from 'node:assert/strict';
 // remains recorded. Explicitly bound this patched closure at 912000 bytes.
 // Startup (180000) and each deferred chunk (80000) keep their existing limits.
 // This policy adjustment does not qualify startup, runtime or browser behavior.
-export const clientLimits = { startup: 180000, total: 912000, deferredChunk: 80000 };
+// Assistant result paging and inline PDF reading add 2,838 gzip bytes to the
+// accepted 911,110-byte client. The PDF reader is deferred. This build uses
+// 179,916 bytes at startup and 72,825 in its largest deferred chunk.
+export const clientLimits = { startup: 180000, total: 915000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);
