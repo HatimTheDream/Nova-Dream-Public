@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 import test from 'node:test';
 import {publicationInputsRequestSchema} from '../scripts/release-delivery-continuation.mjs';
-import {acceptedObserverExit,assetBranch,assetGrantKind,originalAssetRecovery,verifyOriginalPublicationObservation} from '../scripts/release-delivery-publication-inputs-correction.mjs';
+import {assetBranch,assetGrantKind} from '../scripts/release-delivery-publication-inputs-schema.mjs';
+import {acceptedObserverExit,originalAssetRecovery,verifyOriginalPublicationObservation} from '../scripts/release-delivery-publication-inputs-correction.mjs';
 
 const operationId=randomUUID(),digest='a'.repeat(64);
 const ref=name=>({path:resolve(name+'.json'),sha256:digest});
@@ -12,6 +14,14 @@ const owner=Object.fromEntries(['request','launcher','intent','exit','childResul
 const request={format:1,kind:'nova-returned-publication-inputs-request',operationId,historical:{root:resolve('history'),manifest:ref('manifest')},
   operatorSources:{private:side,public:side},ciRuns:{private:1,public:2},owner,predecessorGrantSha256:digest,localInputs:ref('local-inputs'),assetPlan:ref('asset-plan'),
   browser:{predecessor:ref('original-browser'),status:ref('closed-browser'),successorSessionId:randomUUID()},preparedBrowser:ref('prepared-browser')};
+
+test('the default storage identity and the publication recovery helper can each be the first import in a new process',()=>{
+  for(const name of ['release-delivery-adapters.mjs','release-delivery-publication-inputs-correction.mjs']){
+    const url=new URL('../scripts/'+name,import.meta.url);
+    const child=spawnSync(process.execPath,['--input-type=module','-e','await import(process.argv[1])',url.href],{encoding:'utf8',timeout:30000,windowsHide:true});
+    assert.equal(child.status,0,child.error?.message??child.stderr);
+  }
+});
 
 test('a returned publication binds paired operator sources, actual local inputs, the GET-only plan and the original observer',()=>{
   assert.doesNotThrow(()=>publicationInputsRequestSchema.parse(request));

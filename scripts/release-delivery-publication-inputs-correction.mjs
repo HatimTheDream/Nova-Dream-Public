@@ -2,38 +2,16 @@
 import {readdirSync} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
 import {isDeepStrictEqual as same} from 'node:util';
-import {z} from 'zod';
+import {assetGrantKind,phases,children} from './release-delivery-publication-inputs-schema.mjs';
 import {readEvidenceFile,readReleaseInputFile,sha256} from './release-plan.mjs';
-import {completionGrantKind} from './release-delivery-returned-rehearsal.mjs';
 import {verifyReservedPublicationAsset} from './release-publication-asset-reservation.mjs';
-import {verifyReturnedPublicationBrowser} from './release-delivery-browser-continuation.mjs';
 
-export const assetGrantKind='nova-returned-publication-inputs-grant';
-export const assetEvent='returned-publication-inputs-granted';
-export const assetBranch='operator/returned-publication-inputs';
 const need=(value,reason)=>{if(!value)throw Error(reason);};
 const json=ref=>JSON.parse(readEvidenceFile(ref,{maximum:2*1024**2}));
 const ref=path=>({path,sha256:sha256(readReleaseInputFile(path))});
 const canonical=value=>JSON.stringify(value,(_key,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const sum=value=>sha256(canonical(value));
-const phases=['private-source','public-source','private-ci','public-ci','artifacts','route','package','sign','capacity','recovery'];
-const children=['dependency-stage','dependency-plan','dependency-intent','dependency-execute','dependency-retrieval','pair','bundle'].map(n=>'package/'+n);
 const named=p=>({phase:p.phase,key:p.key,inputSha256:p.inputSha256,observationSha256:sum(p.current)});
-
-export function publicationInputSchemas({reference,digest,source,baseRequest,baseGrant,publicationBrowser}){
- const sources=z.object({private:source.extend({branch:z.literal(assetBranch)}),public:source.extend({branch:z.literal(assetBranch)})}).strict();
- const owner=z.object({request:reference,launcher:reference,intent:reference,exit:reference,childResult:reference,stdout:reference,session:reference}).strict();
- const common={predecessorGrantSha256:digest,localInputs:reference,assetPlan:reference,browser:publicationBrowser,preparedBrowser:reference};
- const request=baseRequest.omit({durationMs:true}).extend({kind:z.literal('nova-returned-publication-inputs-request'),owner,operatorSources:sources,...common});
- const phase=z.object({phase:z.string(),key:z.uuid(),inputSha256:digest,observationSha256:digest}).strict();
- const {hostFacts,...baseline}=baseGrant.shape;
- const grant=z.object({...baseline,kind:z.literal(assetGrantKind),...common,prerequisites:z.array(phase).length(phases.length),
-   packageSubsteps:z.array(phase).length(children.length),publication:phase.extend({observationId:z.number().int().positive(),storedObservationSha256:digest}),
-   assetRequest:reference,reservation:reference,storageAdmission:z.object({eventId:z.number().int().positive(),sha256:digest,session:reference,dispatch:reference}).strict(),
-   operator:baseGrant.shape.operator.extend({sources})}).strict().refine(p=>p.expiresAtMs===p.originalCreatedAtMs+p.originalBudgetMs&&p.issuedAtMs<p.expiresAtMs,
-   'original-publication-deadline-required');
- return {request,grant};
-}
 
 function owner(journal,id,request,previous,admission,now,assertAbsent){
  const a=request.owner,predecessor=json(previous.proof.request);
@@ -101,10 +79,9 @@ function phaseHistory(journal,id){
 
 export function publicationInputsSnapshot(journal,id,request,previous,{now,assertAbsent,history}){
  const retained=journal.loadDelivery(id),d=retained.descriptor;
- need(previous?.proof.kind===completionGrantKind&&previous.sha256===request.predecessorGrantSha256&&previous.proof.operationId===request.operationId&&request.operationId===id
+ need(previous?.sha256===request.predecessorGrantSha256&&previous.proof.operationId===request.operationId&&request.operationId===id
   &&retained.state==='active'&&!journal.deliveryDisposition(id)&&now>=previous.recordedAtMs&&now<previous.proof.expiresAtMs
   &&previous.proof.expiresAtMs===retained.created_at+d.observationBudgetMs,'asset-active-original-window-required');
- verifyReturnedPublicationBrowser(request.browser,request.preparedBrowser,{journal,descriptor:d,now});
  const target=json(d.target);
  need(Number.isSafeInteger(target.browserTools.timeoutMs)&&now+target.browserTools.timeoutMs<=previous.proof.expiresAtMs,'browser-successor-budget-exceeds-grant');
  const known=journal.db.prepare('SELECT phase FROM delivery_phases WHERE operation_id=? ORDER BY phase').all(id).map(r=>r.phase);
@@ -137,7 +114,7 @@ export function verifyOriginalPublicationObservation(current,original,row){
 
 export function verifyPublicationInputsHistory(journal,id,p,req,previous,history){
  const d=journal.loadDelivery(id),current=journal.deliveryPhase(id,'publication');
- need(previous?.proof.kind===completionGrantKind&&previous.sha256===p.predecessorGrantSha256&&p.predecessorGrantSha256===req.predecessorGrantSha256
+ need(previous?.sha256===p.predecessorGrantSha256&&p.predecessorGrantSha256===req.predecessorGrantSha256
   &&req.operationId===p.operationId&&p.operationId===id&&same(req.localInputs,p.localInputs)&&same(req.assetPlan,p.assetPlan)
   &&same(p.browser,req.browser)&&same(p.preparedBrowser,req.preparedBrowser)
   &&same(req.operatorSources,p.operator.sources)&&same(p.storageAdmission,storageMarker(journal,id,previous))
@@ -150,8 +127,7 @@ export function verifyPublicationInputsHistory(journal,id,p,req,previous,history
  const ledger=phaseHistory(journal,id),files=assetRefs(journal,id,current.key);
  need(same(ledger.prerequisites,p.prerequisites)&&same(ledger.packageSubsteps,p.packageSubsteps)&&same(files.assetRequest,p.assetRequest)&&same(files.reservation,p.reservation),
   'asset-grant-original-immutable-inputs-changed');
- for(const original of [p.assetPlan,p.localInputs,req.owner.exit,req.owner.childResult])readEvidenceFile(original,{maximum:2*1024**2});
- verifyReturnedPublicationBrowser(p.browser,p.preparedBrowser,{journal,descriptor:d.descriptor,now:p.issuedAtMs});
+ for(const original of [p.assetPlan,p.localInputs,req.owner.exit,req.owner.childResult,p.browser.predecessor,p.browser.status,p.preparedBrowser])readEvidenceFile(original,{maximum:2*1024**2});
 }
 
 export function originalAssetRecovery(proof){

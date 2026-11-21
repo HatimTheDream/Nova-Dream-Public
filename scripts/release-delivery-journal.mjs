@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { assessTimeline, readEvidenceFile, releaseOperationSchema, releaseTimelineSchema, sha256, validateOperationContinuation } from './release-plan.mjs';
 import { deriveFailedDisposition, failedDispositionSchema } from './release-delivery-disposition.mjs';
 import { capabilityDispositionSchema, deriveCapabilityDisposition, predecessorRecoverySchema } from './release-delivery-capability-disposition.mjs';
-import {assetEvent,assetGrantKind} from './release-delivery-publication-inputs-correction.mjs';
+import {assetEvent,assetGrantKind} from './release-delivery-publication-inputs-schema.mjs';
 import {completionGrantKind,completionEventKind} from './release-delivery-returned-rehearsal.mjs';
 import { correctionGrantKind } from './release-delivery-dependency-correction.mjs';
 import { publicationInputsGrantSchema,publicationInputsRequestSchema,publicationInputsCheckpoint,returnedStorageAdmissionSchema,returnedRehearsalGrantSchema,returnedRehearsalRequestSchema,returnedRehearsalSnapshot,prepackageGrantSchema, prepackageRequestSchema, continuationSnapshot, publicationStorageAdmissionSchema, verifyPublicationStorageAdmission, publicationContinuationGrantSchema, publicationContinuationRequestSchema, publicationContinuationSnapshot, operatorGrantSchema, preJournalGrantSchema, verifyPreJournalProof, verifyContinuationGrant } from './release-delivery-continuation.mjs';

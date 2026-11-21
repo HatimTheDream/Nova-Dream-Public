@@ -24,7 +24,8 @@ import { createAssistantHostTransport } from './release-delivery-assistant-trans
 import { createFullAssistantHostTransport } from './release-delivery-assistant-full.mjs';
 import { createFullInstalledIdentityObserver } from './release-delivery-installed-identity.mjs';
 import { createFullInstallationAdmission } from './release-delivery-install-admission.mjs';
-import {assetGrantKind,originalAssetRecovery} from './release-delivery-publication-inputs-correction.mjs';
+import {assetGrantKind} from './release-delivery-publication-inputs-schema.mjs';
+import {originalAssetRecovery} from './release-delivery-publication-inputs-correction.mjs';
 import {completedRehearsalTransport,completionGrantKind,completionValues,collectReturnedResponse,verifyReturnedReservation} from './release-delivery-returned-rehearsal.mjs';
 import { fullHostOptionsSchema, FULL_HELPERS, fullHelpersForBinding, createFullCapacityAdapter, createFullRehearsalAdapter, collectFullOnlineCapacity, fullFactsSpec, buildFullHostProgram, verifyFullFacts } from './release-delivery-full-host.mjs';
 import { createFullPublicationAdapter,planFullPublicationContinuation,verifyFullPublicationContinuationPlan } from './release-delivery-full-publication.mjs';
@@ -105,7 +106,7 @@ export function deliveryAdapterSourceFiles() {
     'release-delivery-existing-reply.mjs', 'release-assistant-existing-reply.py', 'release-delivery-assistant-full.mjs', 'release-delivery-installed-identity.mjs', 'release-delivery-full-coordinator.mjs', 'release-installed-identity.py', '../deploy/update-runner/request_install.py',
     'release-delivery-install-admission.mjs', 'release-delivery-full-host.mjs',
     'full-host-primitives/collect-facts.py', 'full-host-primitives/metadata-stage.py', 'full-host-primitives/launch-plan-template.py', 'full-host-primitives/observe-plan-template.py',
-    'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/collect-returned-completion.py','release-delivery-returned-rehearsal.mjs','release-delivery-publication-inputs-correction.mjs','release-publication-asset-reservation.mjs','release-publication-asset-reservation.py','release-publication-local-inputs.mjs','release-same-schema-returned-proof.mjs','full-host-primitives/collect-same-schema-returned-completion.py', 'full-host-primitives/online-capacity.py',
+    'full-host-primitives/launch-execute-template-r2.py', 'full-host-primitives/observe-execute-template.py', 'full-host-primitives/collect-completion-template.py', 'full-host-primitives/collect-returned-completion.py','release-delivery-returned-rehearsal.mjs','release-delivery-publication-inputs-correction.mjs','release-delivery-publication-inputs-schema.mjs','release-publication-asset-reservation.mjs','release-publication-asset-reservation.py','release-publication-local-inputs.mjs','release-same-schema-returned-proof.mjs','full-host-primitives/collect-same-schema-returned-completion.py', 'full-host-primitives/online-capacity.py',
     'release-delivery-full-publication.mjs', 'release-delivery-full-publication.py', 'release-full-publication-primitives.py', 'release-full-feed-publication.py',
     'release-delivery-full-prestage.mjs', 'release-delivery-full-prestage.py', 'full-host-primitives/asset-stage.py', 'full-host-primitives/install-facts.py',
     'release-retained-feed-dependencies.mjs', 'release-retained-feed-dependencies.py',

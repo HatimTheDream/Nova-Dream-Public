@@ -11,13 +11,14 @@ import { readEvidenceFile, sha256 } from './release-plan.mjs';
 import { PREWRITE_PREREQUISITES } from './release-delivery-disposition.mjs';
 import { withVerificationPass } from './release-verification-pass.mjs';
 import { fullFactsSpec, verifyFullFacts } from './release-delivery-full-host.mjs';
-import { verifyPublicationBrowserContinuation, verifyBrowserWindowRecoveryReadiness, assertBrowserWindowRecoveryUnmaterialized } from './release-delivery-browser-continuation.mjs';
+import { verifyReturnedPublicationBrowser, verifyPublicationBrowserContinuation, verifyBrowserWindowRecoveryReadiness, assertBrowserWindowRecoveryUnmaterialized } from './release-delivery-browser-continuation.mjs';
 import { configuredBrowserWindowRecoveryStorageReadiness, verifyBrowserWindowRecoveryStorageReadiness } from './release-storage-default.mjs';
 
 import { correctionRequestKind, correctionGrantKind, correctionBranch, correctedDependencyTarget, dependencyCorrectionSchema, requireCorrectionExit } from './release-delivery-dependency-correction.mjs';
 
 import {completionGrantKind,completionPrerequisites,completionSchemas,completionSnapshot,verifyCompletionHistory,readCompletion,remainingRecoveryBudget} from './release-delivery-returned-rehearsal.mjs';
-import {assetGrantKind,publicationInputSchemas,publicationInputsSnapshot,verifyPublicationInputsHistory} from './release-delivery-publication-inputs-correction.mjs';
+import {assetGrantKind,publicationInputSchemas} from './release-delivery-publication-inputs-schema.mjs';
+import {publicationInputsSnapshot,verifyPublicationInputsHistory} from './release-delivery-publication-inputs-correction.mjs';
 import {planReservedPublicationAsset} from './release-publication-asset-reservation.mjs';
 const need=(v,r)=>{if(!v)throw Error(r);};
 const canonical=v=>JSON.stringify(v,(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
@@ -100,7 +101,10 @@ export const preJournalGrantSchema=z.object({format:z.literal(1),kind:z.literal(
 export const {request:returnedRehearsalRequestSchema,grant:returnedRehearsalGrantSchema}=completionSchemas({ref,source,continuationRequestSchema,continuationGrantSchema});
 export const {request:publicationInputsRequestSchema,grant:publicationInputsGrantSchema}=publicationInputSchemas({reference:ref,digest:hash,source,baseRequest:continuationRequestSchema,baseGrant:continuationGrantSchema,publicationBrowser});
 export function publicationInputsCheckpoint(journal,id,now,request,assertAbsent=absentOwner){
- return publicationInputsSnapshot(journal,id,request,journal.deliveryOriginalOperatorContinuation(id),{now,assertAbsent,history});
+ const previous=journal.deliveryOriginalOperatorContinuation(id);
+ need(previous?.proof.kind===completionGrantKind,'returned-rehearsal-predecessor-required');
+ verifyReturnedPublicationBrowser(request.browser,request.preparedBrowser,{journal,descriptor:journal.loadDelivery(id).descriptor,now});
+ return publicationInputsSnapshot(journal,id,request,previous,{now,assertAbsent,history});
 }
 export const operatorGrantSchema=z.union([publicationInputsGrantSchema,prepackageGrantSchema,preJournalGrantSchema,publicationContinuationGrantSchema,returnedRehearsalGrantSchema]);
 export function returnedRehearsalSnapshot(journal,id,now,{request,assertAbsent=absentOwner}={}){
@@ -784,6 +788,7 @@ function verifyStoredContinuationGrant(journal,id,saved,{now,effect,assertAbsent
   need(previous?.proof.kind===completionGrantKind,'returned-rehearsal-predecessor-required');
   verifyStoredContinuationGrant(journal,id,previous,{now,effect:false,assertAbsent});
   verifyPublicationInputsHistory(journal,id,p,req,previous,history);
+  verifyReturnedPublicationBrowser(p.browser,p.preparedBrowser,{journal,descriptor:journal.loadDelivery(id).descriptor,now:p.issuedAtMs});
   for(const side of ['private','public']){
    const ci=verifyOperatorCi(json(p.operator.ci[side]),p.operator.sources[side]);need(ci.run.id===req.ciRuns[side],'publication-inputs-operator-ci-changed');
   }
