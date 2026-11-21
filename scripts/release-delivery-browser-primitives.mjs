@@ -6,7 +6,13 @@ export const canonicalBrowser=value=>JSON.stringify(value,(_key,x)=>x&&typeof x=
   ?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 export const sha256=value=>createHash('sha256').update(value).digest('hex');
 export const retainedWindowPolicy='one-prior-then-two-targets';
-const qualifiedBrowserBuilds = new Map([['2.28.46', '1.0.419'], ['2.28.47', '1.0.420'], ['2.28.48', '1.0.421']]);
+const qualifiedBrowserBuilds = new Map([
+  ['2.28.46', '1.0.419'],
+  ['2.28.47', '1.0.420'],
+  ['2.28.48', '1.0.421'],
+  ['2.28.49', '1.0.422'],
+  ['2.28.50', '1.0.423'],
+]);
 export const qualifiedBrowserBuild = version => qualifiedBrowserBuilds.get(version);
 export function verifyRetainedWindowPolicy(policy,binding) {
   if(!policy)return false;

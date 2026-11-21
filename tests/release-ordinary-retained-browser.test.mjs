@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {sha256} from '../scripts/release-plan.mjs';
@@ -71,9 +71,26 @@ test('normal package admission and signed browser consume one exact candidate-bo
   assert.equal(f.bind().windowPolicy,undefined);
 });
 
+test('the release being built admits its measured browser proof in the package and the worker', async t => {
+  const metadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const f = fixture(t, metadata.version, metadata.edition3.buildVersion);
+  const registry = createDeliveryRegistry();
+  await registry.phasePreflight('package', f.descriptor, f.prior);
+  const binding = f.bind();
+  assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
+
+  const wrongBuild = {...binding, fullTarget: {...binding.fullTarget, buildVersion: '0.0.0'}};
+  assert.throws(() => verifyRetainedWindowPolicy(binding.windowPolicy, wrongBuild), /policy-target-changed/);
+  delete f.target.browserWindowQualification;
+  f.descriptor.target = f.save('target', f.target);
+  await assert.rejects(registry.phasePreflight('package', f.descriptor, f.prior), /qualification-required/);
+  assert.throws(f.bind, /qualification-required/);
+});
+
 for (const [version, build, previousVersion, previousBuild] of [
   ['2.28.47', '1.0.420', '2.28.46', '1.0.419'],
-  ['2.28.48', '1.0.421', '2.28.47', '1.0.420']
+  ['2.28.48', '1.0.421', '2.28.47', '1.0.420'],
+  ['2.28.49', '1.0.422', '2.28.48', '1.0.421']
 ]) {
   test(`recovery update ${version} requires its own measured Tasks window and exact build`, t => {
     const f = fixture(t, version, build);

@@ -191,9 +191,13 @@ const WARM_ANTECEDENT_SOURCES=Object.freeze({"qualified-startup.py":"993ec3498ed
 export const RETAINED_BINDINGS_STARTUP_SOURCES=Object.freeze({...PARKED_CAPTURE_STARTUP_SOURCES,
   'produce-startup-inputs.py':'3bd0f9e1dae5d233df062a80404c643c24507a9f310d7ae2a8670177ca4f57b7',
   'qualified-startup.py':'9cff2dd7717c5e9d0c5c41421f43a625ae3be6e7f5e6d2307d394d7ff1777f43'});
+export const RETAINED_WINDOW_STARTUP_SOURCES=Object.freeze({...RETAINED_BINDINGS_STARTUP_SOURCES,
+  'produce-startup-inputs.py':'7ec78cc4d026587a515dba58c7e41b6a0876f156f1e157c2f0b453341eadf202',
+  'qualified-startup.py':'896b22918d9e0c184b6942e4d1c13f95e06d86ce1845fab2bbc41a85ebedbfac'});
 const parkedReleases=[
   [PARKED_CAPTURE_STARTUP_SOURCES,'2.28.48'],
   [RETAINED_BINDINGS_STARTUP_SOURCES,'2.28.49'],
+  [RETAINED_WINDOW_STARTUP_SOURCES,'2.28.50'],
 ];
 const parkedVersion=sources=>parkedReleases.find(([family])=>same(family,sources))?.[1];
 const sameSchemaSourceFamilies=[...parkedReleases.map(([family])=>family),SAME_SCHEMA60_STARTUP_SOURCES,RETIRED_RECAPTURE_STARTUP_SOURCES,REHEARSAL_SCHEMA60_STARTUP_SOURCES,DEFERRED_CAPTURE_STARTUP_SOURCES,COMPLETE_CAPTURE_STARTUP_SOURCES];
@@ -217,7 +221,7 @@ export const RETAINED_BINDINGS_STARTUP_HELPERS=Object.freeze({...PARKED_CAPTURE_
   'hosted_retained_configuration.py':'7f7e5e3c7730f90e116d38da1ef1c19acab0e437ca26dfc1ff832309dc777a4d',
   'operator_rehearsal.py':'5ec3bc4bc86cdfcafeddbc36d98b247ecd52fed945da6c1c8dbb812e5c12338d'});
 function helpersForStartupSources(sources){
-  if(same(sources,RETAINED_BINDINGS_STARTUP_SOURCES))return RETAINED_BINDINGS_STARTUP_HELPERS;
+  if(same(sources,RETAINED_WINDOW_STARTUP_SOURCES)||same(sources,RETAINED_BINDINGS_STARTUP_SOURCES))return RETAINED_BINDINGS_STARTUP_HELPERS;
   if(same(sources,PARKED_CAPTURE_STARTUP_SOURCES))return PARKED_CAPTURE_STARTUP_HELPERS;
   if(same(sources,COMPLETE_CAPTURE_STARTUP_SOURCES)||same(sources,WARM_ANTECEDENT_SOURCES))return COMPLETE_CAPTURE_STARTUP_HELPERS;
   if(same(sources,DEFERRED_CAPTURE_STARTUP_SOURCES))return DEFERRED_CAPTURE_STARTUP_HELPERS;

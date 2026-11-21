@@ -250,6 +250,7 @@ PARKED_CAPTURE_PRODUCER = '7e36af529fb353224722c6db2a2d9c2ea068f490913e2d4bef3c2
 PARKED_RELEASES = {
     PARKED_CAPTURE_PRODUCER: '2.28.48',
     '9cff2dd7717c5e9d0c5c41421f43a625ae3be6e7f5e6d2307d394d7ff1777f43': '2.28.49',
+    '896b22918d9e0c184b6942e4d1c13f95e06d86ce1845fab2bbc41a85ebedbfac': '2.28.50',
 }
 
 def read_split_warm_donor(authority,loan,plan,review,history,document):

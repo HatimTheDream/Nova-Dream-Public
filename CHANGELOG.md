@@ -1,3 +1,7 @@
+## [2.28.50]
+
+- Hosted updates check that the release controller recognizes the current app version and its measured browser result before publication. The browser still has to demonstrate that an unsent Tasks draft survives an upgrade and reload.
+
 ## [2.28.49]
 
 - Hosted updates now preserve conversations added since the last saved configuration. After restart, Nova checks every regenerated session binding against the saved conversations.
