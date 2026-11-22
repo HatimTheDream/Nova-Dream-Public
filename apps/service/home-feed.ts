@@ -7,6 +7,7 @@ import type { ContentReview } from '../../packages/domain/content-workspace.js';
 import { homeFeedOpenSchema, type HomeDestination, type HomeDestinationLink, type HomeFeedCard, type HomeFeedState } from '../../packages/domain/home-feed.js';
 import type { HomeItem } from '../../packages/domain/home-library.js';
 import { Fault, Store } from './store.js';
+import { WorkSourceService } from './work-sources.js';
 
 /** Observations of retained work only; reading Feed never dispatches a job. */
 export class HomeFeed {
@@ -15,6 +16,11 @@ export class HomeFeed {
  destination(_device: string, raw: unknown): HomeDestination {
   const input = homeFeedOpenSchema.parse(raw);
   if (input.epoch !== this.store.epoch) throw new Fault(409, 'epoch_changed', 'The workspace changed. Reopen this saved reference before continuing.');
+  if ('target' in input && input.forDiscussion) {
+    const target=input.target, access=new WorkSourceService(this.store);
+    if (target.kind==='assignment') access.assertOrdinaryHandoff(target.kind,target.attemptId);
+    if (target.kind==='content') access.assertOrdinaryHandoff(target.kind,target.id,target.sourceRevision);
+  }
   const links: HomeDestinationLink[] = [];
   let fileStatus: string | undefined;
   const link = (value: HomeDestinationLink) => { if (!links.some(l => JSON.stringify(l) === JSON.stringify(value))) links.push(value); };

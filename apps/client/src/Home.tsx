@@ -10,12 +10,14 @@ import { HomeToday, type HomeTaskActions } from './HomeToday';
 import { mayLeaveHomeDraft } from './home-draft-navigation';
 import { readLocal, saveLocal } from './api';
 import './home-library.css';
+import { existingLibraryWorkDraft, keepLibraryWorkStart, type LibraryWorkStart } from './library-work-draft';
 import type { LibraryTarget } from './home-library-navigation';
 
 type View = 'today' | 'library' | 'ideas' | 'feed';
 const views: View[] = ['today', 'library', 'ideas', 'feed'];
 const NewsFeed=lazy(()=>import('./NewsFeed'));
-type Props = HomeSpaceProps & HomeSourceActions & {
+type Props = HomeSpaceProps & Omit<HomeSourceActions, 'onPrepareAssignment'> & {
+ openLibraryAssignment?: (id: string) => boolean;
  openDraft?: (id: string) => void; openConversation?: (conversation: Conversation) => void;
  operations?: AssistantOperation[]; conversations?: Conversation[]; activityRead?: 'loading' | 'ready' | 'error';
  openFeedTarget?: (target: HomeFeedTarget) => void; libraryTarget?: LibraryTarget; clearLibraryTarget?: () => void;
@@ -38,6 +40,17 @@ export function Home(props: Props) {
   if (!saveLocal(key, next)) { setError('Free browser storage before changing Home views. Your current view and writing stay open.');return false; }
   props.clearLibraryTarget?.();setNewsLibraryTarget(undefined);setKept({ scope, view: next });setError('');return true;
  };
+ const prepareAssignment = (input: LibraryWorkStart) => {
+  if (!current() || !mayLeaveHomeDraft() || !props.openLibraryAssignment) return false;
+  const existing = existingLibraryWorkDraft(props.snapshot, input);
+  if (existing) return props.openLibraryAssignment(existing);
+  const id = 'library-work:' + crypto.randomUUID();
+  if (!keepLibraryWorkStart(props.snapshot, id, input)) {
+   setError('The assignment draft could not be kept. Your Library selection is still open.');
+   return false;
+  }
+  return props.openLibraryAssignment(id);
+ };
  const leave = (next: () => void) => { if (current() && mayLeaveHomeDraft()) next(); };
  const handoff: HomeSourceActions['onAssistantHandoff'] = props.onAssistantHandoff ? async incoming => {
   if (!current() || !mayLeaveHomeDraft()) throw Error('Keep the current Home writing before opening Assistant.');
@@ -47,7 +60,7 @@ export function Home(props: Props) {
   <nav className="home-view-tabs" role="tablist" aria-label="Home Views" onKeyDown={e => { const index = views.indexOf(displayedView), next = e.key === 'Home' ? views[0] : e.key === 'End' ? views.at(-1) : e.key === 'ArrowRight' ? views[(index + 1) % views.length] : e.key === 'ArrowLeft' ? views[(index + views.length - 1) % views.length] : null;if (next) { e.preventDefault();if (select(next)) tabs.current.get(next)?.focus(); } }}>{views.map(id => <button className="compact-action" key={id} type="button" id={`home-tab-${id}`} role="tab" aria-selected={displayedView === id} aria-controls={`home-panel-${id}`} tabIndex={displayedView === id ? 0 : -1} ref={node => { if (node) tabs.current.set(id, node);else tabs.current.delete(id); }} onClick={() => select(id)}>{id[0].toUpperCase() + id.slice(1)}</button>)}</nav>
   {error && <p role="alert">{error}</p>}
   <div id="home-panel-today" role="tabpanel" aria-labelledby="home-tab-today" hidden={displayedView !== 'today'}><HomeToday snapshot={props.snapshot} actions={props.taskActions} editTask={task => leave(() => props.editTask(task))} openTasks={() => leave(() => props.open('tasks'))} openLibrary={() => select('library')} openIdeas={() => select('ideas')}/></div>
-  <div id="home-panel-library" role="tabpanel" aria-labelledby="home-tab-library" hidden={displayedView !== 'library'}><HomeLibrary libraryTarget={libraryTarget} snapshot={props.snapshot} controller={controller} onAssistantHandoff={handoff} openResource={props.openResource ? reference => leave(() => props.openResource!(reference)) : undefined}/></div>
+  <div id="home-panel-library" role="tabpanel" aria-labelledby="home-tab-library" hidden={displayedView !== 'library'}><HomeLibrary libraryTarget={libraryTarget} snapshot={props.snapshot} controller={controller} onAssistantHandoff={handoff} onPrepareAssignment={props.openLibraryAssignment ? prepareAssignment : undefined} openResource={props.openResource ? reference => leave(() => props.openResource!(reference)) : undefined}/></div>
   <div id="home-panel-ideas" role="tabpanel" aria-labelledby="home-tab-ideas" hidden={displayedView !== 'ideas'}>{view === 'ideas' && <HomeIdeas snapshot={props.snapshot} controller={controller} onAssistantHandoff={handoff} openResource={props.openResource ? reference=>leave(()=>props.openResource!(reference)):undefined} {...{ openDraft: props.openDraft ? (id: string) => leave(() => props.openDraft!(id)) : undefined }}/>}</div>
   <div id="home-panel-feed" role="tabpanel" aria-labelledby="home-tab-feed" hidden={displayedView !== 'feed'}>{view === 'feed' && <Suspense fallback={<LoadingRing label="Loading Feed…"/>}><NewsFeed key={scope} snapshot={props.snapshot} library={controller} onAssistantHandoff={handoff} openLibrary={id=>{
    const collection=id&&controller.state?.collections.find(row=>row.id===id);

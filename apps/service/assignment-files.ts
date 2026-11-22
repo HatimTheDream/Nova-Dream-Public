@@ -15,6 +15,7 @@ export function captureAssignmentFiles(store: Store, capture: AssignmentCapture)
   ];
   const unique = new Map<string, { file: Attachment; origins: string[] }>();
   for (const candidate of candidates) {
+    if (store.internalRead('connected:result-file:'+candidate.file.id)) throw new Fault(409,'connected_source_required','Select this connected result in Library → Use In Agent Work to preserve its input permissions.');
     const previous = unique.get(candidate.file.id);
     if (previous && canonical(previous.file) !== canonical(candidate.file)) throw new Fault(409, 'assignment_file_changed', 'A source file has conflicting identities. Review the selected saved sources.');
     if (previous) previous.origins.push(candidate.origin); else unique.set(candidate.file.id, { file: candidate.file, origins: [candidate.origin] });

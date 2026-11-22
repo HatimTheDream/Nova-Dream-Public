@@ -69,6 +69,7 @@ import { imagePreviewType } from './image-preview.js';
 import { Gateway, type AssistantTransport } from './gateway.js';
 import { AssistantService } from './assistant.js';
 import { AssignmentService } from './assignments.js';
+import { WorkSourceService } from './work-sources.js';
 import { AgentRoutines } from './agent-routines.js';
 import { AgentActivity } from './agent-activity.js';
 import { HubMeetings } from './hub-meetings.js';
@@ -155,6 +156,7 @@ export async function startServer(options: { directory: string; port: number; pr
   const accounts = new Accounts(store, options.providers, undefined, options.privateWeb?.origin);
   const homeWeather = new HomeWeatherService(store, options.weatherFetch);
   const homeLibrary = new HomeLibrary(store),ideaPursuits=new IdeaPursuits(store);
+  const workSources = new WorkSourceService(store);
   const profileStudio = new ProfileStudio(store);
   const profileWeek = new ProfileWeek(store);
   const profileWeekNotes = new ProfileWeekNotes(store);
@@ -643,6 +645,7 @@ export async function startServer(options: { directory: string; port: number; pr
         if(url.pathname==='/api/home/ideas'&&request.method==='POST')return json(200,ideaPursuits.command(device,await commandBody(request,500000)));
         if(url.pathname==='/api/home/ideas/receipt'&&request.method==='POST')return json(200,ideaPursuits.receipt(device,await commandBody(request,500000)));
         if (url.pathname === '/api/home/library' && request.method === 'GET') return json(200, homeLibrary.state(device));
+        if (url.pathname === '/api/assignments/source-checks' && request.method === 'POST') return json(200, workSources.checks(await commandBody(request, 65536)));
         if (url.pathname === '/api/home/library/export' && request.method === 'GET') {
           const exported = homeLibrary.export(url.searchParams);
           response.setHeader('Content-Disposition', 'attachment; filename="nova-library.json"');
@@ -677,6 +680,13 @@ export async function startServer(options: { directory: string; port: number; pr
           return json(200, assignments.state(query.assignmentId, query.before));
         }
         if (url.pathname === '/api/assignments/approvals' && request.method === 'GET') { const ids = new Set(assignments.approvalTargets().map(target => target.id)); const state = approvals.state(); return json(200, { ...state, items: state.items.filter(item => ids.has(item.conversationId)) }); }
+        if (url.pathname==='/api/assignments/connected-work-list' && request.method==='GET') return json(200,assignments.connectedWorkList());
+        const connectedDetail = /^\/api\/assignments\/connected\/([a-f0-9-]{36})$/.exec(url.pathname);
+        if (connectedDetail && request.method==='GET') return json(200,assignments.connectedDetail(connectedDetail[1]));
+        if (request.method==='POST' && url.pathname==='/api/assignments/connected/review') return json(202,assignments.startConnectedAction(device,'review',await commandBody(request)));
+        if (request.method==='POST' && url.pathname==='/api/assignments/connected/revise') return json(202,assignments.startConnectedAction(device,'revise',await commandBody(request)));
+        if (request.method==='POST' && url.pathname==='/api/assignments/connected/accept') return json(200,assignments.connectedDetail(assignments.connected.accept(device,await commandBody(request))));
+        if (request.method==='POST' && url.pathname==='/api/assignments/connected/save') return json(200,assignments.connected.save(device,await commandBody(request)));
         if (url.pathname === '/api/assignments/start' && request.method === 'POST') return json(202, assignments.start(device, await commandBody(request)));
         if (url.pathname === '/api/assignments/stop' && request.method === 'POST') return json(200, assignments.stop(device, await commandBody(request)));
         if (url.pathname === '/api/assignments/acknowledge' && request.method === 'POST') return json(200, assignments.acknowledgeUnresolved(device, await commandBody(request)));
@@ -735,6 +745,7 @@ export async function startServer(options: { directory: string; port: number; pr
         const match = /^\/api\/attachments\/([a-z0-9-]{36})$/.exec(url.pathname);
         if (match && request.method === 'GET') {
           if (url.searchParams.has('pdfPage')) {
+            workSources.assertFileAccess(match[1]);
             const query = z.object({ pdfPage: z.coerce.number().int().min(1).max(1000), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.coerce.number().int().nonnegative() }).strict().parse(Object.fromEntries(url.searchParams));
             const file = store.blobMetadata(match[1]);
             if (query.sha256 !== file.sha256 || query.size !== file.size) throw new Fault(409, 'attachment_changed', 'The saved PDF version could not be verified.');

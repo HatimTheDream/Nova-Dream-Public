@@ -190,7 +190,11 @@ import assert from 'node:assert/strict';
 // Assistant result paging and inline PDF reading add 2,838 gzip bytes to the
 // accepted 911,110-byte client. The PDF reader is deferred. This build uses
 // 179,916 bytes at startup and 72,825 in its largest deferred chunk.
-export const clientLimits = { startup: 180000, total: 915000, deferredChunk: 80000 };
+// Connected Library assignments, review and Content handoff add 15,120 gzip bytes
+// to the 913,948-byte 2.29.0 client. Both builds measured 929,068 total, with
+// 179,979 at startup and 72,825 in the largest deferred chunk. The source picker
+// is shared. The preparation editor and result panels load with their workspace.
+export const clientLimits = { startup: 180000, total: 930000, deferredChunk: 80000 };
 
 export function measureClient(manifest, bytesByFile, limits = clientLimits) {
   const entries = Object.keys(manifest).filter(key => manifest[key].isEntry);

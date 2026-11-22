@@ -4,6 +4,7 @@ import type { Assignment } from '../../../packages/domain/workspace-records';
 import { assignmentHoldsSlot, assignmentTerminal, type AssignmentAttempt, type AssignmentStart, type AssignmentState } from '../../../packages/domain/assignments';
 import { ApiError, readLocal, request, saveLocal } from './api';
 import { retainedWindowId } from './useWorkspace';
+import { ConnectedAttempts } from './ConnectedAttempts';
 import { AssignmentReview } from './AssignmentReview';
 import { UseAssignmentInContent } from './ContentOutputs';
 import { Dialog } from './ui';
@@ -110,6 +111,12 @@ export function AssignmentRuns({ entity, snapshot, dirty, refresh, openContent, 
   };
   const activeElsewhere = state?.attempts.find(attempt => attempt.assignmentId !== entity.id && assignmentHoldsSlot(attempt));
   const canReview = (attempt: AssignmentAttempt) => !attempt.unresolvedReview && !!attempt.stopReason && ['unknown', 'stopping'].includes(attempt.state);
+  if (entity.value.workOrigin && openContent) {
+    return <ConnectedAttempts attempts={attempts} assignmentId={entity.id} snapshot={snapshot} refresh={refresh} openContent={openContent}
+      error={selectedRead?.error || readError || error} busy={busy} loading={!state || !!targetAttempt && !selectedRead?.attempt}
+      hasMore={!targetAttempt && !!nextCursor} more={() => void loadOlder()} retry={() => { setTargetRetry(value => value + 1); void load().catch(() => undefined); }}
+      act={(attempt, action) => void act(attempt, action)} approvals={attempt => <AssignmentApprovalTray attempt={attempt} epoch={snapshot.epoch} state={approvals.state} refresh={approvals.refresh}/>}/>;
+  }
   return <section className="record-connections assignment-runs" aria-label="Assignment execution">
     <div className="section-heading"><h3>Work with this agent</h3><button className="primary" disabled={busy || rejected || (!pending && (!state?.canStart || entity.value.archived || entity.value.state !== 'planned' || dirty))} onClick={() => void start()}>{busy ? 'Updating…' : pending ? 'Reconcile start' : `Run saved version ${entity.revision}`}</button></div>
     <p className="metadata">The agent uses the saved design and selected source versions, then returns a result for your review. Selected app capabilities are enforced for this run. Proposed changes appear below for your review. A stop is requested after {entity.value.maxMinutes ?? 5} minute{(entity.value.maxMinutes ?? 5) === 1 ? "" : "s"}, including time spent waiting for your approval.</p>

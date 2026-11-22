@@ -17,9 +17,9 @@ export function libraryView(value: unknown): LibraryView | undefined {
     !['all', 'up-next', 'unassigned'].includes(route.kind) || Object.keys(route).some(key => key !== 'kind')))) return;
   return { query: row.query, mode: row.mode, filter: row.filter, collectionId: row.collectionId, selection, ...(route ? { route } : {}) };
 }
-export type LibraryTarget = SearchScope & { nonce: string; target?: SearchTarget; restore?: LibraryView };
+export type LibraryTarget = SearchScope & { nonce: string; target?: SearchTarget; restore?: LibraryView; restoreScrollTop?: number };
 export const libraryViewKey = (scope: Pick<SearchScope, 'epoch' | 'deviceId'>) => `e3:home-library-view:${scope.deviceId}:${scope.epoch}`;
-export function admitLibraryTarget(scope: SearchScope, state: HomeLibraryState, target: LibraryTarget, storage: SearchStorage) {
+export function admitLibraryTarget(scope: SearchScope, state: Pick<HomeLibraryState, 'epoch' | 'items' | 'collections'>, target: LibraryTarget, storage: SearchStorage) {
   if (target.epoch !== scope.epoch || target.deviceId !== scope.deviceId || target.windowId !== scope.windowId || state.epoch !== scope.epoch) return 'This Library source belongs to another workspace.';
   const raw = storage.read(libraryViewKey(scope)), previous = raw === undefined ? defaultLibraryView() : libraryView(raw);
   if (!previous) return 'The kept Library view could not be read. Its original data is preserved.';

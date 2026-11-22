@@ -4,17 +4,24 @@ import type {AssistantOperation,AssistantOutput,Conversation} from '../../packag
 import type {HomeSourceCapture} from '../../packages/domain/home-library.js';
 import {Fault,type Store} from './store.js';
 import {ideaActivityIndex} from './idea-activity.js';
+import {WorkSourceService} from './work-sources.js';
+import type {HomeReference} from '../../packages/domain/home-library.js';
 
 const prefix='home:ideas:',pursuitKey=(id:string)=>prefix+'pursuit:'+id,entryKey=(id:string)=>prefix+'entry:'+id;
 const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function identity(value:string){if(!uuid.test(value))throw new Fault(400,'idea_identity','Use the exact original Idea identity.');return value;}
+function assertSourceAccess(store:Store,references:HomeReference[]) {
+ const access=new WorkSourceService(store);
+ if (!references.every(ref=>access.canReadLibraryReference(ref))) throw new Fault(403,'idea_source_access','A connected source for this brief is no longer available.');
+}
 export function captureIdeaBinding(store:Store,raw:IdeaBinding|undefined):IdeaBinding|undefined{
  if(!raw)return;
  const binding=ideaBindingSchema.parse(raw),pursuit=store.internalRead<IdeaPursuit>(pursuitKey(binding.pursuitId)),
   entry=store.internalRead<IdeaEntry>(entryKey(binding.entryId));
  if(!pursuit||pursuit.epoch!==store.epoch||!entry||entry.epoch!==store.epoch||entry.pursuitId!==pursuit.id)
   throw new Fault(409,'idea_changed','The original Idea pursuit is unavailable. Your Assistant writing is kept; reopen its original pursuit.');
+ assertSourceAccess(store,entry.handoff.sourceRefs);
  return binding;
 }
 /** Joined with the original operation write; contains no copied result or mutable outcome. */
@@ -41,6 +48,7 @@ export class IdeaPursuits{
   return this.page<{entryId:string},IdeaEntry>(prefix+`entries:${id}:`,after,link=>{
    const entry=this.store.internalRead<IdeaEntry>(entryKey(link.entryId));
    if(!entry||entry.pursuitId!==id||entry.epoch!==this.store.epoch)throw new Fault(409,'idea_entry_missing','An original brief is unavailable. Its link remains kept.');
+   assertSourceAccess(this.store,entry.handoff.sourceRefs);
    return entry;
   });
  }
@@ -53,7 +61,7 @@ export class IdeaPursuits{
  entry(id:string){
   const entry=this.store.internalRead<IdeaEntry>(entryKey(identity(id)));
   if(!entry||entry.epoch!==this.store.epoch)throw new Fault(404,'idea_entry_missing','The original brief is unavailable.');
-  this.pursuit(entry.pursuitId);return {epoch:this.store.epoch,entry};
+  this.pursuit(entry.pursuitId);assertSourceAccess(this.store,entry.handoff.sourceRefs);return {epoch:this.store.epoch,entry};
  }
  detail(id:string){return {epoch:this.store.epoch,pursuit:this.pursuit(id)};}
  run(id:string,operationId:string):IdeaRunDetail{
@@ -76,11 +84,13 @@ export class IdeaPursuits{
  }
  receipt(device:string,raw:unknown):IdeaReceipt{
   const command=ideaCommandSchema.parse(raw);
+  if(command.type==='create')assertSourceAccess(this.store,command.handoff.sourceRefs);
   return this.store.replayAdmission<IdeaReceipt>(device,command,this.intent(command))??{command,state:'unknown'};
  }
  command(device:string,raw:unknown):IdeaReceipt{
   this.store.assertUpdateAdmission();
   const command=ideaCommandSchema.parse(raw);
+  if(command.type==='create')assertSourceAccess(this.store,command.handoff.sourceRefs);
   return this.store.admit(device,command,this.intent(command),():IdeaReceipt=>{
    const reject=(code:string,message:string):IdeaReceipt=>({command,state:'rejected',code,message});
    if(this.store.recoveryEffectsPaused)return reject('idea_held','Idea changes are paused during recovery.');
@@ -102,6 +112,7 @@ export class IdeaPursuits{
      if(!command.text.trim())return reject('idea_question_empty','Write a question before preparing it.');
      const original=this.store.internalRead<IdeaEntry>(entryKey(pursuit.initialEntryId));
      if(!original||original.epoch!==command.epoch||original.pursuitId!==pursuit.id)return reject('idea_entry_missing','The original brief is unavailable.');
+     assertSourceAccess(this.store,original.handoff.sourceRefs);
      const text=`${original.handoff.text}\n\nFollow-Up Question:\n${command.text}`;
      if(text.length>100000)return reject('idea_brief_large','The complete brief and question exceed the Assistant limit. Nothing was shortened.');
      pursuit.reviewed=false;

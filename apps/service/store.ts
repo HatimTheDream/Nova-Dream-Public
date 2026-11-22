@@ -49,6 +49,7 @@ import { groupPreparationPrefix, preparationGroupPrefix, groupPreparationEventSc
   groupPreparationBytes, type GroupDraftScope,
   type GroupPreparationReceipt, type PreparedGroupRound } from '../../packages/domain/assistant-group-turns.js';
 import { homeWidgetPreservationKey } from './home-widget-preservation.js';
+import { WorkSourceService } from './work-sources.js';
 import { importedProgressSchema } from '../../packages/domain/profile-progression.js';
 import { buildProfileProgress, progressHistory, questCommandSchema, type PersonalQuest } from '../../packages/domain/profile-progression.js';
 import { backupFormat, backupSnapshotSchema, historyBackupSnapshotSchema, sealingBackupSnapshotSchema, backupPlainMaxBytes, type BackupSnapshot, type HistoryBackupSnapshot, type SealingBackupSnapshot } from '../../packages/domain/workspace-backup.js';
@@ -104,6 +105,9 @@ type HistoryReviewOpen={token:typeof historyReviewOpen;limits:HistoryStoreLimits
 
 /** Single-owner local preview. No predecessor credentials or databases are opened. */
 export class Store {
+  private readonly untrackedAgent = new AsyncLocalStorage<true>();
+  inUntrackedAgentWork() { return !!this.untrackedAgent.getStore(); }
+  withUntrackedAgentWork<T>(work:()=>T):T { return this.untrackedAgent.run(true,work); }
   private historyOwners?:FeedHistoryOwnerObservation;
   #historyRemoval?:Readonly<HistoryRemovalLimits>;
   #projectedCapacity?:Readonly<ProjectedCapacityPolicy>;
@@ -546,7 +550,7 @@ export class Store {
       const history = (this.db.prepare('SELECT * FROM history ORDER BY cursor').all() as { cursor: number; entity_id: string; revision: number; payload: Uint8Array }[]).map(row => ({ cursor: row.cursor, entityId: row.entity_id, revision: row.revision, value: this.open(`history:${row.entity_id}:${row.revision}`, row.payload) }));
       const receipts = (this.db.prepare('SELECT * FROM receipts ORDER BY request_id').all() as { request_id: string; digest: string; device_id: string; payload: Uint8Array }[]).map(row => ({ requestId: row.request_id, digest: row.digest, deviceId: row.device_id, value: this.open(`receipt:${row.request_id}`, row.payload) }));
       const services = (this.db.prepare('SELECT * FROM service_records ORDER BY id').all() as { id: string; revision: number; payload: Uint8Array }[]).filter(row => !row.id.startsWith('backup:')).map(row => ({ id: row.id, revision: row.revision, value: this.open(`service:${row.id}`, row.payload) }));
-      const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.download(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
+      const files = (this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id').all() as { id: string; device_id: string }[]).map(row => { const file = this.readStoredFile(row.id); return { ...file.metadata, deviceId: row.device_id, base64: file.bytes.toString('base64') }; });
       const references = (this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id,blob_id').all() as { entity_id: string; blob_id: string }[]).map(row => ({ entityId: row.entity_id, fileId: row.blob_id }));
       const value: BackupSnapshot = { format: backupFormat, schema: (this.db.prepare('PRAGMA user_version').get() as {user_version:number}).user_version as BackupSnapshot['schema'], version, id: randomUUID(), createdAt: new Date().toISOString(), epoch: this.epoch, cursor: this.entityCursor, entities, history, receipts, services, files, references, native };
       Store.verifyBackup(value); return value;
@@ -575,7 +579,7 @@ export class Store {
       const history=(this.db.prepare('SELECT * FROM history ORDER BY cursor').all() as {cursor:number;entity_id:string;revision:number;payload:Uint8Array}[]).map(row=>({cursor:row.cursor,entityId:row.entity_id,revision:row.revision,value:this.open(`history:${row.entity_id}:${row.revision}`,row.payload)}));
       const receipts=[...access.receipts()];
       const services=(this.db.prepare('SELECT * FROM service_records ORDER BY id COLLATE BINARY').all() as {id:string;revision:number;payload:Uint8Array}[]).filter(row=>!row.id.startsWith('backup:')).map(row=>({id:row.id,revision:row.revision,value:this.open(`service:${row.id}`,row.payload)}));
-      const files=(this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id COLLATE BINARY').all() as {id:string;device_id:string}[]).map(row=>{const file=this.download(row.id);return {...file.metadata,deviceId:row.device_id,base64:file.bytes.toString('base64')};});
+      const files=(this.db.prepare('SELECT id,device_id FROM blobs ORDER BY id COLLATE BINARY').all() as {id:string;device_id:string}[]).map(row=>{const file=this.readStoredFile(row.id);return {...file.metadata,deviceId:row.device_id,base64:file.bytes.toString('base64')};});
       const references=(this.db.prepare('SELECT entity_id,blob_id FROM blob_refs ORDER BY entity_id COLLATE BINARY,blob_id COLLATE BINARY').all() as {entity_id:string;blob_id:string}[]).map(row=>({entityId:row.entity_id,fileId:row.blob_id}));
       const value:HistoryBackupSnapshot|SealingBackupSnapshot={format:backupFormat,schema:this.historyReviewSchema,version,id:randomUUID(),createdAt:new Date().toISOString(),epoch:this.epoch,cursor:this.entityCursor,entities,history,receipts,services,files,references,native,
         feedHistory:{format:1,objects:[...access.objects()]}};
@@ -772,7 +776,7 @@ export class Store {
         if(value.schema===61||value.schema===62)restored.internalVerifyFeedHistory(historyLimits,value.schema);else verifyFeedStoreLedger(restored.internalFeedLedger());
       });
       for (const record of value.services) if (hasDirectAgentAuthority(record.value)) restored.directAgentProtected.add(record.id);
-      for (const file of value.files) restored.download(file.id);
+      for (const file of value.files) restored.readStoredFile(file.id);
       if(value.schema===61||value.schema===62){restored.close();restoredClosed=true;return value.schema===62?Store.openHistorySealReview(directory,historyLimits!):Store.openHistoryReview(directory,historyLimits!);}
       return restored;
     } catch (error) {
@@ -785,7 +789,7 @@ export class Store {
     return this.transaction(() => { if (!this.recoveryEffectsPaused && !this.updateMaintenanceHeld) { this.materializeRoutines(); this.sweepReminders(); } return { epoch: this.epoch, cursor: this.entityCursor, deviceId,
       layout: this.get('layout', 'layout')!, tasks: this.list('task').filter(t => !t.value.trashed), trashedTasks: this.list('task').filter(t => t.value.trashed), routines: this.list('routine'), calendarCompletions: this.internalList<import('../../packages/domain/calendar-completion.js').CalendarCompletion>('tasks:calendar-completion:'), taskState: this.taskState(), drafts: this.list('draft'), draftOrganization: this.internalList<DraftOrganization>('assistant:draft-organization:'), draftRemovals: this.internalList<DraftRemoval>('assistant:draft-removed:'), projects: this.list('project'),
       projectOrganization: this.internalList<ProjectOrganization>('assistant:project-organization:'),
-      records: { contact: this.list('contact'), content: this.list('content'), agent: this.list('agent'), assignment: this.list('assignment'), profile: this.list('profile') },
+      records: { contact: this.list('contact'), content: this.listEntities('content'), agent: this.list('agent'), assignment: this.list('assignment'), profile: this.list('profile') },
       capabilities: { assistant: false, voice: false, reason: 'A verified Assistant and speech connection has not been configured for this workspace.' } }; });
   }
   private replay(requestId: string, digest: string, device: string): unknown | undefined {
@@ -1285,6 +1289,7 @@ export class Store {
       if (cmd.epoch !== this.epoch) throw new Fault(409, 'epoch_changed', 'The host was recovered or replaced. Review your kept work before saving again.');
       if (cmd.kind === 'layout' && cmd.entityId !== 'layout') throw new Fault(400, 'invalid_target', 'Invalid layout identity.');
       if(cmd.kind==='draft')this.validateDraftBranch(deviceId,cmd,value as Draft,<T>(id:string)=>this.internalRead<T>(id));
+      if (cmd.kind==='content') this.requireContentAccess(this.get('content',cmd.entityId));
       const previous = this.replay(cmd.requestId, digest, deviceId); if (previous) return previous as Entity<unknown>;
       this.prepareReceipt(cmd.requestId,digest,deviceId);
       if (cmd.kind !== 'layout' && !cmd.entityId.startsWith(`${cmd.kind}:`)) throw new Fault(400, 'invalid_target', 'Invalid record identity.');
@@ -1374,6 +1379,7 @@ export class Store {
     }
     if (kind === 'assignment') {
       const plan = value as Assignment, prior = current?.value as Assignment | undefined;
+      if (prior?.workSources && this.internalRead('connected:assignment:'+id) && canonical({...prior,archived:plan.archived,state:plan.state})!==canonical(plan)) throw new Fault(409,'connected_plan_submitted','This assignment has started. Prepare a separate draft to change its submitted inputs.');
       const agent = this.get('agent', plan.agentId);
       if (!agent) throw new Fault(409, 'missing_agent', 'Choose a saved agent design.');
       if ((!prior || plan.agentId !== prior.agentId || plan.agentRevision !== prior.agentRevision) && (agent.value.archived || agent.revision !== plan.agentRevision)) throw new Fault(409, 'agent_changed', 'The agent design changed. Review its current version before choosing it.');
@@ -1392,6 +1398,7 @@ export class Store {
   }
   recordHistory(raw: unknown) {
     const input = recordHistorySchema.parse(raw);
+    if (input.kind==='content') this.requireContentAccess(this.get('content',input.id));
     if (!this.get(input.kind, input.id)) throw new Fault(404, 'record_missing', 'This saved record is unavailable.');
     const rows = this.db.prepare('SELECT revision,payload FROM history WHERE entity_id=? AND revision<? ORDER BY revision DESC LIMIT 50').all(input.id, input.beforeRevision ?? Number.MAX_SAFE_INTEGER) as { revision: number; payload: Uint8Array }[];
     return { versions: rows.map(row => this.open(`history:${input.id}:${row.revision}`, row.payload) as Entity<RecordValue>), beforeRevision: rows.length === 50 ? rows.at(-1)!.revision : null };
@@ -1423,25 +1430,34 @@ export class Store {
     const input = contentFromAssignmentSchema.parse(raw);
     return this.admit(device, input, { type: 'content.from-assignment', ...input }, () => {
       const attempt = this.internalRead<AssignmentAttempt>(`assignments:attempt:${input.attemptId}`);
-      if (!attempt || attempt.epoch !== this.epoch || attempt.state !== 'returned' || attempt.terminal?.status !== 'ok' || !attempt.runId || !attempt.nativeSessionId || attempt.result?.disposition !== 'visible' || attempt.result.file.sha256 !== input.sha256) throw new Fault(409, 'assignment_result_changed', 'Choose an exact returned assignment result before starting a Content draft.');
+      if (attempt?.connected) throw new Fault(409, 'connected_review_required', 'Accept the reviewed result before saving its Content draft.');
+      if (!attempt) throw new Fault(409, 'assignment_result_changed', 'Choose an exact returned assignment result.');
+      return this.insertAssignmentContent(device, attempt, input.sha256, `content:${randomUUID()}`);
+    }).value;
+  }
+  assignmentDocument(attempt:AssignmentAttempt, sha256:string) {
+      if (attempt.epoch !== this.epoch || attempt.state !== 'returned' || attempt.terminal?.status !== 'ok' || !attempt.runId || !attempt.nativeSessionId || attempt.result?.disposition !== 'visible' || attempt.result.file.sha256 !== sha256) throw new Fault(409, 'assignment_result_changed', 'Choose an exact returned assignment result before starting a Content draft.');
       const file = this.download(attempt.result.file.id);
-      if (canonical(file.metadata) !== canonical(attempt.result.file)) throw new Fault(409, 'attachment_changed', 'The saved assignment result file changed. No draft was created.');
-      // Native replies are UTF-8; reject corrupt bytes rather than substituting
-      // replacement characters. Larger results remain attached in full.
-      let text: string;
-      try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(file.bytes); }
-      catch { throw new Fault(409, 'assignment_result_changed', 'The result text could not be verified. Download the original file before continuing.'); }
+      if (canonical(file.metadata) !== canonical(attempt.result.file)) throw new Fault(409, 'attachment_changed', 'The saved assignment result file changed.');
+      let text:string;
+      try { text = new TextDecoder('utf-8', { fatal:true, ignoreBOM:true }).decode(file.bytes); }
+      catch { throw new Fault(409, 'assignment_result_changed', 'The full result could not be decoded. The original file is kept.'); }
       if (!text.trim()) throw new Fault(409, 'assignment_result_empty', 'This assignment returned no draft text. Its saved attempt is kept.');
+      return { text, metadata:file.metadata, turnId:attempt.terminal.turnId, nativeId:attempt.nativeSessionId, runId:attempt.runId };
+  }
+  /** Called inside the owner command transaction, with its original reserved ID. */
+  insertAssignmentContent(device:string, attempt:AssignmentAttempt, sha256:string, id:string, connected?:NonNullable<import('../../packages/domain/workspace-records.js').ContentAssignmentSource['connected']>) {
+      const { text, metadata, turnId, nativeId, runId } = this.assignmentDocument(attempt,sha256);
+      if (this.get('content',id)) throw new Fault(409, 'content_id_taken', 'The original draft identifier is already occupied. Reload its save status.');
       const importedText = text.length <= 100000;
+      if (connected && !importedText) throw new Fault(413,'connected_document_too_long','This result exceeds the editable Content limit of 100,000 characters. Its full original is kept. Request a shorter revision to save.');
       const value = contentSchema.parse({ ...blankRecord('content', 'UTC'), title: attempt.title, stage: 'drafting', body: importedText ? text : '', projectId: attempt.projectId,
-        assets: [file.metadata], source: { kind: 'assignment', attemptId: attempt.id, version: 1, assignmentId: attempt.assignmentId, assignmentRevision: attempt.assignmentRevision, agentId: attempt.agentId, agentRevision: attempt.agentRevision, runId: attempt.runId, nativeId: attempt.nativeSessionId, turnId: attempt.terminal.turnId, sha256: file.metadata.sha256, fileId: file.metadata.id, name: file.metadata.name, importedText },
+        assets: [metadata], source: { kind: 'assignment', attemptId: attempt.id, version: 1, assignmentId: attempt.assignmentId, assignmentRevision: attempt.assignmentRevision, agentId: attempt.agentId, agentRevision: attempt.agentRevision, runId, nativeId, turnId, sha256, fileId: metadata.id, name: metadata.name, importedText, ...(connected ? {connected} : {}) },
       });
-      const id = `content:${randomUUID()}`;
       this.validateRecord('content', id, value, undefined, true);
       const record = this.write('content', id, device, value, 1);
-      this.db.prepare('INSERT INTO blob_refs VALUES (?,?)').run(id, file.metadata.id);
+      this.db.prepare('INSERT INTO blob_refs VALUES (?,?)').run(id, metadata.id);
       return record;
-    }).value;
   }
   linkMailContact(device: string, raw: unknown, check: (review: MailContactReview) => void): Entity<Contact> {
     const input = mailContactLinkSchema.parse(raw);
@@ -2430,10 +2446,29 @@ export class Store {
       return value;
     });
   }
-  readEntity<K extends Kind>(kind: K, id: string): Entity<Values[K]> | undefined { return this.get(kind, id); }
+  private contentAccessible(record?:Entity<Content>) {
+    const source=record?.value.source;
+    if (!record || source?.kind!=='assignment' || !source.connected) return true;
+    // Ordinary native assignments and team conversations retain their own
+    // transcripts. Only connected capture can carry the source lineage onward.
+    return !this.inUntrackedAgentWork() && new WorkSourceService(this).canReadLibraryReference({kind:'content',id:record.id,revision:record.revision});
+  }
+  private requireContentAccess(record?:Entity<Content>) {
+    if (!this.contentAccessible(record)) throw new Fault(403,'connected_access','This Content draft is retained. A source it depends on is no longer accessible.');
+  }
+  /** The source inspector uses this raw lookup while walking its bounded provenance chain. */
+  capturedContent(id:string,revision?:number) {
+    return revision===undefined?this.get('content',id):this.rawEntityVersion('content',id,revision);
+  }
+  readEntity<K extends Kind>(kind: K, id: string): Entity<Values[K]> | undefined {
+    const record=this.get(kind,id);
+    if (kind==='content' && !this.contentAccessible(record as Entity<Content>|undefined)) return undefined;
+    return record;
+  }
   /** Content service calls inside admission, keeping entity/history/blob references atomic. */
   reviseContent(device:string,id:string,payload:Content,expectedRevision:number):Entity<Content>{
     const current=this.get('content',id);
+    this.requireContentAccess(current);
     if((current?.revision??0)!==expectedRevision)throw new Fault(409,'content_changed','This Content item changed. Review its latest saved version.',current);
     const value=contentSchema.parse(JSON.parse(JSON.stringify(payload)));this.validateRecord('content',id,value,current);
     const result=this.write('content',id,current?.deviceId??device,value,expectedRevision+1);
@@ -2459,11 +2494,19 @@ export class Store {
     const result = this.write('task', id, current?.deviceId ?? device, value, (current?.revision ?? 0) + 1);
     this.recordTask(result, current); this.syncReminder(result, current); return result;
   }
-  listEntities<K extends Kind>(kind: K): Entity<Values[K]>[] { return this.list(kind); }
+  listEntities<K extends Kind>(kind: K): Entity<Values[K]>[] {
+    const rows=this.list(kind);
+    return kind==='content'?rows.filter(row=>this.contentAccessible(row as Entity<Content>)):rows;
+  }
   get entityCursor(): number { return Math.max(Number(this.db.prepare("SELECT value FROM meta WHERE key='workspace-cursor'").get()?.value ?? 0), Number(this.db.prepare("SELECT seq FROM sqlite_sequence WHERE name='history'").get()?.seq ?? 0)); }
   private advanceCursor(prior = this.entityCursor) { this.assertWriteContext(); const next = Math.max(prior + 1, this.entityCursor); this.db.prepare("INSERT INTO meta (key,value) VALUES ('workspace-cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(next)); }
   /** Resolve an exact saved version only within its current canonical kind. */
   readEntityVersion<K extends Kind>(kind: K, id: string, revision: number): Entity<Values[K]> | undefined {
+    const record=this.rawEntityVersion(kind,id,revision);
+    if (kind==='content' && !this.contentAccessible(record as Entity<Content>|undefined)) return undefined;
+    return record;
+  }
+  private rawEntityVersion<K extends Kind>(kind:K,id:string,revision:number):Entity<Values[K]>|undefined {
     const current = this.get(kind, id);
     if (!current || !Number.isInteger(revision) || revision < 1) return undefined;
     if (current.revision === revision) return current;
@@ -2532,6 +2575,10 @@ export class Store {
     return this.open(`blob-meta:${id}`, row.payload);
   }
   download(id: string): { metadata: Attachment; bytes: Buffer } {
+    new WorkSourceService(this).assertFileAccess(id);
+    return this.readStoredFile(id);
+  }
+  private readStoredFile(id: string): { metadata: Attachment; bytes: Buffer } {
     const metadata = this.blobMetadata(id); // Validate authoritative identity before constructing a path.
     const bytes = Buffer.from(this.open(`blob:${id}`, readFileSync(join(this.directory, 'blobs', metadata.id))), 'base64');
     if (hash(bytes) !== metadata.sha256 || bytes.length !== metadata.size) throw new Fault(409, 'attachment_corrupt', 'Attachment integrity check failed.');

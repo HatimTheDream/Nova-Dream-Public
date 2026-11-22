@@ -94,6 +94,9 @@ export class ContentWorkspace {
  async command(device:string,raw:unknown){
   const input=contentWorkspaceCommandSchema.parse(raw);
   if(input.type==='library-save')return this.saveLibrary(device,input);
+  // Commands can replay a previously saved body or quoted review comment.
+  // Check current source authority before either replay or a fresh effect.
+  this.content(input.type==='work-control'?this.job(input.jobId).contentId:input.contentId);
   if(input.type==='work-control'){
    const admitted=this.admitCommand(device,input,()=>{
     const job=this.job(input.jobId);
@@ -125,6 +128,7 @@ export class ContentWorkspace {
     this.store.internalWrite(`content:change:${c.id}:${restored.revision}`,{type:'restore',fromRevision:old.revision,revision:restored.revision,at:this.now()});return restored;
    }
    if(input.type==='work'){
+    if (c.value.source?.kind==='assignment' && c.value.source.connected) throw new Fault(409,'connected_source_required','Select this Content in Library → Use In Agent Work to preserve its input permissions.');
     if(this.store.internalList<SavedJob>(jobKey).filter(j=>j.contentId===c.id).length>=100)throw new Fault(409,'content_work_limit','This item has reached its saved run limit. Start another Content item to continue.');
     if(!this.assignments.state().canStart)throw new Fault(409,'content_worker_busy',this.assignments.state().reason);
     const agent=this.store.readEntity('agent',input.agentId);if(!agent||agent.value.archived)throw new Fault(409,'content_agent_missing','Choose an active agent.');

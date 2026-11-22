@@ -32,6 +32,12 @@ POST /api/agents/activity
 POST /api/agents/hub/layout
 GET /api/agents/meetings
 POST /api/agents/meetings
+POST /api/assignments/connected/review
+GET /api/assignments/connected-work-list
+POST /api/assignments/source-checks
+POST /api/assignments/connected/revise
+POST /api/assignments/connected/accept
+POST /api/assignments/connected/save
 GET /api/assignments/state
 GET /api/assignments/approvals
 GET /api/assistant/models
@@ -212,5 +218,5 @@ POST /api/tasks/order
 POST /api/tasks/reminders/action
 POST /api/tasks/reminders/delivery
 `.trim().split('\n'));
-const dynamic = /^\/api\/(?:attachments|tasks\/suggestions|calendar\/local|assignments\/(?:attempt|check)|assistant\/(?:history|retained|goal|reconcile|access|dictation|voice|voice\/recover))\/[a-f0-9-]{36}$/;
+const dynamic = /^\/api\/(?:attachments|tasks\/suggestions|calendar\/local|assignments\/(?:attempt|check|connected)|assistant\/(?:history|retained|goal|reconcile|access|dictation|voice|voice\/recover))\/[a-f0-9-]{36}$/;
 export function phoneRouteAllowed(path: string, method: string) { return routes.has(method + ' ' + path) || method === 'GET' && (dynamic.test(path) || /^\/api\/assistant\/work-changes\/[a-f0-9-]{36}$/.test(path) || /^\/api\/assistant\/observation\/[a-f0-9-]{36}(?:\/[a-f0-9]{64})?$/.test(path)); }

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { Entity, Attachment, Project } from './contracts.js';
 import type { Assignment, AgentDesign, Contact, Content } from './workspace-records.js';
 import type { AssignmentRoutineOrigin } from './agent-routines.js';
+import type { ConnectedAttempt, ConnectedStatus } from './connected-work.js';
+import type { CapturedWorkSource } from './work-sources.js';
 
 export const assignmentStartSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), assignmentId: z.string().min(1).max(100), revision: z.number().int().positive(), projectRevision: z.number().int().positive().nullable() }).strict();
 export const assignmentStopSchema = z.object({ requestId: z.string().uuid(), epoch: z.string().uuid(), attemptId: z.string().uuid() }).strict();
@@ -15,6 +17,9 @@ export type AssignmentAttempt = {
   createdAt: number; updatedAt: number; deadlineAt: number; state: AssignmentAttemptState;
   stopReason?: 'owner' | 'deadline' | 'shutdown'; message: string;
   routine?: AssignmentRoutineOrigin;
+  connected?: ConnectedAttempt;
+  connectedStatus?: ConnectedStatus;
+  savedContentId?: string;
   unresolvedReview?: { at: number; deviceId: string };
   connectionGeneration?: string; hostId?: string; runId?: string; sessionKey?: string; nativeSessionId?: string;
   nativeTools?: string[];
@@ -23,5 +28,5 @@ export type AssignmentAttempt = {
   result?: { file: Attachment; preview: string; previewTruncated: boolean; disposition: 'visible' | 'silent' | 'empty' };
 };
 export const assignmentHoldsSlot = (attempt: Pick<AssignmentAttempt, 'state' | 'unresolvedReview'>) => !assignmentTerminal(attempt.state) && !attempt.unresolvedReview;
-export type AssignmentCapture = { plan: Entity<Assignment>; agent: Entity<AgentDesign>; project: Entity<Project> | null; sources: { kind: 'contact' | 'content'; record: Entity<Contact | Content> }[]; files?: { file: Attachment; origins: string[]; text: string }[]; binaryFiles?: { file: Attachment; origins: string[] }[]; omittedFiles?: {file:Attachment;reason:string}[] };
+export type AssignmentCapture = { plan: Entity<Assignment>; agent: Entity<AgentDesign>; project: Entity<Project> | null; projectIdentity?:{id:string;revision:number}; sources: { kind: 'contact' | 'content'; record: Entity<Contact | Content> }[]; files?: { file: Attachment; origins: string[]; text: string }[]; binaryFiles?: { file: Attachment; origins: string[] }[]; omittedFiles?: {file:Attachment;reason:string}[]; workSources?: CapturedWorkSource[] };
 export type AssignmentState = { attempts: AssignmentAttempt[]; canStart: boolean; reason: string; nextCursor: string | null };

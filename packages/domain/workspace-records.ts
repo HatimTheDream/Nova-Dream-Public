@@ -5,6 +5,8 @@ import { reminderInstant } from './reminders.js';
 import { attachmentSchema } from './attachments.js';
 import { mailContactSourceSchema } from './mail-contact.js';
 import { keepInTouchSchema, pipelineStages, relationshipSchema } from './crm.js';
+import { workSourceSelectionsSchema } from './work-sources.js';
+import { workLibraryOriginSchema } from './work-library-origin.js';
 
 // Original DC People/Content fields, Nova saved records and agent identity,
 // adapted to the single Nova Dream entity/revision authority.
@@ -45,6 +47,7 @@ export const contentAssignmentSourceSchema = z.object({
   assignmentId: id, assignmentRevision: z.number().int().positive(), agentId: id, agentRevision: z.number().int().positive(),
   runId: z.string().uuid(), nativeId: z.string().uuid(), turnId: z.string().min(1).max(1000),
   sha256: z.string().regex(/^[a-f0-9]{64}$/), fileId: id, name: z.string().min(1).max(200), importedText: z.boolean(),
+  connected: z.object({ rootAttemptId:z.string().uuid(), number:z.number().int().positive(), baseAttemptId:z.string().uuid().optional(), reviewAttemptId:z.string().uuid() }).strict().optional(),
 }).strict();
 export type ContentAssignmentSource = z.infer<typeof contentAssignmentSourceSchema>;
 export const contentFromOutputSchema = /* @__PURE__ */ (() => z.object({
@@ -82,6 +85,8 @@ export const assignmentSchema = z.object({
   agentId: id, agentRevision: z.number().int().positive(), projectId, due: date,
   state: z.enum(['planned', 'cancelled']), archived: z.boolean(),
   sources: z.array(assignmentSourceSchema).max(5).refine(v => new Set(v.map(s => s.id)).size === v.length, 'Choose each source once.').optional(),
+  workSources: workSourceSelectionsSchema.optional(),
+  workOrigin: workLibraryOriginSchema.optional(),
   maxMinutes: z.number().int().min(1).max(10).optional(),
   executionMode: z.enum(['work', 'discussion', 'proposal']).optional(),
 }).strict();

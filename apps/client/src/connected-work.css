@@ -1,0 +1,47 @@
+.connected-work {
+  width: min(100%, 1180px);
+  margin-inline: auto;
+  min-width: 0;
+  container: connected-work / inline-size;
+}
+.connected-work > header { margin-block: 12px 18px; }
+.connected-work h1, .connected-work h2, .connected-work h3 { margin-block: .35em; overflow-wrap: anywhere; }
+.connected-work .compact-actions, .connected-result-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.connected-result-heading { margin-block: 16px 12px; }
+.connected-result-heading label { width: auto; display: flex; align-items: center; gap: 6px; }
+.connected-result-heading select { width: auto; }
+.connected-result-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 16px; align-items: start; }
+.connected-document, .connected-result-aside, .connected-brief, .connected-progress {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: clamp(12px, 2.5vw, 25px);
+  border-radius: 14px;
+}
+.connected-document pre, .connected-inputs pre, .connected-result details p, .connected-brief p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  line-height: 1.65;
+}
+.connected-document pre { margin: 0; }
+.connected-result-aside { display: grid; gap: 18px; }
+.connected-review-notes, .connected-inputs { display: grid; gap: 8px; overflow-wrap: anywhere; min-width: 0; }
+.connected-review-notes p, .connected-inputs p { margin: 0; }
+.connected-inputs details, .connected-finding { padding-block: 8px; border-top: 1px solid var(--line); }
+.connected-work summary, .connected-inputs summary { cursor: pointer; }
+.connected-review-notes select { max-width: 100%; }
+.connected-review-notes button { justify-self: start; }
+.connected-finding label { display: flex; align-items: center; gap: 8px; }
+.connected-finding input[type=checkbox] { width: auto; min-height: 0; }
+.connected-work .connected-result-actions { margin-top: 15px; }
+.connected-work .connected-panel-triggers { display: none; }
+@container connected-work (max-width: 820px) {
+  .connected-result-layout { display: block; }
+  .connected-result-aside { display: none; }
+  .connected-work .connected-panel-triggers { display: flex; margin-block: 10px; }
+}
+@media (max-width: 640px) {
+  .connected-work button, .connected-work select, .connected-work summary { min-height: 44px; }
+  .connected-work select, .connected-work textarea { font-size: 16px; }
+}

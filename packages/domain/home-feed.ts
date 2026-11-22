@@ -8,7 +8,7 @@ export const homeFeedTargetSchema = z.discriminatedUnion('kind', [
  z.object({ kind: z.literal('routine'), id, occurrenceId: id }).strict(),
 ]);
 export type HomeFeedTarget = z.infer<typeof homeFeedTargetSchema>;
-export const homeFeedOpenSchema = z.union([z.object({ epoch: z.uuid(), target: homeFeedTargetSchema }).strict(), z.object({ epoch: z.uuid(), reference: homeReferenceSchema }).strict()]);
+export const homeFeedOpenSchema = z.union([z.object({ epoch: z.uuid(), target: homeFeedTargetSchema, forDiscussion:z.literal(true).optional() }).strict(), z.object({ epoch: z.uuid(), reference: homeReferenceSchema }).strict()]);
 export type HomeFeedOpenRequest = z.infer<typeof homeFeedOpenSchema>;
 export type HomeDestinationLink = { kind: 'assignment' | 'content' | 'conversation' | 'routine' | 'project' | 'task'; id: string; attemptId?: string; occurrenceId?: string };
 export type HomeDestination = { epoch: string; title: string; status: string; text: string; sourceDetails?: string; links: HomeDestinationLink[]; target?: HomeFeedTarget; reference?: HomeReference; previewOnly?: boolean };
