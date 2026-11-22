@@ -1,6 +1,6 @@
 import { useRememberWorkRoute } from './useRememberWorkRoute';
 import { useConnectedWorkList } from './useConnectedWorkList';
-import { useLibraryWorkRoutes } from './LibraryWorkNavigation';
+import { LibraryWorkRoutes } from './LibraryWorkNavigation';
 import { listLibraryWorkDrafts } from './library-work-draft';
 import { LoadingRing } from './ModuleLoading';
 import type { MailContactSource } from '../../../packages/domain/mail-contact';
@@ -239,7 +239,6 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
   const filtered = records.filter(r => ('archived' in r.value && r.value.archived) === archived && (!project || 'projectId' in r.value && r.value.projectId === project) && (!stage || 'stage' in r.value && r.value.stage === stage) && (kind!=='content'||(!preferences.collection||(r.value as Content).collection===preferences.collection)&&(!preferences.tag||(r.value as Content).tags?.includes(preferences.tag))) && JSON.stringify(r.value).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const selectedMissing = index.selected && !selected && !activeDrafts.includes(index.selected);
   const activeFilters = [archived, project, stage, preferences.collection, preferences.tag].filter(Boolean).length;
-  const workRoutes = useLibraryWorkRoutes();
   const showConnectedWork = kind === 'assignment' && !index.selected && records.some(row => (row.value as Assignment).workOrigin);
   const connectedLabels = useConnectedWorkList(showConnectedWork, snapshot.deviceId, snapshot.epoch);
   const contentSource = kind === 'content' ? (selected?.value as Content | undefined)?.source : undefined;
@@ -251,11 +250,12 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
   const filterSummary = [archived && 'Archived', project && (snapshot.projects.find(p => p.id === project)?.value.name ?? 'Project unavailable'), stage && scopeTitle, preferences.collection, preferences.tag && `#${preferences.tag}`].filter(Boolean).join(' · ');
   const viewIcon = (option: typeof view) => option === 'board' ? <ViewBoard size={16}/> : option === 'calendar' ? <CalendarDays size={16}/> : <ViewList size={16}/>;
   const viewLabel = (option: typeof view) => option[0].toUpperCase() + option.slice(1);
-  if (workRoutes && kind === 'assignment' && index.selected?.startsWith('library-work:')) {
-    return <Suspense fallback={<LoadingRing label="Opening your assignment draft…"/>}>
-      <PrepareAssignment key={index.selected} draftId={index.selected} snapshot={snapshot} onOpenWork={workRoutes.openWork}
-        onOpenWorkList={closeRecord} onReturnToLibrary={workRoutes.openLibrary}/>
-    </Suspense>;
+  const preparedId = index.selected;
+  if (kind === 'assignment' && preparedId?.startsWith('library-work:')) {
+    return <LibraryWorkRoutes.Consumer>{routes => routes ? <Suspense fallback={<LoadingRing label="Opening your assignment draft…"/>}>
+      <PrepareAssignment key={preparedId} draftId={preparedId} snapshot={snapshot} onOpenWork={routes.openWork}
+        onOpenWorkList={closeRecord} onReturnToLibrary={routes.openLibrary}/>
+    </Suspense> : <Empty title="Kept Assignment" action={<button onClick={closeRecord}>Work List</button>}>Open this preparation in the Agents workspace.</Empty>}</LibraryWorkRoutes.Consumer>;
   }
   if (kind === 'assignment' && selected && (selected.value as Assignment).workOrigin) {
     return <Suspense fallback={<LoadingRing label="Opening agent work…"/>}>
@@ -295,11 +295,11 @@ function RecordCollection({ kind, snapshot, refresh, editTask, target, outputs, 
     {creating && <Dialog title="Start Something New" size="choice" close={() => setCreating(false)}><div className="compact-actions content-start-options"><button className="compact-action primary" onClick={() => { setCreating(false); create(); }}>Blank Draft</button><button className="compact-action" onClick={() => { setCreating(false); setCatalog('templates'); }}>Start With A Template</button><button className="compact-action" onClick={() => { setCreating(false); setLibrary(true); }}>Use Saved Agent Result</button></div></Dialog>}
     {catalog&&<Suspense fallback={<LoadingRing label="Opening library…"/>}><ContentLibrary snapshot={snapshot} backLabel="Back To Content" initialSection={catalog} close={()=>setCatalog(null)} useTemplate={item=>{if(create({title:item.name,brief:item.brief,body:item.body,format:item.format??'markdown',assets:item.assets??[],platform:item.platform,collection:item.collection,tags:item.tags,brandId:item.brandId,stage:'ideas'}))setCatalog(null);}}/></Suspense>}
     {library && <ContentOutputLibrary outputs={outputs} snapshot={snapshot} refresh={refresh} close={() => setLibrary(false)} openContent={id => { setLibrary(false); openContent(id); }}/>}
-    {kind === 'assignment' && preparedDrafts.length > 0 && <section aria-label="Kept Library Assignments" className="record-draft-tray">
-      {preparedDrafts.map(draft => <button type="button" key={draft.id} className="card record-list-item" onClick={() => workRoutes?.openDraft(draft.id)}>
+    {kind === 'assignment' && preparedDrafts.length > 0 && <LibraryWorkRoutes.Consumer>{routes => routes && <section aria-label="Kept Library Assignments" className="record-draft-tray">
+      {preparedDrafts.map(draft => <button type="button" key={draft.id} className="card record-list-item" onClick={() => routes.openDraft(draft.id)}>
         <strong>{draft.title || 'Untitled Assignment'}</strong><small>Kept Library Assignment</small>
       </button>)}
-    </section>}
+    </section>}</LibraryWorkRoutes.Consumer>}
     <div className={`record-workspace${index.selected ? ' has-selection' : ''}${kind === 'content' && view !== 'list' ? ' content-planning-workspace' : ''}`}><section ref={listArea} tabIndex={-1} className="record-list" aria-label="Records">
       <div className={kind === 'content' && view !== 'list' ? 'content-draft-tray' : 'record-draft-tray'}>{activeDrafts.map((id, i) => <button className="card record-list-item" key={id} aria-pressed={index.selected === id} onClick={e => openRecord(id, e.currentTarget)}><span><strong>{kind === 'content' ? currentRecordDraftTitle(localStorage, recoveryScope, id) ?? `Unfinished content ${i + 1}` : `Unfinished ${kind} ${i + 1}`}</strong><small>Kept on this device · resume writing</small></span></button>)}</div>
       {kind === 'content' && <ContentPlanning key={snapshot.epoch} snapshot={snapshot} records={filtered as Entity<Content>[]} refresh={refresh} selected={index.selected} open={openRecord} create={create} publication={id => openRecord(id, undefined, true)} view={view}/>}

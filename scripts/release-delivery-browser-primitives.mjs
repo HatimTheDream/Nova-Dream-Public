@@ -13,9 +13,11 @@ const qualifiedBrowserBuilds = new Map([
   ['2.28.49', '1.0.422'],
   ['2.28.50', '1.0.423'],
   ['2.29.0', '1.0.424'],
+  ['2.30.0', '1.0.425'],
 ]);
 export const qualifiedBrowserBuild = version => qualifiedBrowserBuilds.get(version);
 export function qualifiedBrowserPrior(targetVersion, prior) {
+  if (targetVersion === '2.30.0') return prior?.version === '2.29.0' && prior.buildVersion === '1.0.424';
   if (targetVersion === '2.29.0') return prior?.version === '2.28.50' && prior.buildVersion === '1.0.423';
   return prior?.version === '2.28.39' && prior.buildVersion === '1.0.412';
 }

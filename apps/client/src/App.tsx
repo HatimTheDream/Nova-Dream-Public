@@ -160,7 +160,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const [setupJournal] = useState(() => new SetupJourneyJournal({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) }, { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId }));
   const [setupJourney, setSetupJourney] = useState(setupJournal.value), [setupError, setSetupError] = useState(setupJournal.error);
   const setupPosition = useRef<SetupPosition | undefined>(undefined), setupWritingFocus = useRef<HTMLElement | null>(null);
-  const [route, setRoute] = useState<Route>(() => taskWorkspace.state?.active ? taskWorkspace.state.origin.route : search.view?.open ? search.view.origin.route : setupJournal.value ? 'settings' : restoredWorkRoute(snapshot, retainedWindowId, sessionStorage, localStorage) ?? 'home');
+  const [route, setRoute] = useState<Route>(() => taskWorkspace.state?.active ? taskWorkspace.state.origin.route : search.view?.open ? search.view.origin.route : setupJournal.value ? 'settings' : restoredWorkRoute(snapshot, retainedWindowId) ?? 'home');
   const assistant = useAssistant(snapshot, route === 'assistant', setupJournal.value?.selection);
   const setupCurrentRoute = useRef(route); setupCurrentRoute.current = route;
   const directScope = { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId };
@@ -305,9 +305,8 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   };
   const returnToWorkLibrary = (origin: LibraryWorkOrigin) => {
     if (!canOpen('home', () => returnToWorkLibrary(origin))) return false;
-    const scope = { epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId };
-    const target: LibraryTarget = { ...scope, nonce: crypto.randomUUID(), restore: origin.view, restoreScrollTop: origin.scrollTop };
-    const issue = admitLibraryTarget(scope, { epoch: snapshot.epoch, items: [], collections: [] }, target, { read: readNavigationLocal, write: saveLocal });
+    const target: LibraryTarget = { ...searchScope, nonce: crypto.randomUUID(), restore: origin.view, restoreScrollTop: origin.scrollTop };
+    const issue = keepLibraryTarget(target);
     if (issue || !saveLocal('e3:home-view:' + snapshot.deviceId, 'library')) {
       setHomeNavigationError(issue || 'The Library view could not be kept. Your assignment is still open.');
       return false;
@@ -413,6 +412,8 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
   const changeTaskStatus = (item: Entity<Task>, status: Task['status']) => { void taskActions.run([{ task: item, value: { ...item.value, status } }], status === 'done' ? 'Task completed' : 'Task updated'); };
   const complete = (item: Entity<Task>) => changeTaskStatus(item, ['done', 'skipped'].includes(item.value.status) ? 'open' : 'done');
   const searchScope = search.navigation.scope;
+  const keepLibraryTarget = (target: LibraryTarget, library?: typeof search.library) =>
+    admitLibraryTarget(searchScope, library ?? { epoch: snapshot.epoch, items: [], collections: [] }, target, { read: readNavigationLocal, write: saveLocal });
   const searchVisible = search.shown && !taskWorkspace.state?.active;
   const renderRoute = (page: Route) => route === page && !searchVisible || route === 'settings' && setupJourney?.origin === page || !!search.view?.open && searchMountedRoutes.includes(page);
   const coverWithSearch = () => { if (!searchVisible) setSearchMountedRoutes(current => [...new Set([...current, route])]); search.setShown(true); };
@@ -458,7 +459,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
     } else if (['collection', 'note', 'link'].includes(target.kind)) {
       if (!search.library || search.libraryStatus !== 'ready') { search.setNotice('Refresh Library before opening this exact source.'); return; }
       const request: LibraryTarget = { ...searchScope, nonce: crypto.randomUUID(), target };
-      const problem = admitLibraryTarget(searchScope, search.library, request, { read: readNavigationLocal, write: saveLocal });
+      const problem = keepLibraryTarget(request, search.library);
       if (problem) { search.setNotice(problem); return; } setLibraryTarget(request);
     } else if (target.kind === 'project') setShowProject(target.id);
     else if (target.kind === 'draft') setSearchPreview({ id: target.id, revision: target.revision, nonce: crypto.randomUUID(), epoch: snapshot.epoch, standalone: !searchMountedRoutes.includes('assistant') });
@@ -488,7 +489,7 @@ export function Workspace({ snapshot, online, error, refresh, reconnect, access,
     }
     if (origin.library) {
       const request: LibraryTarget = { ...searchScope, nonce: crypto.randomUUID(), restore: origin.library };
-      const problem = admitLibraryTarget(searchScope, search.library ?? { epoch: snapshot.epoch, items: [], collections: [] } as NonNullable<typeof search.library>, request, { read: readNavigationLocal, write: saveLocal });
+      const problem = keepLibraryTarget(request, search.library);
       if (problem) { search.setNotice(problem); return; } preparedLibrary = request;
     }
     if (!search.close()) return;

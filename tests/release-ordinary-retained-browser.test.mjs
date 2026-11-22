@@ -18,7 +18,11 @@ function fixture(t, version='2.28.46', buildVersion='1.0.419') {
   };
   const id=randomUUID(),epoch=randomUUID(),oldId=sha256('prior'),nextId=sha256('target');
   const app=(candidateId,version,buildVersion)=>({candidateId,version,buildVersion});
-  const old=version==='2.29.0' ? app(oldId,'2.28.50','1.0.423') : app(oldId,'2.28.39','1.0.412');
+  const predecessor = {
+    '2.29.0': ['2.28.50','1.0.423'],
+    '2.30.0': ['2.29.0','1.0.424'],
+  }[version] ?? ['2.28.39','1.0.412'];
+  const old=app(oldId,...predecessor);
   const next=app(nextId,version,buildVersion);
   const doc=a=>({...a,frontendId:a.candidateId,assets:`/__bundled/${a.candidateId}/`});
   const checks=['one-prior-document-and-unsent-draft','old-document-retained','old-client-fence','new-document-identity',
@@ -80,12 +84,14 @@ test('the release being built admits its measured browser proof in the package a
   const binding = f.bind();
   assert.equal(verifyRetainedWindowPolicy(binding.windowPolicy, binding), true);
 
-  const previousRelease = {...binding, priorBundledTarget: {...binding.priorBundledTarget, version: '2.28.39', buildVersion: '1.0.412'}};
-  assert.throws(() => verifyRetainedWindowPolicy(binding.windowPolicy, previousRelease), /policy-target-changed/);
   const oldBase=f.target.bases.private.manifest;
-  f.target.bases.private.manifest=f.save('unaccepted-base',previousRelease.priorBundledTarget);
-  f.freeze();
-  assert.throws(f.bind,/qualification-prior-changed/);
+  for (const [version,buildVersion] of [['2.28.50','1.0.423'],['2.28.39','1.0.412'],[binding.priorBundledTarget.version,'0.0.0']]) {
+    const wrongPrior={...binding.priorBundledTarget,version,buildVersion};
+    assert.throws(() => verifyRetainedWindowPolicy(binding.windowPolicy, {...binding,priorBundledTarget:wrongPrior}), /policy-target-changed/);
+    f.target.bases.private.manifest=f.save('unaccepted-base',wrongPrior);
+    f.freeze();
+    assert.throws(f.bind,/qualification-prior-changed/);
+  }
   f.target.bases.private.manifest=oldBase;
   f.freeze();
   const wrongBuild = {...binding, fullTarget: {...binding.fullTarget, buildVersion: '0.0.0'}};
@@ -99,7 +105,9 @@ test('the release being built admits its measured browser proof in the package a
 for (const [version, build, previousVersion, previousBuild] of [
   ['2.28.47', '1.0.420', '2.28.46', '1.0.419'],
   ['2.28.48', '1.0.421', '2.28.47', '1.0.420'],
-  ['2.28.49', '1.0.422', '2.28.48', '1.0.421']
+  ['2.28.49', '1.0.422', '2.28.48', '1.0.421'],
+  ['2.29.0', '1.0.424', '2.28.50', '1.0.423'],
+  ['2.30.0', '1.0.425', '2.29.0', '1.0.424']
 ]) {
   test(`recovery update ${version} requires its own measured Tasks window and exact build`, t => {
     const f = fixture(t, version, build);

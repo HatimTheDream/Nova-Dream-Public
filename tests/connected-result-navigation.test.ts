@@ -11,6 +11,7 @@ function browserStorage() {
 
 test('reload returns to the open connected record only in its own workspace and tab', () => {
   const session = browserStorage(), local = browserStorage(), scope = { epoch: 'epoch', deviceId: 'owner' };
+  assert.equal(restoredWorkRoute(scope, 'tab', { getItem() { throw new Error('Session storage unavailable'); } }, local), undefined);
   session.setItem('e3:connected-view:epoch:owner:tab', JSON.stringify({ page: 'agents', id: 'library-work:original' }));
   local.setItem('e3:record-index:owner:assignment:tab', JSON.stringify({ selected: 'library-work:original' }));
   local.setItem('e3:agent-view:owner:tab', JSON.stringify({ view: 'assignment' }));
