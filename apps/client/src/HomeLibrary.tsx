@@ -17,6 +17,7 @@ import { LibraryTransfer, type LibraryTransferRequest } from './LibraryTransfer'
 import { keepImportedLibraryText } from './library-transfer-file';
 import { draftBrowserStorage } from './draft-browser-storage';
 import { captureLibraryActionFocus } from './library-action-focus';
+import type { LibraryWorkStart } from './library-work-draft';
 import { admittedLibraryView, defaultLibraryView, libraryView, libraryTargetPreview, type LibraryTarget, type LibraryView } from './home-library-navigation';
 
 export type ConfirmedLibrarySave = { command: HomeLibraryCommand; result: HomeLibraryResult; undo: HomeLibraryUndo | HomeShelvesUndo | null };
@@ -120,7 +121,7 @@ export async function captureHomeContext(snapshot: Snapshot, references: HomeRef
  catch (reason) { if (reason instanceof ApiError && reason.status && reason.status < 500) saveLocal(key, null);throw reason; }
 }
 export function acknowledgeHomeCapture(snapshot: Snapshot, scope: string) { if (!saveLocal(`e3:home-capture:${snapshot.deviceId}:${snapshot.epoch}:${scope}`, null)) throw Error('The context is captured. Free browser storage before starting another handoff.'); }
-export type HomeSourceActions = { onAssistantHandoff?: (handoff: HomeAssistantHandoff) => void | Promise<void>; openResource?: (reference: HomeReference) => void };
+export type HomeSourceActions = { onAssistantHandoff?: (handoff: HomeAssistantHandoff) => void | Promise<void>; openResource?: (reference: HomeReference) => void; onPrepareAssignment?: (input: LibraryWorkStart) => boolean };
 export const collectionSymbols: Record<typeof homeIcons[number], string> = { folder: '📁', book: '📚', sparkles: '✨', briefcase: '💼', heart: '♥', globe: '🌍', leaf: '🌿', coffee: '☕' };
 const emptyCollection = (): HomeCollectionValue => ({ title: '', subtitle: '', icon: 'folder', pinned: false, archived: false, references: [] });
 type LibraryWriter<T> = { id: string; revision: number; value: T; destination?: string };
@@ -167,6 +168,7 @@ export function HomeLibrary({ snapshot, controller, libraryTarget, ...actions }:
  const { state, error, journalError, loading, busy, pending, lastSave, run, load } = controller;
  const blocked = busy || !!pending || !!journalError;
  const detailSequence = useRef(0), libraryRoot = useRef<HTMLElement>(null);
+ const prepareAction = useRef<HTMLButtonElement>(null);
  const writerKey = `e3:home-library-writer:${snapshot.deviceId}:${snapshot.epoch}:${retainedWindowId}`, viewKey = `e3:home-library-view:${snapshot.deviceId}:${snapshot.epoch}`;
  type Writers = { key: string; collection?: LibraryWriter<HomeCollectionValue>; item?: LibraryWriter<HomeItemValue>; invalidCollection: boolean; invalidItem: boolean };
  const readWriters = (): Writers => { const collection = readLibraryWriter<HomeCollectionValue>(writerKey + ':collection', isHomeCollectionDraft), item = readLibraryWriter<HomeItemValue>(writerKey + ':item', isHomeItemDraft);return { key: writerKey, collection, item, invalidCollection: !collection && retainedValue(writerKey + ':collection'), invalidItem: !item && retainedValue(writerKey + ':item') }; };
@@ -226,12 +228,22 @@ export function HomeLibrary({ snapshot, controller, libraryTarget, ...actions }:
  const acceptedTarget = useRef<string | undefined>(undefined);
  useEffect(() => {
   if (!libraryTarget || acceptedTarget.current === libraryTarget.nonce) return;
+  if (libraryTarget.restoreScrollTop !== undefined && !state) return;
   const kept = admittedLibraryView({ epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId }, libraryTarget, { read: readLocal });
   if (!kept) { setNotice('The exact Library selection could not be confirmed. Return to Search.'); return; }
   if (!libraryTarget.restore && libraryTarget.target?.kind !== 'collection' && !state) return;
   const preview = state && libraryTargetPreview(state, libraryTarget);
   setKeptView({ key: viewKey, value: kept }); acceptedTarget.current = libraryTarget.nonce;
   detailSequence.current++; setDetailBusy(false); setDetail(preview);
+  if (libraryTarget.restoreScrollTop !== undefined) {
+   const offset = libraryTarget.restoreScrollTop;
+   requestAnimationFrame(() => {
+    const root = libraryRoot.current, scroll = root?.closest<HTMLElement>('.page-scroll');
+    if (!root?.isConnected || root.closest('[hidden],[inert]') || !scroll) return;
+    scroll.scrollTop = offset;
+    (prepareAction.current ?? root.querySelector<HTMLElement>('.home-library-title h1'))?.focus({preventScroll:true});
+   });
+  }
   setNotice(!libraryTarget.restore && libraryTarget.target?.kind !== 'collection' && !preview ? 'The exact saved Library item changed or is unavailable. Return to Search to review it.' : '');
  }, [libraryTarget?.nonce, state, snapshot.epoch, snapshot.deviceId]);
  const updateView = (patch: Partial<LibraryView>) => { const value = { ...view, ...patch };setKeptView({ key: viewKey, value });if (!saveLocal(viewKey, value)) setNotice('View preferences could not be kept on this device.'); };
@@ -337,7 +349,10 @@ export function HomeLibrary({ snapshot, controller, libraryTarget, ...actions }:
   {recoveryOpen && <HomeWritingRecovery key={writerKey} snapshot={snapshot} scope={{ epoch: snapshot.epoch, deviceId: snapshot.deviceId, windowId: retainedWindowId }} preservation={state?.homePreservation} canAdopt={canAdoptHomeWriting} hasWriter={!!itemEditor || !!collectionEditor} adopt={adoptHomeWriting} returnToWriter={() => setRecoveryOpen(false)} openSaved={openRecoveredItem} close={() => setRecoveryOpen(false)}/>}
   {error && <div className="notice warning" role="alert"><span>{error}</span><button disabled={busy} onClick={() => void load()}>Refresh</button></div>}{journalError && <p className="notice warning" role="alert">{journalError}</p>}{writerError && <p className="notice warning" role="alert">{writerError}</p>}{pending && <div className="notice"><span>{busy ? 'Saving the original Library request…' : 'A Library save is unconfirmed. Your original request is kept.'}</span><button disabled={busy} onClick={() => void runFocused(pending)}>Check original save</button></div>}{notice && <p role="status">{notice}</p>}
   {lastSave && !pending && <div className="home-library-outcome" role="status"><span>{shelvesReceipt ? shelvesReceipt.type === 'shelves-undo' ? 'Spaces or Up Next change undone. Sources are kept.' : shelvesReceipt.changed ? 'Library organization saved.' : 'Already kept unchanged.' : receipt ? receipt.type === 'library-undo' ? 'Organization change undone. Saved sources are kept.' : receipt.type === 'collections-order' ? 'Collection order saved.' : receipt.type === 'references-order' ? 'Source order saved.' : `${receipt.outcomes.filter(row => ['created-and-added', 'added', 'moved'].includes(row.disposition)).length} sources organized. ${receipt.outcomes.filter(row => ['already-in-destination', 'duplicate-in-batch'].includes(row.disposition)).length} duplicates kept unchanged.` : 'Library change saved.'}</span>{lastSave.undo && <button disabled={blocked} onClick={undoLast}>Undo</button>}</div>}
-  {selectedRefs.length > 0 && <div className="home-library-selection" role="region" aria-label="Selected sources"><span>{selectedRefs.length} selected in {selectedCollection?.title ?? 'an unavailable collection'}{selectionChanged && ' · sources changed; review your selection'}</span><button disabled={blocked || selectionChanged || !selectedCollection || selectedCollection.archived} onClick={() => { setTarget('');setBefore('');setTransfer('move'); }}>Move</button><button disabled={blocked || selectionChanged || !selectedCollection || selectedCollection.archived} onClick={() => { setTarget('');setBefore('');setTransfer('copy'); }}>Copy</button><button disabled={selectionChanged || !selectedCollection} onClick={() => { if (selectedCollection) startExport(selectedCollection, true); }}>Export Selected</button><button onClick={() => updateView({ selection: null })}>Clear selection</button></div>}
+  {selectedRefs.length > 0 && <div className="home-library-selection" role="region" aria-label="Selected sources"><span>{selectedRefs.length} selected in {selectedCollection?.title ?? 'an unavailable collection'}{selectionChanged && ' · sources changed; review your selection'}</span>{actions.onPrepareAssignment && <button ref={prepareAction} className="primary" onClick={() => {
+   const scrollTop = libraryRoot.current?.closest<HTMLElement>('.page-scroll')?.scrollTop ?? 0;
+   if (!actions.onPrepareAssignment?.({origin:{view,scrollTop:Math.max(0,scrollTop)},references:selectedRefs})) setNotice('Your selection is kept. Keep your current writing before opening Agent Work.');
+  }}>Use In Agent Work</button>}<button disabled={blocked || selectionChanged || !selectedCollection || selectedCollection.archived} onClick={() => { setTarget('');setBefore('');setTransfer('move'); }}>Move</button><button disabled={blocked || selectionChanged || !selectedCollection || selectedCollection.archived} onClick={() => { setTarget('');setBefore('');setTransfer('copy'); }}>Copy</button><button disabled={selectionChanged || !selectedCollection} onClick={() => { if (selectedCollection) startExport(selectedCollection, true); }}>Export Selected</button><button onClick={() => updateView({ selection: null })}>Clear selection</button></div>}
   {loading && !state ? <LoadingRing label="Loading Library…"/> : !state ? <Empty title="Library is unavailable">Reconnect or refresh to reopen your saved collections.</Empty> : <>
    {organizationUnavailable ? <Empty title="Library Organization Is Unavailable" action={<button className="compact-action" onClick={() => chooseRoute({ kind: 'all' })}>Browse All Collections</button>}>Your collections and saved sources are kept. Their Space or Up Next membership cannot be confirmed from the current organization data.</Empty> : route.kind === 'up-next' ? <UpNextShelf references={shelves?.upNext ?? []} resources={state.resources} query={query} mode={view.mode} blocked={shelvesBlocked} inspect={open} openResource={actions.openResource} remove={ref => { if (shelves) void runFocused({ ...envelope(), type: 'up-next-remove', expectedRevision: shelves.revision, reference: ref }); }} reorder={refs => { if (shelves) void runFocused({ ...envelope(), type: 'up-next-order', expectedRevision: shelves.revision, references: refs }); }}/> : <>
    <CollectionCanvas collections={collections} order={orderCollections} blocked={blocked || !!query || !!view.collectionId} render={(c, handle) => <LibraryCollection key={c.id} collection={c} focused={view.collectionId === c.id} mode={view.mode} query={query} resources={state.resources} blocked={blocked} selected={view.selection?.collectionId === c.id ? selectedRefs : []} select={(ref, checked) => toggleReference(c, ref, checked)} inspect={open} openResource={actions.openResource} handle={handle} spaceName={shelves?.spaces.find(row => row.id === shelves.assignments.find(entry => entry.collectionId === c.id)?.spaceId)?.name} moveSpace={() => { setAssignment(c);setSpaceDestination(shelves?.assignments.find(row => row.collectionId === c.id)?.spaceId ?? ''); }} shelvesBlocked={shelvesBlocked} addUpNext={addUpNext} queued={queued} orderEarlier={!query && !view.collectionId && collections[0]?.id !== c.id ? () => stepCollection(c.id, -1) : undefined} orderLater={!query && !view.collectionId && collections.at(-1)?.id !== c.id ? () => stepCollection(c.id, 1) : undefined} focus={() => chooseCollection(c.id)} edit={() => editCollection(c)} pin={() => void saveCollection(c, { pinned: !c.pinned })} archive={() => void saveCollection(c, { archived: !c.archived })} add={() => openPaste(c.id)} addExisting={() => { chooseCollection(c.id);setPicked([]);setPicking(true); }} remove={ref => saveCollection(c, { references: c.references.filter(r => !exactHomeReference(r, ref)) })} reorder={refs => run({ ...envelope(), type: 'references-order', collection: { id: c.id, expectedRevision: c.revision }, references: refs })}/>} />

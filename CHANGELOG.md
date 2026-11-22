@@ -1,3 +1,8 @@
+## [2.30.0]
+
+- Select saved Library sources for an agent assignment. Compare changed versions, keep your brief, and follow the original work in Agents.
+- Review the complete result and its captured inputs, request a correction, and save the accepted revision once as an editable Content draft. Open its original result and sources from Content.
+
 ## [2.29.0]
 
 - Assistant conversation search now pages through matching messages and conversation titles. Use Next matches to reach older replies and open the exact message. Search keeps your Chat or Work, archive, and Project filters.

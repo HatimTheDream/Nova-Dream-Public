@@ -8,6 +8,7 @@ import { normalizeHomeUrl, isHomeShelvesCommand } from '../../packages/domain/ho
 import { Fault, Store } from './store.js';
 import { homeLibraryWithinCapacity, homeWidgetPreservationState, originalHomeWidget, preserveHomeWidgets } from './home-widget-preservation.js';
 import { HomeLibraryShelves } from './home-library-shelves.js';
+import { WorkSourceService } from './work-sources.js';
 import { buildLibraryPortable, LibraryPortableError, readLibraryExportQuery } from '../../packages/domain/home-library-portable.js';
 
 const collections = 'home:library:collection:', items = 'home:library:item:';
@@ -51,7 +52,8 @@ export class HomeLibrary {
   for (const attempt of this.store.internalList<AssignmentAttempt>('assignments:summary:')) if (attempt.epoch === snapshot.epoch && attempt.state === 'returned' && attempt.result?.disposition === 'visible') add({ kind: 'assignment', id: attempt.id, revision: attempt.assignmentRevision, sha256: attempt.result.file.sha256 }, attempt.title, `${attempt.agentName} · Saved Result`, new Date(attempt.updatedAt).toISOString());
   const preservation = homeWidgetPreservationState(this.store);
   if (!['ready', 'changed'].includes(preservation.status)) for (const widget of snapshot.layout.value.widgets) if (widget.type === 'note' || widget.type === 'links') add({ kind: 'widget', id: widget.id, revision: snapshot.layout.revision }, widget.title || (widget.type === 'note' ? 'Kept Note' : 'Kept Links'), 'Kept Widget · Original Content Preserved', snapshot.layout.updatedAt);
-  return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.title.localeCompare(b.title));
+  const sources=new WorkSourceService(this.store);
+  return result.filter(row=>sources.canReadLibraryReference(row.reference)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.title.localeCompare(b.title));
  }
  resolve(device: string, reference: HomeReference, catalog = this.catalog(device)): HomeResource {
   const current = catalog.find(r => homeReferenceKey(r.reference) === homeReferenceKey(reference));
@@ -81,6 +83,7 @@ export class HomeLibrary {
   return saved?.kind === ref.kind && saved.id === ref.id && saved.revision === ref.revision ? saved : undefined;
  }
  private current(ref: HomeReference): boolean {
+  if (!new WorkSourceService(this.store).canReadLibraryReference(ref)) return false;
   if (ref.kind === 'note' || ref.kind === 'link') { const item = this.store.internalRead<HomeItem>(items + ref.id);return !!item && item.kind === ref.kind && item.revision === ref.revision && ref.sha256 === undefined && !item.archived; }
   if (ref.kind === 'output') { const output = this.store.internalRead<AssistantOutput>('assistant:output:' + ref.id);return output?.state === 'ready' && output.version === ref.revision && !!output.file && output.file.sha256 === ref.sha256; }
   if (ref.kind === 'assignment') { const attempt = this.store.internalRead<AssignmentAttempt>('assignments:summary:' + ref.id);return attempt?.epoch === this.store.epoch && attempt.state === 'returned' && attempt.assignmentRevision === ref.revision && attempt.result?.disposition === 'visible' && attempt.result.file.sha256 === ref.sha256; }
@@ -249,6 +252,10 @@ export class HomeLibrary {
  }
  capture(device: string, raw: unknown): HomeSourceCapture {
   const input = homeCaptureSchema.parse(raw), catalog = this.catalog(device);
+  // Admission replay returns the original body; permissions must also hold for that read.
+  const sourceAccess = new WorkSourceService(this.store);
+  if (!input.references.every(ref => sourceAccess.canReadLibraryReference(ref))) throw new Fault(403,'home_source_denied','A selected result is no longer available with its original source access.');
+  for (const ref of input.references) sourceAccess.assertOrdinaryHandoff(ref.kind,ref.id,ref.revision);
   return this.store.admit(device, input, { operation: 'home.context', ...input }, () => {
    const sources = input.references.map(ref => {
     const resource = this.resolve(device, ref, catalog);if (!this.current(ref)) throw new Fault(409, 'home_source_changed', 'A source changed. Refresh the selection before continuing.');

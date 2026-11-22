@@ -204,6 +204,12 @@ export class ModuleActions {
  }
  async invoke(raw:unknown){
   const input=moduleInvocationSchema.parse(raw),owner=this.current(input);
+  if (owner.assignmentId || this.s.store.internalRead('team:conversation:'+owner.conversationId)) {
+   return this.s.store.withUntrackedAgentWork(()=>this.invokeAuthorized(input,owner));
+  }
+  return this.invokeAuthorized(input,owner);
+ }
+ private async invokeAuthorized(input:ModuleInvocation,owner:ReturnType<ModuleActions['current']>){
   if(input.operation==='catalog'){
    if(input.write)throw new Fault(400,'read_required','Use nova_read for the catalog.');
    if(owner.assignmentId && typeof input.input.kind==='string') this.current({...input, operation:'records.read',input:{kind:input.input.kind},write:false});

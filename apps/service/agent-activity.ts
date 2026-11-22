@@ -125,7 +125,7 @@ export class AgentActivity {
     const plan = latest ? plans.find(p => p.id === latest.assignmentId) : plans[0];
     if(!plan)return undefined;
     const detail=latest?this.assignments.detail(latest.id):undefined,source=detail?.capture.plan.value??plan.value,sourceAccess=detail?.capture.agent.value.access??this.store.readEntity('agent',id)?.value.access??{};
-    const shared=Object.keys(sourceAccess).every(key=>sharingAccess.every(access=>!!access[key as keyof AgentAccess]));
+    const shared=!latest?.connected && Object.keys(sourceAccess).every(key=>sharingAccess.every(access=>!!access[key as keyof AgentAccess]));
     const result=detail?.attempt.result;
     return { assignmentId: plan.id, assignmentRevision: plan.revision, title: latest?.title??plan.value.title,
       ...(latest ? { attemptId: latest.id, attemptUpdatedAt: latest.updatedAt, attemptState: latest.state, capturedAssignmentRevision:latest.assignmentRevision, ...(latest.result ? { resultFileId: latest.result.file.id } : {}) } : {}),

@@ -5,10 +5,10 @@ import type { Task } from './contracts.js';
 import type { HubLayout } from './hub-layout.js';
 import type { AgentActivityState } from './agent-activity.js';
 
-export type AssignmentActivity = Pick<AssignmentAttempt, 'id' | 'assignmentId' | 'assignmentRevision' | 'agentId' | 'agentRevision' | 'agentName' | 'title' | 'projectId' | 'createdAt' | 'updatedAt' | 'deadlineAt' | 'state' | 'message' | 'stopReason' | 'unresolvedReview' | 'routine'> & { result?: Pick<NonNullable<AssignmentAttempt['result']>, 'file' | 'disposition'> };
+export type AssignmentActivity = Pick<AssignmentAttempt, 'id' | 'assignmentId' | 'assignmentRevision' | 'agentId' | 'agentRevision' | 'agentName' | 'title' | 'projectId' | 'createdAt' | 'updatedAt' | 'deadlineAt' | 'state' | 'message' | 'stopReason' | 'unresolvedReview' | 'routine' | 'connected' | 'connectedStatus' | 'savedContentId'> & { result?: Pick<NonNullable<AssignmentAttempt['result']>, 'file' | 'disposition'> };
 export const activityOf = (attempt: AssignmentAttempt): AssignmentActivity => {
-  const { id, assignmentId, assignmentRevision, agentId, agentRevision, agentName, title, projectId, createdAt, updatedAt, deadlineAt, state, message, stopReason, unresolvedReview, routine, result } = attempt;
-  return { id, assignmentId, assignmentRevision, agentId, agentRevision, agentName, title, projectId, createdAt, updatedAt, deadlineAt, state, message, ...(stopReason ? { stopReason } : {}), ...(unresolvedReview ? { unresolvedReview } : {}), ...(routine ? { routine } : {}), ...(result ? { result: { file: result.file, disposition: result.disposition } } : {}) };
+  const { id, assignmentId, assignmentRevision, agentId, agentRevision, agentName, title, projectId, createdAt, updatedAt, deadlineAt, state, message, stopReason, unresolvedReview, routine, result, connected, connectedStatus, savedContentId } = attempt;
+  return { id, assignmentId, assignmentRevision, agentId, agentRevision, agentName, title, projectId, createdAt, updatedAt, deadlineAt, state, message, ...(stopReason ? { stopReason } : {}), ...(unresolvedReview ? { unresolvedReview } : {}), ...(routine ? { routine } : {}), ...(connected ? {connected,connectedStatus,savedContentId}:{}), ...(result ? { result: { file: result.file, disposition: result.disposition } } : {}) };
 };
 export type HubStatus = 'working' | 'waiting-owner' | 'waiting-provider' | 'failed' | 'offline' | 'idle';
 export type HubAgent = {
